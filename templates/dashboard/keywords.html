@@ -1,0 +1,327 @@
+{% extends "base.html" %}
+
+{% block title %}Keyword Research · FuseHealth{% endblock %}
+{% block page_title %}Keyword Research{% endblock %}
+{% block page_subtitle %}Analyze your organic keyword portfolio — powered by DataForSEO{% endblock %}
+
+{% block content %}
+  {# Live sync progress #}
+  {% include "components/sync_progress.html" %}
+
+  {# ── Overview Stats Row (SEMrush-style) ── #}
+  <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+    <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+      <div class="text-xs font-medium text-slate-500 uppercase tracking-wider mb-1">Total Keywords</div>
+      <div class="text-3xl font-bold text-slate-800">{{ intelligence.total_tracked|default:"0" }}</div>
+      <div class="text-xs text-slate-400 mt-1">Unique keywords tracked</div>
+    </div>
+    <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+      <div class="text-xs font-medium text-slate-500 uppercase tracking-wider mb-1">Avg Position</div>
+      <div class="text-3xl font-bold text-slate-800">{{ intelligence.avg_position|default:"—" }}</div>
+      <div class="text-xs text-slate-400 mt-1">Across all keywords</div>
+    </div>
+    <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+      <div class="text-xs font-medium text-slate-500 uppercase tracking-wider mb-1">Total Volume</div>
+      <div class="text-3xl font-bold text-slate-800">{{ intelligence.total_volume|default:"0" }}</div>
+      <div class="text-xs text-slate-400 mt-1">Monthly search volume</div>
+    </div>
+    <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+      <div class="text-xs font-medium text-slate-500 uppercase tracking-wider mb-1">Total Clicks</div>
+      <div class="text-3xl font-bold text-slate-800">{{ intelligence.total_clicks|default:"0" }}</div>
+      <div class="text-xs text-slate-400 mt-1">Organic traffic captured</div>
+    </div>
+  </div>
+
+  {# ── Intent & Difficulty Distribution (side-by-side) ── #}
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+    {# Intent Distribution #}
+    <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+      <h2 class="text-[15px] font-semibold tracking-tight mb-4">Search Intent Distribution</h2>
+      <div class="space-y-3">
+        {% with intent=intelligence.intent_distribution %}
+        {% if intent %}
+          {% with total=intelligence.total_tracked %}
+            <div class="flex items-center gap-3">
+              <span class="inline-flex items-center justify-center w-5 h-5 rounded bg-blue-100 text-blue-600 text-[10px] font-bold">I</span>
+              <span class="text-sm text-slate-700 w-28">Informational</span>
+              <div class="flex-1 h-2 rounded-full bg-slate-100 overflow-hidden">
+                {% if total > 0 %}<div class="h-full rounded-full bg-blue-500 transition-all" style="width: {% widthratio intent.informational total 100 %}%"></div>{% endif %}
+              </div>
+              <span class="text-sm font-semibold text-slate-700 w-10 text-right">{{ intent.informational }}</span>
+            </div>
+            <div class="flex items-center gap-3">
+              <span class="inline-flex items-center justify-center w-5 h-5 rounded bg-emerald-100 text-emerald-600 text-[10px] font-bold">C</span>
+              <span class="text-sm text-slate-700 w-28">Commercial</span>
+              <div class="flex-1 h-2 rounded-full bg-slate-100 overflow-hidden">
+                {% if total > 0 %}<div class="h-full rounded-full bg-emerald-500 transition-all" style="width: {% widthratio intent.commercial total 100 %}%"></div>{% endif %}
+              </div>
+              <span class="text-sm font-semibold text-slate-700 w-10 text-right">{{ intent.commercial }}</span>
+            </div>
+            <div class="flex items-center gap-3">
+              <span class="inline-flex items-center justify-center w-5 h-5 rounded bg-orange-100 text-orange-600 text-[10px] font-bold">T</span>
+              <span class="text-sm text-slate-700 w-28">Transactional</span>
+              <div class="flex-1 h-2 rounded-full bg-slate-100 overflow-hidden">
+                {% if total > 0 %}<div class="h-full rounded-full bg-orange-500 transition-all" style="width: {% widthratio intent.transactional total 100 %}%"></div>{% endif %}
+              </div>
+              <span class="text-sm font-semibold text-slate-700 w-10 text-right">{{ intent.transactional }}</span>
+            </div>
+            <div class="flex items-center gap-3">
+              <span class="inline-flex items-center justify-center w-5 h-5 rounded bg-purple-100 text-purple-600 text-[10px] font-bold">N</span>
+              <span class="text-sm text-slate-700 w-28">Navigational</span>
+              <div class="flex-1 h-2 rounded-full bg-slate-100 overflow-hidden">
+                {% if total > 0 %}<div class="h-full rounded-full bg-purple-500 transition-all" style="width: {% widthratio intent.navigational total 100 %}%"></div>{% endif %}
+              </div>
+              <span class="text-sm font-semibold text-slate-700 w-10 text-right">{{ intent.navigational }}</span>
+            </div>
+          {% endwith %}
+        {% endif %}
+        {% endwith %}
+      </div>
+    </div>
+
+    {# KD Distribution #}
+    <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+      <h2 class="text-[15px] font-semibold tracking-tight mb-4">Keyword Difficulty Distribution</h2>
+      <div class="space-y-3">
+        {% with kd_total=intelligence.kd_easy|add:intelligence.kd_medium|add:intelligence.kd_hard %}
+        <div class="flex items-center gap-3">
+          <span class="inline-flex items-center justify-center w-5 h-5 rounded bg-emerald-100 text-emerald-600 text-[10px] font-bold">E</span>
+          <span class="text-sm text-slate-700 w-28">Easy (0–29)</span>
+          <div class="flex-1 h-2 rounded-full bg-slate-100 overflow-hidden">
+            {% if kd_total > 0 %}<div class="h-full rounded-full bg-emerald-500 transition-all" style="width: {% widthratio intelligence.kd_easy kd_total 100 %}%"></div>{% endif %}
+          </div>
+          <span class="text-sm font-semibold text-emerald-700 w-10 text-right">{{ intelligence.kd_easy }}</span>
+        </div>
+        <div class="flex items-center gap-3">
+          <span class="inline-flex items-center justify-center w-5 h-5 rounded bg-amber-100 text-amber-600 text-[10px] font-bold">M</span>
+          <span class="text-sm text-slate-700 w-28">Medium (30–59)</span>
+          <div class="flex-1 h-2 rounded-full bg-slate-100 overflow-hidden">
+            {% if kd_total > 0 %}<div class="h-full rounded-full bg-amber-500 transition-all" style="width: {% widthratio intelligence.kd_medium kd_total 100 %}%"></div>{% endif %}
+          </div>
+          <span class="text-sm font-semibold text-amber-700 w-10 text-right">{{ intelligence.kd_medium }}</span>
+        </div>
+        <div class="flex items-center gap-3">
+          <span class="inline-flex items-center justify-center w-5 h-5 rounded bg-red-100 text-red-600 text-[10px] font-bold">H</span>
+          <span class="text-sm text-slate-700 w-28">Hard (60+)</span>
+          <div class="flex-1 h-2 rounded-full bg-slate-100 overflow-hidden">
+            {% if kd_total > 0 %}<div class="h-full rounded-full bg-red-500 transition-all" style="width: {% widthratio intelligence.kd_hard kd_total 100 %}%"></div>{% endif %}
+          </div>
+          <span class="text-sm font-semibold text-red-700 w-10 text-right">{{ intelligence.kd_hard }}</span>
+        </div>
+        {% endwith %}
+      </div>
+    </div>
+  </div>
+
+  {# ── Health Score Banner ── #}
+  {% if intelligence.health_score > 0 %}
+  <div class="rounded-xl border shadow-sm p-6 mb-6" style="background: linear-gradient(135deg, {{ intelligence.health_color }}15, {{ intelligence.health_color }}08); border-left: 4px solid {{ intelligence.health_color }};">
+    <div class="flex items-center gap-5 flex-wrap">
+      <div>
+        <div class="text-5xl font-extrabold leading-none" style="color: {{ intelligence.health_color }};">
+          {{ intelligence.health_score }}
+        </div>
+        <div class="text-xs text-slate-500 uppercase tracking-widest mt-1">
+          Keyword Health
+        </div>
+      </div>
+      <div class="flex-1 min-w-[200px]">
+        <div class="text-lg font-semibold text-slate-800">
+          {{ intelligence.health_label }} — {{ intelligence.total_tracked }} keywords tracked
+        </div>
+        <div class="text-sm text-slate-600 mt-1">
+          Based on 1st page positioning and organic click-through performance.
+        </div>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  {# ── Action Tabs ── #}
+  <div class="mb-8" x-data="{ tab: 'quick_wins' }">
+    <div class="border-b border-slate-200">
+      <nav class="-mb-px flex space-x-6" aria-label="Tabs">
+        <button @click="tab = 'quick_wins'" :class="tab === 'quick_wins' ? 'border-brand-500 text-brand-600' : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300'" class="whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm transition-colors">
+          ⚡ Quick Wins ({{ intelligence.quick_wins|length }})
+        </button>
+        <button @click="tab = 'striking'" :class="tab === 'striking' ? 'border-brand-500 text-brand-600' : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300'" class="whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm transition-colors">
+          🎯 Striking Distance ({{ intelligence.striking|length }})
+        </button>
+        <button @click="tab = 'declining'" :class="tab === 'declining' ? 'border-brand-500 text-brand-600' : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300'" class="whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm transition-colors">
+          📉 Declining ({{ intelligence.declining|length }})
+        </button>
+        <button @click="tab = 'low_ctr'" :class="tab === 'low_ctr' ? 'border-brand-500 text-brand-600' : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300'" class="whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm transition-colors">
+          👀 High Imp, Low CTR ({{ intelligence.low_ctr|length }})
+        </button>
+      </nav>
+    </div>
+
+    {# Quick Wins #}
+    <div x-show="tab === 'quick_wins'" x-cloak class="mt-4">
+      <div class="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
+        <div class="text-sm text-slate-600">These keywords rank #4-10 AND already get real clicks. A small push can move them into the top 3 — where CTR doubles.</div>
+        <div class="text-sm text-blue-700 mt-2 font-semibold">💡 Action: Improve meta titles, add internal links from high-authority pages, expand content depth.</div>
+      </div>
+      {% include "dashboard/partials/_action_table.html" with items=intelligence.quick_wins empty_msg="No quick wins found in this period." show_change=False %}
+    </div>
+
+    {# Striking Distance #}
+    <div x-show="tab === 'striking'" x-cloak class="mt-4">
+      <div class="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
+        <div class="text-sm text-slate-600">These keywords are on page 2 (positions 11-20). Google considers your content relevant, but users rarely go to page 2.</div>
+        <div class="text-sm text-blue-700 mt-2 font-semibold">💡 Action: Add 300-500 words of depth, improve internal linking, get 1-2 quality backlinks.</div>
+      </div>
+      {% include "dashboard/partials/_action_table.html" with items=intelligence.striking empty_msg="No striking distance keywords found." show_change=False %}
+    </div>
+
+    {# Declining #}
+    <div x-show="tab === 'declining'" x-cloak class="mt-4">
+      <div class="bg-red-50 border border-red-200 rounded-lg p-4 mb-4">
+        <div class="text-sm text-slate-600">These keywords dropped by 3 or more positions compared to the previous period.</div>
+        <div class="text-sm text-red-700 mt-2 font-semibold">⚠️ Action: Check if competitors published better content. Update your content to ensure it's still fresh and accurate.</div>
+      </div>
+      {% include "dashboard/partials/_action_table.html" with items=intelligence.declining empty_msg="No declining keywords found. Great job!" show_change=True %}
+    </div>
+
+    {# Low CTR #}
+    <div x-show="tab === 'low_ctr'" x-cloak class="mt-4">
+      <div class="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-4">
+        <div class="text-sm text-slate-600">These keywords get over 50 impressions but have less than 2% CTR. People see your result but click someone else.</div>
+        <div class="text-sm text-amber-700 mt-2 font-semibold">💡 Action: Rewrite the meta title and description to be more clickable. Match search intent better.</div>
+      </div>
+      {% include "dashboard/partials/_action_table.html" with items=intelligence.low_ctr empty_msg="No low CTR keywords found." show_change=False %}
+    </div>
+  </div>
+
+  {# ── Full Keyword Research Table ── #}
+  <div class="rounded-xl bg-white border border-slate-200 shadow-sm overflow-hidden">
+    <div class="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
+      <h2 class="text-[15px] font-semibold tracking-tight">All Keywords</h2>
+      <div class="flex items-center gap-4">
+        <span class="text-xs text-slate-500">{{ intelligence.total_tracked }} total</span>
+        <a href="{% url 'dashboard:export_csv' 'keywords' %}" class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-600 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors shadow-sm">
+          <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"></path></svg>
+          Export CSV
+        </a>
+      </div>
+    </div>
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-left text-slate-400 text-xs uppercase tracking-wider bg-slate-50 border-b border-slate-100">
+            <th class="font-medium px-5 py-3">Keyword</th>
+            <th class="font-medium px-3 py-3">Intent</th>
+            <th class="font-medium px-3 py-3 text-center">Position</th>
+            <th class="font-medium px-3 py-3 text-right">Volume</th>
+            <th class="font-medium px-3 py-3 text-center">KD%</th>
+            <th class="font-medium px-3 py-3 text-right">CPC</th>
+            <th class="font-medium px-3 py-3 text-right">Clicks</th>
+            <th class="font-medium px-3 py-3 text-right">Impressions</th>
+            <th class="font-medium px-3 py-3 text-right">CTR</th>
+            <th class="font-medium px-3 py-3">URL</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100">
+          {% for k in intelligence.all_keywords %}
+          <tr class="hover:bg-slate-50 transition-colors">
+            <td class="px-5 py-3 font-medium text-slate-700 max-w-[200px] truncate" title="{{ k.keyword }}">{{ k.keyword }}</td>
+            <td class="px-3 py-3">
+              {% if k.intent %}
+              <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider
+                {% if 'info' in k.intent|lower %}bg-blue-100 text-blue-700
+                {% elif 'comm' in k.intent|lower %}bg-emerald-100 text-emerald-700
+                {% elif 'trans' in k.intent|lower %}bg-orange-100 text-orange-700
+                {% elif 'nav' in k.intent|lower %}bg-purple-100 text-purple-700
+                {% else %}bg-slate-100 text-slate-600{% endif %}">
+                {{ k.intent|truncatechars:5 }}
+              </span>
+              {% else %}—{% endif %}
+            </td>
+            <td class="px-3 py-3 text-center">
+              {% if k.position %}
+                <span class="inline-flex items-center justify-center min-w-[28px] h-6 rounded text-xs font-semibold
+                  {% if k.position <= 3 %}bg-emerald-100 text-emerald-700{% elif k.position <= 10 %}bg-blue-100 text-blue-700{% elif k.position <= 20 %}bg-amber-100 text-amber-700{% else %}bg-red-100 text-red-700{% endif %}">
+                  {{ k.position|floatformat:0 }}
+                </span>
+              {% else %}—{% endif %}
+            </td>
+            <td class="px-3 py-3 text-right text-slate-600">{% if k.search_volume %}{{ k.search_volume|floatformat:0 }}{% else %}—{% endif %}</td>
+            <td class="px-3 py-3 text-center">
+              {% if k.keyword_difficulty %}
+              <div class="flex items-center gap-1.5 justify-center">
+                <div class="w-8 h-1.5 rounded-full bg-slate-100 overflow-hidden">
+                  <div class="h-full rounded-full {% if k.keyword_difficulty < 30 %}bg-emerald-500{% elif k.keyword_difficulty < 60 %}bg-amber-500{% else %}bg-red-500{% endif %}" style="width: {{ k.keyword_difficulty }}%"></div>
+                </div>
+                <span class="text-xs text-slate-500">{{ k.keyword_difficulty|floatformat:0 }}</span>
+              </div>
+              {% else %}—{% endif %}
+            </td>
+            <td class="px-3 py-3 text-right text-slate-600">{% if k.cpc %}${{ k.cpc|floatformat:2 }}{% else %}—{% endif %}</td>
+            <td class="px-3 py-3 text-right font-semibold text-slate-700">{{ k.clicks|floatformat:0 }}</td>
+            <td class="px-3 py-3 text-right text-slate-600">{{ k.impressions|floatformat:0 }}</td>
+            <td class="px-3 py-3 text-right text-slate-600">{{ k.ctr|floatformat:1 }}%</td>
+            <td class="px-3 py-3 text-slate-500 max-w-[180px] truncate">
+              {% if k.url %}<a href="{{ k.url }}" target="_blank" class="text-brand-600 hover:underline text-xs" title="{{ k.url }}">{{ k.url }}</a>{% else %}—{% endif %}
+            </td>
+          </tr>
+          {% empty %}
+          <tr>
+            <td colspan="10" class="p-8">
+              {% include "components/empty_state.html" with icon="🔍" title="No keywords tracked yet" detail="Run a sync to fetch keyword data from Google Search Console and DataForSEO." %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  {# ── AI Search Demand (DataForSEO AI Optimization) ── #}
+  <div class="rounded-xl bg-white border border-slate-200 shadow-sm overflow-hidden mb-6">
+    <div class="px-5 py-4 border-b border-slate-100 flex items-center justify-between flex-wrap gap-2">
+      <div>
+        <h2 class="text-[15px] font-semibold tracking-tight flex items-center gap-2">
+          <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-brand-50 text-brand-700">AI</span>
+          AI Search Demand
+        </h2>
+        <p class="text-xs text-slate-400 mt-0.5">How often your keywords are asked in AI tools — AI search volume &amp; month-over-month trend{% if ai_keywords.latest_date %} · {{ ai_keywords.latest_date }}{% endif %}</p>
+      </div>
+    </div>
+    {% if ai_keywords.status == 'ok' %}
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-left text-slate-400 text-xs uppercase tracking-wider bg-slate-50 border-b border-slate-100">
+            <th class="font-medium px-5 py-3">Keyword</th>
+            <th class="font-medium px-3 py-3 text-right">AI Search Volume</th>
+            <th class="font-medium px-3 py-3 text-center">Trend (MoM)</th>
+            <th class="font-medium px-3 py-3 text-right">Classic Volume</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100">
+          {% for k in ai_keywords.rows %}
+          <tr class="hover:bg-slate-50 transition-colors">
+            <td class="px-5 py-3 font-medium text-slate-700 max-w-[260px] truncate" title="{{ k.keyword }}">{{ k.keyword }}</td>
+            <td class="px-3 py-3 text-right font-semibold text-slate-800">{% if k.ai_volume != None %}{{ k.ai_volume }}{% else %}—{% endif %}</td>
+            <td class="px-3 py-3 text-center">
+              {% if k.change_pct != None and k.direction == 'up' %}
+              <span class="text-emerald-600 font-semibold text-xs">▲ {{ k.change_pct }}%</span>
+              {% elif k.change_pct != None and k.direction == 'down' %}
+              <span class="text-red-600 font-semibold text-xs">▼ {{ k.change_pct }}%</span>
+              {% else %}
+              <span class="text-slate-400 text-xs">—</span>
+              {% endif %}
+            </td>
+            <td class="px-3 py-3 text-right text-slate-600">{% if k.search_volume %}{{ k.search_volume }}{% else %}—{% endif %}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="p-8">
+      {% include "components/empty_state.html" with icon="🤖" title="No AI search data yet" detail="Hit Refresh on this page to pull AI search volume for your tracked keywords from DataForSEO's AI Optimization API." %}
+    </div>
+    {% endif %}
+  </div>
+{% endblock %}

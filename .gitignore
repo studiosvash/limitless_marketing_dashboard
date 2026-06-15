@@ -1,0 +1,56 @@
+# --- Secrets — NEVER commit --------------------------------------------------
+.env
+*.env
+!.env.example
+
+
+.claude/
+
+# Google OAuth token artifacts
+token.json
+credentials.json
+google_token.pickle
+
+# --- Databases (local data, not version controlled) --------------------------
+*.db
+*.sqlite
+*.sqlite3
+data/
+
+# --- Django ------------------------------------------------------------------
+staticfiles/          # collectstatic output
+media/
+
+# --- Python ------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# --- Virtual environments ----------------------------------------------------
+.venv/
+venv/
+env/
+ENV/
+
+# --- Logs --------------------------------------------------------------------
+*.log
+logs/
+
+# --- IDE / OS ----------------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# --- Local scratch / test artifacts ------------------------------------------
+scratch/shots/        # browser screenshots from manual verification
+scratch/*.png
+scratch/_*/           # verification output dirs (_verify_shots, _audit_screens, …)
+_audit_screens/
+*.bak                 # DB backups (e.g. cache.db.bak-*)

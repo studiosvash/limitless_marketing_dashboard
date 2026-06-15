@@ -1,0 +1,26 @@
+{% load i18n %}
+<div id="sync-progress"
+     class="{% if not active_sync %}hidden{% endif %} rounded-xl border border-brand-200 bg-brand-50 p-4"
+     {% if active_sync %}
+     hx-get="{% url 'sync:status' %}"
+     hx-trigger="every 2s"
+     hx-target="#sync-progress"
+     hx-swap="outerHTML"
+     {% endif %}>
+  <div class="flex items-center justify-between text-sm mb-2">
+    <span class="font-medium text-brand-700">{{ label|default:"Syncing…" }}</span>
+    <span class="text-brand-600">{{ percent|default:0 }}%</span>
+  </div>
+  <div class="h-2 rounded-full bg-brand-100 overflow-hidden">
+    <div class="h-full bg-brand-600 transition-all duration-300"
+         style="width:{{ percent|default:0 }}%"></div>
+  </div>
+  {% if detail %}
+  <div class="mt-2 text-xs text-brand-600/70">{{ detail }}</div>
+  {% endif %}
+  {% if run and run.status == "success" %}
+  <div class="mt-2 text-xs text-emerald-600 font-medium">✓ Sync complete</div>
+  {% elif run and run.status == "error" %}
+  <div class="mt-2 text-xs text-red-500">{{ run.error_message }}</div>
+  {% endif %}
+</div>

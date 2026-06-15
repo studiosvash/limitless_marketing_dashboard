@@ -1,0 +1,207 @@
+{% extends "base.html" %}
+
+{% block title %}Settings · FuseHealth{% endblock %}
+{% block page_title %}Settings{% endblock %}
+{% block page_subtitle %}Site configuration and connected APIs{% endblock %}
+
+{% block content %}
+  {# Site selector #}
+  <div class="rounded-xl bg-white border border-slate-200 shadow-sm p-6">
+    <h2 class="text-[15px] font-semibold tracking-tight mb-4">Active Website</h2>
+    <div class="space-y-3">
+      <div>
+        <label class="block text-xs font-medium text-slate-700 mb-2">Currently Monitoring</label>
+        <div class="flex items-center gap-2 p-3 bg-brand-50 border border-brand-200 rounded-lg">
+          <div class="w-3 h-3 rounded-full bg-brand-600"></div>
+          <span class="text-sm font-medium text-slate-900">{{ site_name }}</span>
+          <span class="text-xs text-slate-500 ml-auto">{{ site_id }}</span>
+        </div>
+      </div>
+      {% if available_sites %}
+      <div>
+        <label class="block text-xs font-medium text-slate-700 mb-2">Switch to another website</label>
+        <form method="post" action="{% url 'dashboard:set_site' %}" class="flex gap-2">
+          {% csrf_token %}
+          <select name="site_url" class="flex-1 px-3 py-2 border border-slate-300 rounded-lg text-sm">
+            {% for site in available_sites %}
+            <option value="{{ site.site_url }}" {% if site.site_url == site_id %}selected{% endif %}>
+              {{ site.site_name|default:site.site_url }}
+            </option>
+            {% endfor %}
+          </select>
+          <button type="submit" class="px-4 py-2 bg-brand-600 text-white text-sm font-medium rounded-lg hover:bg-brand-700">
+            Switch
+          </button>
+        </form>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+  {# Tracked competitors (Positioning grid columns) #}
+  <div class="rounded-xl bg-white border border-slate-200 shadow-sm p-6">
+    <div class="flex items-center justify-between mb-2">
+      <h2 class="text-[15px] font-semibold tracking-tight">Tracked Competitors</h2>
+      {% if competitors_overridden %}
+      <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider bg-brand-50 text-brand-700">Custom list</span>
+      {% else %}
+      <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider bg-slate-100 text-slate-500">Auto-discovered</span>
+      {% endif %}
+    </div>
+    <p class="text-sm text-slate-600 mb-4">
+      These domains become the columns in the <span class="font-medium">Positioning → Competitor Rankings</span> grid.
+      Leave empty to auto-use the top competitors DataForSEO discovers. One domain per line (or comma-separated).
+    </p>
+    <form method="post" action="{% url 'dashboard:set_competitors' %}" class="space-y-3">
+      {% csrf_token %}
+      <textarea name="competitors" rows="5" placeholder="competitor1.com&#10;competitor2.com"
+        class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm font-mono">{% for d in tracked_competitors %}{{ d }}
+{% endfor %}</textarea>
+      {% if discovered_competitors %}
+      <div>
+        <div class="text-xs font-medium text-slate-500 mb-1.5">Discovered competitors (click to copy into the box):</div>
+        <div class="flex flex-wrap gap-1.5">
+          {% for d in discovered_competitors %}
+          <button type="button" onclick="const t=this.closest('form').querySelector('textarea'); if(!t.value.includes('{{ d }}')){t.value=(t.value.trim()+'\n{{ d }}').trim()+'\n';}"
+            class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-slate-100 text-slate-600 hover:bg-brand-50 hover:text-brand-700 transition-colors">{{ d }}</button>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+      <div class="flex items-center gap-3">
+        <button type="submit" class="px-4 py-2 bg-brand-600 text-white text-sm font-medium rounded-lg hover:bg-brand-700">Save competitors</button>
+        <span class="text-xs text-slate-400">Then hit Refresh on the Positioning page to capture their ranks.</span>
+      </div>
+    </form>
+  </div>
+
+  {# Connected APIs #}
+  <div class="rounded-xl bg-white border border-slate-200 shadow-sm overflow-hidden">
+    <div class="px-6 py-4 border-b border-slate-100">
+      <h2 class="text-[15px] font-semibold tracking-tight">Connected APIs</h2>
+    </div>
+    <div class="p-6 space-y-4">
+      {# Working connectors #}
+      {% if working_connectors %}
+      <div>
+        <h3 class="text-sm font-semibold text-slate-900 mb-3 flex items-center gap-2">
+          <span class="w-3 h-3 rounded-full bg-green-500"></span>
+          Working ({{ working_connectors|length }})
+        </h3>
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+          {% for log in working_connectors %}
+          <div class="p-3 bg-green-50 border border-green-200 rounded-lg">
+            <div class="font-medium text-sm text-slate-900">{{ log.connector }}</div>
+            <div class="text-xs text-slate-500 mt-1">
+              {% if log.last_synced %}
+              Last synced: {{ log.last_synced|date:"M d, H:i" }}
+              {% else %}
+              Never synced
+              {% endif %}
+            </div>
+            {% if log.records_written %}
+            <div class="text-xs text-green-700 mt-1">{{ log.records_written|add:0 }} records</div>
+            {% endif %}
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+
+      {# Errored connectors #}
+      {% if errored_connectors %}
+      <div>
+        <h3 class="text-sm font-semibold text-slate-900 mb-3 flex items-center gap-2">
+          <span class="w-3 h-3 rounded-full bg-red-500"></span>
+          Errors ({{ errored_connectors|length }})
+        </h3>
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+          {% for log in errored_connectors %}
+          <div class="p-3 bg-red-50 border border-red-200 rounded-lg">
+            <div class="font-medium text-sm text-slate-900">{{ log.connector }}</div>
+            {% if log.error_message %}
+            <div class="text-xs text-red-700 mt-1">{{ log.error_message|truncatewords:10 }}</div>
+            {% endif %}
+            <div class="text-xs text-slate-500 mt-1">
+              {% if log.last_synced %}
+              Last attempted: {{ log.last_synced|date:"M d, H:i" }}
+              {% endif %}
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+
+      {# Never run #}
+      {% if never_run_connectors %}
+      <div>
+        <h3 class="text-sm font-semibold text-slate-900 mb-3 flex items-center gap-2">
+          <span class="w-3 h-3 rounded-full bg-slate-400"></span>
+          Not Yet Synced ({{ never_run_connectors|length }})
+        </h3>
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+          {% for log in never_run_connectors %}
+          <div class="p-3 bg-slate-50 border border-slate-200 rounded-lg">
+            <div class="font-medium text-sm text-slate-900">{{ log.connector }}</div>
+            <div class="text-xs text-slate-500 mt-1">Run a full sync to activate</div>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+
+      {# Nothing recorded yet — guide the user instead of showing a blank panel #}
+      {% if not working_connectors and not errored_connectors and not never_run_connectors %}
+      <div class="text-center py-6">
+        <p class="text-sm text-slate-600">No connector runs recorded yet for this site.</p>
+        <p class="text-xs text-slate-400 mt-1">Click <span class="font-medium text-slate-600">Refresh All Data</span> below to fetch from every connected API. Each connector's status will appear here afterwards.</p>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+  {# API Status & Refresh #}
+  <div class="rounded-xl bg-white border border-slate-200 shadow-sm p-6">
+    <h2 class="text-[15px] font-semibold tracking-tight mb-4">Data Sync</h2>
+    <p class="text-sm text-slate-600 mb-4">
+      All data displayed in this dashboard is fetched from connected APIs and stored in the database.
+      Use the Refresh buttons on each page to fetch the latest data for that page, or use Refresh All
+      to update data across all pages.
+    </p>
+    <div class="flex gap-3">
+      {% include "components/refresh_button.html" with label="Refresh All Data" scope="all" %}
+      <button class="px-4 py-2 border border-slate-300 text-slate-700 text-sm font-medium rounded-lg hover:bg-slate-50">
+        View Sync Logs
+      </button>
+    </div>
+  </div>
+
+  {# User Preferences #}
+  <div class="rounded-xl bg-white border border-slate-200 shadow-sm p-6">
+    <h2 class="text-[15px] font-semibold tracking-tight mb-4">User Preferences</h2>
+    <div class="space-y-4">
+      <div class="flex items-center justify-between p-3 border border-slate-200 rounded-lg">
+        <div>
+          <div class="font-medium text-sm text-slate-900">Email Notifications</div>
+          <div class="text-xs text-slate-500">Get alerts when anomalies are detected</div>
+        </div>
+        <input type="checkbox" class="w-5 h-5 text-brand-600 rounded" checked>
+      </div>
+      <div class="flex items-center justify-between p-3 border border-slate-200 rounded-lg">
+        <div>
+          <div class="font-medium text-sm text-slate-900">Weekly Digest</div>
+          <div class="text-xs text-slate-500">Receive a summary of metrics every Monday</div>
+        </div>
+        <input type="checkbox" class="w-5 h-5 text-brand-600 rounded" checked>
+      </div>
+      <div class="flex items-center justify-between p-3 border border-slate-200 rounded-lg">
+        <div>
+          <div class="font-medium text-sm text-slate-900">Dark Mode</div>
+          <div class="text-xs text-slate-500">Coming soon</div>
+        </div>
+        <input type="checkbox" class="w-5 h-5 text-slate-300 rounded" disabled>
+      </div>
+    </div>
+  </div>
+{% endblock %}

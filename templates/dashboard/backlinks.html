@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+
+{% block title %}Backlinks · FuseHealth{% endblock %}
+{% block page_title %}Backlink Intelligence{% endblock %}
+{% block page_subtitle %}Analyze referring domains and link acquisition{% endblock %}
+
+{% block content %}
+  {# Live sync progress #}
+  {% include "components/sync_progress.html" %}
+
+  {# Summary metrics #}
+  <div class="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
+    <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
+      <div class="text-xs font-medium text-slate-500 uppercase tracking-wider">Total Backlinks</div>
+      <div class="text-2xl font-bold text-slate-800 mt-1">{{ summary.total|default:0|floatformat:0 }}</div>
+    </div>
+    <div class="bg-white rounded-xl border border-emerald-200 shadow-sm p-4">
+      <div class="text-xs font-medium text-emerald-600 uppercase tracking-wider">Live Links</div>
+      <div class="text-2xl font-bold text-emerald-700 mt-1">{{ summary.live|default:0|floatformat:0 }}</div>
+    </div>
+    <div class="bg-white rounded-xl border border-red-200 shadow-sm p-4">
+      <div class="text-xs font-medium text-red-600 uppercase tracking-wider">Lost Links</div>
+      <div class="text-2xl font-bold text-red-700 mt-1">{{ summary.lost|default:0|floatformat:0 }}</div>
+    </div>
+    <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
+      <div class="text-xs font-medium text-slate-500 uppercase tracking-wider">Referring Domains</div>
+      <div class="text-2xl font-bold text-slate-800 mt-1">{{ summary.unique_domains|default:0|floatformat:0 }}</div>
+    </div>
+    <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
+      <div class="text-xs font-medium text-slate-500 uppercase tracking-wider">Avg Domain Rank</div>
+      <div class="text-2xl font-bold text-slate-800 mt-1">{{ summary.avg_dr|default:0 }}</div>
+    </div>
+  </div>
+
+  {# Backlinks Table #}
+  <div class="rounded-xl bg-white border border-slate-200 shadow-sm overflow-hidden" x-data="{ filter: 'all' }">
+    <div class="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
+      <h2 class="text-[15px] font-semibold tracking-tight">Recent Backlinks</h2>
+      <div class="flex items-center gap-3">
+        <div class="flex space-x-1 bg-slate-100 p-1 rounded-lg">
+          <button @click="filter = 'all'" :class="{'bg-white shadow-sm text-slate-900': filter === 'all', 'text-slate-500 hover:text-slate-700': filter !== 'all'}" class="px-3 py-1 text-xs font-medium rounded-md">All</button>
+          <button @click="filter = 'live'" :class="{'bg-white shadow-sm text-slate-900': filter === 'live', 'text-slate-500 hover:text-slate-700': filter !== 'live'}" class="px-3 py-1 text-xs font-medium rounded-md text-emerald-600">Live</button>
+          <button @click="filter = 'lost'" :class="{'bg-white shadow-sm text-slate-900': filter === 'lost', 'text-slate-500 hover:text-slate-700': filter !== 'lost'}" class="px-3 py-1 text-xs font-medium rounded-md text-red-600">Lost</button>
+        </div>
+        <a href="{% url 'dashboard:export_csv' 'backlinks' %}" class="text-xs text-brand-600 hover:text-brand-700 font-medium">Export CSV</a>
+      </div>
+    </div>
+    
+    {% if backlinks %}
+    <div class="overflow-x-auto max-h-[600px] overflow-y-auto">
+      <table class="w-full text-sm">
+        <thead class="sticky top-0 bg-white shadow-sm">
+          <tr class="text-left text-slate-400 text-xs uppercase tracking-wider">
+            <th class="font-medium px-5 py-3">Referring Domain</th>
+            <th class="font-medium px-5 py-3">Target URL</th>
+            <th class="font-medium px-5 py-3">Anchor Text</th>
+            <th class="font-medium px-5 py-3 text-center">Type</th>
+            <th class="font-medium px-5 py-3 text-center">Status</th>
+            <th class="font-medium px-5 py-3 text-right">Domain Rank</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100">
+          {% for link in backlinks %}
+          <tr class="hover:bg-slate-50 transition-colors" x-show="filter === 'all' || filter === '{{ link.status }}'">
+            <td class="px-5 py-3">
+              <div class="font-medium text-slate-700 max-w-[200px] truncate" title="{{ link.domain }}">{{ link.domain }}</div>
+            </td>
+            <td class="px-5 py-3 text-slate-500 text-xs max-w-[200px] truncate" title="{{ link.target_url }}">{{ link.target_url|truncatechars:40 }}</td>
+            <td class="px-5 py-3 text-slate-600 italic text-xs max-w-[200px] truncate" title="{{ link.anchor }}">{{ link.anchor }}</td>
+            <td class="px-5 py-3 text-center">
+              {% if link.dofollow %}
+                <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-blue-50 text-blue-600 border border-blue-200">Dofollow</span>
+              {% else %}
+                <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-slate-100 text-slate-500 border border-slate-200">Nofollow</span>
+              {% endif %}
+            </td>
+            <td class="px-5 py-3 text-center">
+              {% if link.status == 'live' %}
+                <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-emerald-100 text-emerald-700">Live</span>
+              {% else %}
+                <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700">Lost</span>
+              {% endif %}
+            </td>
+            <td class="px-5 py-3 text-right">
+              <span class="font-semibold {% if link.domain_rank >= 50 %}text-emerald-600{% elif link.domain_rank >= 30 %}text-blue-600{% else %}text-slate-600{% endif %}">
+                {{ link.domain_rank }}
+              </span>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+      <div class="p-8">
+        {% include "components/empty_state.html" with icon="🔗" title="No backlinks found" detail="We haven't discovered any backlinks for this site yet. Run a full sync to fetch backlink data." %}
+      </div>
+    {% endif %}
+  </div>
+{% endblock %}

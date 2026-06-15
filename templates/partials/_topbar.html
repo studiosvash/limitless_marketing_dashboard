@@ -1,0 +1,55 @@
+{# Top bar: page title + subtitle (left), date range + Refresh (right).        #}
+{# Pages override the blocks below. The Refresh button + sync flow land Phase 4. #}
+<header class="h-16 shrink-0 bg-white/80 backdrop-blur border-b border-slate-200 flex items-center gap-4 px-6">
+  <div>
+    <h1 class="text-[17px] font-semibold tracking-tight leading-none">
+      {% if active == 'overview' %}Overview
+      {% elif active == 'seo' %}SEO Performance
+      {% elif active == 'keywords' %}Keywords
+      {% elif active == 'pages' %}Page Health
+      {% elif active == 'positioning' %}Position Tracking
+      {% elif active == 'backlinks' %}Backlinks
+      {% elif active == 'ads' %}Ads
+      {% elif active == 'alerts' %}Alerts &amp; Audit
+      {% elif active == 'settings' %}Settings
+      {% else %}Dashboard{% endif %}
+    </h1>
+    <p class="text-xs text-slate-400 mt-1">
+      {% if active == 'overview' %}Your traffic, rankings, and what needs attention
+      {% elif active == 'seo' %}Opportunities, anomalies, and technical issues
+      {% elif active == 'keywords' %}Action buckets and keyword health
+      {% elif active == 'pages' %}Traffic, speed, and indexing per page
+      {% elif active == 'positioning' %}Rankings, competitors, and visibility
+      {% elif active == 'backlinks' %}Link acquisition and lost links
+      {% elif active == 'ads' %}Paid media performance
+      {% elif active == 'alerts' %}Anomalies, indexing problems, and technical issues
+      {% elif active == 'settings' %}Site selection, connectors, and preferences
+      {% endif %}
+    </p>
+  </div>
+
+  <div class="ml-auto flex items-center gap-3">
+    {# Global website selector — switches the site the whole dashboard reads from. #}
+    {% if available_sites %}
+    <form method="get" action="{% url 'dashboard:set_site' %}" class="relative">
+      <select name="site_url" onchange="this.form.submit()"
+              class="appearance-none cursor-pointer text-sm rounded-lg border border-slate-200 bg-white pl-8 pr-8 py-1.5 text-slate-700 font-medium hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-200">
+        {% for site in available_sites %}
+        <option value="{{ site.site_url }}" {% if site.site_url == selected_site_url %}selected{% endif %}>{{ site.site_name }}</option>
+        {% endfor %}
+      </select>
+      <svg class="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-indigo-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 12h18M3 6h18M3 18h18"/></svg>
+      <svg class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/></svg>
+    </form>
+    {% endif %}
+    {% block topbar_actions %}
+      {# Default date-range toggle. Wired to session state via HTMX in Phase 2/5. #}
+      <div class="flex items-center text-sm rounded-lg border border-slate-200 bg-white overflow-hidden">
+        <a href="{% url 'dashboard:set_period' %}?mode=daily" class="px-3 py-1.5 {% if request.session.period_mode == 'daily' %}bg-slate-100 text-slate-800 font-medium{% else %}text-slate-500 hover:bg-slate-50{% endif %}">1d</a>
+        <a href="{% url 'dashboard:set_period' %}?mode=weekly" class="px-3 py-1.5 {% if request.session.period_mode == 'weekly' or not request.session.period_mode %}bg-slate-100 text-slate-800 font-medium{% else %}text-slate-500 hover:bg-slate-50{% endif %} border-x border-slate-200">7d</a>
+        <a href="{% url 'dashboard:set_period' %}?mode=monthly" class="px-3 py-1.5 {% if request.session.period_mode == 'monthly' %}bg-slate-100 text-slate-800 font-medium{% else %}text-slate-500 hover:bg-slate-50{% endif %}">30d</a>
+      </div>
+      {% include "components/refresh_button.html" with label="Refresh all" scope="all" %}
+    {% endblock %}
+  </div>
+</header>
