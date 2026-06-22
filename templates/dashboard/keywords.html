@@ -8,6 +8,57 @@
   {# Live sync progress #}
   {% include "components/sync_progress.html" %}
 
+  {# ── Keyword Explorer (ad-hoc research — calls DataForSEO on Search) ── #}
+  <section id="keyword-explorer" class="mb-8" hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'>
+    <div class="rounded-xl bg-white border border-slate-200 shadow-sm overflow-hidden">
+      <div class="px-5 py-4 border-b border-slate-100">
+        <h2 class="text-[15px] font-semibold tracking-tight flex items-center gap-2">
+          <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-brand-50 text-brand-700">New</span>
+          Keyword Explorer
+        </h2>
+        <p class="text-xs text-slate-400 mt-0.5">Research any keywords on demand — enter one or several separated by commas. Powered by DataForSEO.</p>
+      </div>
+
+      <div class="p-5">
+        <form hx-post="{% url 'dashboard:keyword_explorer_search' %}"
+              hx-target="#explorer-results" hx-swap="innerHTML"
+              hx-indicator="#explorer-loading"
+              hx-disabled-elt="find button"
+              class="flex flex-col sm:flex-row gap-3">
+          {% csrf_token %}
+          <input type="text" name="keywords" autocomplete="off" required
+                 placeholder="e.g. seo agency, local seo services, digital marketing agency"
+                 class="flex-1 px-3.5 py-2.5 text-sm rounded-lg border border-slate-200 focus:border-brand-400 focus:ring-2 focus:ring-brand-100 outline-none transition" />
+          <select name="location"
+                  class="px-3 py-2.5 text-sm rounded-lg border border-slate-200 bg-white focus:border-brand-400 focus:ring-2 focus:ring-brand-100 outline-none transition">
+            {% for loc in explorer_locations %}
+            <option value="{{ loc }}">{{ loc }}</option>
+            {% endfor %}
+          </select>
+          <button type="submit"
+                  class="inline-flex items-center justify-center gap-2 px-5 py-2.5 text-sm font-semibold text-white bg-brand-600 rounded-lg hover:bg-brand-700 transition-colors shadow-sm disabled:opacity-60">
+            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"></path></svg>
+            Search
+          </button>
+        </form>
+
+        {# Loading state (shown by htmx-indicator CSS while the request is in flight) #}
+        <div id="explorer-loading" class="htmx-indicator items-center gap-2 mt-4 text-sm text-slate-500">
+          <svg class="w-4 h-4 animate-spin text-brand-500" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+          Fetching keyword data…
+        </div>
+
+        {# Results swapped in here #}
+        <div id="explorer-results" class="mt-5"></div>
+      </div>
+    </div>
+
+    {# Saved research list #}
+    <div class="mt-6">
+      {% include "dashboard/partials/_saved_keywords.html" %}
+    </div>
+  </section>
+
   {# ── Overview Stats Row (SEMrush-style) ── #}
   <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
     <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
@@ -324,4 +375,151 @@
     </div>
     {% endif %}
   </div>
+{% endblock %}
+
+{% block body_extra %}
+<script>
+  // Keyword Explorer table — sort, select, download, copy, save.
+  // Defined once at page load so it exists before HTMX swaps the results partial in.
+  window.explorerTable = function () {
+    return {
+      rows: [],
+      selected: {},
+      sortKey: '',
+      sortDir: 'desc',
+      copied: false,
+      saving: false,
+      saved: false,
+
+      init() {
+        const el = document.getElementById('explorer-rows-data');
+        this.rows = el ? JSON.parse(el.textContent) : [];
+      },
+
+      get selectedCount() {
+        return Object.values(this.selected).filter(Boolean).length;
+      },
+      get allSelected() {
+        return this.rows.length > 0 && this.rows.every(r => this.selected[r.keyword]);
+      },
+      toggle(kw) { this.selected[kw] = !this.selected[kw]; },
+      toggleAll(checked) {
+        this.rows.forEach(r => { this.selected[r.keyword] = checked; });
+      },
+      selectedRows() {
+        return this.rows.filter(r => this.selected[r.keyword]);
+      },
+
+      sortBy(key) {
+        if (this.sortKey === key) {
+          this.sortDir = this.sortDir === 'asc' ? 'desc' : 'asc';
+        } else {
+          this.sortKey = key;
+          this.sortDir = 'desc';
+        }
+        const dir = this.sortDir === 'asc' ? 1 : -1;
+        this.rows.sort((a, b) => {
+          const av = a[key], bv = b[key];
+          // Nulls always sort to the bottom regardless of direction.
+          if (av === null || av === undefined) return 1;
+          if (bv === null || bv === undefined) return -1;
+          return (av - bv) * dir;
+        });
+      },
+      sortArrow(key) {
+        if (this.sortKey !== key) return '';
+        return this.sortDir === 'asc' ? '▲' : '▼';
+      },
+
+      // ── formatting helpers ──
+      fmtInt(v) { return (v === null || v === undefined) ? '—' : Number(v).toLocaleString(); },
+      fmtCpc(v) { return (v === null || v === undefined) ? '—' : '$' + Number(v).toFixed(2); },
+      kdClass(v) {
+        if (v < 30) return 'bg-emerald-100 text-emerald-700';
+        if (v < 60) return 'bg-amber-100 text-amber-700';
+        return 'bg-red-100 text-red-700';
+      },
+      compClass(c) {
+        const v = (c || '').toString().toUpperCase();
+        if (v === 'LOW') return 'bg-emerald-100 text-emerald-700';
+        if (v === 'MEDIUM') return 'bg-amber-100 text-amber-700';
+        if (v === 'HIGH') return 'bg-red-100 text-red-700';
+        return 'bg-slate-100 text-slate-600';
+      },
+      intentClass(i) {
+        const v = (i || '').toString().toLowerCase();
+        if (v.indexOf('info') === 0) return 'bg-blue-100 text-blue-700';
+        if (v.indexOf('comm') === 0) return 'bg-emerald-100 text-emerald-700';
+        if (v.indexOf('trans') === 0) return 'bg-orange-100 text-orange-700';
+        if (v.indexOf('nav') === 0) return 'bg-purple-100 text-purple-700';
+        return 'bg-slate-100 text-slate-600';
+      },
+
+      // ── columns for export ──
+      _cols: ['keyword', 'search_volume', 'keyword_difficulty', 'cpc', 'competition', 'intent', 'serp_features', 'location'],
+      _headers: ['Keyword', 'Search Volume', 'Keyword Difficulty', 'CPC', 'Competition', 'Search Intent', 'SERP Features', 'Country / Location'],
+      _cell(v) { return (v === null || v === undefined) ? '' : String(v); },
+
+      copy() {
+        const rows = this.selectedRows();
+        if (!rows.length) return;
+        const lines = [this._headers.join('\t')];
+        rows.forEach(r => lines.push(this._cols.map(c => this._cell(r[c])).join('\t')));
+        const text = lines.join('\n');
+        const done = () => { this.copied = true; setTimeout(() => { this.copied = false; }, 1500); };
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).then(done).catch(() => {});
+        } else {
+          const ta = document.createElement('textarea');
+          ta.value = text; document.body.appendChild(ta); ta.select();
+          try { document.execCommand('copy'); } catch (e) {}
+          document.body.removeChild(ta); done();
+        }
+      },
+
+      download() {
+        const rows = this.selectedRows();
+        if (!rows.length) return;
+        const esc = (v) => {
+          const s = this._cell(v);
+          return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+        };
+        const lines = [this._headers.map(esc).join(',')];
+        rows.forEach(r => lines.push(this._cols.map(c => esc(r[c])).join(',')));
+        const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = 'keyword_explorer.csv';
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      },
+
+      save() {
+        const rows = this.selectedRows();
+        if (!rows.length || this.saving) return;
+        this.saving = true;
+        const tokenEl = document.querySelector('#keyword-explorer input[name=csrfmiddlewaretoken]');
+        const token = tokenEl ? tokenEl.value : '';
+        fetch('{% url "dashboard:save_keywords" %}', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-CSRFToken': token },
+          body: JSON.stringify({ rows: rows }),
+        })
+          .then(r => r.text())
+          .then(html => {
+            const panel = document.getElementById('saved-keywords-panel');
+            if (panel) {
+              panel.outerHTML = html;
+              if (window.htmx) { window.htmx.process(document.getElementById('saved-keywords-panel')); }
+            }
+            this.saving = false;
+            this.saved = true;
+            this.selected = {};
+            setTimeout(() => { this.saved = false; }, 1500);
+          })
+          .catch(() => { this.saving = false; });
+      },
+    };
+  };
+</script>
 {% endblock %}

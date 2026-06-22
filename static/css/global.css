@@ -17,3 +17,11 @@ body {
 /* HTMX: subtle fade so swapped partials don't pop. */
 .htmx-swapping { opacity: 0; transition: opacity .15s ease-out; }
 .htmx-settling { opacity: 1; transition: opacity .15s ease-in; }
+
+/* HTMX: loading indicators — hidden until the triggering request is in flight. */
+.htmx-indicator { display: none; }
+.htmx-request.htmx-indicator { display: flex; }
+.htmx-request .htmx-indicator { display: flex; }
+
+/* Alpine: hide x-cloak elements until Alpine initializes. */
+[x-cloak] { display: none !important; }

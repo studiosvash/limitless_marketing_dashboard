@@ -188,7 +188,6 @@ Which connectors feed each dashboard page (from `sync_engine.py`):
 | Tables written | `keyword_rankings` (enriches: `search_volume`, `cpc`, `keyword_difficulty`) |
 | Pages that use it | `keywords`, `positioning` |
 | Notes | Reads tracked keywords from `keywords.txt` via `pipeline.utils.keywords.load_tracked_keywords`. Batches up to 1,000 keywords per API call. KD comes from a separate Labs endpoint — failures degrade gracefully (KD stays `None`). Does NOT set `position` or `url` — those come from `dataforseo_serp` or `gsc_keywords`. Conflict key: `(date, site_id, keyword)`. |
-| Ad-hoc lookup | `lookup_keywords(keywords, location_name="United States") -> dict` — **read-only** method for the Keyword Explorer (Keywords page). One call to Labs `dataforseo_labs/google/keyword_overview/live` (≤700 kw/call) returns volume, KD, CPC, competition, intent, and SERP features at once. Does **not** write the DB or read `keywords.txt` — fully separate from the tracking `fetch()`/`sync()` path. Triggered by the user-action `keywords/explore/` endpoint (not page render). Returns `{status, rows, no_data, location, error}`. |
 
 ---
 

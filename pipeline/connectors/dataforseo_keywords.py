@@ -108,6 +108,113 @@ class DataForSEOKeywordsConnector(BaseConnector):
                     kd_map[kw] = float(kd)
         return kd_map
 
+    # ─────────────────────────────────────────────
+    # Ad-hoc lookup for the Keyword Explorer (read-only — no DB write, no keywords.txt).
+    # Separate from the tracking fetch()/sync() path. Triggered by an explicit user
+    # action, so calling the API here is consistent with the data-first contract.
+    # ─────────────────────────────────────────────
+
+    @with_retry(max_retries=2, base_delay=3.0)
+    def _fetch_keyword_overview(self, keywords: list[str], location_name: str) -> list[dict]:
+        """One DataForSEO Labs keyword_overview call — returns every metric at once.
+        Accepts up to 700 keywords per request."""
+        payload = [{
+            "keywords": keywords[:700],
+            "location_name": location_name,
+            "language_name": "English",
+        }]
+        resp = requests.post(
+            f"{DATAFORSEO_BASE}/dataforseo_labs/google/keyword_overview/live",
+            auth=self.auth,
+            json=payload,
+            timeout=30,
+        )
+        resp.raise_for_status()
+        return resp.json().get("tasks", [{}])[0].get("result", [{}])[0].get("items", []) or []
+
+    @staticmethod
+    def _parse_overview_item(item: dict, location_name: str) -> Optional[dict]:
+        """Map one keyword_overview item to the Explorer's 8 columns. Defensive against
+        missing nested keys. Returns None if the item has no keyword."""
+        # keyword_overview returns metrics on the item itself; ranked_keywords nests them
+        # under keyword_data — accept either so the parser is robust.
+        data = item.get("keyword_data") if isinstance(item.get("keyword_data"), dict) else item
+        keyword = data.get("keyword")
+        if not keyword:
+            return None
+
+        info = data.get("keyword_info") or {}
+        props = data.get("keyword_properties") or {}
+        serp = data.get("serp_info") or {}
+        intent_info = data.get("search_intent_info") or {}
+
+        main_intent = intent_info.get("main_intent") if isinstance(intent_info, dict) else None
+        serp_types = serp.get("serp_item_types") if isinstance(serp, dict) else None
+        serp_features = ", ".join(serp_types) if serp_types else ""
+
+        competition = info.get("competition_level")
+        if not competition and info.get("competition") is not None:
+            competition = str(info.get("competition"))
+
+        return {
+            "keyword": keyword,
+            "search_volume": info.get("search_volume"),
+            "keyword_difficulty": props.get("keyword_difficulty"),
+            "cpc": info.get("cpc"),
+            "competition": competition,
+            "intent": main_intent.capitalize() if main_intent else None,
+            "serp_features": serp_features,
+            "location": location_name,
+        }
+
+    def lookup_keywords(self, keywords: list[str], location_name: str = "United States") -> dict:
+        """
+        Fetch on-demand keyword metrics for the Keyword Explorer. Read-only: returns the
+        data, never writes to the DB. Always returns a dict the view/template can branch on:
+
+            {"status": "ok"|"error", "rows": [...], "no_data": [...],
+             "location": str, "error": str|None}
+
+        - rows: keywords DataForSEO returned data for (the 8 Explorer columns).
+        - no_data: requested keywords with no result (shown as a note; successful rows still render).
+        - status "error": whole-call failure (missing creds, negative balance, network/HTTP).
+        """
+        cleaned = []
+        seen = set()
+        for kw in keywords:
+            k = (kw or "").strip()
+            key = k.lower()
+            if k and key not in seen:
+                seen.add(key)
+                cleaned.append(k)
+
+        if not cleaned:
+            return {"status": "error", "rows": [], "no_data": [],
+                    "location": location_name, "error": "Enter at least one keyword."}
+
+        if not self.login or not self.password:
+            return {"status": "error", "rows": [], "no_data": cleaned, "location": location_name,
+                    "error": "DataForSEO credentials are not configured."}
+
+        try:
+            items = self._fetch_keyword_overview(cleaned, location_name)
+        except Exception as exc:
+            self.logger.warning(f"[dataforseo_keywords] lookup_keywords failed: {exc}")
+            return {"status": "error", "rows": [], "no_data": cleaned, "location": location_name,
+                    "error": f"Couldn't fetch keyword data: {exc}"}
+
+        rows = []
+        returned = set()
+        for item in items:
+            parsed = self._parse_overview_item(item, location_name)
+            if parsed:
+                rows.append(parsed)
+                returned.add(parsed["keyword"].lower())
+
+        no_data = [k for k in cleaned if k.lower() not in returned]
+        return {"status": "ok", "rows": rows, "no_data": no_data,
+                "location": location_name, "error": None}
+
     def fetch(self, site_id: Optional[str] = None) -> list[dict]:
         """
         Fetch keyword metadata (volume, KD, CPC) for all tracked keywords.

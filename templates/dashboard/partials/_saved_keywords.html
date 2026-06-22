@@ -1,0 +1,65 @@
+{% comment %}
+Saved research keywords panel. Rendered on the Keywords page and re-rendered (swapped)
+after a Save or Delete. Root id `saved-keywords-panel` is the swap target.
+Context: saved_keywords = [ {keyword, location, search_volume, keyword_difficulty, cpc,
+                            competition, intent, serp_features}, … ]
+{% endcomment %}
+<div id="saved-keywords-panel" class="rounded-xl bg-white border border-slate-200 shadow-sm overflow-hidden">
+  <div class="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
+    <div>
+      <h3 class="text-[15px] font-semibold tracking-tight flex items-center gap-2">
+        <svg class="w-4 h-4 text-brand-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M17.593 3.322c1.1.128 1.907 1.077 1.907 2.185V21L12 17.25 4.5 21V5.507c0-1.108.806-2.057 1.907-2.185a48.507 48.507 0 0111.186 0z"></path></svg>
+        Saved Keywords
+      </h3>
+      <p class="text-xs text-slate-400 mt-0.5">Your bookmarked research keywords — separate from tracked keywords.</p>
+    </div>
+    <span class="text-xs text-slate-500">{{ saved_keywords|length }} saved</span>
+  </div>
+
+  {% if saved_keywords %}
+  <div class="overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead>
+        <tr class="text-left text-slate-400 text-xs uppercase tracking-wider bg-slate-50 border-b border-slate-100">
+          <th class="font-medium px-5 py-3">Keyword</th>
+          <th class="font-medium px-3 py-3 text-right">Volume</th>
+          <th class="font-medium px-3 py-3 text-center">KD</th>
+          <th class="font-medium px-3 py-3 text-right">CPC</th>
+          <th class="font-medium px-3 py-3">Competition</th>
+          <th class="font-medium px-3 py-3">Intent</th>
+          <th class="font-medium px-3 py-3">Location</th>
+          <th class="font-medium px-3 py-3 text-right">Remove</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-slate-100">
+        {% for k in saved_keywords %}
+        <tr class="hover:bg-slate-50 transition-colors">
+          <td class="px-5 py-3 font-medium text-slate-700 max-w-[220px] truncate" title="{{ k.keyword }}">{{ k.keyword }}</td>
+          <td class="px-3 py-3 text-right text-slate-600">{% if k.search_volume != None %}{{ k.search_volume|floatformat:0 }}{% else %}—{% endif %}</td>
+          <td class="px-3 py-3 text-center text-slate-600">{% if k.keyword_difficulty != None %}{{ k.keyword_difficulty|floatformat:0 }}{% else %}—{% endif %}</td>
+          <td class="px-3 py-3 text-right text-slate-600">{% if k.cpc != None %}${{ k.cpc|floatformat:2 }}{% else %}—{% endif %}</td>
+          <td class="px-3 py-3 text-slate-600">{{ k.competition|default:"—" }}</td>
+          <td class="px-3 py-3 text-slate-600">{{ k.intent|default:"—" }}</td>
+          <td class="px-3 py-3 text-slate-500 text-xs">{{ k.location }}</td>
+          <td class="px-3 py-3 text-right">
+            <form hx-post="{% url 'dashboard:delete_saved_keyword' %}" hx-target="#saved-keywords-panel" hx-swap="outerHTML" class="inline">
+              {% csrf_token %}
+              <input type="hidden" name="keyword" value="{{ k.keyword }}">
+              <input type="hidden" name="location" value="{{ k.location }}">
+              <button type="submit" class="inline-flex items-center justify-center w-7 h-7 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors" title="Remove">
+                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"></path></svg>
+              </button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="px-5 py-8 text-center">
+    <div class="text-sm font-medium text-slate-500">No saved keywords yet</div>
+    <div class="text-xs text-slate-400 mt-1">Search above, select keywords, and click Save to bookmark them here.</div>
+  </div>
+  {% endif %}
+</div>

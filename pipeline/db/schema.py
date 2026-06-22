@@ -423,6 +423,32 @@ class AIKeywordData(Base):
     )
 
 
+class SavedKeyword(Base):
+    """
+    Ad-hoc research keywords a user explicitly bookmarked from the Keyword Explorer.
+    Intentionally separate from keyword_rankings (the tracking pipeline) — this is a
+    research list, never synced or position-tracked. Site-scoped, shared by the team.
+    """
+    __tablename__ = "saved_keywords"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    site_id = Column(String(255), nullable=False, index=True, default="")
+    keyword = Column(String(500), nullable=False, index=True)
+    location = Column(String(255), nullable=False, default="United States")
+    search_volume = Column(Integer, nullable=True)
+    keyword_difficulty = Column(Float, nullable=True)
+    cpc = Column(Float, nullable=True)
+    competition = Column(String(50), nullable=True)        # competition_level label (LOW/MEDIUM/HIGH)
+    intent = Column(String(100), nullable=True)
+    serp_features = Column(Text, nullable=True)            # comma-joined serp_item_types
+    saved_at = Column(DateTime, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("site_id", "keyword", "location", name="uq_saved_keyword_site_kw_loc"),
+        Index("ix_saved_keyword_site", "site_id"),
+    )
+
+
 # ─────────────────────────────────────────────
 # Prediction & intelligence layer
 # Not filled by any API — a prediction service reads the raw/aggregate tables,

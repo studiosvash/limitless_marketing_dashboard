@@ -26,6 +26,7 @@ from pipeline.db.schema import (
     PageSpeed, IndexingStatus, SEOAggregate,
     Anomaly, ComparativeMetrics,
     CompetitorKeywordRanking, TrackedCompetitor, AIKeywordData,
+    SavedKeyword,
 )
 from pipeline.utils.logger import get_logger
 
@@ -508,4 +509,37 @@ def upsert_ai_keyword_data(session: Session, records: list[dict], site_id: Optio
         session.execute(stmt)
         total += len(batch)
     logger.debug(f"[writer] ai_keyword_data: upserted {total} rows")
+    return total
+
+
+# ─────────────────────────────────────────────
+# Saved Keywords (Keyword Explorer research list)
+# ─────────────────────────────────────────────
+
+def upsert_saved_keywords(session: Session, records: list[dict], site_id: Optional[str] = None) -> int:
+    """Upsert saved research keywords. Unique on (site_id, keyword, location).
+    Re-saving the same keyword/location updates its metrics in place."""
+    if not records:
+        return 0
+
+    ensure_tables(session, SavedKeyword)
+    _ensure_site_id(records, site_id)
+    for r in records:
+        r.setdefault("site_id", "")
+        r.setdefault("location", "United States")
+
+    BATCH_SIZE = 80
+    _upsert_keys = ("site_id", "keyword", "location")
+    update_cols = [k for k in records[0] if k not in _upsert_keys and k != "id"]
+    total = 0
+    for i in range(0, len(records), BATCH_SIZE):
+        batch = records[i:i + BATCH_SIZE]
+        stmt = sqlite_insert(SavedKeyword).values(batch)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=list(_upsert_keys),
+            set_={k: stmt.excluded[k] for k in update_cols},
+        )
+        session.execute(stmt)
+        total += len(batch)
+    logger.debug(f"[writer] saved_keywords: upserted {total} rows")
     return total

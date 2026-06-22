@@ -9,6 +9,7 @@ render client-side with Plotly.
 from datetime import date, timedelta
 
 from django.shortcuts import render
+from django.views.decorators.http import require_POST
 from sqlalchemy import func, select
 
 from apps.accounts.decorators import role_required
@@ -690,8 +691,11 @@ def _get_keyword_intelligence(site_id: str, curr_start: date, curr_end: date, pr
             if df.empty:
                 return {
                     "health_score": 0, "health_label": "No Data", "health_color": "#94a3b8",
+                    "total_tracked": 0, "total_volume": 0, "avg_position": 0, "total_clicks": 0,
+                    "intent_distribution": {"informational": 0, "commercial": 0, "transactional": 0, "navigational": 0},
+                    "kd_easy": 0, "kd_medium": 0, "kd_hard": 0,
                     "quick_wins": [], "striking": [], "declining": [], "low_ctr": [],
-                    "all_keywords": []
+                    "all_keywords": [],
                 }
 
             # Health Score
@@ -958,22 +962,104 @@ def _get_ai_keywords(site_id: str, limit: int = 100) -> dict:
         return {"status": "no_data", "rows": []}
 
 
+# Locations offered in the Keyword Explorer dropdown (DataForSEO location_name values).
+EXPLORER_LOCATIONS = [
+    "United States", "United Kingdom", "Canada", "Australia", "India",
+    "Germany", "France", "Spain", "Italy", "Netherlands",
+    "Brazil", "Mexico", "United Arab Emirates", "Singapore",
+]
+
+
 @role_required("keywords")
 def keywords(request):
-    """Keywords page — Action buckets, Keyword Health Score, and AI search demand."""
+    """Keywords page — Action buckets, Keyword Health Score, AI search demand, and the
+    Keyword Explorer (ad-hoc research). The page render stays DB-only; the Explorer's
+    DataForSEO call happens on the separate explore endpoint when the user searches."""
     site_id = request.session.get("selected_site_url") or get_default_site_id()
     curr_start, curr_end, prev_start, prev_end, mode = get_active_period(request)
 
     intelligence = _get_keyword_intelligence(site_id, curr_start, curr_end, prev_start, prev_end)
     ai_keywords = _get_ai_keywords(site_id)
 
+    from pipeline.services.saved_keyword_service import list_saved_keywords
+
     context = {
         "active": "keywords",
         "intelligence": intelligence,
         "ai_keywords": ai_keywords,
+        "saved_keywords": list_saved_keywords(site_id),
+        "explorer_locations": EXPLORER_LOCATIONS,
         "last_sync": _get_last_sync_time(site_id),
     }
     return render(request, "dashboard/keywords.html", context)
+
+
+@role_required("keywords")
+@require_POST
+def keyword_explorer_search(request):
+    """Keyword Explorer search — calls DataForSEO live for the entered keywords and
+    returns the results table partial. This is the user-action API path (like Refresh),
+    not a page render, so the live call here is consistent with the data-first contract."""
+    raw = request.POST.get("keywords", "")
+    location = (request.POST.get("location") or "United States").strip() or "United States"
+    if location not in EXPLORER_LOCATIONS:
+        location = "United States"
+
+    keywords_list = [k.strip() for k in raw.split(",") if k.strip()]
+
+    if not keywords_list:
+        return render(request, "dashboard/partials/_explorer_results.html", {
+            "result": {"status": "error", "rows": [], "no_data": [],
+                       "location": location, "error": "Enter at least one keyword to search."},
+        })
+
+    try:
+        from pipeline.connectors.dataforseo_keywords import DataForSEOKeywordsConnector
+        result = DataForSEOKeywordsConnector().lookup_keywords(keywords_list, location)
+    except Exception as e:
+        import logging; logging.getLogger(__name__).error(f"keyword_explorer_search error: {e}", exc_info=True)
+        result = {"status": "error", "rows": [], "no_data": keywords_list,
+                  "location": location, "error": "Something went wrong fetching keyword data."}
+
+    return render(request, "dashboard/partials/_explorer_results.html", {"result": result})
+
+
+@role_required("keywords")
+@require_POST
+def save_keywords(request):
+    """Save selected Explorer rows to the site's research list, return the refreshed panel."""
+    import json
+    site_id = request.session.get("selected_site_url") or get_default_site_id()
+
+    try:
+        payload = json.loads(request.body or "{}")
+        rows = payload.get("rows", [])
+    except (ValueError, TypeError):
+        rows = []
+
+    from pipeline.services.saved_keyword_service import save_keywords as svc_save, list_saved_keywords
+    svc_save(site_id, rows)
+
+    return render(request, "dashboard/partials/_saved_keywords.html", {
+        "saved_keywords": list_saved_keywords(site_id),
+    })
+
+
+@role_required("keywords")
+@require_POST
+def delete_saved_keyword(request):
+    """Remove one saved research keyword, return the refreshed panel."""
+    site_id = request.session.get("selected_site_url") or get_default_site_id()
+    keyword = (request.POST.get("keyword") or "").strip()
+    location = (request.POST.get("location") or "United States").strip()
+
+    from pipeline.services.saved_keyword_service import delete_saved_keyword as svc_delete, list_saved_keywords
+    if keyword:
+        svc_delete(site_id, keyword, location)
+
+    return render(request, "dashboard/partials/_saved_keywords.html", {
+        "saved_keywords": list_saved_keywords(site_id),
+    })
 
 
 def _get_page_health(site_id: str, curr_start: date, curr_end: date) -> dict:
@@ -1804,9 +1890,17 @@ def settings(request):
                 select(Site).where(Site.site_url == site_id).limit(1)
             ).scalars().first()
             site_name = site_obj.site_name if site_obj else site_id
+            site_gsc_property = site_obj.gsc_property if site_obj else site_id
+            site_ga4_property_id = site_obj.ga4_property_id if site_obj else ""
+            site_dataforseo_domain = site_obj.dataforseo_target_domain if site_obj else ""
+            site_db_id = site_obj.id if site_obj else None
     except Exception as e:
         import logging; logging.getLogger(__name__).error(f"Error: {e}", exc_info=True)
         site_name = site_id
+        site_gsc_property = site_id
+        site_ga4_property_id = ""
+        site_dataforseo_domain = ""
+        site_db_id = None
 
     # Get all sync logs for the site to show connector status
     sync_logs = SyncLog.objects.filter(site_url=site_id).order_by('-last_synced')
@@ -1832,6 +1926,10 @@ def settings(request):
         "active": "settings",
         "site_id": site_id,
         "site_name": site_name,
+        "site_db_id": site_db_id,
+        "site_gsc_property": site_gsc_property,
+        "site_ga4_property_id": site_ga4_property_id,
+        "site_dataforseo_domain": site_dataforseo_domain,
         "working_connectors": working,
         "errored_connectors": errored,
         "never_run_connectors": never_run,
@@ -1893,7 +1991,72 @@ def set_site(request):
         return HttpResponseRedirect(referer)
     return HttpResponseRedirect(reverse("dashboard:overview"))
 
-import csv
+def add_site(request):
+    """Add a new website to track."""
+    from django.http import HttpResponseRedirect
+    from django.urls import reverse
+    from pipeline.services.site_service import add_site as service_add_site
+    import logging
+    _log = logging.getLogger(__name__)
+
+    if request.method == "POST":
+        site_url = request.POST.get("site_url", "").strip()
+        site_name = request.POST.get("site_name", "").strip() or site_url
+        if site_url:
+            try:
+                service_add_site(site_url=site_url, site_name=site_name)
+                _log.info(f"[add_site] Added new site: {site_url}")
+            except ValueError as e:
+                # Site already exists — still activate it in the session so
+                # the user ends up on the correct domain instead of staying
+                # on the old one with no feedback.
+                _log.warning(f"[add_site] {e} — activating existing site in session")
+            except Exception as e:
+                _log.error(f"[add_site] Unexpected error adding site {site_url!r}: {e}", exc_info=True)
+            finally:
+                # Always switch the session to the requested site if it exists
+                # in the registry (handles both new-add and already-exists).
+                from pipeline.services.site_service import get_active_site_ids
+                if site_url and site_url in get_active_site_ids():
+                    request.session["selected_site_url"] = site_url
+
+    referer = request.META.get("HTTP_REFERER")
+    if referer:
+        return HttpResponseRedirect(referer)
+    return HttpResponseRedirect(reverse("dashboard:settings"))
+
+
+@require_POST
+def update_site_credentials(request):
+    """Update the GSC property, GA4 property ID, and DataForSEO domain for the active site.
+    Called from the Site Credentials form in Settings. Allows correcting the auto-filled
+    gsc_property (e.g. changing 'eventstaff.com' → 'sc-domain:eventstaff.com')."""
+    from django.http import HttpResponseRedirect
+    from django.urls import reverse
+    from pipeline.services.site_service import update_site
+    import logging
+    _log = logging.getLogger(__name__)
+
+    site_db_id = request.POST.get("site_db_id", "").strip()
+    gsc_property = request.POST.get("gsc_property", "").strip()
+    ga4_property_id = request.POST.get("ga4_property_id", "").strip() or None
+    dataforseo_target_domain = request.POST.get("dataforseo_target_domain", "").strip() or None
+
+    if site_db_id:
+        try:
+            update_site(
+                int(site_db_id),
+                gsc_property=gsc_property or None,
+                ga4_property_id=ga4_property_id,
+                dataforseo_target_domain=dataforseo_target_domain,
+            )
+            _log.info(f"[update_site_credentials] Updated site #{site_db_id}: gsc={gsc_property!r} ga4={ga4_property_id!r}")
+        except Exception as e:
+            _log.error(f"[update_site_credentials] Failed to update site #{site_db_id}: {e}", exc_info=True)
+
+    return HttpResponseRedirect(reverse("dashboard:settings"))
+
+
 from django.http import HttpResponse
 
 @role_required("seo")

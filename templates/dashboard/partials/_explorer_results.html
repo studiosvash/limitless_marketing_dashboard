@@ -1,0 +1,116 @@
+{% comment %}
+Keyword Explorer results partial — swapped into #explorer-results by HTMX.
+Context: result = {status, rows, no_data, location, error}
+The table is an Alpine component (window.explorerTable, defined in keywords.html) that
+handles client-side sort, row selection, Download (CSV), Copy (TSV), and Save (POST).
+{% endcomment %}
+
+{% if result.status == "error" %}
+  <div class="rounded-lg border border-red-200 bg-red-50 p-4 flex items-start gap-3">
+    <svg class="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z"></path></svg>
+    <div>
+      <div class="text-sm font-semibold text-red-800">Couldn't fetch keyword data</div>
+      <div class="text-sm text-red-700 mt-0.5">{{ result.error }}</div>
+    </div>
+  </div>
+
+{% elif not result.rows %}
+  <div class="rounded-lg border border-slate-200 bg-slate-50 p-6 text-center">
+    <div class="text-sm font-medium text-slate-600">No keyword data found</div>
+    <div class="text-xs text-slate-400 mt-1">DataForSEO returned no results for: {{ result.no_data|join:", " }}</div>
+  </div>
+
+{% else %}
+  {{ result.rows|json_script:"explorer-rows-data" }}
+  <div x-data="explorerTable()" x-cloak>
+
+    {# Bulk action bar — visible once at least one row is selected #}
+    <div class="flex items-center justify-between flex-wrap gap-3 mb-3">
+      <div class="text-xs text-slate-500">
+        {{ result.rows|length }} keyword{{ result.rows|length|pluralize }} · <span class="font-medium text-slate-600">{{ result.location }}</span>
+        <template x-if="selectedCount > 0"><span> · <span class="font-semibold text-brand-600" x-text="selectedCount"></span> selected</span></template>
+      </div>
+      <div class="flex items-center gap-2" x-show="selectedCount > 0" x-cloak>
+        <button type="button" @click="copy()" class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-600 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors shadow-sm">
+          <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 17.25v3.375c0 .621-.504 1.125-1.125 1.125h-9.75a1.125 1.125 0 01-1.125-1.125V7.875c0-.621.504-1.125 1.125-1.125H6.75a9.06 9.06 0 011.5.124m7.5 10.376h3.375c.621 0 1.125-.504 1.125-1.125V11.25c0-4.46-3.243-8.161-7.5-8.876a9.06 9.06 0 00-1.5-.124H9.375c-.621 0-1.125.504-1.125 1.125v3.5m7.5 10.375H9.375a1.125 1.125 0 01-1.125-1.125v-9.25m12 6.625v-1.875a3.375 3.375 0 00-3.375-3.375h-1.5a1.125 1.125 0 01-1.125-1.125v-1.5a3.375 3.375 0 00-3.375-3.375H9.75"></path></svg>
+          <span x-text="copied ? 'Copied!' : 'Copy'"></span>
+        </button>
+        <button type="button" @click="download()" class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-600 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors shadow-sm">
+          <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"></path></svg>
+          Download CSV
+        </button>
+        <button type="button" @click="save()" :disabled="saving" class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-brand-600 rounded-lg hover:bg-brand-700 transition-colors shadow-sm disabled:opacity-60">
+          <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M17.593 3.322c1.1.128 1.907 1.077 1.907 2.185V21L12 17.25 4.5 21V5.507c0-1.108.806-2.057 1.907-2.185a48.507 48.507 0 0111.186 0z"></path></svg>
+          <span x-text="saving ? 'Saving…' : (saved ? 'Saved!' : 'Save')"></span>
+        </button>
+      </div>
+    </div>
+
+    {% if result.no_data %}
+    <div class="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-3">
+      No data returned for: {{ result.no_data|join:", " }}
+    </div>
+    {% endif %}
+
+    <div class="rounded-xl border border-slate-200 overflow-hidden">
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="text-left text-slate-400 text-xs uppercase tracking-wider bg-slate-50 border-b border-slate-100">
+              <th class="font-medium px-4 py-3 w-10">
+                <input type="checkbox" @change="toggleAll($event.target.checked)" :checked="allSelected" class="rounded border-slate-300 text-brand-600 focus:ring-brand-400">
+              </th>
+              <th class="font-medium px-3 py-3">Keyword</th>
+              <th class="font-medium px-3 py-3 text-right cursor-pointer select-none hover:text-slate-600" @click="sortBy('search_volume')">
+                Volume <span x-text="sortArrow('search_volume')"></span>
+              </th>
+              <th class="font-medium px-3 py-3 text-center cursor-pointer select-none hover:text-slate-600" @click="sortBy('keyword_difficulty')">
+                KD <span x-text="sortArrow('keyword_difficulty')"></span>
+              </th>
+              <th class="font-medium px-3 py-3 text-right cursor-pointer select-none hover:text-slate-600" @click="sortBy('cpc')">
+                CPC <span x-text="sortArrow('cpc')"></span>
+              </th>
+              <th class="font-medium px-3 py-3">Competition</th>
+              <th class="font-medium px-3 py-3">Intent</th>
+              <th class="font-medium px-3 py-3">SERP Features</th>
+              <th class="font-medium px-3 py-3">Country / Location</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100">
+            <template x-for="row in rows" :key="row.keyword">
+              <tr class="hover:bg-slate-50 transition-colors" :class="selected[row.keyword] ? 'bg-brand-50/40' : ''">
+                <td class="px-4 py-3">
+                  <input type="checkbox" :checked="!!selected[row.keyword]" @change="toggle(row.keyword)" class="rounded border-slate-300 text-brand-600 focus:ring-brand-400">
+                </td>
+                <td class="px-3 py-3 font-medium text-slate-700 max-w-[220px] truncate" :title="row.keyword" x-text="row.keyword"></td>
+                <td class="px-3 py-3 text-right text-slate-600" x-text="fmtInt(row.search_volume)"></td>
+                <td class="px-3 py-3 text-center">
+                  <template x-if="row.keyword_difficulty !== null && row.keyword_difficulty !== undefined">
+                    <span class="inline-flex items-center justify-center min-w-[28px] px-1.5 h-6 rounded text-xs font-semibold"
+                          :class="kdClass(row.keyword_difficulty)" x-text="Math.round(row.keyword_difficulty)"></span>
+                  </template>
+                  <template x-if="row.keyword_difficulty === null || row.keyword_difficulty === undefined"><span class="text-slate-300">—</span></template>
+                </td>
+                <td class="px-3 py-3 text-right text-slate-600" x-text="fmtCpc(row.cpc)"></td>
+                <td class="px-3 py-3">
+                  <template x-if="row.competition">
+                    <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider" :class="compClass(row.competition)" x-text="row.competition"></span>
+                  </template>
+                  <template x-if="!row.competition"><span class="text-slate-300">—</span></template>
+                </td>
+                <td class="px-3 py-3">
+                  <template x-if="row.intent">
+                    <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider" :class="intentClass(row.intent)" x-text="row.intent"></span>
+                  </template>
+                  <template x-if="!row.intent"><span class="text-slate-300">—</span></template>
+                </td>
+                <td class="px-3 py-3 text-slate-500 text-xs max-w-[220px] truncate" :title="row.serp_features" x-text="row.serp_features || '—'"></td>
+                <td class="px-3 py-3 text-slate-500 text-xs" x-text="row.location"></td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+{% endif %}

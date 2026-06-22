@@ -60,11 +60,11 @@ worse than none. Status: (exists) = on disk now · (planned: Phase N) = not yet 
 
 | Path | Purpose | Status |
 |---|---|---|
-| `pipeline/db/schema.py` | SQLAlchemy ORM for all analytics tables + `init_db(engine)`. +2026-06-15: `CompetitorKeywordRanking`, `TrackedCompetitor`, `AIKeywordData` | exists |
+| `pipeline/db/schema.py` | SQLAlchemy ORM for all analytics tables + `init_db(engine)`. +2026-06-15: `CompetitorKeywordRanking`, `TrackedCompetitor`, `AIKeywordData`. +2026-06-17: `SavedKeyword` (Keyword Explorer research list) | exists |
 | `pipeline/db/engine.py` | `get_engine(db_path)`, `get_sessionmaker(db_path)` factories | exists |
 | `pipeline/db/tests/test_schema.py` | 9 tests covering all table families + prediction tables | exists |
 | `pipeline/db/tests/test_engine.py` | engine creation + SELECT 1 tests | exists |
-| `pipeline/db/writer.py` | All upsert helpers (batched, SQLAlchemy 2.x) + `ensure_tables()`. +2026-06-15: `upsert_competitor_keyword_rankings`, `upsert_ai_keyword_data` | exists |
+| `pipeline/db/writer.py` | All upsert helpers (batched, SQLAlchemy 2.x) + `ensure_tables()`. +2026-06-15: `upsert_competitor_keyword_rankings`, `upsert_ai_keyword_data`. +2026-06-17: `upsert_saved_keywords` | exists |
 | `pipeline/connectors/base.py` | `BaseConnector` — `sync()`, `_write_records()`, Django `SyncLog` bridge | exists |
 | `pipeline/connectors/<name>.py` | connector files (gsc, ga4, gsc_keywords, gsc_pages, url_inspection, pagespeed, sitemap, dataforseo_*, google_ads, meta, linkedin, webflow, wordpress) | exists |
 | `pipeline/connectors/dataforseo_serp_competitors.py` | +2026-06-15: per-keyword competitor rank capture (full-SERP); writes `competitor_keyword_rankings` | exists |
@@ -72,6 +72,9 @@ worse than none. Status: (exists) = on disk now · (planned: Phase N) = not yet 
 | `pipeline/services/sync_engine.py` | `sync_all()` + `sync_page()` + `PAGE_CONNECTORS` map — called from background threads | exists |
 | `pipeline/services/site_service.py` | `list_sites`, `get_default_site_id`, `add_site`, `update_site`, `delete_site` | exists |
 | `pipeline/services/competitor_service.py` | +2026-06-15: resolve tracked competitor columns (auto-seed from `competitor_domains` or editable override) | exists |
+| `pipeline/services/saved_keyword_service.py` | +2026-06-17: Keyword Explorer saved research list — list/save/delete over the `saved_keywords` table (separate from keyword tracking) | exists |
+| `pipeline/connectors/tests/test_dataforseo_lookup.py` | +2026-06-17: tests for `DataForSEOKeywordsConnector.lookup_keywords` (mocked HTTP) | exists |
+| `pipeline/db/tests/test_saved_keywords.py` | +2026-06-17: `upsert_saved_keywords` + `saved_keyword_service` round-trip tests | exists |
 | `pipeline/services/aggregate_service.py` | `rebuild_seo_aggregates(site_url)` — impression-weighted CTR + position rollup | exists |
 | `pipeline/services/anomaly_service.py` | `AnomalyDetector` — rolling-baseline anomaly detection across SEO + Ads metrics | exists |
 | `pipeline/utils/db_connection.py` | Django-settings-aware SQLAlchemy session factory (thread-safe singleton) | exists |
@@ -92,6 +95,9 @@ worse than none. Status: (exists) = on disk now · (planned: Phase N) = not yet 
 | `templates/components/refresh_button.html` | Primary refresh button (HTMX wired Phase 4) | exists |
 | `templates/components/sync_progress.html` | Live sync progress bar partial (polled Phase 4) | exists |
 | `templates/dashboard/overview.html` | Overview page (demo data; real queries Phase 5) | exists |
+| `templates/dashboard/keywords.html` | Keywords page. +2026-06-17: **Keyword Explorer** section (ad-hoc research) + `explorerTable` Alpine logic in `body_extra` | exists |
+| `templates/dashboard/partials/_explorer_results.html` | +2026-06-17: Keyword Explorer results table (Alpine: sort/select/download/copy/save) | exists |
+| `templates/dashboard/partials/_saved_keywords.html` | +2026-06-17: saved research keywords panel (swap target `#saved-keywords-panel`) | exists |
 | `static/css/global.css` | Small custom CSS on top of Tailwind (scrollbar, htmx fade) | exists |
 | `apps/dashboard/views.py` | `overview` view (+ demo Plotly spec builder) | exists |
 | `apps/dashboard/urls.py` | dashboard routes (`overview` at `/`) | exists |

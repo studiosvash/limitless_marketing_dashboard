@@ -11,8 +11,19 @@ from pipeline.services.sync_engine import sync_all, sync_page
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _get_site_url() -> str:
+def _get_site_url(request=None) -> str:
+    """Return the currently-selected site URL.
+
+    Priority: session['selected_site_url'] → first active site → .env fallback.
+    The request parameter must be passed so per-user site selection is respected.
+    Without it we would always sync the primary site, ignoring domain switches.
+    """
     try:
+        # Prefer the site the user has explicitly selected in this session.
+        if request is not None:
+            selected = request.session.get("selected_site_url")
+            if selected:
+                return selected
         from pipeline.services.site_service import get_default_site_id
         return get_default_site_id()
     except Exception:
@@ -51,7 +62,7 @@ def sync_all_view(request):
     Returns an HTMX partial: the sync_progress bar showing 'Syncing...'
     The partial will be auto-polled by hx-trigger="every 2s" on the status endpoint.
     """
-    site_url = _get_site_url()
+    site_url = _get_site_url(request)  # use the session-selected site, not the default
     run = RefreshRun.objects.create(
         site_url=site_url,
         scope="all",
@@ -84,7 +95,7 @@ def sync_page_view(request, page: str):
     if not known:
         logger.warning("sync_page_view: unknown page key %r — proceeding with empty connector set", page)
 
-    site_url = _get_site_url()
+    site_url = _get_site_url(request)  # use the session-selected site, not the default
     run = RefreshRun.objects.create(
         site_url=site_url,
         scope=page,
@@ -104,7 +115,7 @@ def sync_status_view(request):
     HTMX polling endpoint. Returns the progress bar partial.
     Called every 2s by hx-trigger on the frontend.
     """
-    site_url = _get_site_url()
+    site_url = _get_site_url(request)  # use the session-selected site, not the default
     run = (
         RefreshRun.objects
         .filter(site_url=site_url)
