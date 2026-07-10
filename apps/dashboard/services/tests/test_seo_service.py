@@ -80,3 +80,47 @@ class SeoServiceTests(TestCase):
         from apps.dashboard.services import seo_service
         with mock.patch.object(seo_service, "get_session", side_effect=RuntimeError("boom")):
             self.assertEqual(seo_service.count_technical_issues("x"), 0)
+
+
+class BuildSeoResponseTests(SeoServiceTests):
+    def test_top_level_keys(self):
+        from apps.dashboard.services.seo_service import build_seo_response
+        body = build_seo_response("sc-domain:fusehealth.com", date(2026, 6, 30), date(2026, 6, 30))
+        for key in ["kpis", "lowCtrPages", "countries", "anomalies", "quickWinKws"]:
+            self.assertIn(key, body)
+
+    def test_kpis_match_spec_semantics(self):
+        from apps.dashboard.services.seo_service import build_seo_response
+        body = build_seo_response("sc-domain:fusehealth.com", date(2026, 6, 30), date(2026, 6, 30))
+        # low_ctr: 1 seeded low-CTR page
+        self.assertEqual(body["kpis"]["low_ctr"], 1)
+        # anomalies: 1 seeded unacknowledged anomaly
+        self.assertEqual(body["kpis"]["anomalies"], 1)
+        # critical: 1 of the 2 seeded technical issues is not_found_404 — NOT high_sev_issues (which would be 1 too here by
+        # coincidence since both seeded issues are severity="high"/"medium" — this assertion specifically pins the
+        # 404-count semantics, not a severity count, per the corrected spec mapping)
+        self.assertEqual(body["kpis"]["critical"], 1)
+        # total_issues: 2 technical issues + 1 anomaly + 1 low_ctr page = 4
+        self.assertEqual(body["kpis"]["total_issues"], 4)
+
+    def test_low_ctr_pages_shape(self):
+        from apps.dashboard.services.seo_service import build_seo_response
+        body = build_seo_response("sc-domain:fusehealth.com", date(2026, 6, 30), date(2026, 6, 30))
+        page = body["lowCtrPages"][0]
+        for key in ["url", "impressions", "clicks", "ctr", "avg_pos"]:
+            self.assertIn(key, page)
+        self.assertNotIn("url_short", page)
+
+    def test_anomalies_shape(self):
+        from apps.dashboard.services.seo_service import build_seo_response
+        body = build_seo_response("sc-domain:fusehealth.com", date(2026, 6, 30), date(2026, 6, 30))
+        a = body["anomalies"][0]
+        self.assertEqual(set(a.keys()), {"id", "metric", "severity", "deviation", "date", "detail"})
+        self.assertEqual(a["detail"], "Clicks dropped 50% vs. baseline.")
+        self.assertEqual(a["deviation"], "-50%")
+
+    def test_quick_win_kws_is_a_count_not_a_list(self):
+        from apps.dashboard.services.seo_service import build_seo_response
+        body = build_seo_response("sc-domain:fusehealth.com", date(2026, 6, 30), date(2026, 6, 30))
+        self.assertEqual(body["quickWinKws"], 1)
+        self.assertIsInstance(body["quickWinKws"], int)

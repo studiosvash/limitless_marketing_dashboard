@@ -190,3 +190,47 @@ def format_recent_anomalies(raw_anomalies: list[dict]) -> list[dict]:
             "date": str(r["date"]),
         })
     return out
+
+
+def build_seo_response(site_id: str, curr_start: date, curr_end: date) -> dict:
+    """HANDOFF_SPEC.md `seo` view shape — verified against the real fixture's seoView()
+    in Limitless marketing dashboard2/app/api.js. See
+    docs/superpowers/specs/2026-07-10-phaseB1-seo-design.md for the field mapping and the
+    kpis.critical/total_issues correction."""
+    low_ctr_raw = query_low_ctr_pages_raw(site_id, curr_start, curr_end)
+    by_dim = query_seo_by_dimension_raw(site_id, curr_start, curr_end)
+    anomalies_raw = query_seo_anomalies_raw(site_id)
+    critical_count = count_technical_issues(site_id, issue_type="not_found_404")
+    total_issue_count = count_technical_issues(site_id)
+    quick_win_count = count_quick_win_keywords(site_id, curr_start, curr_end)
+
+    return {
+        "kpis": {
+            "low_ctr": len(low_ctr_raw),
+            "anomalies": len(anomalies_raw),
+            "critical": critical_count,
+            "total_issues": total_issue_count + len(anomalies_raw) + len(low_ctr_raw),
+        },
+        "lowCtrPages": [
+            {"url": p["url"], "impressions": p["impressions"], "clicks": p["clicks"],
+             "ctr": p["ctr"], "avg_pos": p["avg_position"]}
+            for p in low_ctr_raw
+        ],
+        "countries": by_dim["by_country"],
+        "anomalies": [
+            {
+                "id": str(a["id"]),
+                "metric": {"seo_clicks": "Clicks", "seo_impressions": "Impressions",
+                           "seo_ctr": "CTR", "seo_avg_position": "Avg. position",
+                           "ad_spend": "Ad spend", "ad_clicks": "Ad clicks",
+                           "ad_impressions": "Ad impressions", "ad_conversions": "Conversions"
+                           }.get(a["metric_type"], a["metric_type"]),
+                "severity": a["severity"],
+                "deviation": f"{'+' if a['direction'] == 'up' else '-'}{abs(a['deviation_pct']):.0f}%",
+                "date": str(a["date"]),
+                "detail": a["description"],
+            }
+            for a in anomalies_raw
+        ],
+        "quickWinKws": quick_win_count,
+    }
