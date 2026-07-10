@@ -1,6 +1,7 @@
 import tempfile
 from datetime import date
 from pathlib import Path
+from unittest.mock import patch
 
 from django.test import TestCase, override_settings
 from sqlalchemy import select
@@ -69,3 +70,48 @@ class OverviewServiceTests(TestCase):
         self.assertEqual(len(points), 2)
         self.assertEqual(points[0]["date"], "2026-07-01")
         self.assertEqual(points[0]["clicks"], 100)
+
+    # ── Error-path resilience: a transient DB error must degrade gracefully to
+    # the same safe fallback the pre-refactor _get_kpi_stats/_get_top_pages/
+    # _get_traffic_chart/_get_ai_summary returned, not propagate and 500 the page.
+
+    def test_get_kpi_raw_returns_empty_dicts_on_db_error(self):
+        from apps.dashboard.services import overview_service
+        with patch.object(overview_service, "get_session", side_effect=RuntimeError("db down")):
+            current, previous = overview_service.get_kpi_raw(
+                "sc-domain:fusehealth.com",
+                date(2026, 7, 1), date(2026, 7, 2),
+                date(2026, 6, 1), date(2026, 6, 1),
+            )
+        self.assertEqual(current, {})
+        self.assertEqual(previous, {})
+
+    def test_format_kpi_cards_does_not_crash_on_empty_fallback(self):
+        # Proves the view-level chain (get_kpi_raw error -> format_kpi_cards) survives:
+        # format_kpi_cards must not KeyError when handed the {} / {} fallback shape.
+        from apps.dashboard.services.overview_service import format_kpi_cards
+        cards = format_kpi_cards({}, {})
+        self.assertEqual(cards[0]["value"], "0")
+        self.assertEqual(cards[0]["delta"], "0%")
+
+    def test_query_top_pages_raw_returns_empty_list_on_db_error(self):
+        from apps.dashboard.services import overview_service
+        with patch.object(overview_service, "get_session", side_effect=RuntimeError("db down")):
+            pages = overview_service.query_top_pages_raw(
+                "sc-domain:fusehealth.com", date(2026, 7, 1), date(2026, 7, 2)
+            )
+        self.assertEqual(pages, [])
+
+    def test_query_daily_traffic_raw_returns_empty_list_on_db_error(self):
+        from apps.dashboard.services import overview_service
+        with patch.object(overview_service, "get_session", side_effect=RuntimeError("db down")):
+            points = overview_service.query_daily_traffic_raw(
+                "sc-domain:fusehealth.com", date(2026, 7, 1), date(2026, 7, 2)
+            )
+        self.assertEqual(points, [])
+
+    def test_get_ai_summary_text_returns_none_on_db_error(self):
+        from apps.dashboard.services import overview_service
+        with patch.object(overview_service, "get_session", side_effect=RuntimeError("db down")):
+            summary = overview_service.get_ai_summary_text("sc-domain:fusehealth.com")
+        self.assertIsNone(summary)
