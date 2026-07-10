@@ -21,6 +21,7 @@ from apps.dashboard.services.seo_service import (
     query_low_ctr_pages_raw, query_seo_by_dimension_raw, query_seo_anomalies_raw,
     count_technical_issues, format_recent_anomalies,
 )
+from apps.dashboard.services.keywords_service import get_keyword_intelligence_raw
 from pipeline.db.schema import SEODaily, SEOAggregate, AISummary, KeywordRanking, AdMetricDaily, CompetitorDomain, Anomaly, TechnicalIssue, PageSpeed, IndexingStatus, Backlink, KeywordOpportunity, CompetitorKeywordRanking, AIKeywordData
 from pipeline.services.site_service import get_default_site_id
 from pipeline.utils.period_utils import get_period_dates
@@ -359,162 +360,6 @@ def overview(request):
     return render(request, "dashboard/overview.html", context)
 
 
-import pandas as pd
-
-def _get_keyword_intelligence(site_id: str, curr_start: date, curr_end: date, prev_start: date, prev_end: date) -> dict:
-    """Calculate keyword health score and action buckets."""
-    try:
-        with get_session() as session:
-            def get_kw_df(start, end):
-                rows = session.execute(
-                    select(
-                        KeywordRanking.keyword,
-                        func.avg(KeywordRanking.position).label("position"),
-                        func.sum(KeywordRanking.clicks).label("clicks"),
-                        func.sum(KeywordRanking.impressions).label("impressions"),
-                        func.max(KeywordRanking.search_volume).label("search_volume"),
-                        func.max(KeywordRanking.keyword_difficulty).label("keyword_difficulty"),
-                        func.max(KeywordRanking.cpc).label("cpc"),
-                        func.max(KeywordRanking.intent).label("intent"),
-                        func.max(KeywordRanking.url).label("url"),
-                    )
-                    .where(KeywordRanking.site_id == site_id, KeywordRanking.date >= start, KeywordRanking.date <= end)
-                    .group_by(KeywordRanking.keyword)
-                ).all()
-                if not rows:
-                    return pd.DataFrame()
-                
-                df = pd.DataFrame([dict(r._mapping) for r in rows])
-                df["ctr"] = (df["clicks"] / df["impressions"] * 100).fillna(0)
-                return df
-
-            df = get_kw_df(curr_start, curr_end)
-            prev_df = get_kw_df(prev_start, prev_end)
-
-            if df.empty:
-                return {
-                    "health_score": 0, "health_label": "No Data", "health_color": "#94a3b8",
-                    "total_tracked": 0, "total_volume": 0, "avg_position": 0, "total_clicks": 0,
-                    "intent_distribution": {"informational": 0, "commercial": 0, "transactional": 0, "navigational": 0},
-                    "kd_easy": 0, "kd_medium": 0, "kd_hard": 0,
-                    "quick_wins": [], "striking": [], "declining": [], "low_ctr": [],
-                    "all_keywords": [],
-                }
-
-            # Health Score
-            with_clicks = df[df["clicks"] > 0]
-            top3 = df[df["position"] <= 3]
-            top10 = df[df["position"] <= 10]
-            
-            p1_ratio = len(top10) / len(df) if len(df) > 0 else 0
-            click_ratio = len(with_clicks) / len(df) if len(df) > 0 else 0
-            health_score = int((p1_ratio * 0.6 + click_ratio * 0.4) * 100)
-            
-            if health_score >= 70:
-                health_color, health_label = "#10b981", "Excellent"
-            elif health_score >= 40:
-                health_color, health_label = "#f59e0b", "Needs Work"
-            else:
-                health_color, health_label = "#ef4444", "Critical"
-
-            # Position changes
-            if not prev_df.empty and "position" in prev_df.columns:
-                merged = df.merge(
-                    prev_df[["keyword", "position"]].rename(columns={"position": "prev_position"}),
-                    on="keyword", how="left"
-                )
-                merged["pos_change"] = merged["prev_position"] - merged["position"]
-            else:
-                merged = df.copy()
-                merged["prev_position"] = None
-                merged["pos_change"] = None
-
-            # Quick Wins: Page 1 positions 4-10 with real clicks
-            quick_wins = merged[
-                (merged["position"] >= 4) & (merged["position"] <= 10) & (merged["clicks"] > 0)
-            ].sort_values("clicks", ascending=False).head(15)
-
-            # Striking Distance: Page 2 (11-20)
-            striking = merged[
-                (merged["position"] >= 11) & (merged["position"] <= 20)
-            ].sort_values(["impressions", "position"], ascending=[False, True]).head(15)
-
-            # Declining: Dropped ≥ 3 positions
-            if "pos_change" in merged.columns and merged["pos_change"].notna().any():
-                declining = merged[merged["pos_change"] <= -3].sort_values("pos_change").head(15)
-            else:
-                declining = pd.DataFrame()
-
-            # High Impressions / Low CTR
-            low_ctr = merged[
-                (merged["position"] <= 20) & (merged["impressions"] >= 50) & (merged["ctr"] < 2.0)
-            ].sort_values("impressions", ascending=False).head(15)
-            
-            def df_to_dicts(data_df):
-                if data_df.empty:
-                    return []
-                # Ensure all NaN are replaced by None for JSON serialization
-                return data_df.where(pd.notna(data_df), None).to_dict('records')
-
-            # Intent distribution
-            intent_counts = {"informational": 0, "commercial": 0, "transactional": 0, "navigational": 0}
-            if "intent" in df.columns:
-                for val in df["intent"].dropna():
-                    key = str(val).lower().strip()
-                    if key in intent_counts:
-                        intent_counts[key] += 1
-                    elif "info" in key:
-                        intent_counts["informational"] += 1
-                    elif "comm" in key:
-                        intent_counts["commercial"] += 1
-                    elif "trans" in key:
-                        intent_counts["transactional"] += 1
-                    elif "nav" in key:
-                        intent_counts["navigational"] += 1
-
-            # KD distribution
-            kd_easy = kd_medium = kd_hard = 0
-            if "keyword_difficulty" in df.columns:
-                kd_vals = df["keyword_difficulty"].dropna()
-                kd_easy = int((kd_vals < 30).sum())
-                kd_medium = int(((kd_vals >= 30) & (kd_vals < 60)).sum())
-                kd_hard = int((kd_vals >= 60).sum())
-
-            # Aggregates
-            total_volume = int(df["search_volume"].dropna().sum()) if "search_volume" in df.columns else 0
-            avg_position = round(df["position"].mean(), 1) if "position" in df.columns and not df["position"].isna().all() else 0
-            total_clicks = int(df["clicks"].sum()) if "clicks" in df.columns else 0
-
-            return {
-                "health_score": health_score,
-                "health_label": health_label,
-                "health_color": health_color,
-                "total_tracked": len(df),
-                "total_volume": total_volume,
-                "avg_position": avg_position,
-                "total_clicks": total_clicks,
-                "intent_distribution": intent_counts,
-                "kd_easy": kd_easy,
-                "kd_medium": kd_medium,
-                "kd_hard": kd_hard,
-                "quick_wins": df_to_dicts(quick_wins),
-                "striking": df_to_dicts(striking),
-                "declining": df_to_dicts(declining),
-                "low_ctr": df_to_dicts(low_ctr),
-                "all_keywords": df_to_dicts(df.sort_values("clicks", ascending=False).head(200))
-            }
-    except Exception as e:
-        import logging; logging.getLogger(__name__).error(f"Error: {e}", exc_info=True)
-        return {
-            "health_score": 0, "health_label": "Error", "health_color": "#ef4444",
-            "total_tracked": 0, "total_volume": 0, "avg_position": 0, "total_clicks": 0,
-            "intent_distribution": {"informational": 0, "commercial": 0, "transactional": 0, "navigational": 0},
-            "kd_easy": 0, "kd_medium": 0, "kd_hard": 0,
-            "quick_wins": [], "striking": [], "declining": [], "low_ctr": [], "all_keywords": []
-        }
-
-
-
 @role_required("seo")
 def seo(request):
     """SEO page — decision-focused: what needs attention, low-CTR opportunities,
@@ -654,7 +499,7 @@ def keywords(request):
     site_id = request.session.get("selected_site_url") or get_default_site_id()
     curr_start, curr_end, prev_start, prev_end, mode = get_active_period(request)
 
-    intelligence = _get_keyword_intelligence(site_id, curr_start, curr_end, prev_start, prev_end)
+    intelligence = get_keyword_intelligence_raw(site_id, curr_start, curr_end, prev_start, prev_end)
     ai_keywords = _get_ai_keywords(site_id)
 
     from pipeline.services.saved_keyword_service import list_saved_keywords
