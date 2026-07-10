@@ -5,6 +5,7 @@ Provides read/write access to the `sites` table. All Django views and pipeline
 connectors that need to resolve a site_url → Site row should go through this module.
 """
 import os
+import re
 from typing import Optional
 
 from dotenv import load_dotenv
@@ -27,6 +28,28 @@ def _bare_domain(value: str) -> str:
         .replace("sc-domain:", "")
         .rstrip("/")
     )
+
+
+def _slugify(value: str) -> str:
+    """Lowercase, alnum + hyphens only, matching the project 'id' shape the frontend
+    fixtures already use (e.g. 'fusehealth', 'limitless')."""
+    value = _bare_domain(value) or value
+    slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+    return slug or "project"
+
+
+def slugify_unique(session, base: str) -> str:
+    """Return a slug derived from `base` that doesn't collide with an existing Site.slug.
+    Appends -2, -3, ... on collision."""
+    from pipeline.db.schema import Site  # local import: avoids a circular import at module load
+
+    root = _slugify(base)
+    candidate = root
+    n = 2
+    while session.execute(select(Site).where(Site.slug == candidate)).scalars().first():
+        candidate = f"{root}-{n}"
+        n += 1
+    return candidate
 
 
 def list_sites(active_only: bool = True) -> list[Site]:
@@ -101,7 +124,8 @@ def sync_primary_site_from_env() -> None:
             logger.info(f"[site_service] Created primary site from .env: {gsc}")
 
 
-def add_site(site_url, site_name=None, gsc_property=None, ga4_property_id=None, dataforseo_target_domain=None) -> int:
+def add_site(site_url, site_name=None, gsc_property=None, ga4_property_id=None,
+             dataforseo_target_domain=None, vertical=None, location="United States") -> int:
     site_url = (site_url or "").strip()
     if not site_url:
         raise ValueError("site_url is required")
@@ -109,9 +133,13 @@ def add_site(site_url, site_name=None, gsc_property=None, ga4_property_id=None, 
         existing = session.execute(select(Site).where(Site.site_url == site_url)).scalars().first()
         if existing:
             raise ValueError(f"Site already exists: {site_url}")
+        name = site_name or _bare_domain(site_url) or site_url
         site = Site(
             site_url=site_url,
-            site_name=site_name or _bare_domain(site_url) or site_url,
+            site_name=name,
+            slug=slugify_unique(session, name),
+            vertical=vertical,
+            location=location,
             gsc_property=gsc_property or site_url,
             ga4_property_id=ga4_property_id or None,
             dataforseo_target_domain=_bare_domain(dataforseo_target_domain or site_url),
@@ -125,7 +153,8 @@ def add_site(site_url, site_name=None, gsc_property=None, ga4_property_id=None, 
 
 
 def update_site(site_id_pk: int, **fields) -> None:
-    allowed = {"site_name", "gsc_property", "ga4_property_id", "dataforseo_target_domain", "is_active"}
+    allowed = {"site_name", "gsc_property", "ga4_property_id", "dataforseo_target_domain",
+               "is_active", "vertical", "location"}
     bad = set(fields) - allowed
     if bad:
         raise ValueError(f"Cannot update fields: {bad}. Allowed: {allowed}")
