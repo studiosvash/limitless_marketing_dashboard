@@ -158,3 +158,41 @@ Audit/AI Optimization/Off-site data; Keyword/Prompt Explorer. These are Phases B
 - Whether `range` query param semantics (7d/30d/90d) map cleanly onto the existing
   `period_mode`/`period_offset` session-based period system, or need a small adapter —
   resolve during implementation; both represent the same underlying concept (a date window).
+
+## 4. Design fidelity — guaranteed by construction
+
+The product must end up looking **exactly** like the approved design. This is not a
+translation risk: from Phase A onward we serve the actual approved file
+(`Limitless Marketing Dashboard v2.dc.html` + `app/`) as the real frontend — every screen is
+pixel-identical because it *is* that file, not a hand-rebuilt copy of it. All engineering
+effort in every phase is on the backend (the API feeding it real data); there is no step in
+this roadmap where UI is redrawn from a screenshot. Visual parity is therefore a property of
+the plan, not a QA task to verify per page.
+
+## 5. Feature completeness commitment — every feature in the new design gets built
+
+No feature present in the new design is dropped or descoped. Full gap analysis, MVP vs. new
+design, mapped to the phase that builds it:
+
+| Feature | In old MVP today | In new design | Plan |
+|---|---|---|---|
+| Overview | Yes | Yes — expanded (pillars/modules/priority feed) | **Phase A** |
+| Multi-project switcher | No (single site only) | Yes | **Phase A** |
+| SEO Performance | Yes | Yes | Phase B — port |
+| Keywords tracking | Yes | Yes | Phase B — port |
+| Position Tracking | Yes (as "Positioning") | Yes | Phase B — port |
+| Alerts | Yes | Yes — expanded (`ai`, `ads` kinds added) | Phase B — port + expand |
+| Off-site SEO (GA4 referral/social) | No | Yes | Phase C — buildable with live data now (GA4 already connected) |
+| Backlink Analytics (full suite) | No (empty state only) | Yes | Phase C — built now, live data waits on DataForSEO balance |
+| Site Audit (crawler, score, CWV) | No | Yes | Phase C — built now, live data waits on DataForSEO balance |
+| Ads (incl. pause/budget/negatives write-back) | No (blocked, report-only) | Yes — full mutation support | Phase C — built now, live data waits on Google Ads/Meta credentials |
+| AI Optimization (LLM mentions, 4 models, Answer Inspector) | No | Yes | Phase D — live data waits on DataForSEO AI Optimization API |
+| Keyword Explorer | No | Yes | Phase D |
+| Prompt Explorer | No | Yes | Phase D |
+| Settings (15 groups: team, billing, security, notifications, budget/quotas, sync config, alert rules, crawl config, data prefs) | Partial (site selector, connector status, refresh, basic prefs only) | Yes | Phase E — expand |
+
+For every credential-blocked row, "built now" means the complete code path — schema,
+connectors, API endpoints, and SPA wiring — ships in its assigned phase, not a stub deferred
+indefinitely. The page reports an honest `state:"setup"`/empty response (per the no-fake-data
+rule, §0.3) until the credential is resolved; no further development work is needed at that
+point — the feature is already finished and goes live the moment the credential lands.
