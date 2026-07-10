@@ -48,6 +48,9 @@ logs/
 .DS_Store
 Thumbs.db
 
+# --- Git worktrees (isolated task workspaces) ---------------------------------
+.worktrees/
+
 # --- Local scratch / test artifacts ------------------------------------------
 scratch/shots/        # browser screenshots from manual verification
 scratch/*.png
