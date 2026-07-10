@@ -173,6 +173,49 @@ Spec: `docs/superpowers/specs/2026-06-15-dataforseo-competitor-intelligence-desi
 
 ---
 
+## PHASE A — SPA + API Foundation ✅ (2026-07-10)
+Migrates the dashboard's front end from Django server-rendered pages to the approved
+Limitless Marketing SPA design, backed by a real DRF API. The old Streamlit-derived Django
+dashboard pages (Phase 5) still serve unchanged at `/` — this phase adds a parallel `/app/`
+route; nothing at `/` was touched or removed.
+
+- [x] DRF installed and wired (`apps/api/`), `rest_framework.authtoken` enabled
+- [x] Bearer token auth: every Django user gets an auth token automatically via a
+      `post_save` signal (Task 2)
+- [x] `Site` model extended with `vertical` / `location` / `slug` fields (project identity)
+- [x] `GET/POST /api/projects` — list/create projects, real DB-backed
+- [x] `GET /api/projects/<slug>/overview?range=` — real Overview KPIs/pillars/modules,
+      stateless per-request (no session `period_mode` coupling, per `HANDOFF_SPEC.md`)
+- [x] SPA served at `/app/`, login-protected, with `window.FuseAPI.config` bootstrapped
+      server-side per request (real Bearer token, `baseUrl` pointed at the real backend)
+- [x] Verified end-to-end in a real browser (Playwright): logged-out redirect to `/login/`,
+      real `GET /api/projects` and `GET /api/projects/<slug>/overview` calls firing and
+      returning real DB data (compared 1:1 against `/`'s numbers for fusehealth.com — both
+      show zero traffic because this account has never been synced, confirming the SPA is
+      reading the same real data source, not fixture placeholders)
+
+**Non-obvious fixes required (all in `apps/dashboard/spa_views.py`, documented inline):**
+the exported design file's own JS contains an Excel-export helper whose string content
+literally includes the text `<head>...</head>` and `...</table></body></html>`, so a naive
+`str.replace("</body>", ...)` corrupts the SPA's own logic script; the fix targets the
+structural tag by position (`index()`/`rindex()`), never a blanket replace. Separately,
+`app/api.js`'s script tag executes twice in a real browser (once at parse time, once via the
+SPA's own `<helmet>` relocation), each time creating a fresh `window.FuseAPI` with default
+config — a one-shot post-load assignment gets silently wiped out, so the bootstrap installs
+an `Object.defineProperty` interceptor instead. And `config.baseUrl` must be `'/'`, not `''`
+— `api.js`'s `get()/post()/put()` gate real-backend mode on a truthy check, so an empty
+string (the literal reading of "paths already hardcode `/api/...`") silently keeps the SPA in
+fixture/demo mode forever; `'/'` is truthy and still strips to an empty effective prefix.
+
+**Known gap, out of this phase's scope:** the SPA's Overview tab also always fetches
+`/api/projects/<slug>/alerts` in the background (for a notification badge); that endpoint
+doesn't exist yet (404), which surfaces an error banner over the Overview content area even
+though the KPI data itself loads correctly. Not a Task 8 defect — `/alerts` (and every other
+non-Overview endpoint: Keywords, Backlinks, Site Audit, AI, Ads, Settings, …) is explicitly
+Phase B–D scope per the design doc's §2.8 boundary.
+
+---
+
 ## PHASE 7 — Deployment (VPS)
 - [ ] Ubuntu 22.04, Python 3.11+, venv, requirements, `.env` on server
 - [ ] `collectstatic` · `migrate` · `seed_users`

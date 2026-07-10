@@ -1,0 +1,27 @@
+/* FuseHealth — small custom CSS layered on top of Tailwind (CDN).
+   Keep this lean: prefer Tailwind utility classes. Only put here what utilities
+   cannot express (font features, scrollbar, base resets). */
+
+:root { color-scheme: light; }
+
+body {
+  font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+}
+
+/* Soft, unobtrusive scrollbars to match the airy aesthetic. */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: #e2e8f0; border-radius: 8px; }
+::-webkit-scrollbar-thumb:hover { background: #cbd5e1; }
+::-webkit-scrollbar-track { background: transparent; }
+
+/* HTMX: subtle fade so swapped partials don't pop. */
+.htmx-swapping { opacity: 0; transition: opacity .15s ease-out; }
+.htmx-settling { opacity: 1; transition: opacity .15s ease-in; }
+
+/* HTMX: loading indicators — hidden until the triggering request is in flight. */
+.htmx-indicator { display: none; }
+.htmx-request.htmx-indicator { display: flex; }
+.htmx-request .htmx-indicator { display: flex; }
+
+/* Alpine: hide x-cloak elements until Alpine initializes. */
+[x-cloak] { display: none !important; }
