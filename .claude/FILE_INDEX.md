@@ -44,13 +44,27 @@ worse than none. Status: (exists) = on disk now · (planned: Phase N) = not yet 
 | `apps/dashboard/admin.py` | `InsightAdmin` | exists |
 | `apps/dashboard/migrations/` | 0001 initial + 0002 Meta ordering | exists |
 | `apps/dashboard/` | views/templates per page; reads DB only | scaffolded (pages: Phase 5) |
+| `apps/dashboard/services/overview_service.py` | Phase A: Overview page query logic extracted to one place — raw DB calculators (`get_kpi_raw`, `query_top_pages_raw`, `query_daily_traffic_raw`, `get_ai_summary_text`) plus both an old-template formatter (`format_kpi_cards`, `build_traffic_chart`) and a new API-shaped formatter (`build_kpis_api`, `build_top_pages_api`, `build_pillars`, `build_modules`, `build_summary_lists`). Shared by the old Django Overview view and `apps.api.views.ProjectOverviewView` | exists |
+| `apps/dashboard/services/tests/test_overview_service.py` | Tests for the above (raw calculators, DB-error fallbacks, API-shape builders) | exists |
+| `apps/dashboard/spa_views.py` | Phase A: `spa_index` — serves the approved Limitless Marketing SPA (`static/spa/index.html`) at `/app/`; injects an auth-token bootstrap script (see module docstring for 3 footguns re: duplicate `<head>` text, `api.js` double-execution, `baseUrl` truthy gate) | exists |
 | `apps/sync/models.py` | `SyncLog` + `RefreshRun` Django models + `SyncStatus`/`RefreshStatus` TextChoices | exists |
 | `apps/sync/admin.py` | `SyncLogAdmin`, `RefreshRunAdmin` | exists |
 | `apps/sync/migrations/` | 0001 initial + 0002 TextChoices/ordering | exists |
 | `apps/sync/management/commands/migrate_legacy_data.py` | One-time MVP→production data migration (analytics + insights); `--source` option | exists |
+| `apps/sync/management/commands/add_project_fields.py` | Phase A: idempotent one-off command adding `vertical`/`location`/`slug` columns to the SQLAlchemy `sites` table + backfilling `slug` (not a Django migration — see `.claude/DATABASE.md` §3.1) | exists |
 | `apps/sync/views.py` | `sync_all_view`, `sync_page_view`, `sync_status_view` — HTMX polling endpoints | exists |
 | `apps/sync/urls.py` | `/sync/all/`, `/sync/page/<page>/`, `/sync/status/` (app_name="sync") | exists |
 | `templates/sync/progress.html` | HTMX progress bar partial (self-polling when active_sync=True) | exists |
+
+## API app — `apps/api/` (Phase A: DRF API foundation for the SPA)
+
+| Path | Purpose | Status |
+|---|---|---|
+| `apps/api/authentication.py` | `BearerTokenAuthentication` — DRF `TokenAuthentication` subclass using `Bearer` keyword (the SPA's `app/api.js` sends `Authorization: Bearer <token>`, not DRF's default `Token`) | exists |
+| `apps/api/views.py` | `PingView` (auth smoke test), `ProjectListCreateView` (`GET`/`POST /api/projects`), `ProjectOverviewView` (`GET /api/projects/<slug>/overview`) — all `login_not_required` so DRF's own auth returns 401 instead of a 302 to the login page | exists |
+| `apps/api/serializers.py` | `ProjectSerializer`, `ProjectCreateSerializer`, `OverviewQuerySerializer` (validates `range=7d\|30d\|90d`) | exists |
+| `apps/api/urls.py` | `/api/ping`, `/api/projects`, `/api/projects/<slug>/overview` (app_name="api"); mounted at `path('api/', ...)` in `config/urls.py` | exists |
+| `apps/api/tests/` | `test_ping.py`, `test_projects.py`, `test_overview.py` | exists |
 
 *Each app currently holds the default Django files (`models.py`, `views.py`, `admin.py`,
 `apps.py`, `tests.py`, `migrations/`). App configs use dotted name `apps.<name>` with a short
@@ -99,6 +113,7 @@ worse than none. Status: (exists) = on disk now · (planned: Phase N) = not yet 
 | `templates/dashboard/partials/_explorer_results.html` | +2026-06-17: Keyword Explorer results table (Alpine: sort/select/download/copy/save) | exists |
 | `templates/dashboard/partials/_saved_keywords.html` | +2026-06-17: saved research keywords panel (swap target `#saved-keywords-panel`) | exists |
 | `static/css/global.css` | Small custom CSS on top of Tailwind (scrollbar, htmx fade) | exists |
+| `static/spa/` | Phase A: copied assets of the approved Limitless Marketing SPA design export — `index.html`, `app/api.js`, `app/fixtures.js`, `support.js`, `css/`, `assets/`. Served raw (not through Django templates) by `apps/dashboard/spa_views.py` at `/app/` | exists |
 | `apps/dashboard/views.py` | `overview` view (+ demo Plotly spec builder) | exists |
 | `apps/dashboard/urls.py` | dashboard routes (`overview` at `/`) | exists |
 | `apps/dashboard/context_processors.py` | `navigation` — sidebar items + availability badges | exists |

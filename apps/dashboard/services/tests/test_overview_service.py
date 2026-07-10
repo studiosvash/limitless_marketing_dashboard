@@ -173,3 +173,17 @@ class RangeAndApiShapeTests(TestCase):
         self.assertEqual(pages[0]["url"], "https://fusehealth.com/a")
         self.assertIn("ctr", pages[0])
         self.assertNotIn("page", pages[0])
+
+    def test_build_kpis_api_and_build_pillars_do_not_crash_on_empty_fallback(self):
+        # Mirrors test_format_kpi_cards_does_not_crash_on_empty_fallback: proves the
+        # API-shaped builders survive the same {} / {} fallback get_kpi_raw returns on a
+        # DB error, instead of KeyError-ing and 500ing the new endpoint.
+        from apps.dashboard.services.overview_service import build_kpis_api, build_pillars
+        kpis = build_kpis_api({}, {})
+        self.assertEqual(kpis[0], {"label": "Total clicks", "value": 0, "delta": 0.0, "unit": "%"})
+        self.assertEqual(kpis[3], {"label": "Avg. position", "value": 0.0, "delta": 0.0, "unit": "pos"})
+
+        pillars = build_pillars("sc-domain:fusehealth.com", {}, {}, 0)
+        self.assertEqual(pillars[0]["value"], 0)
+        self.assertEqual(pillars[0]["delta"], 0)
+        self.assertEqual(pillars[1]["value"], 0.0)

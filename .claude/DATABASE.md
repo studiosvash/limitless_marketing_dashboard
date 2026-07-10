@@ -111,6 +111,9 @@ Qualitative notes linking business events to metrics. User-editable via admin/fo
 | `id` | Integer PK | |
 | `site_url` | String(255) NOT NULL UNIQUE | the cross-DB join key |
 | `site_name` | String(255) null | display name |
+| `slug` | String(100) null, unique, indexed | URL-safe project identifier for the SPA/API (e.g. `GET /api/projects` routing) |
+| `vertical` | String(255) null | industry/vertical label, e.g. `telehealth` — shown in Settings |
+| `location` | String(255) null, default=`"United States"` | primary market/location for keyword & competitor research |
 | `gsc_property` | String(255) null | e.g. `sc-domain:fusehealth.com` |
 | `ga4_property_id` | String(100) null | numeric GA4 property ID |
 | `dataforseo_target_domain` | String(255) null | bare domain for DataForSEO |
@@ -118,6 +121,12 @@ Qualitative notes linking business events to metrics. User-editable via admin/fo
 | `created_at` | DateTime server_default=now | |
 
 **Fed by:** manual / `.env` backfill during setup.
+
+**`slug`/`vertical`/`location` (Phase A):** added to `pipeline/db/schema.py`'s `Site` class and
+backfilled via `python manage.py add_project_fields` — an idempotent one-off command, not a
+Django migration (this table lives in the SQLAlchemy-managed `fusehealth.db`, not
+`django_internal.db`, so Django's migration system doesn't cover it). Run it once on any
+pre-existing database.
 
 ### 3.2 `seo_daily` — daily GSC + GA4 metrics
 

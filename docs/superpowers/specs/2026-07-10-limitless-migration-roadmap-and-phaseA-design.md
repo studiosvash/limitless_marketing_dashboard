@@ -142,8 +142,12 @@ The `sites` table (`fusehealth.db`, SQLAlchemy, `pipeline/db/schema.py`) already
 - Token login flow: log in via the existing page, confirm a token is issued/retrievable.
 - `GET /api/projects/:id/overview` returns real fusehealth.com data matching (or explaining
   any deliberate divergence from) what the old Overview page shows today.
-- The SPA at `/app/` loads, `FuseAPI.config.baseUrl` set to `/api`, Overview tab renders real
-  KPIs/trend/topPages/signals from the live API (not fixtures.js).
+- The SPA at `/app/` loads, `FuseAPI.config.baseUrl` set to `/` (**not** `/api` — corrected
+  post-implementation: `app/api.js`'s `get()`/`post()`/`put()` gate real-backend mode on a plain
+  JS truthy check, and `/api` would double the prefix since every call site already passes an
+  `/api/...`-prefixed path; see `apps/dashboard/spa_views.py`'s module docstring, footgun #3, for
+  the full explanation), Overview tab renders real KPIs/trend/topPages/signals from the live API
+  (not fixtures.js).
 - Old dashboard at its existing URLs still works, untouched.
 
 ### 2.8 Explicitly out of scope for Phase A

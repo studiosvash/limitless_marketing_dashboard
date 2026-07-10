@@ -233,17 +233,20 @@ def build_kpis_api(current: dict, previous: dict) -> list[dict]:
     view's pre-formatted display strings (see format_kpi_cards for that)."""
     from pipeline.utils.period_utils import compute_delta
 
-    clicks_delta = compute_delta(current["clicks"], previous["clicks"])
-    impr_delta = compute_delta(current["impressions"], previous["impressions"])
-    ctr_delta = compute_delta(current["ctr"] * 100, previous["ctr"] * 100)
+    # .get(..., default) fallbacks: current/previous can be {} when get_kpi_raw hit a DB
+    # error and returned its safe fallback (see format_kpi_cards for the same pattern) —
+    # must not KeyError in that case.
+    clicks_delta = compute_delta(current.get("clicks", 0), previous.get("clicks", 0))
+    impr_delta = compute_delta(current.get("impressions", 0), previous.get("impressions", 0))
+    ctr_delta = compute_delta(current.get("ctr", 0.0) * 100, previous.get("ctr", 0.0) * 100)
     # Avg position: lower is better, so "improvement" delta is (previous - current).
-    pos_delta_val = round((previous["avg_position"] or 0) - (current["avg_position"] or 0), 1)
+    pos_delta_val = round((previous.get("avg_position", 0.0) or 0) - (current.get("avg_position", 0.0) or 0), 1)
 
     return [
-        {"label": "Total clicks", "value": int(current["clicks"]), "delta": clicks_delta["pct_change"], "unit": "%"},
-        {"label": "Impressions", "value": int(current["impressions"]), "delta": impr_delta["pct_change"], "unit": "%"},
-        {"label": "Avg. CTR", "value": round(current["ctr"] * 100, 2), "delta": ctr_delta["pct_change"], "unit": "%"},
-        {"label": "Avg. position", "value": round(current["avg_position"], 1), "delta": pos_delta_val, "unit": "pos"},
+        {"label": "Total clicks", "value": int(current.get("clicks", 0)), "delta": clicks_delta["pct_change"], "unit": "%"},
+        {"label": "Impressions", "value": int(current.get("impressions", 0)), "delta": impr_delta["pct_change"], "unit": "%"},
+        {"label": "Avg. CTR", "value": round(current.get("ctr", 0.0) * 100, 2), "delta": ctr_delta["pct_change"], "unit": "%"},
+        {"label": "Avg. position", "value": round(current.get("avg_position", 0.0), 1), "delta": pos_delta_val, "unit": "pos"},
     ]
 
 
@@ -256,16 +259,21 @@ def build_top_pages_api(site_id: str, start_date: date, end_date: date, limit: i
 def build_pillars(site_id: str, kpis_current: dict, kpis_previous: dict, top3_count: int) -> list[dict]:
     """HANDOFF_SPEC.md §2.2 pillar shape. Site health / Paid ROAS / AI visibility report
     state='setup' — Site Audit, Ads, and AI Optimization aren't built yet (Phases C/D)."""
+    # .get(..., default) fallbacks: kpis_current/kpis_previous can be {} when get_kpi_raw hit
+    # a DB error and returned its safe fallback (see format_kpi_cards for the same pattern) —
+    # must not KeyError in that case.
+    current_clicks = kpis_current.get("clicks", 0)
+    previous_clicks = kpis_previous.get("clicks", 0)
     clicks_delta = round(
-        ((kpis_current["clicks"] - kpis_previous["clicks"]) / kpis_previous["clicks"] * 100)
-        if kpis_previous["clicks"] else 0, 1,
+        ((current_clicks - previous_clicks) / previous_clicks * 100)
+        if previous_clicks else 0, 1,
     )
     return [
         {"label": "Organic clicks", "target": "overview", "valueKind": "num",
-         "value": int(kpis_current["clicks"]), "delta": clicks_delta, "deltaUnit": "%",
+         "value": int(current_clicks), "delta": clicks_delta, "deltaUnit": "%",
          "sub": f"clicks", "state": "ok"},
         {"label": "Avg. position", "target": "positioning", "valueKind": "pos",
-         "value": round(kpis_current["avg_position"], 1), "delta": None, "deltaUnit": "pos",
+         "value": round(kpis_current.get("avg_position", 0.0), 1), "delta": None, "deltaUnit": "pos",
          "sub": f"{top3_count} keywords in top 3", "state": "ok"},
         {"label": "Site health", "target": "pages", "valueKind": "score",
          "value": None, "delta": None, "deltaUnit": "pts", "sub": "Site Audit not set up yet",
