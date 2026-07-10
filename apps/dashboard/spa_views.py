@@ -11,17 +11,19 @@ Three non-obvious footguns discovered by driving the real file in a browser
 
 1. `static/spa/index.html`'s own JS (an Excel-export helper deep inside the
    `<script data-dc-script>` block) contains the literal TEXT "<head>...</head>"
-   and "...</table></body></html>" inside a JS string — i.e. the substrings
-   "<head>" and "</body>" each appear TWICE in the file: once as the real
-   structural tag, once as inert text inside a JS string. A naive
-   `html.replace("</body>", ...)` (or "<head>") matches BOTH occurrences,
-   splicing our script into the middle of that JS string and corrupting the
-   SPA's whole logic script — the browser's HTML parser then treats our
-   injected `</script>` as the terminator for that (much earlier, unrelated)
-   script element, truncating it and breaking the dc-runtime's `evalDcLogic`
-   step ("Unexpected string"). Fix: target the structural tag by *position*
-   (first occurrence for `<head>`, last for `</body>`) via index()/rindex(),
-   never a blanket replace().
+   and "...</table></body></html>" inside a JS string — i.e. the substring
+   "<head>" appears TWICE in the file: once as the real structural tag, once
+   as inert text inside a JS string (the same is true of "</body>", though we
+   don't insert there — see below). A naive `html.replace("<head>", ...)`
+   matches BOTH occurrences, splicing our script into the middle of that JS
+   string and corrupting the SPA's whole logic script — the browser's HTML
+   parser then treats our injected `</script>` as the terminator for that
+   (much earlier, unrelated) script element, truncating it and breaking the
+   dc-runtime's `evalDcLogic` step ("Unexpected string"). Fix: target the
+   structural `<head>` tag by *position* — the FIRST occurrence, via
+   `str.index()` — never a blanket `replace()`. (We only ever insert once,
+   right after `<head>`, per the interceptor approach in footgun #2 below —
+   there is no separate `</body>`-relative insertion in this implementation.)
 
 2. `app/api.js`'s `<script src>` tag actually executes TWICE in a real browser:
    once during the browser's normal top-to-bottom parse of the document, and a
