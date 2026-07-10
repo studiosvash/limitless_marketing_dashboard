@@ -82,7 +82,35 @@ class SeoServiceTests(TestCase):
             self.assertEqual(seo_service.count_technical_issues("x"), 0)
 
 
-class BuildSeoResponseTests(SeoServiceTests):
+class BuildSeoResponseTests(TestCase):
+    def setUp(self):
+        db_connection._SessionFactory = None
+        self.addCleanup(setattr, db_connection, "_SessionFactory", None)
+        tmp = tempfile.mkdtemp()
+        db_path = str(Path(tmp) / "fusehealth.db")
+        init_db(get_engine(db_path))
+        self._ctx = override_settings(ANALYTICS_DB_PATH=db_path)
+        self._ctx.enable()
+        self.addCleanup(self._ctx.disable)
+
+        with get_session() as session:
+            session.add_all([
+                SEODaily(date=date(2026, 6, 30), site_id="sc-domain:fusehealth.com",
+                         clicks=5, impressions=800, ctr=0.006, avg_position=8.2,
+                         landing_page="https://fusehealth.com/low-ctr-page",
+                         country="United States", device="mobile"),
+                Anomaly(date=date(2026, 6, 29), site_id="sc-domain:fusehealth.com",
+                        metric_type="seo_clicks", actual_value=50, baseline_value=100,
+                        deviation_pct=-50.0, severity="high",
+                        description="Clicks dropped 50% vs. baseline.", is_acknowledged=0),
+                TechnicalIssue(site_id="sc-domain:fusehealth.com", url="https://fusehealth.com/gone",
+                               issue_type="not_found_404", severity="high", description="404"),
+                TechnicalIssue(site_id="sc-domain:fusehealth.com", url="https://fusehealth.com/redir",
+                               issue_type="page_with_redirect", severity="medium", description="redirect"),
+                KeywordRanking(date=date(2026, 6, 30), site_id="sc-domain:fusehealth.com",
+                               keyword="iv therapy near me", position=6, clicks=12, impressions=200),
+            ])
+
     def test_top_level_keys(self):
         from apps.dashboard.services.seo_service import build_seo_response
         body = build_seo_response("sc-domain:fusehealth.com", date(2026, 6, 30), date(2026, 6, 30))
