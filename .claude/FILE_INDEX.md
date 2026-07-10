@@ -46,6 +46,8 @@ worse than none. Status: (exists) = on disk now · (planned: Phase N) = not yet 
 | `apps/dashboard/` | views/templates per page; reads DB only | scaffolded (pages: Phase 5) |
 | `apps/dashboard/services/overview_service.py` | Phase A: Overview page query logic extracted to one place — raw DB calculators (`get_kpi_raw`, `query_top_pages_raw`, `query_daily_traffic_raw`, `get_ai_summary_text`) plus both an old-template formatter (`format_kpi_cards`, `build_traffic_chart`) and a new API-shaped formatter (`build_kpis_api`, `build_top_pages_api`, `build_pillars`, `build_modules`, `build_summary_lists`). Shared by the old Django Overview view and `apps.api.views.ProjectOverviewView` | exists |
 | `apps/dashboard/services/tests/test_overview_service.py` | Tests for the above (raw calculators, DB-error fallbacks, API-shape builders) | exists |
+| `apps/dashboard/services/seo_service.py` | Phase B1: SEO page query logic extracted to one place — raw DB calculators (`query_low_ctr_pages_raw`, `query_seo_by_dimension_raw`, `query_seo_anomalies_raw`, `count_technical_issues`, `count_quick_win_keywords`) plus both an old-template formatter (`format_recent_anomalies`) and a new API-shaped builder (`build_seo_response`, with corrected `kpis.critical`/`kpis.total_issues` semantics). Shared by the old Django `seo()` view and `apps.api.views.ProjectSEOView` | exists |
+| `apps/dashboard/services/tests/test_seo_service.py` | Tests for the above (raw calculators, `build_seo_response` shape/semantics) | exists |
 | `apps/dashboard/spa_views.py` | Phase A: `spa_index` — serves the approved Limitless Marketing SPA (`static/spa/index.html`) at `/app/`; injects an auth-token bootstrap script (see module docstring for 3 footguns re: duplicate `<head>` text, `api.js` double-execution, `baseUrl` truthy gate) | exists |
 | `apps/sync/models.py` | `SyncLog` + `RefreshRun` Django models + `SyncStatus`/`RefreshStatus` TextChoices | exists |
 | `apps/sync/admin.py` | `SyncLogAdmin`, `RefreshRunAdmin` | exists |
@@ -61,10 +63,10 @@ worse than none. Status: (exists) = on disk now · (planned: Phase N) = not yet 
 | Path | Purpose | Status |
 |---|---|---|
 | `apps/api/authentication.py` | `BearerTokenAuthentication` — DRF `TokenAuthentication` subclass using `Bearer` keyword (the SPA's `app/api.js` sends `Authorization: Bearer <token>`, not DRF's default `Token`) | exists |
-| `apps/api/views.py` | `PingView` (auth smoke test), `ProjectListCreateView` (`GET`/`POST /api/projects`), `ProjectOverviewView` (`GET /api/projects/<slug>/overview`) — all `login_not_required` so DRF's own auth returns 401 instead of a 302 to the login page | exists |
+| `apps/api/views.py` | `PingView` (auth smoke test), `ProjectListCreateView` (`GET`/`POST /api/projects`), `ProjectOverviewView` (`GET /api/projects/<slug>/overview`), `ProjectSEOView` (`GET /api/projects/<slug>/seo`, Phase B1) — all `login_not_required` so DRF's own auth returns 401 instead of a 302 to the login page | exists |
 | `apps/api/serializers.py` | `ProjectSerializer`, `ProjectCreateSerializer`, `OverviewQuerySerializer` (validates `range=7d\|30d\|90d`) | exists |
-| `apps/api/urls.py` | `/api/ping`, `/api/projects`, `/api/projects/<slug>/overview` (app_name="api"); mounted at `path('api/', ...)` in `config/urls.py` | exists |
-| `apps/api/tests/` | `test_ping.py`, `test_projects.py`, `test_overview.py` | exists |
+| `apps/api/urls.py` | `/api/ping`, `/api/projects`, `/api/projects/<slug>/overview`, `/api/projects/<slug>/seo` (Phase B1) (app_name="api"); mounted at `path('api/', ...)` in `config/urls.py` | exists |
+| `apps/api/tests/` | `test_ping.py`, `test_projects.py`, `test_overview.py`, `test_seo.py` (Phase B1) | exists |
 
 *Each app currently holds the default Django files (`models.py`, `views.py`, `admin.py`,
 `apps.py`, `tests.py`, `migrations/`). App configs use dotted name `apps.<name>` with a short

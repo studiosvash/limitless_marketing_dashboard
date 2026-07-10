@@ -17,6 +17,7 @@ from apps.dashboard.services.overview_service import (
     build_pillars, build_modules,
 )
 from apps.dashboard.services.decision_engine import generate_signals, generate_ad_overlap_signals
+from apps.dashboard.services.seo_service import build_seo_response
 from apps.dashboard.views import (
     _get_ads_overview, _get_keywords_overview,
 )
@@ -110,3 +111,22 @@ class ProjectOverviewView(APIView):
             "summary": summary,
             "topPages": top_pages,
         })
+
+
+@method_decorator(login_not_required, name="dispatch")
+class ProjectSEOView(APIView):
+    def get(self, request, slug):
+        with get_session() as session:
+            site = session.execute(select(Site).where(Site.slug == slug)).scalars().first()
+        if site is None:
+            from django.http import Http404
+            raise Http404(f"No project with slug '{slug}'")
+        site_id = site.site_url
+
+        with get_session() as session:
+            anchor = session.execute(
+                select(func.max(SEODaily.date)).where(SEODaily.site_id == site_id)
+            ).scalar() or date_cls.today()
+        curr_start, curr_end, _, _ = range_to_period_dates("30d", anchor)
+
+        return Response(build_seo_response(site_id, curr_start, curr_end))

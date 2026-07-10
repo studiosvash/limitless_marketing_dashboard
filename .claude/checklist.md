@@ -216,6 +216,24 @@ Phase B–D scope per the design doc's §2.8 boundary.
 
 ---
 
+## PHASE B1 — SEO ✅ (2026-07-10)
+Wires the SPA's SEO tab to a real DRF endpoint, following the exact pattern established by
+Phase A's Overview endpoint.
+
+- [x] SEO page query logic extracted into `apps/dashboard/services/seo_service.py`, shared
+      by the old `/seo/` Django view and the new API view (no duplicated queries)
+- [x] `build_seo_response(site_id, curr_start, curr_end)` — API-shaped builder matching
+      `HANDOFF_SPEC.md`'s `seo` view shape, with corrected `kpis.critical` (404-count) /
+      `kpis.total_issues` (fresh sum of issues + anomalies + low-CTR pages) semantics
+- [x] `GET /api/projects/<slug>/seo` — real DB-backed, same "anchor to latest data date"
+      pattern as Overview but with a fixed 30-day window (no `range` param — the SEO page
+      has no period selector in the new design)
+- [x] Verified against a real seeded DB: API response's `lowCtrPages`/`countries`/
+      `anomalies`/`quickWinKws` matched the old `/seo/` page's numbers for the same site
+      and period
+
+---
+
 ## PHASE 7 — Deployment (VPS)
 - [ ] Ubuntu 22.04, Python 3.11+, venv, requirements, `.env` on server
 - [ ] `collectstatic` · `migrate` · `seed_users`
