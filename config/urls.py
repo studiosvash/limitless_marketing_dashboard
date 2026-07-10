@@ -22,4 +22,5 @@ urlpatterns = [
     path('', include('apps.accounts.urls')),
     path('', include('apps.dashboard.urls')),
     path('', include('apps.sync.urls')),
+    path('api/', include('apps.api.urls')),
 ]

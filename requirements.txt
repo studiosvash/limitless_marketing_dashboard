@@ -3,6 +3,7 @@
 
 # --- Web framework -----------------------------------------------------------
 Django>=6.0,<6.1
+djangorestframework>=3.15.0,<3.16.0
 python-dotenv>=1.0.0          # loads .env in development
 django-htmx>=1.17.0           # request.htmx helper for partial responses
 
