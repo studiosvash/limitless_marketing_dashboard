@@ -72,6 +72,21 @@ class KeywordIntelligenceTests(TestCase):
         self.assertEqual(result["total_tracked"], 0)
         self.assertEqual(result["all_keywords"], [])
 
+    def test_full_keywords_includes_every_tracked_keyword(self):
+        from apps.dashboard.services.keywords_service import get_keyword_intelligence_raw
+        result = get_keyword_intelligence_raw(
+            "sc-domain:fusehealth.com",
+            date(2026, 6, 30), date(2026, 6, 30),
+            date(2026, 6, 1), date(2026, 6, 1),
+        )
+        self.assertIn("full_keywords", result)
+        full_ids = {row["keyword"] for row in result["full_keywords"]}
+        self.assertEqual(full_ids, {"iv therapy near me", "mobile iv drip"})
+        # every row must carry pos_change (real number or None), not be missing the key
+        by_kw = {row["keyword"]: row for row in result["full_keywords"]}
+        self.assertIn("pos_change", by_kw["iv therapy near me"])
+        self.assertIsNotNone(by_kw["iv therapy near me"]["pos_change"])
+
 
 class BuildKeywordsResponseTests(TestCase):
     def setUp(self):
@@ -195,3 +210,22 @@ class BuildKeywordsResponseBeyondTopClicksCapTests(TestCase):
         # the target's 0 clicks put it outside the old top-200-by-clicks all_keywords cap.
         known_ids = {k["id"] for k in body["keywords"]}
         self.assertIn(target_id, known_ids)
+
+
+from apps.dashboard.services.keywords_service import to_api_keyword
+
+
+class ToApiKeywordTests(TestCase):
+    def test_shapes_a_raw_row_into_the_api_keyword_object(self):
+        row = {
+            "keyword": "iv therapy near me", "intent": "commercial", "position": 6.0,
+            "prev_position": 9.0, "search_volume": 2400, "keyword_difficulty": 24.0,
+            "cpc": 4.2, "clicks": 12, "impressions": 200, "ctr": 6.0,
+            "url": "/services/iv-therapy",
+        }
+        api_kw = to_api_keyword(row)
+        self.assertEqual(api_kw["id"], "iv therapy near me")
+        self.assertEqual(api_kw["pos"], 6.0)
+        self.assertEqual(api_kw["prevPos"], 9.0)
+        self.assertEqual(api_kw["monthly"], [])
+        self.assertEqual(api_kw["source"], "sync")

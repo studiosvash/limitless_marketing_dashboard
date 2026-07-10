@@ -12,6 +12,30 @@ from pipeline.db.schema import KeywordRanking
 from pipeline.utils.db_connection import get_session
 
 
+def kw_id(row: dict) -> str:
+    return row["keyword"]
+
+
+def to_api_keyword(row: dict) -> dict:
+    return {
+        "id": kw_id(row),
+        "kw": row["keyword"],
+        "intent": row.get("intent"),
+        "pos": row.get("position"),
+        "prevPos": row.get("prev_position"),
+        "volume": row.get("search_volume"),
+        "kd": row.get("keyword_difficulty"),
+        "cpc": row.get("cpc"),
+        "clicks": row.get("clicks"),
+        "impressions": row.get("impressions"),
+        "ctr": row.get("ctr"),
+        "url": row.get("url"),
+        "monthly": [],       # not tracked yet — honest empty, not fabricated
+        "source": "sync",    # every currently-tracked keyword comes from the sync pipeline
+        "serpFeatures": [],  # not tracked yet — honest empty, not fabricated
+    }
+
+
 def get_keyword_intelligence_raw(site_id: str, curr_start: date, curr_end: date,
                                   prev_start: date, prev_end: date) -> dict:
     """Keyword health score and action buckets. Identical to the pre-extraction
@@ -52,7 +76,7 @@ def get_keyword_intelligence_raw(site_id: str, curr_start: date, curr_end: date,
                     "intent_distribution": {"informational": 0, "commercial": 0, "transactional": 0, "navigational": 0},
                     "kd_easy": 0, "kd_medium": 0, "kd_hard": 0,
                     "quick_wins": [], "striking": [], "declining": [], "low_ctr": [],
-                    "all_keywords": [],
+                    "all_keywords": [], "full_keywords": [],
                 }
 
             with_clicks = df[df["clicks"] > 0]
@@ -168,6 +192,7 @@ def get_keyword_intelligence_raw(site_id: str, curr_start: date, curr_end: date,
                 "declining": df_to_dicts(declining),
                 "low_ctr": df_to_dicts(low_ctr),
                 "all_keywords": df_to_dicts(all_keywords_df),
+                "full_keywords": df_to_dicts(merged.sort_values("clicks", ascending=False)),
             }
     except Exception as e:
         import logging; logging.getLogger(__name__).error(f"get_keyword_intelligence_raw error: {e}", exc_info=True)
@@ -176,7 +201,7 @@ def get_keyword_intelligence_raw(site_id: str, curr_start: date, curr_end: date,
             "total_tracked": 0, "total_volume": 0, "avg_position": 0, "total_clicks": 0,
             "intent_distribution": {"informational": 0, "commercial": 0, "transactional": 0, "navigational": 0},
             "kd_easy": 0, "kd_medium": 0, "kd_hard": 0,
-            "quick_wins": [], "striking": [], "declining": [], "low_ctr": [], "all_keywords": []
+            "quick_wins": [], "striking": [], "declining": [], "low_ctr": [], "all_keywords": [], "full_keywords": []
         }
 
 
@@ -186,28 +211,6 @@ def build_keywords_response(site_id: str, curr_start: date, curr_end: date,
     keywordsView() in Limitless marketing dashboard2/app/api.js. See
     docs/superpowers/specs/2026-07-10-phaseB2-keywords-design.md for the field mapping."""
     intel = get_keyword_intelligence_raw(site_id, curr_start, curr_end, prev_start, prev_end)
-
-    def kw_id(row: dict) -> str:
-        return row["keyword"]
-
-    def to_api_keyword(row: dict) -> dict:
-        return {
-            "id": kw_id(row),
-            "kw": row["keyword"],
-            "intent": row.get("intent"),
-            "pos": row.get("position"),
-            "prevPos": row.get("prev_position"),
-            "volume": row.get("search_volume"),
-            "kd": row.get("keyword_difficulty"),
-            "cpc": row.get("cpc"),
-            "clicks": row.get("clicks"),
-            "impressions": row.get("impressions"),
-            "ctr": row.get("ctr"),
-            "url": row.get("url"),
-            "monthly": [],       # not tracked yet — honest empty, not fabricated
-            "source": "sync",    # every currently-tracked keyword comes from the sync pipeline
-            "serpFeatures": [],  # not tracked yet — honest empty, not fabricated
-        }
 
     return {
         "kpis": {
