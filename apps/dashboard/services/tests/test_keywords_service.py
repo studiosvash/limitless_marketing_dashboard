@@ -71,3 +71,70 @@ class KeywordIntelligenceTests(TestCase):
         )
         self.assertEqual(result["total_tracked"], 0)
         self.assertEqual(result["all_keywords"], [])
+
+
+class BuildKeywordsResponseTests(TestCase):
+    def setUp(self):
+        db_connection._SessionFactory = None
+        self.addCleanup(setattr, db_connection, "_SessionFactory", None)
+        tmp = tempfile.mkdtemp()
+        db_path = str(Path(tmp) / "fusehealth.db")
+        init_db(get_engine(db_path))
+        self._ctx = override_settings(ANALYTICS_DB_PATH=db_path)
+        self._ctx.enable()
+        self.addCleanup(self._ctx.disable)
+
+        with get_session() as session:
+            session.add_all([
+                KeywordRanking(date=date(2026, 6, 30), site_id="sc-domain:fusehealth.com",
+                               keyword="iv therapy near me", position=6, clicks=12,
+                               impressions=200, search_volume=2400, keyword_difficulty=24,
+                               cpc=4.2, intent="commercial", url="/services/iv-therapy"),
+                KeywordRanking(date=date(2026, 6, 1), site_id="sc-domain:fusehealth.com",
+                               keyword="iv therapy near me", position=9, clicks=8, impressions=180),
+                KeywordRanking(date=date(2026, 6, 30), site_id="sc-domain:fusehealth.com",
+                               keyword="mobile iv drip", position=15, clicks=0, impressions=60,
+                               search_volume=880, keyword_difficulty=18, intent="informational",
+                               url="/services/mobile"),
+            ])
+
+    def test_top_level_keys(self):
+        from apps.dashboard.services.keywords_service import build_keywords_response
+        body = build_keywords_response("sc-domain:fusehealth.com", date(2026, 6, 30), date(2026, 6, 30),
+                                        date(2026, 6, 1), date(2026, 6, 1))
+        for key in ["kpis", "intents", "difficulty", "segments", "keywords"]:
+            self.assertIn(key, body)
+
+    def test_segments_are_id_arrays_not_full_objects(self):
+        from apps.dashboard.services.keywords_service import build_keywords_response
+        body = build_keywords_response("sc-domain:fusehealth.com", date(2026, 6, 30), date(2026, 6, 30),
+                                        date(2026, 6, 1), date(2026, 6, 1))
+        self.assertEqual(body["segments"]["quick_wins"], ["iv therapy near me"])
+        for seg_ids in body["segments"].values():
+            for kw_id in seg_ids:
+                self.assertIsInstance(kw_id, str)
+
+    def test_every_segment_id_has_a_matching_keyword(self):
+        from apps.dashboard.services.keywords_service import build_keywords_response
+        body = build_keywords_response("sc-domain:fusehealth.com", date(2026, 6, 30), date(2026, 6, 30),
+                                        date(2026, 6, 1), date(2026, 6, 1))
+        known_ids = {k["id"] for k in body["keywords"]}
+        for seg_ids in body["segments"].values():
+            for kw_id in seg_ids:
+                self.assertIn(kw_id, known_ids)
+
+    def test_keyword_row_shape_and_prev_pos(self):
+        from apps.dashboard.services.keywords_service import build_keywords_response
+        body = build_keywords_response("sc-domain:fusehealth.com", date(2026, 6, 30), date(2026, 6, 30),
+                                        date(2026, 6, 1), date(2026, 6, 1))
+        by_id = {k["id"]: k for k in body["keywords"]}
+        row = by_id["iv therapy near me"]
+        for key in ["id", "kw", "intent", "pos", "prevPos", "volume", "kd", "cpc",
+                    "clicks", "impressions", "ctr", "url", "monthly", "source", "serpFeatures"]:
+            self.assertIn(key, row)
+        self.assertEqual(row["prevPos"], 9)
+        self.assertEqual(row["monthly"], [])
+        self.assertEqual(row["serpFeatures"], [])
+        self.assertEqual(row["source"], "sync")
+        # the keyword with no previous-period row must have prevPos None, not a KeyError/crash
+        self.assertIsNone(by_id["mobile iv drip"]["prevPos"])

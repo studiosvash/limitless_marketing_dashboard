@@ -159,3 +159,51 @@ def get_keyword_intelligence_raw(site_id: str, curr_start: date, curr_end: date,
             "kd_easy": 0, "kd_medium": 0, "kd_hard": 0,
             "quick_wins": [], "striking": [], "declining": [], "low_ctr": [], "all_keywords": []
         }
+
+
+def build_keywords_response(site_id: str, curr_start: date, curr_end: date,
+                             prev_start: date, prev_end: date) -> dict:
+    """HANDOFF_SPEC.md `keywords` view shape — verified against the real fixture's
+    keywordsView() in Limitless marketing dashboard2/app/api.js. See
+    docs/superpowers/specs/2026-07-10-phaseB2-keywords-design.md for the field mapping."""
+    intel = get_keyword_intelligence_raw(site_id, curr_start, curr_end, prev_start, prev_end)
+
+    def kw_id(row: dict) -> str:
+        return row["keyword"]
+
+    def to_api_keyword(row: dict) -> dict:
+        return {
+            "id": kw_id(row),
+            "kw": row["keyword"],
+            "intent": row.get("intent"),
+            "pos": row.get("position"),
+            "prevPos": row.get("prev_position"),
+            "volume": row.get("search_volume"),
+            "kd": row.get("keyword_difficulty"),
+            "cpc": row.get("cpc"),
+            "clicks": row.get("clicks"),
+            "impressions": row.get("impressions"),
+            "ctr": row.get("ctr"),
+            "url": row.get("url"),
+            "monthly": [],       # not tracked yet — honest empty, not fabricated
+            "source": "sync",    # every currently-tracked keyword comes from the sync pipeline
+            "serpFeatures": [],  # not tracked yet — honest empty, not fabricated
+        }
+
+    return {
+        "kpis": {
+            "total": intel["total_tracked"],
+            "avg_pos": intel["avg_position"],
+            "total_volume": intel["total_volume"],
+            "total_clicks": intel["total_clicks"],
+        },
+        "intents": intel["intent_distribution"],
+        "difficulty": {"easy": intel["kd_easy"], "medium": intel["kd_medium"], "hard": intel["kd_hard"]},
+        "segments": {
+            "quick_wins": [kw_id(r) for r in intel["quick_wins"]],
+            "striking": [kw_id(r) for r in intel["striking"]],
+            "declining": [kw_id(r) for r in intel["declining"]],
+            "low_ctr": [kw_id(r) for r in intel["low_ctr"]],
+        },
+        "keywords": [to_api_keyword(r) for r in intel["all_keywords"]],
+    }
