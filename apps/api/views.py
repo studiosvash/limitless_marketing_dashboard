@@ -1,14 +1,27 @@
+from datetime import date as date_cls
+
 from django.contrib.auth.decorators import login_not_required
 from django.utils.decorators import method_decorator
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from sqlalchemy import func, select
 
 from pipeline.services.site_service import add_site, list_sites
 from pipeline.utils.db_connection import get_session
-from pipeline.db.schema import Site
+from pipeline.db.schema import Site, SEODaily
 
-from .serializers import ProjectCreateSerializer, ProjectSerializer
+from apps.dashboard.services.overview_service import (
+    get_kpi_raw, build_kpis_api, build_top_pages_api, query_daily_traffic_raw,
+    range_to_period_dates, get_ai_summary_text, parse_ai_summary, build_summary_lists,
+    build_pillars, build_modules,
+)
+from apps.dashboard.services.decision_engine import generate_signals, generate_ad_overlap_signals
+from apps.dashboard.views import (
+    _get_ads_overview, _get_keywords_overview, _get_positioning_overview,
+)
+
+from .serializers import OverviewQuerySerializer, ProjectCreateSerializer, ProjectSerializer
 
 
 # login_not_required bypasses session-based LoginRequiredMiddleware (active project-wide)
@@ -44,3 +57,57 @@ class ProjectListCreateView(APIView):
             site = session.get(Site, new_id)
             body = ProjectSerializer(site).data
         return Response(body, status=status.HTTP_201_CREATED)
+
+
+@method_decorator(login_not_required, name="dispatch")
+class ProjectOverviewView(APIView):
+    def get(self, request, slug):
+        with get_session() as session:
+            site = session.execute(select(Site).where(Site.slug == slug)).scalars().first()
+        if site is None:
+            from django.http import Http404
+            raise Http404(f"No project with slug '{slug}'")
+        site_id = site.site_url
+
+        query = OverviewQuerySerializer(data=request.query_params)
+        query.is_valid(raise_exception=True)
+        range_key = query.validated_data["range"]
+
+        with get_session() as session:
+            anchor = session.execute(
+                select(func.max(SEODaily.date)).where(SEODaily.site_id == site_id)
+            ).scalar() or date_cls.today()
+
+        curr_start, curr_end, prev_start, prev_end = range_to_period_dates(range_key, anchor)
+
+        kpis_current, kpis_previous = get_kpi_raw(site_id, curr_start, curr_end, prev_start, prev_end)
+        kpis = build_kpis_api(kpis_current, kpis_previous)
+        trend = query_daily_traffic_raw(site_id, curr_start, curr_end)
+        top_pages = build_top_pages_api(site_id, curr_start, curr_end)
+
+        ads_overview, ads_curr, ads_prev = _get_ads_overview(site_id, curr_start, curr_end, prev_start, prev_end)
+        signals = generate_signals(kpis_current, kpis_previous, ads_curr, ads_prev)
+        signals += generate_ad_overlap_signals(site_id, curr_start, curr_end)
+        signals = signals[:3]
+
+        keywords_overview = _get_keywords_overview(site_id)
+        positioning = _get_positioning_overview(site_id)
+        top3_count = sum(1 for k in keywords_overview if k["position"] not in ("N/A",) and float(k["position"] or 99) <= 3)
+
+        pillars = build_pillars(site_id, kpis_current, kpis_previous, top3_count)
+        seo_stat = f"{int(kpis_current['clicks']):,} clicks"
+        modules = build_modules(seo_stat, len(keywords_overview), top3_count, kpis_current["avg_position"])
+
+        ai_summary_sections = parse_ai_summary(get_ai_summary_text(site_id))
+        summary = build_summary_lists(ai_summary_sections)
+
+        return Response({
+            "kpis": kpis,
+            "pillars": pillars,
+            "modules": modules,
+            "priority": [],  # Alerts feed is Phase B — no fake data, empty until built
+            "signals": signals,
+            "trend": trend,
+            "summary": summary,
+            "topPages": top_pages,
+        })

@@ -21,3 +21,7 @@ class ProjectCreateSerializer(serializers.Serializer):
     name = serializers.CharField(max_length=255, required=False, allow_blank=True)
     vertical = serializers.CharField(max_length=255, required=False, allow_blank=True, allow_null=True)
     location = serializers.CharField(max_length=255, required=False, allow_blank=True)
+
+
+class OverviewQuerySerializer(serializers.Serializer):
+    range = serializers.ChoiceField(choices=["7d", "30d", "90d"], required=False, default="30d")

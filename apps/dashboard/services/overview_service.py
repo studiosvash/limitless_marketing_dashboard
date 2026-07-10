@@ -251,3 +251,64 @@ def build_top_pages_api(site_id: str, start_date: date, end_date: date, limit: i
     """HANDOFF_SPEC.md overview `topPages[≤6]` shape: [{url, clicks, impressions, ctr}]."""
     raw = query_top_pages_raw(site_id, start_date, end_date, limit=limit)
     return [{"url": p["page"], "clicks": p["clicks"], "impressions": p["impressions"], "ctr": p["ctr"]} for p in raw]
+
+
+def build_pillars(site_id: str, kpis_current: dict, kpis_previous: dict, top3_count: int) -> list[dict]:
+    """HANDOFF_SPEC.md §2.2 pillar shape. Site health / Paid ROAS / AI visibility report
+    state='setup' — Site Audit, Ads, and AI Optimization aren't built yet (Phases C/D)."""
+    clicks_delta = round(
+        ((kpis_current["clicks"] - kpis_previous["clicks"]) / kpis_previous["clicks"] * 100)
+        if kpis_previous["clicks"] else 0, 1,
+    )
+    return [
+        {"label": "Organic clicks", "target": "overview", "valueKind": "num",
+         "value": int(kpis_current["clicks"]), "delta": clicks_delta, "deltaUnit": "%",
+         "sub": f"clicks", "state": "ok"},
+        {"label": "Avg. position", "target": "positioning", "valueKind": "pos",
+         "value": round(kpis_current["avg_position"], 1), "delta": None, "deltaUnit": "pos",
+         "sub": f"{top3_count} keywords in top 3", "state": "ok"},
+        {"label": "Site health", "target": "pages", "valueKind": "score",
+         "value": None, "delta": None, "deltaUnit": "pts", "sub": "Site Audit not set up yet",
+         "state": "setup"},
+        {"label": "Paid ROAS", "target": "ads", "valueKind": "roas",
+         "value": None, "delta": None, "deltaUnit": None, "sub": "Ads not connected yet",
+         "state": "setup"},
+        {"label": "AI visibility", "target": "ai", "valueKind": "pct",
+         "value": None, "delta": None, "deltaUnit": "pts", "sub": "not set up yet",
+         "state": "setup"},
+    ]
+
+
+def build_modules(seo_module_stat: str, keywords_count: int, top3_count: int,
+                   avg_position: float) -> list[dict]:
+    """HANDOFF_SPEC.md §2.2 module-status card shape."""
+    return [
+        {"label": "SEO Performance", "target": "seo", "stat": seo_module_stat, "sub": "",
+         "tone": "ok"},
+        {"label": "Keywords", "target": "keywords", "stat": f"{keywords_count} tracked",
+         "sub": f"{top3_count} in top 3", "tone": "ok"},
+        {"label": "Position Tracking", "target": "positioning", "stat": f"#{avg_position:.1f} avg",
+         "sub": "", "tone": "ok"},
+        {"label": "Backlinks", "target": "backlinks", "stat": "Not connected", "sub": "",
+         "tone": "setup"},
+        {"label": "Site Audit", "target": "pages", "stat": "Not set up", "sub": "",
+         "tone": "setup"},
+        {"label": "AI Optimization", "target": "ai", "stat": "Not set up",
+         "sub": "Track ChatGPT, Claude, Gemini", "tone": "setup"},
+        {"label": "Paid Media", "target": "ads", "stat": "Not connected", "sub": "",
+         "tone": "setup"},
+    ]
+
+
+def build_summary_lists(ai_summary_sections: list[dict]) -> dict:
+    """HANDOFF_SPEC.md summary{wins, critical, watch} — flattens the parsed AI summary
+    sections (see parse_ai_summary) into complete-sentence string lists per kind."""
+    out = {"wins": [], "critical": [], "watch": []}
+    kind_to_key = {"win": "wins", "critical": "critical", "info": "watch"}
+    for section in ai_summary_sections:
+        key = kind_to_key.get(section["kind"], "watch")
+        for item in section["items"]:
+            out[key].append(str(item))
+        for para in section["prose"]:
+            out[key].append(str(para))
+    return out
