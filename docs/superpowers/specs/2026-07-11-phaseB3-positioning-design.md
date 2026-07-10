@@ -50,7 +50,23 @@ importable function in `keywords_service.py`, and import it here.
 | `movement.lost` | `_get_position_changes()`'s `lost_count` | direct |
 | `competitors.domains` | `pipeline.services.competitor_service.get_tracked_competitors(site_id)` (already used internally by `_get_competitor_grid`) | direct |
 | `competitors.rows` | `_get_competitor_grid(site_id)`'s `rows[]` (currently `{keyword, you:{pos,prev,diff,direction}, cells:[{domain,pos,...}]}`) | reshape to `{kw, you: <pos number>, comps: [<pos number or null>, ...]}` — new shape wants raw position numbers only, not the diff/direction detail (that richer detail isn't part of this endpoint's contract; the old MVP template shows it, this API doesn't need to) |
-| `movers[≤8]` | **new**: build from `_get_position_changes()`'s `improved`+`declined` lists (both already have `keyword`/`delta`), sorted by `abs(delta)` desc, capped at 8, each reshaped via the promoted `to_api_keyword` (see above) — needs a fresh per-keyword query for full API-shape fields, not just the summary fields `_get_position_changes` already returns | genuinely new assembly, reusing B2's keyword-shaping function |
+| `movers[≤8]` | **new** — see below | genuinely new assembly, reusing B2's keyword-shaping function |
+
+**`movers[]` — revised approach (caught during plan-writing):** `_get_position_changes()`'s
+`improved`/`declined` lists are missing fields the full keyword-object shape needs (`intent`,
+`keyword_difficulty`, `cpc`, `impressions` aren't selected by that query) — reusing them
+would mean nulling out real data we do have, which the "no fake data" rule's spirit also
+argues against (it's not fabrication, but it's an avoidable, unnecessary loss of real data).
+`get_keyword_intelligence_raw` (B2, `keywords_service.py`) already computes exactly the
+right full-field frame internally as `merged` (before capping/segmenting) — it's just never
+returned. Fix: add one new key to that function's return dict, `full_keywords` (the complete,
+uncapped `merged` frame, sorted by clicks desc, via the same `df_to_dicts` helper already
+used for every other key) — zero new queries, reuses existing computation. `movers[]` then
+filters `full_keywords` for `abs(pos_change) >= 2`, sorts by `abs(pos_change)` desc, takes
+top 8, reshapes each via the promoted `to_api_keyword`. This is an additive-only change to
+`get_keyword_intelligence_raw`'s return shape (new dict key), verified not to break any
+existing B2 test (none of which assert the full key set of the returned dict, only presence
+of the specific keys each test needs).
 
 ## Architecture
 
