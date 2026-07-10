@@ -18,7 +18,7 @@ from apps.dashboard.services.overview_service import (
 )
 from apps.dashboard.services.decision_engine import generate_signals, generate_ad_overlap_signals
 from apps.dashboard.views import (
-    _get_ads_overview, _get_keywords_overview, _get_positioning_overview,
+    _get_ads_overview, _get_keywords_overview,
 )
 
 from .serializers import OverviewQuerySerializer, ProjectCreateSerializer, ProjectSerializer
@@ -91,7 +91,6 @@ class ProjectOverviewView(APIView):
         signals = signals[:3]
 
         keywords_overview = _get_keywords_overview(site_id)
-        positioning = _get_positioning_overview(site_id)
         top3_count = sum(1 for k in keywords_overview if k["position"] not in ("N/A",) and float(k["position"] or 99) <= 3)
 
         pillars = build_pillars(site_id, kpis_current, kpis_previous, top3_count)

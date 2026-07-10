@@ -8,7 +8,7 @@ from rest_framework.authtoken.models import Token
 from rest_framework.test import APIClient, APITestCase
 
 from pipeline.db.engine import get_engine
-from pipeline.db.schema import init_db, Site, SEODaily
+from pipeline.db.schema import init_db, Site, SEODaily, KeywordRanking, AISummary
 from pipeline.utils.db_connection import get_session
 import pipeline.utils.db_connection as db_connection
 
@@ -73,3 +73,58 @@ class OverviewEndpointTests(APITestCase):
     def test_range_defaults_to_30d(self):
         resp = self.client_auth.get("/api/projects/fusehealth/overview")
         self.assertEqual(resp.status_code, 200)
+
+    def test_pillars_modules_and_summary_reflect_seeded_keyword_and_ai_data(self):
+        """Task 7's genuinely-new logic (build_pillars, build_modules, top3_count,
+        build_summary_lists) only produces non-trivial output when KeywordRanking/AISummary
+        rows exist — setUp() above seeds neither, so this test seeds its own and asserts
+        real numeric/string output, not just key presence."""
+        with get_session() as session:
+            # position=2 (<=3, counts toward top3_count) and position=15 (does not).
+            session.add(KeywordRanking(
+                date=date(2026, 6, 30), site_id="sc-domain:fusehealth.com",
+                keyword="buy protein powder", position=2, clicks=40, impressions=400,
+                search_volume=1200,
+            ))
+            session.add(KeywordRanking(
+                date=date(2026, 6, 30), site_id="sc-domain:fusehealth.com",
+                keyword="health supplements guide", position=15, clicks=10, impressions=800,
+                search_volume=500,
+            ))
+            session.add(AISummary(
+                week_start=date(2026, 6, 29), site_id="sc-domain:fusehealth.com",
+                summary_text=(
+                    "## 🟢 Win: Great CTR growth\n"
+                    "- CTR grew 20% this month\n"
+                    "- Impressions increased significantly\n\n"
+                    "## 🔴 Critical: Ranking drop\n"
+                    "- Lost 5 positions on primary keyword\n"
+                    "- Traffic decreased on key landing page\n"
+                ),
+            ))
+
+        resp = self.client_auth.get("/api/projects/fusehealth/overview", {"range": "30d"})
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+
+        # Keywords module: 2 tracked (both seeded keywords), 1 in top 3 (position 2 only).
+        keywords_module = next(m for m in body["modules"] if m["label"] == "Keywords")
+        self.assertEqual(keywords_module["stat"], "2 tracked")
+        self.assertEqual(keywords_module["sub"], "1 in top 3")
+
+        # Avg. position pillar's `sub` reports the same top3_count.
+        avg_pos_pillar = next(p for p in body["pillars"] if p["label"] == "Avg. position")
+        self.assertEqual(avg_pos_pillar["sub"], "1 keywords in top 3")
+        # 8.0 == the single SEODaily row's avg_position inside the current window (setUp).
+        self.assertEqual(avg_pos_pillar["value"], 8.0)
+
+        # Organic clicks pillar value is a real number matching setUp's SEODaily total.
+        organic_clicks_pillar = next(p for p in body["pillars"] if p["label"] == "Organic clicks")
+        self.assertEqual(organic_clicks_pillar["value"], 100)
+
+        # AI summary wins/critical are populated with the actual seeded bullet text.
+        summary = body["summary"]
+        self.assertTrue(any("CTR grew 20% this month" in w for w in summary["wins"]))
+        self.assertTrue(any("Impressions increased significantly" in w for w in summary["wins"]))
+        self.assertTrue(any("Lost 5 positions on primary keyword" in c for c in summary["critical"]))
+        self.assertTrue(any("Traffic decreased on key landing page" in c for c in summary["critical"]))
