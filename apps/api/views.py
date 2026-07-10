@@ -3,7 +3,6 @@ from django.utils.decorators import method_decorator
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from sqlalchemy import select
 
 from pipeline.services.site_service import add_site, list_sites
 from pipeline.utils.db_connection import get_session
