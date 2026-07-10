@@ -1,6 +1,7 @@
 from datetime import date as date_cls
 
 from django.contrib.auth.decorators import login_not_required
+from django.http import Http404
 from django.utils.decorators import method_decorator
 from rest_framework import status
 from rest_framework.response import Response
@@ -23,6 +24,26 @@ from apps.dashboard.views import (
 )
 
 from .serializers import OverviewQuerySerializer, ProjectCreateSerializer, ProjectSerializer
+
+
+def resolve_project_or_404(slug: str) -> Site:
+    """Look up a Site by its public slug (the API's project `id`). Raises Http404 if no
+    active or inactive site matches — used by every apps.api view that takes a `slug` URL
+    kwarg."""
+    with get_session() as session:
+        site = session.execute(select(Site).where(Site.slug == slug)).scalars().first()
+    if site is None:
+        raise Http404(f"No project with slug '{slug}'")
+    return site
+
+
+def latest_data_anchor(site_id: str) -> date_cls:
+    """Most recent date we have SEO data for, or today if none — periods anchor to this so
+    the API never defaults to a window that postdates the data."""
+    with get_session() as session:
+        return session.execute(
+            select(func.max(SEODaily.date)).where(SEODaily.site_id == site_id)
+        ).scalar() or date_cls.today()
 
 
 # login_not_required bypasses session-based LoginRequiredMiddleware (active project-wide)
@@ -63,21 +84,13 @@ class ProjectListCreateView(APIView):
 @method_decorator(login_not_required, name="dispatch")
 class ProjectOverviewView(APIView):
     def get(self, request, slug):
-        with get_session() as session:
-            site = session.execute(select(Site).where(Site.slug == slug)).scalars().first()
-        if site is None:
-            from django.http import Http404
-            raise Http404(f"No project with slug '{slug}'")
-        site_id = site.site_url
+        site_id = resolve_project_or_404(slug).site_url
 
         query = OverviewQuerySerializer(data=request.query_params)
         query.is_valid(raise_exception=True)
         range_key = query.validated_data["range"]
 
-        with get_session() as session:
-            anchor = session.execute(
-                select(func.max(SEODaily.date)).where(SEODaily.site_id == site_id)
-            ).scalar() or date_cls.today()
+        anchor = latest_data_anchor(site_id)
 
         curr_start, curr_end, prev_start, prev_end = range_to_period_dates(range_key, anchor)
 
@@ -116,17 +129,8 @@ class ProjectOverviewView(APIView):
 @method_decorator(login_not_required, name="dispatch")
 class ProjectSEOView(APIView):
     def get(self, request, slug):
-        with get_session() as session:
-            site = session.execute(select(Site).where(Site.slug == slug)).scalars().first()
-        if site is None:
-            from django.http import Http404
-            raise Http404(f"No project with slug '{slug}'")
-        site_id = site.site_url
-
-        with get_session() as session:
-            anchor = session.execute(
-                select(func.max(SEODaily.date)).where(SEODaily.site_id == site_id)
-            ).scalar() or date_cls.today()
+        site_id = resolve_project_or_404(slug).site_url
+        anchor = latest_data_anchor(site_id)
         curr_start, curr_end, _, _ = range_to_period_dates("30d", anchor)
 
         return Response(build_seo_response(site_id, curr_start, curr_end))

@@ -128,3 +128,42 @@ class OverviewEndpointTests(APITestCase):
         self.assertTrue(any("Impressions increased significantly" in w for w in summary["wins"]))
         self.assertTrue(any("Lost 5 positions on primary keyword" in c for c in summary["critical"]))
         self.assertTrue(any("Traffic decreased on key landing page" in c for c in summary["critical"]))
+
+
+class ResolveProjectHelperTests(APITestCase):
+    def setUp(self):
+        db_connection._SessionFactory = None
+        self.addCleanup(setattr, db_connection, "_SessionFactory", None)
+        tmp = tempfile.mkdtemp()
+        db_path = str(Path(tmp) / "fusehealth.db")
+        init_db(get_engine(db_path))
+        self._ctx = override_settings(ANALYTICS_DB_PATH=db_path)
+        self._ctx.enable()
+        self.addCleanup(self._ctx.disable)
+        with get_session() as session:
+            session.add(Site(site_url="sc-domain:fusehealth.com", site_name="FuseHealth",
+                              slug="fusehealth", is_active=1))
+            session.add(SEODaily(date=date(2026, 7, 1), site_id="sc-domain:fusehealth.com",
+                                  clicks=1, impressions=1, ctr=0.1, avg_position=1.0))
+
+    def test_resolve_project_or_404_finds_real_site(self):
+        from apps.api.views import resolve_project_or_404
+        site = resolve_project_or_404("fusehealth")
+        self.assertEqual(site.site_url, "sc-domain:fusehealth.com")
+
+    def test_resolve_project_or_404_raises_on_unknown_slug(self):
+        from django.http import Http404
+        from apps.api.views import resolve_project_or_404
+        with self.assertRaises(Http404):
+            resolve_project_or_404("does-not-exist")
+
+    def test_latest_data_anchor_finds_max_date(self):
+        from apps.api.views import latest_data_anchor
+        anchor = latest_data_anchor("sc-domain:fusehealth.com")
+        self.assertEqual(anchor, date(2026, 7, 1))
+
+    def test_latest_data_anchor_falls_back_to_today_when_no_data(self):
+        from datetime import date as date_cls
+        from apps.api.views import latest_data_anchor
+        anchor = latest_data_anchor("sc-domain:no-data-site.com")
+        self.assertEqual(anchor, date_cls.today())
