@@ -46,10 +46,13 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    "rest_framework",
+    "rest_framework.authtoken",
     # FuseHealth apps
     "apps.accounts",
     "apps.dashboard",
     "apps.sync",
+    "apps.api",
 ]
 
 MIDDLEWARE = [
@@ -105,6 +108,19 @@ DATABASES = {
 # Path to the SQLAlchemy-managed analytics database. The final schema is decided in
 # Phase 3; the pipeline layer reads this value rather than hardcoding a path.
 ANALYTICS_DB_PATH = env("ANALYTICS_DB_PATH", str(BASE_DIR / "data" / "fusehealth.db"))
+
+
+# --- REST API (Limitless Marketing SPA) --------------------------------------
+# The frontend (`Limitless marketing dashboard2/`) sends `Authorization: Bearer <token>`
+# (see app/api.js), not DRF's default `Token <token>` scheme — hence the custom auth class.
+REST_FRAMEWORK = {
+    "DEFAULT_AUTHENTICATION_CLASSES": [
+        "apps.api.authentication.BearerTokenAuthentication",
+    ],
+    "DEFAULT_PERMISSION_CLASSES": [
+        "rest_framework.permissions.IsAuthenticated",
+    ],
+}
 
 
 # --- Auth -------------------------------------------------------------------
