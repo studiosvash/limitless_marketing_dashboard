@@ -96,6 +96,25 @@ def get_keyword_intelligence_raw(site_id: str, curr_start: date, curr_end: date,
                 (merged["position"] <= 20) & (merged["impressions"] >= 50) & (merged["ctr"] < 2.0)
             ].sort_values("impressions", ascending=False).head(15)
 
+            # all_keywords must be a superset of every segment's members: the segments below
+            # sort by their own criteria (impressions, pos_change, ...) rather than clicks, so
+            # a keyword can qualify for e.g. `striking` while falling outside the top-200-by-
+            # clicks slice. Dropping it here would leave a segment ID with no matching entry in
+            # `keywords[]` (see build_keywords_response), which the frontend surfaces as a tab
+            # whose row count doesn't match its rendered rows. Union the top-200-by-clicks slice
+            # (preserves the existing cap/ordering for the general table) with every segment
+            # member, then dedupe and re-sort by clicks descending.
+            top_by_clicks = merged.sort_values("clicks", ascending=False).head(200)
+            segment_frames = [f for f in (quick_wins, striking, declining, low_ctr) if not f.empty]
+            if segment_frames:
+                all_keywords_df = (
+                    pd.concat([top_by_clicks, *segment_frames], ignore_index=True)
+                    .drop_duplicates(subset="keyword")
+                    .sort_values("clicks", ascending=False)
+                )
+            else:
+                all_keywords_df = top_by_clicks
+
             def df_to_dicts(data_df):
                 if data_df.empty:
                     return []
@@ -148,7 +167,7 @@ def get_keyword_intelligence_raw(site_id: str, curr_start: date, curr_end: date,
                 "striking": df_to_dicts(striking),
                 "declining": df_to_dicts(declining),
                 "low_ctr": df_to_dicts(low_ctr),
-                "all_keywords": df_to_dicts(merged.sort_values("clicks", ascending=False).head(200)),
+                "all_keywords": df_to_dicts(all_keywords_df),
             }
     except Exception as e:
         import logging; logging.getLogger(__name__).error(f"get_keyword_intelligence_raw error: {e}", exc_info=True)
