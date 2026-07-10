@@ -117,7 +117,30 @@ class OverviewServiceTests(TestCase):
         self.assertIsNone(summary)
 
 
-class RangeAndApiShapeTests(OverviewServiceTests):
+class RangeAndApiShapeTests(TestCase):
+    def setUp(self):
+        db_connection._SessionFactory = None
+        self.addCleanup(setattr, db_connection, "_SessionFactory", None)
+        tmp = tempfile.mkdtemp()
+        db_path = str(Path(tmp) / "fusehealth.db")
+        init_db(get_engine(db_path))
+        self._ctx = override_settings(ANALYTICS_DB_PATH=db_path)
+        self._ctx.enable()
+        self.addCleanup(self._ctx.disable)
+
+        with get_session() as session:
+            session.add_all([
+                SEODaily(date=date(2026, 7, 1), site_id="sc-domain:fusehealth.com",
+                         clicks=100, impressions=1000, ctr=0.10, avg_position=8.0,
+                         landing_page="https://fusehealth.com/a"),
+                SEODaily(date=date(2026, 7, 2), site_id="sc-domain:fusehealth.com",
+                         clicks=120, impressions=1100, ctr=0.109, avg_position=7.5,
+                         landing_page="https://fusehealth.com/a"),
+                SEODaily(date=date(2026, 6, 1), site_id="sc-domain:fusehealth.com",
+                         clicks=50, impressions=900, ctr=0.055, avg_position=9.0,
+                         landing_page="https://fusehealth.com/a"),
+            ])
+
     def test_range_to_period_dates_7d(self):
         from apps.dashboard.services.overview_service import range_to_period_dates
         curr_start, curr_end, prev_start, prev_end = range_to_period_dates("7d", date(2026, 7, 10))
