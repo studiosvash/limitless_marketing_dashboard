@@ -17,6 +17,10 @@ from apps.dashboard.services.overview_service import (
     get_kpi_raw, format_kpi_cards, query_top_pages_raw, query_daily_traffic_raw,
     build_traffic_chart, get_ai_summary_text, parse_ai_summary,
 )
+from apps.dashboard.services.seo_service import (
+    query_low_ctr_pages_raw, query_seo_by_dimension_raw, query_seo_anomalies_raw,
+    count_technical_issues, format_recent_anomalies,
+)
 from pipeline.db.schema import SEODaily, SEOAggregate, AISummary, KeywordRanking, AdMetricDaily, CompetitorDomain, Anomaly, TechnicalIssue, PageSpeed, IndexingStatus, Backlink, KeywordOpportunity, CompetitorKeywordRanking, AIKeywordData
 from pipeline.services.site_service import get_default_site_id
 from pipeline.utils.period_utils import get_period_dates
@@ -281,97 +285,6 @@ def _get_positioning_overview(site_id: str) -> dict:
         return {"status": "error", "competitors": []}
 
 
-def _get_seo_by_dimension(site_id: str, start_date: date, end_date: date) -> dict:
-    """Query SEO metrics by country and device for the period."""
-    try:
-        with get_session() as session:
-            by_country = session.execute(
-                select(
-                    SEODaily.country,
-                    func.sum(SEODaily.clicks).label("total_clicks"),
-                    func.sum(SEODaily.impressions).label("total_impressions"),
-                    func.avg(SEODaily.ctr).label("avg_ctr"),
-                    func.avg(SEODaily.avg_position).label("avg_position"),
-                )
-                .where(SEODaily.site_id == site_id, SEODaily.date >= start_date, SEODaily.date <= end_date, SEODaily.country.isnot(None))
-                .group_by(SEODaily.country)
-                .order_by(func.sum(SEODaily.clicks).desc())
-                .limit(5)
-            ).all()
-
-            by_device = session.execute(
-                select(
-                    SEODaily.device,
-                    func.sum(SEODaily.clicks).label("total_clicks"),
-                    func.sum(SEODaily.impressions).label("total_impressions"),
-                    func.avg(SEODaily.ctr).label("avg_ctr"),
-                )
-                .where(SEODaily.site_id == site_id, SEODaily.date >= start_date, SEODaily.date <= end_date, SEODaily.device.isnot(None))
-                .group_by(SEODaily.device)
-                .order_by(func.sum(SEODaily.clicks).desc())
-            ).all()
-
-            return {
-                "by_country": [
-                    {
-                        "country": r.country or "Unknown",
-                        "clicks": f"{r.total_clicks:,.0f}",
-                        "impressions": f"{r.total_impressions:,.0f}",
-                        "ctr": f"{(r.avg_ctr * 100):.2f}%",
-                        "position": f"{r.avg_position:.1f}",
-                    }
-                    for r in by_country
-                ],
-                "by_device": [
-                    {
-                        "device": r.device or "Unknown",
-                        "clicks": f"{r.total_clicks:,.0f}",
-                        "impressions": f"{r.total_impressions:,.0f}",
-                        "ctr": f"{(r.avg_ctr * 100):.2f}%",
-                    }
-                    for r in by_device
-                ],
-            }
-    except Exception as e:
-        import logging; logging.getLogger(__name__).error(f"Error: {e}", exc_info=True)
-        return {"by_country": [], "by_device": []}
-
-
-def _get_recent_anomalies(site_id: str, limit: int = 10) -> list[dict]:
-    """Query recent detected anomalies."""
-    try:
-        with get_session() as session:
-            rows = session.execute(
-                select(Anomaly)
-                .where(Anomaly.site_id == site_id, Anomaly.is_acknowledged == 0)
-                .order_by(Anomaly.date.desc())
-                .limit(limit)
-            ).scalars().all()
-
-            labels = {
-                "seo_clicks": "Clicks", "seo_impressions": "Impressions",
-                "seo_ctr": "CTR", "seo_avg_position": "Avg. position",
-                "ad_spend": "Ad spend", "ad_clicks": "Ad clicks",
-                "ad_impressions": "Ad impressions", "ad_conversions": "Conversions",
-            }
-            out = []
-            for r in rows:
-                up = r.actual_value >= r.baseline_value
-                out.append({
-                    "metric": labels.get(r.metric_type, r.metric_type),
-                    "severity": r.severity,
-                    "direction": "up" if up else "down",
-                    "deviation": f"{'+' if up else '-'}{r.deviation_pct:.0f}%",
-                    "actual": f"{r.actual_value:,.0f}",
-                    "baseline": f"{r.baseline_value:,.0f}",
-                    "date": str(r.date),
-                })
-            return out
-    except Exception as e:
-        import logging; logging.getLogger(__name__).error(f"Error: {e}", exc_info=True)
-        return []
-
-
 def _get_technical_issues(site_id: str, limit: int = 15) -> list[dict]:
     """Query recent technical SEO issues."""
     try:
@@ -602,49 +515,6 @@ def _get_keyword_intelligence(site_id: str, curr_start: date, curr_end: date, pr
 
 
 
-def _get_low_ctr_pages(site_id: str, start_date: date, end_date: date,
-                       min_impressions: int = 100, max_ctr: float = 0.02, limit: int = 15) -> list[dict]:
-    """Pages that get seen but not clicked: high impressions, low CTR.
-    These are the clearest title/meta-description rewrite opportunities."""
-    try:
-        with get_session() as session:
-            rows = session.execute(
-                select(
-                    SEODaily.landing_page,
-                    func.sum(SEODaily.clicks).label("clicks"),
-                    func.sum(SEODaily.impressions).label("impressions"),
-                    func.avg(SEODaily.avg_position).label("avg_position"),
-                )
-                .where(
-                    SEODaily.site_id == site_id,
-                    SEODaily.date >= start_date, SEODaily.date <= end_date,
-                    SEODaily.landing_page.isnot(None),
-                )
-                .group_by(SEODaily.landing_page)
-                .having(func.sum(SEODaily.impressions) >= min_impressions)
-            ).all()
-
-            out = []
-            for r in rows:
-                impr = int(r.impressions or 0)
-                clicks = int(r.clicks or 0)
-                ctr = (clicks / impr) if impr else 0
-                if ctr <= max_ctr:
-                    out.append({
-                        "url": r.landing_page,
-                        "url_short": (r.landing_page or "").split("//")[-1][:55],
-                        "clicks": clicks,
-                        "impressions": impr,
-                        "ctr": round(ctr * 100, 2),
-                        "avg_position": round(r.avg_position or 0, 1),
-                    })
-            out.sort(key=lambda x: x["impressions"], reverse=True)
-            return out[:limit]
-    except Exception as e:
-        import logging; logging.getLogger(__name__).error(f"_get_low_ctr_pages error: {e}", exc_info=True)
-        return []
-
-
 @role_required("seo")
 def seo(request):
     """SEO page — decision-focused: what needs attention, low-CTR opportunities,
@@ -653,10 +523,26 @@ def seo(request):
 
     curr_start, curr_end, prev_start, prev_end, mode = get_active_period(request)
 
-    seo_by_dim = _get_seo_by_dimension(site_id, curr_start, curr_end)
-    anomalies = _get_recent_anomalies(site_id)
+    seo_by_dim_raw = query_seo_by_dimension_raw(site_id, curr_start, curr_end)
+    seo_by_country = [
+        {"country": r["country"], "clicks": f"{r['clicks']:,.0f}", "impressions": f"{r['impressions']:,.0f}",
+         "ctr": f"{r['ctr']:.2f}%", "position": f"{r['avg_position']:.1f}"}
+        for r in seo_by_dim_raw["by_country"]
+    ]
+    seo_by_device = [
+        {"device": r["device"], "clicks": f"{r['clicks']:,.0f}", "impressions": f"{r['impressions']:,.0f}",
+         "ctr": f"{r['ctr']:.2f}%"}
+        for r in seo_by_dim_raw["by_device"]
+    ]
+    anomalies_raw = query_seo_anomalies_raw(site_id)
+    anomalies = format_recent_anomalies(anomalies_raw)
     issues = _get_technical_issues(site_id)
-    low_ctr = _get_low_ctr_pages(site_id, curr_start, curr_end)
+    low_ctr_raw = query_low_ctr_pages_raw(site_id, curr_start, curr_end)
+    low_ctr = [
+        {"url": p["url"], "url_short": p["url_short"], "clicks": p["clicks"],
+         "impressions": p["impressions"], "ctr": p["ctr"], "avg_position": p["avg_position"]}
+        for p in low_ctr_raw
+    ]
 
     # Attention summary — counts that tell the user where to look first.
     high_sev_issues = sum(1 for i in issues if i.get("severity") == "high")
@@ -669,8 +555,8 @@ def seo(request):
 
     context = {
         "active": "seo",
-        "seo_by_country": seo_by_dim["by_country"],
-        "seo_by_device": seo_by_dim["by_device"],
+        "seo_by_country": seo_by_country,
+        "seo_by_device": seo_by_device,
         "anomalies": anomalies,
         "technical_issues": issues,
         "low_ctr_pages": low_ctr,
@@ -1866,7 +1752,12 @@ def export_csv(request, table_name):
         elif table_name == "keywords":
             data = _get_keywords_overview(site_id, limit=5000)
         elif table_name == "seo_country":
-            data = _get_seo_by_dimension(site_id, curr_start, curr_end)["by_country"]
+            country_raw = query_seo_by_dimension_raw(site_id, curr_start, curr_end)["by_country"]
+            data = [
+                {"country": r["country"], "clicks": f"{r['clicks']:,.0f}", "impressions": f"{r['impressions']:,.0f}",
+                 "ctr": f"{r['ctr']:.2f}%", "position": f"{r['avg_position']:.1f}"}
+                for r in country_raw
+            ]
         elif table_name == "backlinks":
             data = _get_backlinks_table(site_id, limit=5000)
         elif table_name == "anomalies":
