@@ -18,6 +18,7 @@ from apps.dashboard.services.overview_service import (
     build_pillars, build_modules,
 )
 from apps.dashboard.services.decision_engine import generate_signals, generate_ad_overlap_signals
+from apps.dashboard.services.keywords_service import build_keywords_response
 from apps.dashboard.services.seo_service import build_seo_response
 from apps.dashboard.views import (
     _get_ads_overview, _get_keywords_overview,
@@ -134,3 +135,13 @@ class ProjectSEOView(APIView):
         curr_start, curr_end, _, _ = range_to_period_dates("30d", anchor)
 
         return Response(build_seo_response(site_id, curr_start, curr_end))
+
+
+@method_decorator(login_not_required, name="dispatch")
+class ProjectKeywordsView(APIView):
+    def get(self, request, slug):
+        site_id = resolve_project_or_404(slug).site_url
+        anchor = latest_data_anchor(site_id)
+        curr_start, curr_end, prev_start, prev_end = range_to_period_dates("30d", anchor)
+
+        return Response(build_keywords_response(site_id, curr_start, curr_end, prev_start, prev_end))

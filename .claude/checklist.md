@@ -234,6 +234,31 @@ Phase A's Overview endpoint.
 
 ---
 
+## PHASE B2 — Keywords ✅ (2026-07-11)
+Wires the SPA's Keywords tab to a real DRF endpoint, following the exact pattern established by
+Phase B1's SEO endpoint — now built on the `resolve_project_or_404`/`latest_data_anchor` helpers
+shared across every project-scoped `apps.api` view instead of duplicating that lookup a third time.
+
+- [x] Shared `resolve_project_or_404`/`latest_data_anchor` helpers extracted in `apps/api/views.py`
+      (used by Overview, SEO, and now Keywords — confirmed the pre-extraction blocks were
+      byte-identical duplicates)
+- [x] Keyword intelligence query logic extracted into `apps/dashboard/services/keywords_service.py`,
+      shared by the old `/keywords/` Django view and the new API view (no duplicated queries); real
+      fix along the way — `all_keywords` (and therefore the API's `keywords[]`) is now built from
+      the `merged` frame (carries `prev_position`/`pos_change` for every tracked keyword), not the
+      current-period-only `df`, so `prevPos` is a proper `None`/number for every row instead of
+      silently missing for anything outside the top-15-per-segment lists
+- [x] `build_keywords_response(site_id, curr_start, curr_end, prev_start, prev_end)` — API-shaped
+      builder matching `HANDOFF_SPEC.md`'s `keywords` view shape, with honest-empty `monthly`/
+      `serpFeatures` fields (not tracked yet, not fabricated)
+- [x] `GET /api/projects/<slug>/keywords` — real DB-backed, same "anchor to latest data date,
+      fixed 30-day window" pattern as SEO
+- [x] Verified against the real dev DB (`fusehealth-com`, 1,492 `KeywordRanking` rows): the API's
+      `kpis.total/avg_pos/total_volume/total_clicks` (172 / 38.2 / 2260 / 303) matched the old
+      `/keywords/` page's KPI cards exactly, for the same site and period
+
+---
+
 ## PHASE 7 — Deployment (VPS)
 - [ ] Ubuntu 22.04, Python 3.11+, venv, requirements, `.env` on server
 - [ ] `collectstatic` · `migrate` · `seed_users`

@@ -48,6 +48,8 @@ worse than none. Status: (exists) = on disk now · (planned: Phase N) = not yet 
 | `apps/dashboard/services/tests/test_overview_service.py` | Tests for the above (raw calculators, DB-error fallbacks, API-shape builders) | exists |
 | `apps/dashboard/services/seo_service.py` | Phase B1: SEO page query logic extracted to one place — raw DB calculators (`query_low_ctr_pages_raw`, `query_seo_by_dimension_raw`, `query_seo_anomalies_raw`, `count_technical_issues`, `count_quick_win_keywords`) plus both an old-template formatter (`format_recent_anomalies`) and a new API-shaped builder (`build_seo_response`, with corrected `kpis.critical`/`kpis.total_issues` semantics). Shared by the old Django `seo()` view and `apps.api.views.ProjectSEOView` | exists |
 | `apps/dashboard/services/tests/test_seo_service.py` | Tests for the above (raw calculators, `build_seo_response` shape/semantics) | exists |
+| `apps/dashboard/services/keywords_service.py` | Phase B2: Keywords page query logic extracted to one place — `get_keyword_intelligence_raw` (health score, intent/KD distribution, quick-wins/striking/declining/low-CTR segments; fixed so `all_keywords` carries `prevPos` for every tracked keyword, not just the top-15-per-segment ones) plus a new API-shaped builder (`build_keywords_response`). Shared by the old Django `keywords()` view and `apps.api.views.ProjectKeywordsView` | exists |
+| `apps/dashboard/services/tests/test_keywords_service.py` | Tests for the above (raw calculator, `build_keywords_response` shape/`prevPos` fix) | exists |
 | `apps/dashboard/spa_views.py` | Phase A: `spa_index` — serves the approved Limitless Marketing SPA (`static/spa/index.html`) at `/app/`; injects an auth-token bootstrap script (see module docstring for 3 footguns re: duplicate `<head>` text, `api.js` double-execution, `baseUrl` truthy gate) | exists |
 | `apps/sync/models.py` | `SyncLog` + `RefreshRun` Django models + `SyncStatus`/`RefreshStatus` TextChoices | exists |
 | `apps/sync/admin.py` | `SyncLogAdmin`, `RefreshRunAdmin` | exists |
@@ -63,10 +65,10 @@ worse than none. Status: (exists) = on disk now · (planned: Phase N) = not yet 
 | Path | Purpose | Status |
 |---|---|---|
 | `apps/api/authentication.py` | `BearerTokenAuthentication` — DRF `TokenAuthentication` subclass using `Bearer` keyword (the SPA's `app/api.js` sends `Authorization: Bearer <token>`, not DRF's default `Token`) | exists |
-| `apps/api/views.py` | `PingView` (auth smoke test), `ProjectListCreateView` (`GET`/`POST /api/projects`), `ProjectOverviewView` (`GET /api/projects/<slug>/overview`), `ProjectSEOView` (`GET /api/projects/<slug>/seo`, Phase B1) — all `login_not_required` so DRF's own auth returns 401 instead of a 302 to the login page | exists |
+| `apps/api/views.py` | `resolve_project_or_404`/`latest_data_anchor` shared helpers (slug→Site lookup, latest-SEO-date anchor — used by every project-scoped view); `PingView` (auth smoke test), `ProjectListCreateView` (`GET`/`POST /api/projects`), `ProjectOverviewView` (`GET /api/projects/<slug>/overview`), `ProjectSEOView` (`GET /api/projects/<slug>/seo`, Phase B1), `ProjectKeywordsView` (`GET /api/projects/<slug>/keywords`, Phase B2) — all `login_not_required` so DRF's own auth returns 401 instead of a 302 to the login page | exists |
 | `apps/api/serializers.py` | `ProjectSerializer`, `ProjectCreateSerializer`, `OverviewQuerySerializer` (validates `range=7d\|30d\|90d`) | exists |
-| `apps/api/urls.py` | `/api/ping`, `/api/projects`, `/api/projects/<slug>/overview`, `/api/projects/<slug>/seo` (Phase B1) (app_name="api"); mounted at `path('api/', ...)` in `config/urls.py` | exists |
-| `apps/api/tests/` | `test_ping.py`, `test_projects.py`, `test_overview.py`, `test_seo.py` (Phase B1) | exists |
+| `apps/api/urls.py` | `/api/ping`, `/api/projects`, `/api/projects/<slug>/overview`, `/api/projects/<slug>/seo` (Phase B1), `/api/projects/<slug>/keywords` (Phase B2) (app_name="api"); mounted at `path('api/', ...)` in `config/urls.py` | exists |
+| `apps/api/tests/` | `test_ping.py`, `test_projects.py`, `test_overview.py`, `test_seo.py` (Phase B1), `test_keywords.py` (Phase B2) | exists |
 
 *Each app currently holds the default Django files (`models.py`, `views.py`, `admin.py`,
 `apps.py`, `tests.py`, `migrations/`). App configs use dotted name `apps.<name>` with a short
