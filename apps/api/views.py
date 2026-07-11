@@ -48,6 +48,22 @@ def latest_data_anchor(site_id: str) -> date_cls:
         ).scalar() or date_cls.today()
 
 
+def resolve_range_periods(request, slug: str):
+    """Resolve a range-taking view's full request context in one call: site lookup (404 on
+    unknown slug), `range` query param validation (default 30d), and period-date resolution
+    anchored to the latest data date. Returns (site_id, curr_start, curr_end, prev_start,
+    prev_end). Used by every apps.api view that takes both a `slug` and a `range` param."""
+    site_id = resolve_project_or_404(slug).site_url
+
+    query = OverviewQuerySerializer(data=request.query_params)
+    query.is_valid(raise_exception=True)
+    range_key = query.validated_data["range"]
+
+    anchor = latest_data_anchor(site_id)
+    curr_start, curr_end, prev_start, prev_end = range_to_period_dates(range_key, anchor)
+    return site_id, curr_start, curr_end, prev_start, prev_end
+
+
 # login_not_required bypasses session-based LoginRequiredMiddleware (active project-wide)
 # so DRF's own TokenAuthentication/IsAuthenticated run instead — without this, anonymous
 # requests get a 302 to the login page rather than DRF's 401. Every future apps.api view
@@ -86,15 +102,7 @@ class ProjectListCreateView(APIView):
 @method_decorator(login_not_required, name="dispatch")
 class ProjectOverviewView(APIView):
     def get(self, request, slug):
-        site_id = resolve_project_or_404(slug).site_url
-
-        query = OverviewQuerySerializer(data=request.query_params)
-        query.is_valid(raise_exception=True)
-        range_key = query.validated_data["range"]
-
-        anchor = latest_data_anchor(site_id)
-
-        curr_start, curr_end, prev_start, prev_end = range_to_period_dates(range_key, anchor)
+        site_id, curr_start, curr_end, prev_start, prev_end = resolve_range_periods(request, slug)
 
         kpis_current, kpis_previous = get_kpi_raw(site_id, curr_start, curr_end, prev_start, prev_end)
         kpis = build_kpis_api(kpis_current, kpis_previous)
@@ -151,13 +159,6 @@ class ProjectKeywordsView(APIView):
 @method_decorator(login_not_required, name="dispatch")
 class ProjectPositionsView(APIView):
     def get(self, request, slug):
-        site_id = resolve_project_or_404(slug).site_url
-
-        query = OverviewQuerySerializer(data=request.query_params)
-        query.is_valid(raise_exception=True)
-        range_key = query.validated_data["range"]
-
-        anchor = latest_data_anchor(site_id)
-        curr_start, curr_end, prev_start, prev_end = range_to_period_dates(range_key, anchor)
+        site_id, curr_start, curr_end, prev_start, prev_end = resolve_range_periods(request, slug)
 
         return Response(build_positions_response(site_id, curr_start, curr_end, prev_start, prev_end))

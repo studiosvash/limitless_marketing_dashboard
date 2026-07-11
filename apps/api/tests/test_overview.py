@@ -167,3 +167,52 @@ class ResolveProjectHelperTests(APITestCase):
         from apps.api.views import latest_data_anchor
         anchor = latest_data_anchor("sc-domain:no-data-site.com")
         self.assertEqual(anchor, date_cls.today())
+
+
+class ResolveRangePeriodsTests(APITestCase):
+    def setUp(self):
+        db_connection._SessionFactory = None
+        self.addCleanup(setattr, db_connection, "_SessionFactory", None)
+        tmp = tempfile.mkdtemp()
+        db_path = str(Path(tmp) / "fusehealth.db")
+        init_db(get_engine(db_path))
+        self._ctx = override_settings(ANALYTICS_DB_PATH=db_path)
+        self._ctx.enable()
+        self.addCleanup(self._ctx.disable)
+        with get_session() as session:
+            session.add(Site(site_url="sc-domain:fusehealth.com", site_name="FuseHealth",
+                              slug="fusehealth", is_active=1))
+            session.add(SEODaily(date=date(2026, 7, 1), site_id="sc-domain:fusehealth.com",
+                                  clicks=1, impressions=1, ctr=0.1, avg_position=1.0))
+
+    def test_resolves_site_id_and_period_dates(self):
+        from django.test import RequestFactory
+        from rest_framework.request import Request
+        from apps.api.views import resolve_range_periods
+
+        django_request = RequestFactory().get("/api/projects/fusehealth/positions", {"range": "7d"})
+        request = Request(django_request)
+        site_id, curr_start, curr_end, prev_start, prev_end = resolve_range_periods(request, "fusehealth")
+        self.assertEqual(site_id, "sc-domain:fusehealth.com")
+        self.assertEqual((curr_end - curr_start).days, 6)
+
+    def test_defaults_range_to_30d_when_absent(self):
+        from django.test import RequestFactory
+        from rest_framework.request import Request
+        from apps.api.views import resolve_range_periods
+
+        django_request = RequestFactory().get("/api/projects/fusehealth/positions")
+        request = Request(django_request)
+        _, curr_start, curr_end, _, _ = resolve_range_periods(request, "fusehealth")
+        self.assertEqual((curr_end - curr_start).days, 29)
+
+    def test_unknown_slug_raises_404(self):
+        from django.http import Http404
+        from django.test import RequestFactory
+        from rest_framework.request import Request
+        from apps.api.views import resolve_range_periods
+
+        django_request = RequestFactory().get("/api/projects/does-not-exist/positions")
+        request = Request(django_request)
+        with self.assertRaises(Http404):
+            resolve_range_periods(request, "does-not-exist")
