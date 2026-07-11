@@ -10,6 +10,21 @@ from pipeline.db.schema import Anomaly, TechnicalIssue
 from pipeline.utils.db_connection import get_session
 
 
+_METRIC_LABELS = {
+    "seo_clicks": "Clicks", "seo_impressions": "Impressions",
+    "seo_ctr": "CTR", "seo_avg_position": "Avg. position",
+    "ad_spend": "Ad spend", "ad_clicks": "Ad clicks",
+    "ad_impressions": "Ad impressions", "ad_conversions": "Conversions",
+}
+_ISSUE_LABELS = {
+    "not_found_404": "404 — Not found",
+    "crawled_not_indexed": "Crawled, not indexed",
+    "page_with_redirect": "Redirect",
+    "long_url": "Long URL",
+}
+_SEVERITY_RANK = {"high": 0, "medium": 1, "info": 2, "low": 3}
+
+
 def query_alert_anomalies_raw(site_id: str) -> list[dict]:
     """All Anomaly rows for the site (not just unacknowledged, not capped) — the new
     alerts feed shows full history, filtering/paging is a frontend concern."""
@@ -60,3 +75,40 @@ def query_alert_technical_issues_raw(site_id: str) -> list[dict]:
     except Exception as e:
         import logging; logging.getLogger(__name__).error(f"query_alert_technical_issues_raw error: {e}", exc_info=True)
         return []
+
+
+def build_alerts_response(site_id: str) -> dict:
+    """HANDOFF_SPEC.md `alerts` view shape: {feed: [{id, ts, kind, severity, title, detail,
+    acknowledged}]}. See docs/superpowers/specs/2026-07-11-phaseB4-alerts-design.md."""
+    anomalies = query_alert_anomalies_raw(site_id)
+    issues = query_alert_technical_issues_raw(site_id)
+
+    feed = []
+    for a in anomalies:
+        metric_label = _METRIC_LABELS.get(a["metric_type"], a["metric_type"])
+        pct = f"{'+' if a['direction'] == 'up' else '-'}{abs(a['deviation_pct']):.0f}%"
+        feed.append({
+            "id": f"anomaly-{a['id']}",
+            "ts": str(a["date"]),
+            "kind": "anomaly",
+            "severity": a["severity"],
+            "title": f"{metric_label} {'up' if a['direction'] == 'up' else 'dropped'} {pct}",
+            "detail": a["description"],
+            "acknowledged": a["is_acknowledged"],
+        })
+    for i in issues:
+        issue_label = _ISSUE_LABELS.get(i["issue_type"], i["issue_type"].replace("_", " ").title())
+        short_url = (i["url"] or "").split("//")[-1][:55]
+        feed.append({
+            "id": f"issue-{i['id']}",
+            "ts": str(i["detected_at"].date()) if i["detected_at"] else "",
+            "kind": "technical",
+            "severity": i["severity"],
+            "title": f"{issue_label}: {short_url}",
+            "detail": i["description"],
+            "acknowledged": False,  # honest — TechnicalIssue has no ack mechanism yet
+        })
+
+    feed.sort(key=lambda item: (item["ts"], -_SEVERITY_RANK.get(item["severity"], 9)), reverse=True)
+
+    return {"feed": feed}
