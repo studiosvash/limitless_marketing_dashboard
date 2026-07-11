@@ -19,6 +19,7 @@ from apps.dashboard.services.overview_service import (
 )
 from apps.dashboard.services.decision_engine import generate_signals, generate_ad_overlap_signals
 from apps.dashboard.services.keywords_service import build_keywords_response
+from apps.dashboard.services.positioning_service import build_positions_response
 from apps.dashboard.services.seo_service import build_seo_response
 from apps.dashboard.views import (
     _get_ads_overview, _get_keywords_overview,
@@ -145,3 +146,18 @@ class ProjectKeywordsView(APIView):
         curr_start, curr_end, prev_start, prev_end = range_to_period_dates("30d", anchor)
 
         return Response(build_keywords_response(site_id, curr_start, curr_end, prev_start, prev_end))
+
+
+@method_decorator(login_not_required, name="dispatch")
+class ProjectPositionsView(APIView):
+    def get(self, request, slug):
+        site_id = resolve_project_or_404(slug).site_url
+
+        query = OverviewQuerySerializer(data=request.query_params)
+        query.is_valid(raise_exception=True)
+        range_key = query.validated_data["range"]
+
+        anchor = latest_data_anchor(site_id)
+        curr_start, curr_end, prev_start, prev_end = range_to_period_dates(range_key, anchor)
+
+        return Response(build_positions_response(site_id, curr_start, curr_end, prev_start, prev_end))

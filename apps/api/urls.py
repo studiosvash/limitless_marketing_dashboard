@@ -10,4 +10,5 @@ urlpatterns = [
     path("projects/<slug:slug>/overview", views.ProjectOverviewView.as_view(), name="project-overview"),
     path("projects/<slug:slug>/seo", views.ProjectSEOView.as_view(), name="project-seo"),
     path("projects/<slug:slug>/keywords", views.ProjectKeywordsView.as_view(), name="project-keywords"),
+    path("projects/<slug:slug>/positions", views.ProjectPositionsView.as_view(), name="project-positions"),
 ]

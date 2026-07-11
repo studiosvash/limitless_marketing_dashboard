@@ -259,6 +259,26 @@ shared across every project-scoped `apps.api` view instead of duplicating that l
 
 ---
 
+## PHASE B3 — Position Tracking ✅ (2026-07-11)
+Wires the SPA's Position Tracking tab to a real DRF endpoint, following the same
+`resolve_project_or_404`/`latest_data_anchor` pattern as B1/B2 — but this endpoint accepts a
+`range` query param (reusing `OverviewQuerySerializer` as-is), unlike SEO/Keywords which
+hardcode a fixed 30-day window.
+
+- [x] `build_positions_response(site_id, curr_start, curr_end, prev_start, prev_end)` — API-shaped
+      builder matching `HANDOFF_SPEC.md`'s `positions` view shape, reshaping the existing
+      `_get_ranking_distribution`/`_get_position_changes`/`_get_competitor_grid` query functions
+      (reused as-is, not moved or modified) plus `get_keyword_intelligence_raw`'s `full_keywords`
+      for `movers[]` (top 8 by `|pos_change|`, requires `>= 2`); competitor grid `None` values
+      (unranked keyword / no competitor data) preserved as `None`, not coerced to 0
+- [x] `GET /api/projects/<slug>/positions?range=7d|30d|90d` — real DB-backed, accepts `range`
+      with a `30d` default (same semantics as Overview's period selector)
+- [x] Verified with a real seeded temp DB via Django's test client (`APITestCase`): all required
+      top-level keys (`kpis`/`distribution`/`movement`/`competitors`/`movers`) present, `range`
+      default works, unknown slug is 404, unauthenticated is 401
+
+---
+
 ## PHASE 7 — Deployment (VPS)
 - [ ] Ubuntu 22.04, Python 3.11+, venv, requirements, `.env` on server
 - [ ] `collectstatic` · `migrate` · `seed_users`
