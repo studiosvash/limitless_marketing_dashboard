@@ -21,6 +21,7 @@ from apps.dashboard.services.decision_engine import generate_signals, generate_a
 from apps.dashboard.services.keywords_service import build_keywords_response
 from apps.dashboard.services.positioning_service import build_positions_response
 from apps.dashboard.services.seo_service import build_seo_response
+from apps.dashboard.services.alerts_service import build_alerts_response
 from apps.dashboard.views import (
     _get_ads_overview, _get_keywords_overview,
 )
@@ -162,3 +163,10 @@ class ProjectPositionsView(APIView):
         site_id, curr_start, curr_end, prev_start, prev_end = resolve_range_periods(request, slug)
 
         return Response(build_positions_response(site_id, curr_start, curr_end, prev_start, prev_end))
+
+
+@method_decorator(login_not_required, name="dispatch")
+class ProjectAlertsView(APIView):
+    def get(self, request, slug):
+        site_id = resolve_project_or_404(slug).site_url
+        return Response(build_alerts_response(site_id))
