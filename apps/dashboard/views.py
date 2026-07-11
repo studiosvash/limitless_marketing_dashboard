@@ -1037,7 +1037,8 @@ def _get_ranking_distribution(site_id: str, curr_start: date, curr_end: date) ->
             top50 = sum(1 for r in rows if r.avg_pos and r.avg_pos <= 50)
             top100 = sum(1 for r in rows if r.avg_pos and r.avg_pos <= 100)
 
-            avg_pos = sum(r.avg_pos for r in rows if r.avg_pos) / total if total > 0 else 0
+            positioned_rows = [r for r in rows if r.avg_pos is not None]
+            avg_pos = sum(r.avg_pos for r in positioned_rows) / len(positioned_rows) if positioned_rows else 0
             total_clicks = sum(int(r.clicks or 0) for r in rows)
             total_impressions = sum(int(r.impressions or 0) for r in rows)
 

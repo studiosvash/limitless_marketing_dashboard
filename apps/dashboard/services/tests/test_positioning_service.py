@@ -78,6 +78,26 @@ class BuildPositionsResponseTests(TestCase):
             self.assertIn(key, mover)
         self.assertEqual(mover["prevPos"], 12.0)
 
+    def test_avg_pos_excludes_null_position_keywords_from_denominator(self):
+        from apps.dashboard.services.positioning_service import build_positions_response
+        with get_session() as session:
+            session.add(
+                # tracked via GSC clicks/impressions but with no matched DataForSEO
+                # position in the period -> func.avg(position) groups to SQL NULL.
+                KeywordRanking(date=date(2026, 6, 30), site_id="sc-domain:fusehealth.com",
+                                keyword="untracked position kw", position=None,
+                                clicks=5, impressions=80)
+            )
+        body = build_positions_response("sc-domain:fusehealth.com", date(2026, 6, 30), date(2026, 6, 30),
+                                         date(2026, 6, 1), date(2026, 6, 1))
+        # 3 keywords are now grouped in the period: "iv therapy" (pos 2), "mobile iv
+        # drip" (pos 6), and "untracked position kw" (pos None). The NULL-position row
+        # must still count toward "tracked" (total keywords) but must NOT be counted
+        # in the avg_pos denominator: correct average = (2 + 6) / 2 = 4.0, not
+        # (2 + 6) / 3 = 2.7 (the deflated, buggy result).
+        self.assertEqual(body["kpis"]["tracked"], 3)
+        self.assertEqual(body["kpis"]["avg_pos"], 4.0)
+
     def test_competitors_rows_align_positionally_with_domains(self):
         from apps.dashboard.services.positioning_service import build_positions_response
         body = build_positions_response("sc-domain:fusehealth.com", date(2026, 6, 30), date(2026, 6, 30),
