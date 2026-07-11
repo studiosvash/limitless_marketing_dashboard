@@ -72,7 +72,7 @@ class BuildAlertsResponseTests(TestCase):
                 Anomaly(date=date(2026, 6, 28), site_id="sc-domain:fusehealth.com",
                         metric_type="seo_clicks", actual_value=50, baseline_value=100,
                         deviation_pct=-50.0, severity="high",
-                        description="Clicks dropped 50%.", is_acknowledged=0),
+                        description="Clicks dropped 50%.", is_acknowledged=1),
                 TechnicalIssue(site_id="sc-domain:fusehealth.com", url="https://fusehealth.com/gone",
                                issue_type="not_found_404", severity="high",
                                description="404 detected"),
@@ -92,7 +92,7 @@ class BuildAlertsResponseTests(TestCase):
         from apps.dashboard.services.alerts_service import build_alerts_response
         body = build_alerts_response("sc-domain:fusehealth.com")
         anomaly_item = next(i for i in body["feed"] if i["kind"] == "anomaly")
-        self.assertFalse(anomaly_item["acknowledged"])
+        self.assertTrue(anomaly_item["acknowledged"])
 
     def test_technical_item_always_reports_unacknowledged(self):
         from apps.dashboard.services.alerts_service import build_alerts_response
