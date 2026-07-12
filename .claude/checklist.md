@@ -314,6 +314,32 @@ work rather than more page-porting.
 
 ---
 
+## PHASE C1 — Backlinks ✅ (2026-07-12)
+Wires the SPA's Backlinks tab to a real DRF endpoint, following the exact pattern established
+by Phase B. This is the final task of Phase C1: implementation of the real data flow without
+attempting the 5 missing DataForSEO sub-endpoint connectors (those remain scope for a future
+phase once credentials exist).
+
+- [x] Backlinks page query logic extracted into `apps/dashboard/services/backlinks_service.py`
+      (Task 2) — raw DB calculators (`query_backlinks_summary_raw`, `query_backlinks_table_raw`)
+      plus API-shaped builder (`build_backlinks_response`). Honest empty states for fields
+      requiring DataForSEO connectors not yet available (`summary`, `months`, `types`, `asBuckets`,
+      `refDomains`, `anchors`, `gapDomains` all return empty or `state:"setup"`).
+- [x] `GET /api/projects/<slug>/backlinks` — real DB-backed (Task 3), same `resolve_project_or_404`
+      pattern as every other project-scoped view
+- [x] Test suite: 3 new tests in `apps/api/tests/test_backlinks.py` (real data + setup states,
+      404 on unknown slug, 401 unauthenticated)
+- [x] All 137 tests pass (134 baseline + 3 new)
+
+**Scope discipline:** Phase C1 deliberately does NOT implement the 5 missing DataForSEO
+sub-endpoint connectors (`referring-domains-by-country`, `anchor-keywords`, `referring-domains-by-type`,
+`referring-domains-by-authority-score`, `text-analytics`) — that is real, unvalidated integration
+work for a future phase once credentials exist and discovery is complete, not something to guess
+at now. Current implementation shows real data (`kpis`/`links`/`competitors`) with honest
+`state:"setup"` placeholders for the rest.
+
+---
+
 ## PHASE 7 — Deployment (VPS)
 - [ ] Ubuntu 22.04, Python 3.11+, venv, requirements, `.env` on server
 - [ ] `collectstatic` · `migrate` · `seed_users`

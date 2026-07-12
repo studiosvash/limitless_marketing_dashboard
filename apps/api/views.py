@@ -22,6 +22,7 @@ from apps.dashboard.services.keywords_service import build_keywords_response
 from apps.dashboard.services.positioning_service import build_positions_response
 from apps.dashboard.services.seo_service import build_seo_response
 from apps.dashboard.services.alerts_service import build_alerts_response
+from apps.dashboard.services.backlinks_service import build_backlinks_response
 from apps.dashboard.views import (
     _get_ads_overview, _get_keywords_overview,
 )
@@ -172,3 +173,10 @@ class ProjectAlertsView(APIView):
     def get(self, request, slug):
         site_id = resolve_project_or_404(slug).site_url
         return Response(build_alerts_response(site_id))
+
+
+@method_decorator(login_not_required, name="dispatch")
+class ProjectBacklinksView(APIView):
+    def get(self, request, slug):
+        site_id = resolve_project_or_404(slug).site_url
+        return Response(build_backlinks_response(site_id))
