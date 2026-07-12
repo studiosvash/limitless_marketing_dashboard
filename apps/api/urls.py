@@ -14,4 +14,5 @@ urlpatterns = [
     path("projects/<slug:slug>/alerts", views.ProjectAlertsView.as_view(), name="project-alerts"),
     path("projects/<slug:slug>/backlinks", views.ProjectBacklinksView.as_view(), name="project-backlinks"),
     path("projects/<slug:slug>/audit", views.ProjectSiteAuditView.as_view(), name="project-audit"),
+    path("projects/<slug:slug>/offsite", views.ProjectOffsiteView.as_view(), name="project-offsite"),
 ]
