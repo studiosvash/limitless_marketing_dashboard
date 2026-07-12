@@ -224,3 +224,22 @@ class BuildPriorityFeedTests(TestCase):
         ]
         priority = build_priority_feed(feed, limit=6)
         self.assertEqual(len(priority), 6)
+
+    def test_sorts_by_severity_high_to_low(self):
+        """Regression test: verify the sort actually reorders items by severity rank.
+        Deliberately scrambles input order (low, high, info, medium) to catch any
+        regression that breaks the sort (e.g., swapped reverse direction, empty rank dict)."""
+        from apps.dashboard.services.overview_service import build_priority_feed
+        feed = [
+            {"id": "low-item", "ts": "2026-06-28", "kind": "anomaly", "severity": "low",
+             "title": "Low severity", "detail": "...", "acknowledged": False},
+            {"id": "high-item", "ts": "2026-06-28", "kind": "anomaly", "severity": "high",
+             "title": "High severity", "detail": "...", "acknowledged": False},
+            {"id": "info-item", "ts": "2026-06-28", "kind": "anomaly", "severity": "info",
+             "title": "Info severity", "detail": "...", "acknowledged": False},
+            {"id": "medium-item", "ts": "2026-06-28", "kind": "anomaly", "severity": "medium",
+             "title": "Medium severity", "detail": "...", "acknowledged": False},
+        ]
+        priority = build_priority_feed(feed)
+        # Verify exact output order: high (rank 0), medium (rank 1), info (rank 2), low (rank 3)
+        self.assertEqual([p["id"] for p in priority], ["high-item", "medium-item", "info-item", "low-item"])
