@@ -52,3 +52,51 @@ class BacklinksRawQueryTests(TestCase):
         with mock.patch.object(backlinks_service, "get_session", side_effect=RuntimeError("boom")):
             summary = backlinks_service.query_backlinks_summary_raw("x")
             self.assertEqual(summary, {"total": 0, "live": 0, "lost": 0, "unique_domains": 0, "avg_dr": 0})
+
+
+class BuildBacklinksResponseTests(TestCase):
+    def setUp(self):
+        db_connection._SessionFactory = None
+        self.addCleanup(setattr, db_connection, "_SessionFactory", None)
+        tmp = tempfile.mkdtemp()
+        db_path = str(Path(tmp) / "fusehealth.db")
+        init_db(get_engine(db_path))
+        self._ctx = override_settings(ANALYTICS_DB_PATH=db_path)
+        self._ctx.enable()
+        self.addCleanup(self._ctx.disable)
+
+        with get_session() as session:
+            session.add(Backlink(site_id="sc-domain:fusehealth.com", referring_domain="healthline.com",
+                                  target_url="https://fusehealth.com/iv-therapy", anchor="iv therapy",
+                                  status="live", dofollow=1, domain_rank=88))
+
+    def test_top_level_keys(self):
+        from apps.dashboard.services.backlinks_service import build_backlinks_response
+        body = build_backlinks_response("sc-domain:fusehealth.com")
+        for key in ["kpis", "links", "summary", "months", "types", "asBuckets",
+                    "refDomains", "anchors", "competitors", "gapDomains"]:
+            self.assertIn(key, body)
+
+    def test_kpis_and_links_are_real(self):
+        from apps.dashboard.services.backlinks_service import build_backlinks_response
+        body = build_backlinks_response("sc-domain:fusehealth.com")
+        self.assertEqual(body["kpis"]["total"], 1)
+        self.assertEqual(body["links"][0]["domain"], "healthline.com")
+
+    def test_unbuilt_fields_report_setup_not_fake_data(self):
+        from apps.dashboard.services.backlinks_service import build_backlinks_response
+        body = build_backlinks_response("sc-domain:fusehealth.com")
+        self.assertEqual(body["summary"], {"state": "setup"})
+        self.assertEqual(body["months"], [])
+        self.assertEqual(body["types"], [])
+        self.assertEqual(body["asBuckets"], [])
+        self.assertEqual(body["refDomains"], [])
+        self.assertEqual(body["anchors"], [])
+        self.assertEqual(body["gapDomains"], [])
+
+    def test_competitors_uses_real_tracked_list(self):
+        from unittest import mock
+        from apps.dashboard.services import backlinks_service
+        with mock.patch.object(backlinks_service, "get_tracked_competitors", return_value=["driphydration.com"]):
+            body = backlinks_service.build_backlinks_response("sc-domain:fusehealth.com")
+            self.assertEqual(body["competitors"], ["driphydration.com"])

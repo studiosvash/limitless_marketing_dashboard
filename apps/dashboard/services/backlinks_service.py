@@ -8,6 +8,7 @@ from sqlalchemy import func, select
 
 from pipeline.db.schema import Backlink
 from pipeline.utils.db_connection import get_session
+from pipeline.services.competitor_service import get_tracked_competitors
 
 
 def query_backlinks_summary_raw(site_id: str) -> dict:
@@ -59,3 +60,33 @@ def query_backlinks_table_raw(site_id: str, limit: int = 200) -> list[dict]:
     except Exception as e:
         import logging; logging.getLogger(__name__).error(f"query_backlinks_table_raw error: {e}", exc_info=True)
         return []
+
+
+def build_backlinks_response(site_id: str) -> dict:
+    """HANDOFF_SPEC.md `backlinks` view shape. Only kpis/links/competitors are real — the
+    rest need DataForSEO sub-endpoint connectors this codebase doesn't have yet, so they
+    honestly report state:"setup" rather than fabricated numbers. See
+    docs/superpowers/specs/2026-07-12-phaseC1-backlinks-design.md."""
+    summary_raw = query_backlinks_summary_raw(site_id)
+    links = query_backlinks_table_raw(site_id)
+
+    kpis = {
+        "total": summary_raw["total"],
+        "live": summary_raw["live"],
+        "lost": summary_raw["lost"],
+        "referring_domains": summary_raw["unique_domains"],
+        "avg_rank": summary_raw["avg_dr"],
+    }
+
+    return {
+        "kpis": kpis,
+        "links": links,
+        "summary": {"state": "setup"},
+        "months": [],
+        "types": [],
+        "asBuckets": [],
+        "refDomains": [],
+        "anchors": [],
+        "competitors": get_tracked_competitors(site_id),
+        "gapDomains": [],
+    }
