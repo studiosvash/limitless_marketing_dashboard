@@ -22,6 +22,7 @@ from apps.dashboard.services.seo_service import (
     count_technical_issues, format_recent_anomalies,
 )
 from apps.dashboard.services.keywords_service import get_keyword_intelligence_raw
+from apps.dashboard.services.backlinks_service import query_backlinks_summary_raw, query_backlinks_table_raw
 from pipeline.db.schema import SEODaily, SEOAggregate, AISummary, KeywordRanking, AdMetricDaily, CompetitorDomain, Anomaly, TechnicalIssue, PageSpeed, IndexingStatus, Backlink, KeywordOpportunity, CompetitorKeywordRanking, AIKeywordData
 from pipeline.services.site_service import get_default_site_id
 from pipeline.utils.period_utils import get_period_dates
@@ -864,62 +865,13 @@ def _get_indexing_summary(indexing: list[dict]) -> dict:
     }
 
 
-def _get_backlinks_summary(site_id: str) -> dict:
-    try:
-        with get_session() as session:
-            rows = session.execute(
-                select(
-                    func.count(Backlink.id).label("total"),
-                    func.count(Backlink.id).filter(Backlink.status == 'live').label("live"),
-                    func.count(Backlink.id).filter(Backlink.status == 'lost').label("lost"),
-                    func.count(func.distinct(Backlink.referring_domain)).label("unique_domains"),
-                    func.avg(Backlink.domain_rank).label("avg_dr")
-                ).where(Backlink.site_id == site_id)
-            ).first()
-            if not rows:
-                return {"total": 0, "live": 0, "lost": 0, "unique_domains": 0, "avg_dr": 0}
-            return {
-                "total": rows.total or 0,
-                "live": rows.live or 0,
-                "lost": rows.lost or 0,
-                "unique_domains": rows.unique_domains or 0,
-                "avg_dr": round(rows.avg_dr or 0, 1),
-            }
-    except Exception as e:
-        import logging; logging.getLogger(__name__).error(f"_get_backlinks_summary error: {e}", exc_info=True)
-        return {"total": 0, "live": 0, "lost": 0, "unique_domains": 0, "avg_dr": 0}
-
-def _get_backlinks_table(site_id: str, limit: int = 200) -> list[dict]:
-    try:
-        with get_session() as session:
-            rows = session.execute(
-                select(Backlink)
-                .where(Backlink.site_id == site_id)
-                .order_by(Backlink.domain_rank.desc().nullslast())
-                .limit(limit)
-            ).scalars().all()
-            return [
-                {
-                    "domain": r.referring_domain,
-                    "target_url": r.target_url,
-                    "anchor": r.anchor or "—",
-                    "status": r.status,
-                    "dofollow": r.dofollow,
-                    "domain_rank": r.domain_rank or 0,
-                }
-                for r in rows
-            ]
-    except Exception as e:
-        import logging; logging.getLogger(__name__).error(f"_get_backlinks_table error: {e}", exc_info=True)
-        return []
-
 @role_required("backlinks")
 def backlinks(request):
     """Backlinks page — link acquisition and lost links."""
     site_id = request.session.get("selected_site_url") or get_default_site_id()
 
-    summary = _get_backlinks_summary(site_id)
-    table = _get_backlinks_table(site_id)
+    summary = query_backlinks_summary_raw(site_id)
+    table = query_backlinks_table_raw(site_id)
 
     context = {
         "active": "backlinks",
@@ -1605,7 +1557,7 @@ def export_csv(request, table_name):
                 for r in country_raw
             ]
         elif table_name == "backlinks":
-            data = _get_backlinks_table(site_id, limit=5000)
+            data = query_backlinks_table_raw(site_id, limit=5000)
         elif table_name == "anomalies":
             data = _get_all_anomalies(site_id, limit=5000)
         elif table_name == "page_speed":
