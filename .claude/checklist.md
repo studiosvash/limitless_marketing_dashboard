@@ -335,8 +335,26 @@ phase once credentials exist).
 sub-endpoint connectors (`referring-domains-by-country`, `anchor-keywords`, `referring-domains-by-type`,
 `referring-domains-by-authority-score`, `text-analytics`) — that is real, unvalidated integration
 work for a future phase once credentials exist and discovery is complete, not something to guess
-at now. Current implementation shows real data (`kpis`/`links`/`competitors`) with honest
-`state:"setup"` placeholders for the rest.
+at now. The endpoint returns real data (`kpis`/`links`/`competitors`) with honest
+`state:"setup"` placeholders for the rest — never fabricated numbers.
+
+**Final-review fix (2026-07-12):** the whole-branch review caught that the approved SPA's
+Backlinks tab reads its headline stats from `data.summary.*`/`data.refDomains[]`, not from
+`data.kpis`/`data.links` — and had no `state:"setup"` guard for this tab (only the Overview
+pillars had one). Feeding it the honest `summary:{state:"setup"}` payload rendered a broken UI
+(`NaN` authority gauge, `undefined` deltas/percentages, "Showing 0 of — backlinks"). Fixed in
+`static/spa/index.html`: the Backlinks tab's computed-values function (`if (tab === 'backlinks')`)
+now short-circuits on `data.summary.state === 'setup'` before touching any of the
+`Math.max`/`.toFixed` chart math, and the template wraps the whole rich sub-tab UI in
+`<sc-if value="{{ !bl.setup }}">`/`<sc-if value="{{ bl.setup }}">` guards — the setup branch
+shows one clean "Backlinks data isn't connected yet" card instead. **This is now the reference
+pattern for C2 (Site Audit)/C3 (Off-site SEO)/C4 (Ads): before wiring any deep-dive tab to a
+`state:"setup"` backend contract, check what fields the SPA's own render function for that tab
+actually reads (not just the mock's declared shape) and add the same short-circuit + guard if
+none exists.** Verified via direct API call (`summary.state === "setup"` confirmed) and a
+tag-balance check across the whole SPA template (163 `sc-if` open/close pairs, 144 `sc-for`
+pairs — unchanged from before the edit, confirming no template corruption). No Python changed;
+full suite unaffected.
 
 ---
 

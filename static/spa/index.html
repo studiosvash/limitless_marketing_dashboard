@@ -775,6 +775,17 @@
       <sc-if value="{{ showBacklinks }}" hint-placeholder-val="{{ false }}">
       <div data-screen-label="Backlinks" style="display: flex; flex-direction: column; gap: 18px;">
 
+        <!-- ===== SETUP PENDING (no DataForSEO Backlinks connector yet) ===== -->
+        <sc-if value="{{ bl.setup }}" hint-placeholder-val="{{ false }}">
+        <div style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 56px 32px; text-align: center; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+          <div style="font-size: 15px; font-weight: 600; color: #0f172a; margin-bottom: 6px;">Backlinks data isn't connected yet</div>
+          <div style="font-size: 13px; color: #64748b; max-width: 420px; margin: 0 auto;">Once the Backlinks data source is connected, authority score, referring domains, anchor text, and link gap analysis will appear here automatically.</div>
+        </div>
+        </sc-if>
+
+        <!-- ===== LIVE BACKLINKS UI ===== -->
+        <sc-if value="{{ !bl.setup }}" hint-placeholder-val="{{ true }}">
+
         <!-- source line -->
         <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;">
           <div style="font-size: 12px; color: #94a3b8;">Database: <b style="color:#475569;">DataForSEO Backlinks</b> · Last updated {{ bl.lastUpdated }} · Refreshes weekly</div>
@@ -1034,6 +1045,8 @@
             </div>
           </div>
         </div>
+        </sc-if>
+
         </sc-if>
 
       </div>
@@ -4836,8 +4849,23 @@ class Component extends DCLogic {
     /* ============ BACKLINKS ============ */
     if (tab === 'backlinks') {
       vals.showBacklinks = true;
-      const links = data.links;
       const sum = data.summary;
+      const setup = !sum || sum.state === 'setup';
+
+      if (setup) {
+        vals.bl = {
+          setup: true,
+          tabs: [], isOverview: false, isLinks: false, isRefDom: false, isAnchors: false, isGap: false,
+          lastUpdated: '', chartBars: [], chartLabels: [], typeArcs: [], typeLegend: [],
+          asBuckets: [], topAnchors: [], topRefDomains: [], allRefDomains: [],
+          rows: [], statusFilters: [], followFilters: [], allAnchors: [],
+          gapCols: [], gapRows: [], gapOnly: false,
+          gapBtnBorder: '#e2e8f0', gapBtnBg: 'white', gapBtnColor: '#64748b'
+        };
+        return vals;
+      }
+
+      const links = data.links;
       const asColorOf = as => as >= 60 ? '#059669' : as >= 40 ? '#0891b2' : as >= 20 ? '#d97706' : '#94a3b8';
       const asBgOf = as => as >= 60 ? '#ecfdf5' : as >= 40 ? '#ecfeff' : as >= 20 ? '#fffbeb' : '#f1f5f9';
       const spamColorOf = sp => sp >= 30 ? '#dc2626' : sp >= 10 ? '#d97706' : '#059669';
