@@ -358,6 +358,32 @@ full suite unaffected.
 
 ---
 
+## PHASE C2 — Site Audit ✅ (2026-07-12)
+Wires the SPA's Site Audit tab to a real DRF endpoint, following the exact pattern established
+by Phase C1. This is the final task of Phase C2: implementation of the real data flow without
+attempting the missing DataForSEO OnPage connector (credentials-blocked; scope for a future
+phase once credentials exist).
+
+- [x] Site Audit page query logic extracted into `apps/dashboard/services/site_audit_service.py`
+      (Task 1–2) — raw DB calculators (`query_indexing_breakdown_raw`, `query_cwv_raw`) plus
+      API-shaped builder (`build_site_audit_response`). Returns real `breakdown` (IndexingStatus
+      categories) and `cwv` metrics (LCP/CLS p75 + buckets from PageSpeed mobile data) with
+      honest `state:"setup"` for fields requiring DataForSEO OnPage connector (rules catalog,
+      crawl metadata, snapshots).
+- [x] `GET /api/projects/<slug>/audit` — real DB-backed (Task 3), same `resolve_project_or_404`
+      pattern as every other project-scoped view
+- [x] Test suite: 3 new tests in `apps/api/tests/test_site_audit.py` (real data + setup states,
+      404 on unknown slug, 401 unauthenticated)
+- [x] All 151 tests pass (148 baseline + 3 new)
+
+**Scope discipline:** Phase C2 deliberately does NOT implement the missing DataForSEO OnPage
+connector (rules catalog, crawl results metadata, crawl-run history, snapshot timelines) —
+that is real, unvalidated integration work for a future phase once credentials exist, not
+something to guess at now. Current implementation shows real data (`breakdown`/`cwv.lcp`/`cwv.cls`)
+with honest `state:"setup"` placeholders for the rest.
+
+---
+
 ## PHASE 7 — Deployment (VPS)
 - [ ] Ubuntu 22.04, Python 3.11+, venv, requirements, `.env` on server
 - [ ] `collectstatic` · `migrate` · `seed_users`
