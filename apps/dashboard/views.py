@@ -23,7 +23,7 @@ from apps.dashboard.services.seo_service import (
 )
 from apps.dashboard.services.keywords_service import get_keyword_intelligence_raw
 from apps.dashboard.services.backlinks_service import query_backlinks_summary_raw, query_backlinks_table_raw
-from pipeline.db.schema import SEODaily, SEOAggregate, AISummary, KeywordRanking, AdMetricDaily, CompetitorDomain, Anomaly, TechnicalIssue, PageSpeed, IndexingStatus, Backlink, KeywordOpportunity, CompetitorKeywordRanking, AIKeywordData
+from pipeline.db.schema import SEODaily, SEOAggregate, AISummary, KeywordRanking, AdMetricDaily, CompetitorDomain, Anomaly, TechnicalIssue, PageSpeed, IndexingStatus, KeywordOpportunity, CompetitorKeywordRanking, AIKeywordData
 from pipeline.services.site_service import get_default_site_id
 from pipeline.utils.period_utils import get_period_dates
 from pipeline.utils.db_connection import get_session
