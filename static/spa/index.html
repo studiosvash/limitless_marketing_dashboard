@@ -5092,7 +5092,7 @@ class Component extends DCLogic {
     /* ============ SITE AUDIT ============ */
     if (tab === 'pages') {
       vals.showPages = true;
-      const auSetup = !data.score || data.score.state === 'setup';
+      const auSetup = data.score == null || data.score.state === 'setup';
 
       if (auSetup) {
         vals.au = {
