@@ -1254,6 +1254,17 @@
       <sc-if value="{{ showPages }}" hint-placeholder-val="{{ false }}">
       <div data-screen-label="Site Audit" style="display: flex; flex-direction: column; gap: 20px;">
 
+        <!-- ===== SETUP PENDING (no crawl/checks-catalog data yet) ===== -->
+        <sc-if value="{{ au.setup }}" hint-placeholder-val="{{ false }}">
+        <div style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 56px 32px; text-align: center; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+          <div style="font-size: 15px; font-weight: 600; color: #0f172a; margin-bottom: 6px;">Site Audit data isn't connected yet</div>
+          <div style="font-size: 13px; color: #64748b; max-width: 420px; margin: 0 auto;">Once site crawling is connected, health score, crawled pages, issue checks, and Core Web Vitals will appear here automatically.</div>
+        </div>
+        </sc-if>
+
+        <!-- ===== LIVE SITE AUDIT UI ===== -->
+        <sc-if value="{{ !au.setup }}" hint-placeholder-val="{{ true }}">
+
         <!-- header -->
         <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap;">
           <div>
@@ -1599,6 +1610,8 @@
               </div>
             </sc-for>
           </div>
+        </sc-if>
+
         </sc-if>
       </div>
       </sc-if>
@@ -5079,6 +5092,26 @@ class Component extends DCLogic {
     /* ============ SITE AUDIT ============ */
     if (tab === 'pages') {
       vals.showPages = true;
+      const auSetup = !data.score || data.score.state === 'setup';
+
+      if (auSetup) {
+        vals.au = {
+          setup: true,
+          subTabs: [], showOverview: false, showIssues: false, showCrawled: false,
+          showCompare: false, showProgress: false, showStats: false,
+          domain: project.domain, crawlDate: '', pagesCrawled: 0, crawlDuration: '', userAgent: '',
+          barSegs: [], breakRows: [], sevTotals: [], cats: [], vitals: [], domChecks: [], topIssues: [],
+          sevFilters: [], catFilters: [], noIssues: true, issueRows: [], search: '',
+          tableTabStyle: {}, treeTabStyle: {}, showTable: false, showTree: false,
+          pgSearch: '', pageRows: [], pageRowCount: '', treeRows: [],
+          statKpis: [], statCharts: [],
+          cmpOptions: [], cmpOptions2: [], cmpFilters: [], cmpKpis: [], cmpEmpty: true, cmpRows: [],
+          cmpA: '', cmpB: '', cmpALabel: '', cmpBLabel: '',
+          progToggles: [], progLines: [], progFrom: '', progTo: '', progRows: []
+        };
+        return vals;
+      }
+
       const SEVC = { error: '#dc2626', warning: '#d97706', notice: '#2563eb' };
       const sevRank = { error: 0, warning: 1, notice: 2 };
       const scoreColor = v => v >= 80 ? '#059669' : v >= 60 ? '#d97706' : '#dc2626';
