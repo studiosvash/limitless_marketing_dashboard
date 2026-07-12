@@ -279,6 +279,41 @@ hardcode a fixed 30-day window.
 
 ---
 
+## PHASE B4 — Alerts ✅ (closes Phase B) (2026-07-12)
+Wires the SPA's Alerts tab to a real DRF endpoint (Tasks 1–4), then closes a gap Phase A
+deliberately left open by wiring Overview's `priority[]` field to that same real data (Task 5).
+
+- [x] Alerts page query logic extracted into `apps/dashboard/services/alerts_service.py` — new,
+      unlimited-count `query_alert_anomalies_raw`/`query_alert_technical_issues_raw` functions,
+      kept separate from `apps.dashboard.views`' capped `_get_all_anomalies`/
+      `_get_technical_issues` (old page's display tables are unmodified)
+- [x] `build_alerts_response(site_id)` — API-shaped builder matching `HANDOFF_SPEC.md`'s `alerts`
+      view shape: `{feed: [{id, ts, kind, severity, title, detail, acknowledged}]}`, merging
+      anomalies (`kind: "anomaly"`) and technical issues (`kind: "technical"`, always
+      `acknowledged: false` — honest reflection of no ack mechanism existing yet for that table),
+      sorted by date desc then severity
+- [x] `GET /api/projects/<slug>/alerts` — real DB-backed, same `resolve_project_or_404` pattern as
+      every other project-scoped view
+- [x] `build_priority_feed(feed, limit=6)` in `overview_service.py` — filters the Alerts feed to
+      unacknowledged items, sorts by severity, caps at 6, tags each with its owning module via a
+      `kind → {label, target}` map (`anomaly→SEO`, `technical→Page Health`; `ranking`/`backlink`/
+      `ads`/`ai`/`system` mapped for forward-compatibility but unreachable today — those alert
+      kinds don't exist yet)
+- [x] `ProjectOverviewView`'s hardcoded `"priority": []` (Phase A placeholder, "no fake data, empty
+      until built") replaced with `build_priority_feed(build_alerts_response(site_id)["feed"])`;
+      every other Overview response field (`kpis`/`pillars`/`modules`/`signals`/`trend`/`summary`/
+      `topPages`) is untouched — confirmed by diff (only the import line and the `priority` value
+      changed) and by the full existing Overview test suite passing unmodified
+- [x] Verified against the real dev DB: `GET /api/projects/fusehealth/overview` returns 6 real
+      priority items (4 seeded `anomaly` rows + 2 `technical` `TechnicalIssue` rows), each tagged
+      with the correct module (`seo` / `pages`)
+
+**Phase B is now complete.** All 4 sub-projects (SEO, Keywords, Position Tracking, Alerts) are
+built and DB-verified. Phase C (Backlinks, Site Audit, Off-site SEO, Ads) begins fresh feature
+work rather than more page-porting.
+
+---
+
 ## PHASE 7 — Deployment (VPS)
 - [ ] Ubuntu 22.04, Python 3.11+, venv, requirements, `.env` on server
 - [ ] `collectstatic` · `migrate` · `seed_users`

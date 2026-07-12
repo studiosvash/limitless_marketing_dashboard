@@ -308,6 +308,34 @@ def build_modules(seo_module_stat: str, keywords_count: int, top3_count: int,
     ]
 
 
+_KIND_MODULE_MAP = {
+    "anomaly": {"label": "SEO", "target": "seo"},
+    "ranking": {"label": "Positioning", "target": "positioning"},
+    "backlink": {"label": "Backlinks", "target": "backlinks"},
+    "technical": {"label": "Page Health", "target": "pages"},
+    "ads": {"label": "Ads", "target": "ads"},
+    "ai": {"label": "AI Optimization", "target": "ai"},
+    "system": {"label": "Alerts", "target": "alerts"},
+}
+
+
+def build_priority_feed(feed: list[dict], limit: int = 6) -> list[dict]:
+    """HANDOFF_SPEC.md overview `priority[≤6]` — unacknowledged alerts, severity-sorted,
+    each tagged with its owning module. `feed` is apps.dashboard.services.alerts_service
+    .build_alerts_response(...)['feed'] — the caller (ProjectOverviewView) passes it in
+    rather than this module importing alerts_service directly, keeping overview_service
+    free of a hard dependency on a sibling page's service module."""
+    severity_rank = {"high": 0, "medium": 1, "info": 2, "low": 3}
+    unacked = [item for item in feed if not item["acknowledged"]]
+    unacked.sort(key=lambda item: (severity_rank.get(item["severity"], 9), item["ts"]), reverse=False)
+
+    out = []
+    for item in unacked[:limit]:
+        module = _KIND_MODULE_MAP.get(item["kind"], {"label": "Alerts", "target": "alerts"})
+        out.append({**item, "module": module})
+    return out
+
+
 def build_summary_lists(ai_summary_sections: list[dict]) -> dict:
     """HANDOFF_SPEC.md summary{wins, critical, watch} — flattens the parsed AI summary
     sections (see parse_ai_summary) into complete-sentence string lists per kind."""

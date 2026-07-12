@@ -187,3 +187,40 @@ class RangeAndApiShapeTests(TestCase):
         self.assertEqual(pillars[0]["value"], 0)
         self.assertEqual(pillars[0]["delta"], 0)
         self.assertEqual(pillars[1]["value"], 0.0)
+
+
+class BuildPriorityFeedTests(TestCase):
+    def test_filters_out_acknowledged_items(self):
+        from apps.dashboard.services.overview_service import build_priority_feed
+        feed = [
+            {"id": "anomaly-1", "ts": "2026-06-28", "kind": "anomaly", "severity": "high",
+             "title": "Clicks dropped", "detail": "...", "acknowledged": False},
+            {"id": "anomaly-2", "ts": "2026-06-27", "kind": "anomaly", "severity": "high",
+             "title": "Already handled", "detail": "...", "acknowledged": True},
+        ]
+        priority = build_priority_feed(feed)
+        self.assertEqual(len(priority), 1)
+        self.assertEqual(priority[0]["id"], "anomaly-1")
+
+    def test_tags_each_item_with_its_owning_module(self):
+        from apps.dashboard.services.overview_service import build_priority_feed
+        feed = [
+            {"id": "anomaly-1", "ts": "2026-06-28", "kind": "anomaly", "severity": "high",
+             "title": "x", "detail": "y", "acknowledged": False},
+            {"id": "issue-1", "ts": "2026-06-28", "kind": "technical", "severity": "high",
+             "title": "x", "detail": "y", "acknowledged": False},
+        ]
+        priority = build_priority_feed(feed)
+        by_id = {p["id"]: p for p in priority}
+        self.assertEqual(by_id["anomaly-1"]["module"], {"label": "SEO", "target": "seo"})
+        self.assertEqual(by_id["issue-1"]["module"], {"label": "Page Health", "target": "pages"})
+
+    def test_caps_at_limit(self):
+        from apps.dashboard.services.overview_service import build_priority_feed
+        feed = [
+            {"id": f"anomaly-{i}", "ts": "2026-06-28", "kind": "anomaly", "severity": "high",
+             "title": "x", "detail": "y", "acknowledged": False}
+            for i in range(10)
+        ]
+        priority = build_priority_feed(feed, limit=6)
+        self.assertEqual(len(priority), 6)

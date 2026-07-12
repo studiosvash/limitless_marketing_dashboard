@@ -8,7 +8,7 @@ from rest_framework.authtoken.models import Token
 from rest_framework.test import APIClient, APITestCase
 
 from pipeline.db.engine import get_engine
-from pipeline.db.schema import init_db, Site, SEODaily, KeywordRanking, AISummary
+from pipeline.db.schema import init_db, Site, SEODaily, KeywordRanking, AISummary, Anomaly
 from pipeline.utils.db_connection import get_session
 import pipeline.utils.db_connection as db_connection
 
@@ -128,6 +128,17 @@ class OverviewEndpointTests(APITestCase):
         self.assertTrue(any("Impressions increased significantly" in w for w in summary["wins"]))
         self.assertTrue(any("Lost 5 positions on primary keyword" in c for c in summary["critical"]))
         self.assertTrue(any("Traffic decreased on key landing page" in c for c in summary["critical"]))
+
+    def test_priority_reflects_real_unacknowledged_alerts(self):
+        with get_session() as session:
+            session.add(Anomaly(date=date(2026, 6, 30), site_id="sc-domain:fusehealth.com",
+                                 metric_type="seo_clicks", actual_value=50, baseline_value=100,
+                                 deviation_pct=-50.0, severity="high",
+                                 description="Clicks dropped.", is_acknowledged=0))
+        resp = self.client_auth.get("/api/projects/fusehealth/overview", {"range": "30d"})
+        body = resp.json()
+        self.assertEqual(len(body["priority"]), 1)
+        self.assertEqual(body["priority"][0]["module"]["target"], "seo")
 
 
 class ResolveProjectHelperTests(APITestCase):

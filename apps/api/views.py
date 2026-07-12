@@ -15,7 +15,7 @@ from pipeline.db.schema import Site, SEODaily
 from apps.dashboard.services.overview_service import (
     get_kpi_raw, build_kpis_api, build_top_pages_api, query_daily_traffic_raw,
     range_to_period_dates, get_ai_summary_text, parse_ai_summary, build_summary_lists,
-    build_pillars, build_modules,
+    build_pillars, build_modules, build_priority_feed,
 )
 from apps.dashboard.services.decision_engine import generate_signals, generate_ad_overlap_signals
 from apps.dashboard.services.keywords_service import build_keywords_response
@@ -125,11 +125,13 @@ class ProjectOverviewView(APIView):
         ai_summary_sections = parse_ai_summary(get_ai_summary_text(site_id))
         summary = build_summary_lists(ai_summary_sections)
 
+        priority = build_priority_feed(build_alerts_response(site_id)["feed"])
+
         return Response({
             "kpis": kpis,
             "pillars": pillars,
             "modules": modules,
-            "priority": [],  # Alerts feed is Phase B — no fake data, empty until built
+            "priority": priority,
             "signals": signals,
             "trend": trend,
             "summary": summary,
