@@ -98,3 +98,40 @@ def query_cwv_raw(site_id: str) -> dict:
                 "poor_threshold": _CWV_THRESHOLDS["cls"]["poor"]})
 
     return {"lcp": lcp, "cls": cls}
+
+
+def build_site_audit_response(site_id: str) -> dict:
+    """API-shaped Site Audit response. Real: breakdown, cwv.lcp, cwv.cls (reshaped from
+    real IndexingStatus/PageSpeed data). Everything else is honestly state:"setup" --
+    see docs/superpowers/specs/2026-07-12-phaseC2-site-audit-design.md for why each field
+    is scoped the way it is (no rules catalog, crawl-run table, or snapshot history exists
+    yet, and the one connector that would populate them is credential-blocked)."""
+    breakdown = query_indexing_breakdown_raw(site_id)
+    cwv_raw = query_cwv_raw(site_id)
+
+    def _cwv_field(metric: dict) -> dict:
+        return {
+            "p75": metric["p75"],
+            "unit": metric["unit"],
+            "good": metric["good_threshold"],
+            "poor": metric["poor_threshold"],
+            "buckets": {"good": metric["good"], "mid": metric["mid"], "poor": metric["poor"]},
+        }
+
+    return {
+        "score": {"state": "setup"},
+        "crawl": {"state": "setup"},
+        "domainChecks": [],
+        "breakdown": breakdown,
+        "catScore": {"state": "setup"},
+        "cwv": {
+            "lcp": _cwv_field(cwv_raw["lcp"]),
+            "cls": _cwv_field(cwv_raw["cls"]),
+            "tbt": {"state": "setup"},
+        },
+        "checks": [],
+        "totals": {"errors": 0, "warnings": 0, "notices": 0},
+        "crawledPages": [],
+        "structure": [],
+        "snapshots": [],
+    }
