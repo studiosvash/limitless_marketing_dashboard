@@ -380,10 +380,20 @@ phase once credentials exist).
 **Scope discipline:** Phase C2 deliberately does NOT implement the missing DataForSEO OnPage
 connector (rules catalog, crawl results metadata, crawl-run history, snapshot timelines) —
 that is real, unvalidated integration work for a future phase once credentials exist, not
-something to guess at now. Current implementation shows real data (`breakdown`/`cwv.lcp`/`cwv.cls`)
+something to guess at now. The endpoint returns real data (`breakdown`/`cwv.lcp`/`cwv.cls`)
 with honest `state:"setup"` placeholders (`score`/`crawl`/`catScore`/`cwv.tbt`) or true-empty
 collections/zeros (`domainChecks`/`checks`/`crawledPages`/`structure`/`snapshots`/`totals`) for
 the rest.
+
+**SPA render guard (2026-07-12, commit 5816996):** applying the lesson from C1's Backlinks
+final review, independent research confirmed the SPA's Site Audit tab has the same missing-
+setup-guard problem — worse, it crashed unconditionally on the default 'overview' sub-tab
+(`data.cwv.tbt.buckets` dereferenced when `cwv.tbt` is honestly `state:"setup"`, plus a `NaN`
+gauge and a phantom "state"/"setup" category card). Fixed proactively, before final review,
+using the exact same pattern as the Backlinks fix (`2ce794e`): the tab's computed-values
+function short-circuits on `data.score.state === 'setup'`, and the template wraps all 6
+sub-tabs (Overview/Issues/Crawled Pages/Statistics/Compare Crawls/Progress) in a guard that
+shows one clean "not connected yet" card instead.
 
 ---
 
