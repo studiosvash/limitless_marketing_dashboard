@@ -213,7 +213,7 @@ class BuildPriorityFeedTests(TestCase):
         priority = build_priority_feed(feed)
         by_id = {p["id"]: p for p in priority}
         self.assertEqual(by_id["anomaly-1"]["module"], {"label": "SEO", "target": "seo"})
-        self.assertEqual(by_id["issue-1"]["module"], {"label": "Page Health", "target": "pages"})
+        self.assertEqual(by_id["issue-1"]["module"], {"label": "Site Audit", "target": "pages"})
 
     def test_caps_at_limit(self):
         from apps.dashboard.services.overview_service import build_priority_feed
@@ -243,3 +243,19 @@ class BuildPriorityFeedTests(TestCase):
         priority = build_priority_feed(feed)
         # Verify exact output order: high (rank 0), medium (rank 1), info (rank 2), low (rank 3)
         self.assertEqual([p["id"] for p in priority], ["high-item", "medium-item", "info-item", "low-item"])
+
+    def test_same_severity_ties_break_newest_first(self):
+        """Regression test for the tiebreak direction: matches the approved SPA's
+        `.sort((a, b) => (sevRank[a.severity] - sevRank[b.severity]) || (a.ts < b.ts ? 1 : -1))`
+        (app/api.js) — within the same severity, newer items (larger ts) must sort first."""
+        from apps.dashboard.services.overview_service import build_priority_feed
+        feed = [
+            {"id": "oldest", "ts": "2026-06-01", "kind": "anomaly", "severity": "high",
+             "title": "x", "detail": "y", "acknowledged": False},
+            {"id": "newest", "ts": "2026-06-28", "kind": "anomaly", "severity": "high",
+             "title": "x", "detail": "y", "acknowledged": False},
+            {"id": "middle", "ts": "2026-06-15", "kind": "anomaly", "severity": "high",
+             "title": "x", "detail": "y", "acknowledged": False},
+        ]
+        priority = build_priority_feed(feed)
+        self.assertEqual([p["id"] for p in priority], ["newest", "middle", "oldest"])

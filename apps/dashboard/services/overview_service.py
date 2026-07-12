@@ -309,13 +309,16 @@ def build_modules(seo_module_stat: str, keywords_count: int, top3_count: int,
 
 
 _KIND_MODULE_MAP = {
+    # Must match the approved SPA's own kindMap exactly
+    # (Limitless marketing dashboard2/app/api.js:141-145) — its labels are used as
+    # lookup keys into a hardcoded color map (`modColor` in the .dc.html source), so
+    # any label that doesn't match falls back to gray instead of the designed color.
     "anomaly": {"label": "SEO", "target": "seo"},
-    "ranking": {"label": "Positioning", "target": "positioning"},
+    "ranking": {"label": "Positions", "target": "positioning"},
     "backlink": {"label": "Backlinks", "target": "backlinks"},
-    "technical": {"label": "Page Health", "target": "pages"},
+    "technical": {"label": "Site Audit", "target": "pages"},
     "ads": {"label": "Ads", "target": "ads"},
-    "ai": {"label": "AI Optimization", "target": "ai"},
-    "system": {"label": "Alerts", "target": "alerts"},
+    "system": {"label": "System", "target": "alerts"},
 }
 
 
@@ -327,11 +330,17 @@ def build_priority_feed(feed: list[dict], limit: int = 6) -> list[dict]:
     free of a hard dependency on a sibling page's service module."""
     severity_rank = {"high": 0, "medium": 1, "info": 2, "low": 3}
     unacked = [item for item in feed if not item["acknowledged"]]
-    unacked.sort(key=lambda item: (severity_rank.get(item["severity"], 9), item["ts"]), reverse=False)
+    # Matches the SPA's sort exactly (app/api.js, right after kindMap):
+    #   .sort((a, b) => (sevRank[a.severity] - sevRank[b.severity]) || (a.ts < b.ts ? 1 : -1))
+    # i.e. severity ascending (high first), and within the same severity, newest ts first.
+    # Two stable passes: sort by ts descending first, then by severity ascending — the
+    # second pass preserves the ts-descending order for items that tie on severity.
+    unacked.sort(key=lambda item: item["ts"], reverse=True)
+    unacked.sort(key=lambda item: severity_rank.get(item["severity"], 9))
 
     out = []
     for item in unacked[:limit]:
-        module = _KIND_MODULE_MAP.get(item["kind"], {"label": "Alerts", "target": "alerts"})
+        module = _KIND_MODULE_MAP.get(item["kind"], {"label": "General", "target": "alerts"})
         out.append({**item, "module": module})
     return out
 
