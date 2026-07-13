@@ -523,6 +523,69 @@ implicit habit) — same manual check C1-C4 did well, made harder to accidentall
 
 ---
 
+## PHASE D — AI Optimization ✅ (2026-07-13)
+First genuinely NET-NEW feature phase — no old MVP page exists for this at all, unlike every
+Phase B/C page — and the first phase to need real first-party mutation endpoints (not just
+GET+cache), since the wizard and every "Add prompts"/"Edit targets"/"New list" action in the
+approved SPA persist user input that must survive a page reload.
+
+- [x] New Django ORM models `AITarget`/`AIPromptList`/`AIPrompt` (`apps/dashboard/models.py`,
+      Task 1) — first-party app state (brand/aliases/competitors/prompts/lists), same
+      `site_url`-string-keyed pattern as the existing `Insight` model. Implementer caught and
+      fixed a real bug in the plan's own code sketch: a field literally named `list` shadowed
+      the Python builtin within the class body, breaking a later `default=list` on a JSONField
+      (Django `fields.E010`) — fixed with a module-level `_empty_list()` helper, independently
+      reproduced and confirmed by the reviewer.
+- [x] `apps/dashboard/services/ai_service.py` (Task 2) — real reshape of `AIKeywordData`
+      (`query_ai_keywords_raw`, same "latest snapshot date" pattern as the old MVP's
+      `_get_ai_keywords`) plus `build_ai_response` assembling real `targets`/`lists`/`prompts`/
+      `setupDone`/`aiKeywords` and honest empty/zero for everything requiring the LLM Mentions/
+      Responses/scraper infrastructure that doesn't exist anywhere in this codebase (`sov`/
+      `trend`/`topPages`/`topDomains`/`prompts[].results`/`suggestions`/`history`/`budget`/
+      `costs`/`next_run`). Review caught two dormant bugs, both fixed immediately: (1) `trend`
+      reshape assumed a flat number list but the real connector stores
+      `[{year,month,ai_search_volume}]` objects, and zero-padded at the wrong end; (2) `ratio`
+      fabricated a permanent "0% AI share" once real data lands (the connector never fetches
+      `search_volume`) — changed to honest `None`.
+- [x] `GET /api/projects/<slug>/ai` + `POST /api/projects/<slug>/ai/<action>` (Task 3) — 6 real
+      mutation handlers (`setup`/`targets`/`prompts`/`prompts-remove`/`prompts-config`/`lists`),
+      all correctly scoped by `site_url` (cross-project isolation verified on every handler).
+      `run`/`inspect` (calling external LLM APIs that don't exist) return a clean 400, not a
+      404/500. Review caught a false-success gap: `prompts-config`/`lists` "rename" silently
+      no-op'd on an unknown or cross-project id, so the SPA's generic post-mutation success
+      toast would lie about what happened — fixed to 404 on zero rows affected (delete stays a
+      no-op, correct REST idempotency).
+- [x] SPA fidelity fixes (Task 4) — traced every `data.*`/`pr.*`/`d.*` dereference in the AI
+      Optimization block, not just the two spots the plan flagged up front, per the by-now-
+      standard two-part check (crash-risk + hardcoded-honesty). Found and fixed, independently
+      of the task-review cycle: (1) `d.trend[0].date` crash on empty trend; (2) **three**
+      occurrences of `d.lists[0].id` crashing whenever no prompt list exists yet — one of them
+      fires unconditionally on every render of the Prompts sub-tab, not just on a click, making
+      it a guaranteed crash in a very reachable state (right after the setup wizard, before the
+      user creates a list); (3) two "null"/"undefined"-looking honesty gaps (`ratioLabel`,
+      `nextRunLabel`); (4) removed the Keywords tab's unrelated hardcoded "Live" badge on
+      Keyword Explorer — false the moment it's served against the real (Keyword-Explorer-out-
+      of-scope) backend, with no real endpoint to gate it on, so removal (not conditional
+      hiding) was the honest fix.
+      **Also found during this same trace, independent of any task review**: `prompts[]`'s
+      shape itself was wrong — the SPA needs a nested `pr.cfg.{models,cadence,country,city}`
+      object and `pr.results` keyed by platform id, not the flat fields Task 2 built. This is
+      exactly the class of bug the Phase C retrospective's recommendation #1 (a contract/shape
+      test) would have caught automatically — concrete validation that recommendation is worth
+      acting on for Phase E, not just a nice-to-have.
+- [x] All 226 tests pass (177 baseline + 12 + 11 + 18 + regression tests from 3 review/self-
+      found fixes)
+
+**Scope discipline:** Phase D deliberately does NOT implement `run`/`inspect` (real external LLM
+Responses API / scraper integration), Keyword Explorer (`POST /api/research`) or Prompt Explorer
+(`POST /api/prompt-research`) — 4 of 5 DataForSEO Labs algorithms plus a 100%-net-new prompt
+template-expansion engine, same "real, unvalidated integration work for a future phase" pattern
+as C1's 5 missing Backlinks sub-endpoints — or `sov`/`trend`/`topPages`/`topDomains`/
+`prompts[].results`/`suggestions`/`history` real data (needs the LLM Mentions/Responses APIs
+this codebase has no connector for).
+
+---
+
 ## PHASE 7 — Deployment (VPS)
 - [ ] Ubuntu 22.04, Python 3.11+, venv, requirements, `.env` on server
 - [ ] `collectstatic` · `migrate` · `seed_users`
