@@ -444,6 +444,66 @@ crash-focused trace.
 
 ---
 
+## PHASE C4 — Ads ✅ (2026-07-13)
+Wires the SPA's four Ads sub-pages (Paid Overview / Campaigns / Search Terms / Attribution) —
+all fed by one shared `GET /api/projects/<slug>/ads?range=` endpoint, matching the SPA's own
+`ADSTABS` single-fetch routing. The biggest and structurally riskiest of the four Phase C
+sub-projects: unlike C1-C3, the SPA's Ads render block has **no setup-guard convention
+anywhere** and would crash outright (`TypeError` on `.toFixed()`) if `totals`/`prev`/`pacing`
+were `state:"setup"` sentinel objects instead of real fully-keyed zero-value objects — this
+phase's central design decision, made up front rather than discovered reactively.
+
+- [x] Ads query logic in `apps/dashboard/services/ads_service.py` (Task 1) — raw calculators
+      for `totals`/`trend`/`pacing` (real `AdMetricDaily` aggregation + real GA4
+      `SEODaily.conversions` cross-reference for `ga4_key_events`) plus `build_ads_response`.
+      Honest `0` for `totals.conv_value`/`totals.ga4_revenue` (no revenue/value column exists
+      anywhere in this schema — not fabricated); honest true-empty `[]` for `campaigns`/
+      `searchTerms`/`attribution`/`landingPages`/`negatives` (rich per-row fields the SPA's
+      tabs need — `status`/`budget_daily`/`lost_is_budget`/`adGroups[]` etc. — simply don't
+      exist in `AdMetricDaily`, and `SearchTerm`/`Attribution` have no backing model at all);
+      `syncMeta.connected` real (`os.getenv` check on Google Ads credentials, currently blank
+      → `false`), everything else in `syncMeta` honest `0`/`None`. Explicitly does **not** port
+      the old MVP's `_get_ads_overview`'s `roi` field — an invented `$50/conversion` estimate.
+- [x] `GET /api/projects/<slug>/ads?range=7d|30d|90d` — real DB-backed (Task 2), range-aware
+      via the shared `resolve_range_periods` helper (matches Positions/Offsite — Ads genuinely
+      has a period concept via `totals` vs `prev`)
+- [x] Test suite: 15 new tests (11 in `apps/dashboard/services/tests/test_ads_service.py`,
+      4 in `apps/api/tests/test_ads.py`) — spend-weighted ROAS correctness (including a
+      dedicated mixed-known/unknown-roas regression, see fix note below), GA4 cross-reference,
+      always-honest-zero `conv_value`/`ga4_revenue`, trend per-day merge with no dropped dates,
+      calendar-month pacing math, exact-equality honest-empty contract, real period isolation
+      at the endpoint layer (current vs. previous, not summed), `range=7d` boundary-shift proof
+- [x] All 177 tests pass (162 baseline + 15 new)
+
+**Task 1 review fix (2026-07-13, commit ce63134):** the weighted-ROAS calculation's denominator
+summed spend over ALL rows while the numerator summed `spend*roas` only over rows with a known
+`roas`, silently treating null-roas spend as a zero-return contributor and deflating the result
+below the true average of the population that actually reports one — a plausible-looking but
+fabricated-by-omission number. Currently dormant (every connector writes `roas=None` on every
+row today, so the honest result is `0`), but a real latent bug once mixed known/unknown-roas
+rows exist. Fixed by scoping the denominator to `sum(spend) WHERE roas IS NOT NULL`, matching
+the numerator; added a concrete mixed-population regression test.
+
+**SPA fidelity fix (2026-07-13, commit 27b1a13):** applying the by-now-standard two-part check
+(crash-risk trace + hardcoded-honesty scan) up front rather than reactively: (1) `fmtTs(null)`
+would have rendered a fake "Jan 1, 1970" timestamp for `last_pull`/`next_pull` — fixed to fall
+back to `'—'`. (2) All four Ads sub-pages hardcoded a green "connected" status dot next to the
+sync cadence line, regardless of `data.syncMeta.connected` (honestly `false`) — same class of
+issue as C3's LinkedIn card, just repeated 4× across sub-pages instead of once. Fixed by
+gating the dot color and cadence text on the real `syncMeta.connected` field this phase's
+`build_ads_response` adds specifically for this. Left the static "$0.00 API cost" line
+untouched — a true statement about Google Ads API pricing itself, not a connection claim.
+
+**Scope discipline:** Phase C4 deliberately does NOT implement rich per-campaign metadata
+(`status`/`budget_daily`/`lost_is_budget`/`type`/`adGroups[]` — needs a richer Google Ads API
+integration once credentials exist), the `SearchTerm`/`Attribution` models/connectors (new
+schema design, future phase), the 4 mutation endpoints (`ads/status`/`ads/budget`/
+`ads/negatives`/`ads/promote` — real Google Ads mutations, dead code against an empty
+`campaigns[]` today), or ads-attributed `landingPages[]` (needs a campaign↔GA4-landing-page
+join that doesn't exist). **Phase C (Backlinks/Site Audit/Off-site SEO/Ads) is now complete.**
+
+---
+
 ## PHASE 7 — Deployment (VPS)
 - [ ] Ubuntu 22.04, Python 3.11+, venv, requirements, `.env` on server
 - [ ] `collectstatic` · `migrate` · `seed_users`
