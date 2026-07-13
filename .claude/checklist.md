@@ -429,6 +429,19 @@ Fixed with a minimal 2-line JS fallback (`"not yet connected"` for cadence, hide
 count) plus a small template guard to avoid a trailing `"· "` separator — not a tab-wide
 rebuild, since the actual verified risk here was much narrower than C1/C2's.
 
+**Final-review fix (2026-07-13, commit 89f1954):** the whole-branch review found the narrower
+fix above wasn't actually sufficient — it only checked `data.*` dereferences for crashes, but
+missed a **hardcoded template element** with no `data.*` binding at all: the LinkedIn spotlight
+card always rendered a green "Connected" badge, "Connector live" subtitle, and "from LinkedIn
+API" caption, regardless of `data.connectors.linkedin` (honestly `false` — no LinkedIn
+credentials exist). That's a false status claim against honest data, the same class of
+violation the C1/C2 whole-tab guards exist to prevent, just localized to one static card
+instead of a whole tab. Fixed by gating the badge/subtitle/caption on
+`data.connectors.linkedin`. **Lesson for C4 (Ads) and beyond:** when checking a tab for setup-
+state fidelity, check both (a) `data.*` dereferences that could crash/NaN, AND (b) hardcoded
+markup that asserts a status the honest payload doesn't support — (b) won't show up in a
+crash-focused trace.
+
 ---
 
 ## PHASE 7 — Deployment (VPS)
