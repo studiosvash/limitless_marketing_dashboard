@@ -2273,7 +2273,7 @@
       <div data-screen-label="Paid Overview" style="display: flex; flex-direction: column; gap: 20px;">
 
         <div style="display: flex; align-items: center; gap: 18px; flex-wrap: wrap; border-radius: 10px; background: white; border: 1px solid #e2e8f0; padding: 10px 16px; font-size: 12px; color: #64748b;">
-          <span style="display: inline-flex; align-items: center; gap: 7px; font-weight: 600; color: #334155;"><span style="width: 7px; height: 7px; border-radius: 9999px; background: #10b981;"></span>{{ adsSync.cadence }}</span>
+          <span style="display: inline-flex; align-items: center; gap: 7px; font-weight: 600; color: #334155;"><span style="{{ adsSync.dotStyle }}"></span>{{ adsSync.cadence }}</span>
           <span>Last pull <b style="color: #334155; font-weight: 600;">{{ adsSync.last }}</b></span>
           <span>Next pull <b style="color: #334155; font-weight: 600;">{{ adsSync.next }}</b></span>
           <span style="margin-left: auto;">Google Ads API {{ adsSync.quota }}</span>
@@ -2459,7 +2459,7 @@
         </div>
 
         <div style="display: flex; align-items: center; gap: 18px; flex-wrap: wrap; border-radius: 10px; background: white; border: 1px solid #e2e8f0; padding: 10px 16px; font-size: 12px; color: #64748b;">
-          <span style="display: inline-flex; align-items: center; gap: 7px; font-weight: 600; color: #334155;"><span style="width: 7px; height: 7px; border-radius: 9999px; background: #10b981;"></span>{{ adsSync.cadence }}</span>
+          <span style="display: inline-flex; align-items: center; gap: 7px; font-weight: 600; color: #334155;"><span style="{{ adsSync.dotStyle }}"></span>{{ adsSync.cadence }}</span>
           <span>Source <b style="color: #334155; font-weight: 600; font-family: monospace; font-size: 11.5px;">GoogleAdsService.searchStream</b> (campaign + ad_group GAQL) · status &amp; budget edits via <b style="color: #334155; font-weight: 600; font-family: monospace; font-size: 11.5px;">CampaignService</b> apply immediately</span>
           <span style="margin-left: auto;">Last pull <b style="color: #334155; font-weight: 600;">{{ adsSync.last }}</b></span>
           <span>Next <b style="color: #334155; font-weight: 600;">{{ adsSync.next }}</b></span>
@@ -2599,7 +2599,7 @@
         </div>
 
         <div style="display: flex; align-items: center; gap: 18px; flex-wrap: wrap; border-radius: 10px; background: white; border: 1px solid #e2e8f0; padding: 10px 16px; font-size: 12px; color: #64748b;">
-          <span style="display: inline-flex; align-items: center; gap: 7px; font-weight: 600; color: #334155;"><span style="width: 7px; height: 7px; border-radius: 9999px; background: #10b981;"></span>{{ adsSync.cadence }}</span>
+          <span style="display: inline-flex; align-items: center; gap: 7px; font-weight: 600; color: #334155;"><span style="{{ adsSync.dotStyle }}"></span>{{ adsSync.cadence }}</span>
           <span>Source <b style="color: #334155; font-weight: 600; font-family: monospace; font-size: 11.5px;">search_term_view</b> via GAQL · negatives written back through <b style="color: #334155; font-weight: 600; font-family: monospace; font-size: 11.5px;">CampaignCriterionService</b></span>
           <span style="margin-left: auto;">Last pull <b style="color: #334155; font-weight: 600;">{{ adsSync.last }}</b></span>
           <span>Next <b style="color: #334155; font-weight: 600;">{{ adsSync.next }}</b></span>
@@ -2676,7 +2676,7 @@
         </div>
 
         <div style="display: flex; align-items: center; gap: 18px; flex-wrap: wrap; border-radius: 10px; background: white; border: 1px solid #e2e8f0; padding: 10px 16px; font-size: 12px; color: #64748b;">
-          <span style="display: inline-flex; align-items: center; gap: 7px; font-weight: 600; color: #334155;"><span style="width: 7px; height: 7px; border-radius: 9999px; background: #10b981;"></span>{{ adsSync.cadence }}</span>
+          <span style="display: inline-flex; align-items: center; gap: 7px; font-weight: 600; color: #334155;"><span style="{{ adsSync.dotStyle }}"></span>{{ adsSync.cadence }}</span>
           <span>Last pull <b style="color: #334155; font-weight: 600;">{{ adsSync.last }}</b></span>
           <span>Next pull <b style="color: #334155; font-weight: 600;">{{ adsSync.next }}</b></span>
           <span style="margin-left: auto;">Google Ads API {{ adsSync.quota }}</span>
@@ -5969,12 +5969,14 @@ class Component extends DCLogic {
       const roasSt = v => ({ fontWeight: 600, color: v >= 3 ? '#059669' : v >= 1.5 ? '#2563eb' : '#dc2626' });
       const fBase = { padding: '4px 12px', fontSize: '12px', fontWeight: 500, borderRadius: '6px', cursor: 'pointer', color: '#64748b' };
       const fActive = Object.assign({}, fBase, { background: 'white', color: '#0f172a', boxShadow: '0 1px 2px rgba(0,0,0,0.05)' });
-      const fmtTs = z => new Date(z).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+      const fmtTs = z => z ? new Date(z).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '—';
       const sm = data.syncMeta;
       vals.adsSync = {
-        cadence: sm.cadence, last: fmtTs(sm.last_pull), next: fmtTs(sm.next_pull),
+        cadence: sm.connected ? sm.cadence : 'not yet connected',
+        last: fmtTs(sm.last_pull), next: fmtTs(sm.next_pull),
         quota: sm.ops_used + ' / ' + this.fmt(sm.ops_limit) + ' ops today',
-        ga4: sm.ga4_tokens_used + ' / ' + this.fmt(sm.ga4_tokens_limit) + ' tokens'
+        ga4: sm.ga4_tokens_used + ' / ' + this.fmt(sm.ga4_tokens_limit) + ' tokens',
+        dotStyle: { width: '7px', height: '7px', borderRadius: '9999px', background: sm.connected ? '#10b981' : '#cbd5e1' }
       };
       const fmtD = z => new Date(z + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
       vals.adsWindow = data.window && data.window.from ? (fmtD(data.window.from) + ' – ' + fmtD(data.window.to) + ' · ' + data.window.days + ' days') : '';
