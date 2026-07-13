@@ -205,6 +205,27 @@ class AIPromptsConfigActionTests(APITestCase):
         prompt.refresh_from_db()
         self.assertEqual(prompt.tracked_models, ["chatgpt", "claude"])
 
+    def test_unknown_id_is_a_clean_404_not_a_false_success(self):
+        # Final-review finding: a silent 200 here would tell the SPA "saved" for a config
+        # change that never happened -- a false-success signal, not just a no-op.
+        resp = self.client_auth.post(
+            "/api/projects/fusehealth/ai/prompts-config",
+            {"id": 999999, "models": ["chatgpt"]},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 404)
+
+    def test_cross_project_id_is_404_and_leaves_other_project_untouched(self):
+        other_prompt = AIPrompt.objects.create(site_url="https://other-project.com", text="not yours")
+        resp = self.client_auth.post(
+            "/api/projects/fusehealth/ai/prompts-config",
+            {"id": other_prompt.id, "models": ["chatgpt"]},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 404)
+        other_prompt.refresh_from_db()
+        self.assertEqual(other_prompt.tracked_models, [])
+
 
 class AIListsActionTests(APITestCase):
     def setUp(self):
@@ -248,6 +269,35 @@ class AIListsActionTests(APITestCase):
             "/api/projects/fusehealth/ai/lists", {"op": "bogus"}, format="json"
         )
         self.assertEqual(resp.status_code, 400)
+
+    def test_rename_unknown_id_is_a_clean_404_not_a_false_success(self):
+        resp = self.client_auth.post(
+            "/api/projects/fusehealth/ai/lists",
+            {"op": "rename", "id": 999999, "name": "New Name"},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 404)
+
+    def test_rename_cross_project_id_is_404_and_leaves_other_project_untouched(self):
+        other_list = AIPromptList.objects.create(site_url="https://other-project.com", name="Not yours")
+        resp = self.client_auth.post(
+            "/api/projects/fusehealth/ai/lists",
+            {"op": "rename", "id": other_list.id, "name": "Hijacked"},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 404)
+        other_list.refresh_from_db()
+        self.assertEqual(other_list.name, "Not yours")
+
+    def test_delete_cross_project_id_is_idempotent_and_leaves_other_project_untouched(self):
+        # Delete stays a no-op (idempotent-safe, matching standard REST practice) -- unlike
+        # rename/config, "the thing is gone" is the correct end state either way.
+        other_list = AIPromptList.objects.create(site_url="https://other-project.com", name="Not yours")
+        resp = self.client_auth.post(
+            "/api/projects/fusehealth/ai/lists", {"op": "delete", "id": other_list.id}, format="json"
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(AIPromptList.objects.filter(id=other_list.id, name="Not yours").exists())
 
 
 class AIUnimplementedActionTests(APITestCase):

@@ -276,9 +276,14 @@ class ProjectAIActionView(APIView):
         return Response({})
 
     def _handle_prompts_config(self, request, site_id):
-        AIPrompt.objects.filter(site_url=site_id, id=request.data.get("id")).update(
+        # update() returning 0 means the id didn't match this site's prompts (unknown id, or
+        # cross-project) -- a silent 200 here would tell the SPA "saved" when nothing changed,
+        # a false-success signal the same class as this project's "no fake data" findings.
+        updated = AIPrompt.objects.filter(site_url=site_id, id=request.data.get("id")).update(
             tracked_models=request.data.get("models", [])
         )
+        if not updated:
+            return Response({"detail": "Prompt not found"}, status=404)
         return Response({})
 
     def _handle_lists(self, request, site_id):
@@ -288,9 +293,13 @@ class ProjectAIActionView(APIView):
             obj = AIPromptList.objects.create(site_url=site_id, name=data.get("name", "Untitled"))
             return Response({"id": obj.id})
         if op == "rename":
-            AIPromptList.objects.filter(site_url=site_id, id=data.get("id")).update(
+            # Same false-success reasoning as _handle_prompts_config above -- rename is not
+            # safely idempotent the way delete is, so a no-match must be a real 404.
+            updated = AIPromptList.objects.filter(site_url=site_id, id=data.get("id")).update(
                 name=data.get("name", "")
             )
+            if not updated:
+                return Response({"detail": "List not found"}, status=404)
             return Response({})
         if op == "delete":
             AIPromptList.objects.filter(site_url=site_id, id=data.get("id")).delete()
