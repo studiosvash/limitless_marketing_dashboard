@@ -452,7 +452,7 @@
         <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
           <div style="padding: 16px 20px; border-bottom: 1px solid #f1f5f9; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;">
             <div>
-              <h2 style="font-size: 15px; font-weight: 600; margin: 0; display: flex; align-items: center; gap: 8px;"><span style="font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; background: #eef2ff; color: #4338ca; padding: 2px 6px; border-radius: 4px;">Live</span> Keyword Explorer</h2>
+              <h2 style="font-size: 15px; font-weight: 600; margin: 0; display: flex; align-items: center; gap: 8px;">Keyword Explorer</h2>
               <p style="font-size: 12px; color: #94a3b8; margin: 4px 0 0;">Research keywords on demand (comma-separate seeds) — one metered expansion per search (~$0.01–0.13), then filters &amp; groups run free on the cached set.</p>
             </div>
             <div style="display: flex; align-items: center; gap: 8px; flex-shrink: 0;">
@@ -5557,7 +5557,7 @@ class Component extends DCLogic {
         const overCap = d.budget.spent / d.budget.cap;
         aiv.budgetLabel = 'AI spend ' + this.money(d.budget.spent) + ' of ' + this.money(d.budget.cap) + ' cap';
         aiv.budgetStyle = { fontSize: '12px', fontWeight: 600, padding: '4px 10px', borderRadius: '6px', background: overCap >= 0.8 ? '#fee2e2' : '#f1f5f9', color: overCap >= 0.8 ? '#b91c1c' : '#475569' };
-        aiv.nextRunLabel = 'Runs weekly · next ' + d.next_run;
+        aiv.nextRunLabel = d.next_run ? ('Runs weekly · next ' + d.next_run) : 'Runs weekly · not yet scheduled';
         const allCost = prompts.reduce((a2, pr) => a2 + runCostOf(pr), 0);
         aiv.runAllLabel = 'Run all now · ' + money3(allCost);
         aiv.runAllStyle = redBtn;
@@ -5624,7 +5624,8 @@ class Component extends DCLogic {
             }).join(' ');
             return { pts, color: pl2.color };
           });
-          aiv.trendFrom = d.trend[0].date; aiv.trendTo = d.trend[d.trend.length - 1].date;
+          aiv.trendFrom = d.trend.length ? d.trend[0].date : '';
+          aiv.trendTo = d.trend.length ? d.trend[d.trend.length - 1].date : '';
           aiv.topPages = d.topPages.map(pg2 => ({
             url: pg2.url, mentions: pg2.mentions, imprFmt: this.fmt(pg2.impressions),
             platforms: pg2.platforms.join(' · ') || '—'
@@ -5715,11 +5716,11 @@ class Component extends DCLogic {
 
           /* --- composer --- */
           aiv.composerOpen = s.aiComposerOpen;
-          aiv.composerShow = () => this.setState({ aiComposerOpen: true, aiComposerList: this.state.aiComposerList || d.lists[0].id });
+          aiv.composerShow = () => this.setState({ aiComposerOpen: true, aiComposerList: this.state.aiComposerList || (d.lists[0] || {}).id });
           aiv.composerHide = () => this.setState({ aiComposerOpen: false });
           aiv.compText = s.aiComposerText;
           aiv.compTextSet = e => this.setState({ aiComposerText: e.target.value });
-          aiv.compList = s.aiComposerList || d.lists[0].id;
+          aiv.compList = s.aiComposerList || (d.lists[0] || {}).id;
           aiv.compListSet = e => this.setState({ aiComposerList: e.target.value });
           aiv.compListOptions = d.lists.map(l => ({ value: l.id, label: l.name }));
           aiv.compSugs = d.suggestions.slice(0, 5).map(x => ({
@@ -5730,7 +5731,7 @@ class Component extends DCLogic {
           aiv.compCount = compLines.length;
           aiv.compAddLabel = 'Add ' + compLines.length + ' prompt' + (compLines.length === 1 ? '' : 's');
           aiv.compAddStyle = Object.assign({}, priBtn, { opacity: compLines.length ? 1 : 0.5, cursor: compLines.length ? 'pointer' : 'default' });
-          aiv.compAdd = () => { if (compLines.length) this.aiAddPrompts(compLines, this.state.aiComposerList || d.lists[0].id, () => this.setState({ aiComposerOpen: false, aiComposerText: '' })); };
+          aiv.compAdd = () => { if (compLines.length) this.aiAddPrompts(compLines, this.state.aiComposerList || (d.lists[0] || {}).id, () => this.setState({ aiComposerOpen: false, aiComposerText: '' })); };
 
           /* --- prompt table --- */
           aiv.noPrompts = prompts.length === 0;
@@ -5891,7 +5892,7 @@ class Component extends DCLogic {
               kw: r.kw, aiVolFmt: this.fmt(r.aiVolume), gVolFmt: this.fmt(r.gVolume),
               spark: this.spark(r.trend, 46, 16),
               sparkColor: r.trend[11] >= r.trend[0] ? '#22c55e' : '#ef4444',
-              ratioLabel: r.ratio + '%',
+              ratioLabel: r.ratio == null ? '—' : r.ratio + '%',
               ratioStyle: { fontSize: '12px', fontWeight: 700, color: r.ratio >= 30 ? '#7c3aed' : '#64748b', textAlign: 'right' },
               intentLabel: iv.label, intentStyle: iv.style,
               mentions: r.mentions,
