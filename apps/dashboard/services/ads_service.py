@@ -41,12 +41,17 @@ def query_ads_totals_raw(site_id: str, start: date, end: date) -> dict:
             weighted = session.execute(
                 select(
                     func.sum(AdMetricDaily.spend * AdMetricDaily.roas).label("weighted_roas_sum"),
+                    func.sum(AdMetricDaily.spend).label("known_roas_spend"),
                 ).where(
                     AdMetricDaily.site_id == site_id, AdMetricDaily.date >= start, AdMetricDaily.date <= end,
                     AdMetricDaily.roas.isnot(None),
                 )
             ).first()
-            roas = float(weighted.weighted_roas_sum or 0) / spend if spend else 0.0
+            known_roas_spend = float(weighted.known_roas_spend or 0)
+            # Weighted average over only the rows that actually have a roas value -- spend
+            # with roas=None must NOT be treated as a zero-return contributor to the
+            # denominator, or the result silently understates roas (fabrication-by-omission).
+            roas = float(weighted.weighted_roas_sum or 0) / known_roas_spend if known_roas_spend else 0.0
 
             ga4_row = session.execute(
                 select(func.sum(SEODaily.conversions)).where(

@@ -74,6 +74,43 @@ class AdsTotalsRawTests(TestCase):
         self.assertEqual(totals["ga4_revenue"], 0.0)
 
 
+class AdsTotalsRawMixedRoasTests(TestCase):
+    """A row with spend but no roas value must not be treated as a zero-return contributor
+    to the weighted average's denominator -- that would silently deflate roas below the true
+    average over the rows that actually report one (final-review finding on Task 1)."""
+
+    def setUp(self):
+        db_connection._SessionFactory = None
+        self.addCleanup(setattr, db_connection, "_SessionFactory", None)
+        tmp = tempfile.mkdtemp()
+        db_path = str(Path(tmp) / "fusehealth.db")
+        init_db(get_engine(db_path))
+        self._ctx = override_settings(ANALYTICS_DB_PATH=db_path)
+        self._ctx.enable()
+        self.addCleanup(self._ctx.disable)
+
+        with get_session() as session:
+            session.add_all([
+                AdMetricDaily(site_id=SITE_ID, date=date(2026, 6, 5), platform="google",
+                               campaign="Known", spend=800.0, clicks=40, impressions=4000,
+                               conversions=16, roas=4.0),
+                AdMetricDaily(site_id=SITE_ID, date=date(2026, 6, 15), platform="google",
+                               campaign="Unknown", spend=200.0, clicks=10, impressions=1000,
+                               conversions=0, roas=None),
+            ])
+
+    def test_null_roas_spend_excluded_from_weighted_average_denominator(self):
+        from apps.dashboard.services.ads_service import query_ads_totals_raw
+        totals = query_ads_totals_raw(SITE_ID, date(2026, 6, 1), date(2026, 6, 30))
+
+        # Total spend across both rows is 1000, but only 800 of it has a known roas.
+        self.assertEqual(totals["spend"], 1000.0)
+        # The naive "divide by all spend" bug would give 3200/1000 = 3.2.
+        self.assertNotEqual(totals["roas"], 3.2)
+        # The correct weighted average is over only the known-roas population: 3200/800 = 4.0.
+        self.assertEqual(totals["roas"], 4.0)
+
+
 class AdsTotalsRawEmptyDbTests(TestCase):
     def setUp(self):
         db_connection._SessionFactory = None
