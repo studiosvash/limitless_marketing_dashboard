@@ -218,17 +218,22 @@ class BuildAiResponseListsAndPromptsTests(TestCase):
         prompts_by_id = {p["id"]: p for p in body["prompts"]}
         self.assertEqual(len(prompts_by_id), 2)
 
+        # cfg is a nested object (not flat pr.models) -- the SPA's own render code
+        # (pr.cfg.models.length, pr.cfg.cadence, pr.results[platformId]) requires this
+        # exact shape or it crashes the instant any prompt exists.
         in_list = prompts_by_id[self.prompt_in_list.id]
         self.assertEqual(in_list["text"], "who makes the best widget")
         self.assertEqual(in_list["listId"], self.plist.id)
-        self.assertEqual(in_list["models"], ["chatgpt", "claude"])
-        self.assertEqual(in_list["results"], [])
+        self.assertEqual(in_list["cfg"]["models"], ["chatgpt", "claude"])
+        self.assertEqual(in_list["cfg"]["cadence"], "weekly")
+        self.assertEqual(in_list["results"], {})
 
         no_list = prompts_by_id[self.prompt_no_list.id]
         self.assertEqual(no_list["text"], "best widget brands 2026")
         self.assertIsNone(no_list["listId"])
-        self.assertEqual(no_list["models"], [])
-        self.assertEqual(no_list["results"], [])
+        self.assertEqual(no_list["cfg"]["models"], [])
+        self.assertEqual(no_list["results"], {})
+        self.assertIsNone(no_list["lastRun"])
 
     def test_excludes_other_sites_lists_and_prompts(self):
         from apps.dashboard.services.ai_service import build_ai_response

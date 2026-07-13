@@ -91,7 +91,28 @@ def build_ai_response(site_id: str) -> dict:
     lists = list(AIPromptList.objects.filter(site_url=site_id).values("id", "name"))
     prompts_qs = AIPrompt.objects.filter(site_url=site_id).select_related(None)
     prompts = [
-        {"id": p.id, "text": p.text, "listId": p.list_id, "models": p.tracked_models, "results": []}
+        {
+            "id": p.id,
+            "text": p.text,
+            "listId": p.list_id,
+            # The SPA reads pr.cfg.models/.cadence/.country/.city (a nested object), not a
+            # flat pr.models -- without this, pr.cfg.models.length crashes unconditionally
+            # once any prompt exists (found tracing the SPA's render code independently,
+            # not caught by any test since 0 real prompts existed when Tasks 1-3 were
+            # reviewed). "weekly" is a real system-wide constant (the only cadence this
+            # feature is designed for -- see the wizard's own "weekly schedule" copy), not
+            # fabricated per-prompt data; country/city/webSearch are honestly empty/false
+            # since no per-prompt geo-targeting or web-search toggle is persisted yet.
+            "cfg": {
+                "models": p.tracked_models,
+                "cadence": "weekly",
+                "country": "",
+                "city": "",
+                "webSearch": False,
+            },
+            "results": {},  # keyed by platform id once real LLM Responses data exists
+            "lastRun": None,
+        }
         for p in prompts_qs
     ]
 

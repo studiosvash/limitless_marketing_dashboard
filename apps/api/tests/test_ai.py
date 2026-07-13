@@ -73,7 +73,11 @@ class AIGetEndpointTests(APITestCase):
         self.assertEqual(texts, {"best iv therapy near me", "unscoped prompt"})
         scoped = next(p for p in body["prompts"] if p["text"] == "best iv therapy near me")
         self.assertEqual(scoped["listId"], plist.id)
-        self.assertEqual(scoped["models"], ["chatgpt"])
+        # cfg is a nested object (not flat "models") -- the SPA's render code dereferences
+        # pr.cfg.models/.cadence and crashes without this exact shape.
+        self.assertEqual(scoped["cfg"]["models"], ["chatgpt"])
+        self.assertEqual(scoped["cfg"]["cadence"], "weekly")
+        self.assertEqual(scoped["results"], {})
 
     def test_get_empty_db_is_honest_not_a_crash(self):
         resp = self.client_auth.get("/api/projects/fusehealth/ai")
