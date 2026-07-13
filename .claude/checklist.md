@@ -502,6 +502,25 @@ schema design, future phase), the 4 mutation endpoints (`ads/status`/`ads/budget
 `campaigns[]` today), or ads-attributed `landingPages[]` (needs a campaign↔GA4-landing-page
 join that doesn't exist). **Phase C (Backlinks/Site Audit/Off-site SEO/Ads) is now complete.**
 
+**Final whole-branch review (2026-07-13): Ready to merge — Yes.** No Critical/Important
+findings; independently re-verified both load-bearing claims (crash-safety of skipping a
+whole-tab guard, and completeness of the hardcoded-honesty sweep) rather than trusting the
+design doc's self-description. 177/177 tests, ROAS fix confirmed sound.
+
+**Phase C retrospective — process note for Phase D/E:** the final review's own assessment,
+worth carrying forward: diligence improved monotonically across C1→C4 (reactive whole-tab
+guard → proactive guard → proactive narrow-fix + one missed hardcoded-honesty case caught in
+review → proactive narrow-fix catching both crash-risk AND hardcoded-honesty up front, plus a
+self-caught dormant bug at task-review level). But the mechanism is still a manual trace —
+"reliable because the reviewer was careful," not "reliable by construction." Two structural
+upgrades were recommended for Phase D/E, which have a larger surface area than any single
+Phase C page: (1) a lightweight contract/shape test asserting the builder's top-level keys and
+value types match what the SPA unconditionally dereferences, so a dropped/mistyped key fails a
+test instead of waiting for a hand-trace; (2) codify the "grep new markup for
+`#10b981`/`Connected`/`Active`/`Live` outside `.map()` scope, gate each hit on real data or
+justify it" step as an explicit, named step in every future page's design doc (not just an
+implicit habit) — same manual check C1-C4 did well, made harder to accidentally skip.
+
 ---
 
 ## PHASE 7 — Deployment (VPS)
