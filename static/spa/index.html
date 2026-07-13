@@ -2893,14 +2893,14 @@
         <sc-if value="{{ st.conn }}" hint-placeholder-val="{{ false }}">
         <div style="display: flex; flex-direction: column; gap: 22px;">
           <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
-            <div style="padding: 16px 24px; border-bottom: 1px solid #f1f5f9;"><h2 style="font-size: 15px; font-weight: 600; margin: 0;">Data pipeline</h2><p style="font-size: 12px; color: #94a3b8; margin: 4px 0 0;">Core sources that feed every dashboard. All healthy.</p></div>
+            <div style="padding: 16px 24px; border-bottom: 1px solid #f1f5f9;"><h2 style="font-size: 15px; font-weight: 600; margin: 0;">Data pipeline</h2><p style="font-size: 12px; color: #94a3b8; margin: 4px 0 0;">Core sources that feed every dashboard. {{ st.healthLabel }}</p></div>
             <div style="padding: 24px;">
               <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px;">
                 <sc-for list="{{ st.dataConnectors }}" as="c" hint-placeholder-count="5">
-                  <div style="padding: 14px; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 10px;">
-                    <div style="font-weight: 600; font-size: 14px; color: #0f172a; display: flex; align-items: center; gap: 8px;"><span style="width: 8px; height: 8px; border-radius: 9999px; background: #22c55e;"></span>{{ c.name }}</div>
+                  <div style="{{ c.cardStyle }}">
+                    <div style="font-weight: 600; font-size: 14px; color: #0f172a; display: flex; align-items: center; gap: 8px;"><span style="{{ c.dotStyle }}"></span>{{ c.name }}</div>
                     <div style="font-size: 12px; color: #64748b; margin-top: 5px;">Last synced: {{ c.last }}</div>
-                    <div style="font-size: 12px; color: #15803d; margin-top: 2px;">{{ c.records }}</div>
+                    <div style="{{ c.recordsStyle }}">{{ c.records }}</div>
                   </div>
                 </sc-for>
               </div>
@@ -6407,7 +6407,25 @@ class Component extends DCLogic {
         inviteEmail: s.inviteEmail, inviteRole: s.inviteRole, roleOptions,
 
         /* ---- connections ---- */
-        dataConnectors: data.connectors.map(c => ({ name: c.name, last: c.last_sync, records: this.fmt(c.records) + ' records' })),
+        // Final-review finding: every connector card was hardcoded green with a static
+        // "All healthy" header, regardless of the real SyncLog status -- an error/never-run
+        // connector would still render as healthy. Derive the card color and header text
+        // from the real status instead.
+        dataConnectors: data.connectors.map(c => {
+          const ok = c.status === 'ok';
+          return {
+            name: c.name, last: c.last_sync || 'never', records: this.fmt(c.records) + ' records',
+            error: c.error,
+            cardStyle: ok
+              ? { padding: '14px', background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '10px' }
+              : { padding: '14px', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '10px' },
+            dotStyle: { width: '8px', height: '8px', borderRadius: '9999px', background: ok ? '#22c55e' : '#dc2626' },
+            recordsStyle: { fontSize: '12px', color: ok ? '#15803d' : '#b91c1c', marginTop: '2px' }
+          };
+        }),
+        healthLabel: data.connectors.length === 0
+          ? 'No sources synced yet.'
+          : (data.connectors.every(c => c.status === 'ok') ? 'All healthy.' : 'Some sources need attention.'),
         platRows: PLAT.map(p => {
           const on = !!platConn[p[0]]; const tg = toggle(on);
           return {
@@ -6421,7 +6439,10 @@ class Component extends DCLogic {
         }),
 
         /* ---- automation: sync + crawl ---- */
-        nextRun: data.sync.next_run + ' (' + data.sync.day + ')', lastRun: data.sync.last_run,
+        // data.sync.next_run/.day are honestly null (no scheduler exists yet) -- avoid the
+        // literal "null (null)" string JS string-concatenation would otherwise produce.
+        nextRun: data.sync.next_run ? (data.sync.next_run + ' (' + data.sync.day + ')') : 'not yet scheduled',
+        lastRun: data.sync.last_run || 'never',
         syncRows: SYNC_MODS.map(m => ({
           label: m[1], desc: m[2], value: syncCfg[m[0]] || 'weekly', options: mkOpts(m[3]),
           onChange: e => this.editSyncCfg(m[0], e.target.value),
