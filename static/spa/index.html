@@ -6412,20 +6412,27 @@ class Component extends DCLogic {
         // connector would still render as healthy. Derive the card color and header text
         // from the real status instead.
         dataConnectors: data.connectors.map(c => {
-          const ok = c.status === 'ok';
+          // Real SyncLog.status values (apps/sync/models.py SyncStatus) are
+          // never/running/success/error -- NOT "ok". Final-review finding: comparing
+          // against 'ok' meant no connector ever matched, so every successfully-synced
+          // connector rendered red -- the opposite of honest, worse than the hardcoded
+          // green it replaced. Only "error" is unhealthy; never/running are neutral (a
+          // connector that hasn't synced yet isn't "broken").
+          const ok = c.status === 'success';
+          const bad = c.status === 'error';
           return {
             name: c.name, last: c.last_sync || 'never', records: this.fmt(c.records) + ' records',
             error: c.error,
-            cardStyle: ok
-              ? { padding: '14px', background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '10px' }
-              : { padding: '14px', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '10px' },
-            dotStyle: { width: '8px', height: '8px', borderRadius: '9999px', background: ok ? '#22c55e' : '#dc2626' },
-            recordsStyle: { fontSize: '12px', color: ok ? '#15803d' : '#b91c1c', marginTop: '2px' }
+            cardStyle: bad
+              ? { padding: '14px', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '10px' }
+              : { padding: '14px', background: ok ? '#f0fdf4' : '#f8fafc', border: '1px solid ' + (ok ? '#bbf7d0' : '#e2e8f0'), borderRadius: '10px' },
+            dotStyle: { width: '8px', height: '8px', borderRadius: '9999px', background: bad ? '#dc2626' : (ok ? '#22c55e' : '#cbd5e1') },
+            recordsStyle: { fontSize: '12px', color: bad ? '#b91c1c' : (ok ? '#15803d' : '#64748b'), marginTop: '2px' }
           };
         }),
         healthLabel: data.connectors.length === 0
           ? 'No sources synced yet.'
-          : (data.connectors.every(c => c.status === 'ok') ? 'All healthy.' : 'Some sources need attention.'),
+          : (data.connectors.some(c => c.status === 'error') ? 'Some sources need attention.' : 'All healthy.'),
         platRows: PLAT.map(p => {
           const on = !!platConn[p[0]]; const tg = toggle(on);
           return {
