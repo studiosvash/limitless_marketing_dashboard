@@ -18,4 +18,5 @@ urlpatterns = [
     path("projects/<slug:slug>/ads", views.ProjectAdsView.as_view(), name="project-ads"),
     path("projects/<slug:slug>/ai", views.ProjectAIView.as_view(), name="project-ai"),
     path("projects/<slug:slug>/ai/<str:action>", views.ProjectAIActionView.as_view(), name="project-ai-action"),
+    path("projects/<slug:slug>/settings", views.ProjectSettingsView.as_view(), name="project-settings"),
 ]

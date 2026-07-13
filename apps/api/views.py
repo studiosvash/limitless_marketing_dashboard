@@ -27,6 +27,7 @@ from apps.dashboard.services.site_audit_service import build_site_audit_response
 from apps.dashboard.services.offsite_service import build_offsite_response
 from apps.dashboard.services.ads_service import build_ads_response
 from apps.dashboard.services.ai_service import build_ai_response
+from apps.dashboard.services.settings_service import build_settings_response, apply_settings_update
 from apps.dashboard.models import AITarget, AIPromptList, AIPrompt
 from apps.dashboard.views import (
     _get_ads_overview, _get_keywords_overview,
@@ -315,3 +316,24 @@ class ProjectAIActionView(APIView):
             AIPromptList.objects.filter(site_url=site_id, id=data.get("id")).delete()
             return Response({})
         return Response({"detail": f"Unknown list op: {op}"}, status=400)
+
+
+@method_decorator(login_not_required, name="dispatch")
+class ProjectSettingsView(APIView):
+    """Phase E: GET/PUT /api/projects/<slug>/settings -- no `range` param (Settings has no
+    period concept, matching Backlinks/SiteAudit/Alerts/AI). GET returns the fully-shaped
+    real+honestly-defaulted response from `build_settings_response`; PUT routes a partial
+    body's top-level key(s) to `apply_settings_update`, which returns a clean 400 (never a
+    false-success 200) for `team`/`security` -- the two groups this phase explicitly does not
+    persist (see docs/superpowers/specs/2026-07-13-phaseE-settings-design.md)."""
+
+    def get(self, request, slug):
+        site_id = resolve_project_or_404(slug).site_url
+        return Response(build_settings_response(site_id))
+
+    def put(self, request, slug):
+        site_id = resolve_project_or_404(slug).site_url
+        result = apply_settings_update(site_id, request.data)
+        if "error" in result:
+            return Response({"detail": result["error"]}, status=400)
+        return Response(build_settings_response(site_id))
