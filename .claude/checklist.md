@@ -573,8 +573,38 @@ approved SPA persist user input that must survive a page reload.
       exactly the class of bug the Phase C retrospective's recommendation #1 (a contract/shape
       test) would have caught automatically — concrete validation that recommendation is worth
       acting on for Phase E, not just a nice-to-have.
-- [x] All 226 tests pass (177 baseline + 12 + 11 + 18 + regression tests from 3 review/self-
-      found fixes)
+- [x] All 229 tests pass (177 baseline + 12 + 11 + 18 + regression tests from 3 review/self-
+      found fixes + 3 final-review fixes)
+
+**Final whole-branch review (2026-07-13): Ready to merge — With fixes, both applied.** The
+review's central finding: Task 4's own "complete trace" claim was NOT actually complete —
+independent re-tracing found two MORE SPA-consumption-shape bugs that survived every task
+review, because Task 2/3's test fixtures (and the design spec's own documented contract) were
+built against an *assumed* shape, never diffed against the SPA's actual code:
+1. **Critical** — `_handle_prompts_config` read a top-level `models` key, but the SPA's real
+   "Save settings" button posts `{id, cfg: {models, ...}, listId}`. Every save silently wiped
+   `tracked_models` to `[]` regardless of what the user changed — a real data-loss bug, not
+   just a display glitch. Fixed to read `cfg.models`, and to apply `listId` (previously
+   dropped entirely).
+2. **Important** — `mentionPlatforms`/`llmPlatforms` used key `label`; the SPA reads
+   `pl2.name` everywhere, and treats `llmPlatforms` as the same `{id,name,color}` object
+   shape as `mentionPlatforms`, not a bare id-string list. Would have rendered blank
+   platform toggles/column headers across the default Visibility sub-tab and the Prompts
+   table the instant any prompt existed. Fixed by renaming `label`→`name` and returning full
+   objects for `llmPlatforms` too.
+
+Both fixed immediately with regression tests (commit `ebeab0e`) — including a dedicated
+"save with no changes doesn't wipe tracked_models" test, the exact regression bug #1 caused.
+
+**Process lesson, now doubly confirmed** (first by the Phase C retrospective, now by direct
+evidence): a hand-trace against a *documented* contract is not equivalent to a hand-trace
+against the *actual SPA code* — both bugs above came from building/testing to the spec table
+rather than diffing against `static/spa/index.html`'s real `aiPost(...)` payloads and `pr.*`/
+`d.*` derefs directly. **For Phase E (more first-party CRUD, same bug class likely):
+verifying a request/response contract must mean grepping the SPA's actual payload-building
+and deref code, in both directions (what it sends AND what it reads), not just checking
+against the design doc's contract table** — the design doc can be wrong in exactly the same
+way the code can.
 
 **Scope discipline:** Phase D deliberately does NOT implement `run`/`inspect` (real external LLM
 Responses API / scraper integration), Keyword Explorer (`POST /api/research`) or Prompt Explorer
