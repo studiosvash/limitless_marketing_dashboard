@@ -1064,7 +1064,7 @@
           </span>
           <span>Off-site = sessions attributed to <b style="color:#475569;">Referral</b> + <b style="color:#475569;">Organic Social/Video</b> — the click-throughs your links, PR &amp; social earn.</span>
           <span style="margin-left: auto; display: inline-flex; align-items: center; gap: 6px;">
-            <span style="width:6px;height:6px;border-radius:9999px;background:#10b981;"></span> {{ off.cadence }} · {{ off.tokens }}
+            <span style="width:6px;height:6px;border-radius:9999px;background:#10b981;"></span> {{ off.cadence }}<sc-if value="{{ !off.tokensEmpty }}" hint-placeholder-val="{{ true }}"> · {{ off.tokens }}</sc-if>
           </span>
         </div>
 
@@ -5004,8 +5004,10 @@ class Component extends DCLogic {
       };
       const kpiCard = (label, value, c, note) => ({ label, value, hasChip: c.has, chipLabel: c.label, chipStyle: c.style, note });
       const off = {};
-      off.cadence = data.syncMeta.cadence;
-      off.tokens = data.syncMeta.ga4_tokens_used + ' / ' + this.fmt(data.syncMeta.ga4_tokens_limit) + ' GA4 tokens';
+      const syncSetup = data.syncMeta.state === 'setup';
+      off.cadence = syncSetup ? 'not yet connected' : data.syncMeta.cadence;
+      off.tokens = syncSetup ? '' : (data.syncMeta.ga4_tokens_used + ' / ' + this.fmt(data.syncMeta.ga4_tokens_limit) + ' GA4 tokens');
+      off.tokensEmpty = syncSetup;
       off.rangeLabel = s.range === '7d' ? 'last 7 days' : s.range === '90d' ? 'last 90 days' : 'last 30 days';
       off.kpis = [
         kpiCard('Off-site sessions', this.fmt(t.sessions), chip(pctD(t.sessions, pv.sessions)), 'vs. previous period'),
