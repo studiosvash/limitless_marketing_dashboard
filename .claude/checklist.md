@@ -658,6 +658,33 @@ correcting these was as much the job as building the honest-empty gaps.
       missing key or crash found across all 8 sub-tabs.
 - [x] All 263 tests pass (177 [end of Phase D] + 6 + 18 + 10 + 12 carried baseline growth = 263)
 
+**Final whole-branch review (2026-07-13): Ready to merge — With fixes, applied.** The review
+independently confirmed the Task 2 catch (the two missing `usage`/`sync` keys) was genuinely
+significant and correctly fixed, then found this branch's own "third thing everyone missed":
+Task 4's connector-health honesty fix was **inverted** — it compared `c.status === 'ok'`, but
+the real `SyncLog.status` values are `never/running/success/error` (there is no `'ok'`), so a
+fully-healthy pipeline rendered entirely RED with "Some sources need attention." — worse than
+the hardcoded-green it replaced, and the exact "built against the mock convention, not the real
+backend value" drift this phase's whole process was meant to prevent. Fixed (commit `ea12d69`):
+compare against the real `"success"`/`"error"` values, with `never`/`running` correctly neutral
+(gray, not red — an unsynced connector isn't "broken"). The review's other items were Minor/
+cosmetic (optimistic-local-state not rolled back on a team/security 400 — matches C4/D
+precedent; a `NaN%` budget bar when the honest default cap is 0; dead computed values) and are
+not blocking.
+
+**Live-run finding (2026-07-13, not a code bug):** running the app in the browser surfaced a
+real `500` on `GET .../settings` — `no such table: dashboard_projectsettings`. Root cause: the
+worktree's Django DB was set up (migrate) at branch time, but Task 1 later added migration
+`0004_projectsettings` and `migrate` was never re-run against the live DB. Fixed by running
+`python manage.py migrate`. **This is a required entry in Phase F's deploy runbook** — the
+green test suite never caught it because tests build their schema from scratch every run;
+a live DB must be explicitly migrated after any migration is added. (User confirmed Settings
+loads after the fix.)
+
+**Phase F DB decision (user, 2026-07-13):** production `default` DB will be **PostgreSQL**
+(not the dev SQLite `django_internal.db`). Phase F wires `config/settings` to read Postgres
+creds from env and documents migrate/seed_users/collectstatic against the fresh DB.
+
 **Scope discipline — an unusually large deliberate cut, explained in full in the design spec:**
 Phase E deliberately does NOT build real mutations for Team & Access (invite/role-change/
 remove — the real system has exactly 3 fixed users with no invite concept; faking one would
