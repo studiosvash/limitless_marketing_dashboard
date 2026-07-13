@@ -397,6 +397,40 @@ shows one clean "not connected yet" card instead.
 
 ---
 
+## PHASE C3 — Off-site SEO ✅ (2026-07-13)
+Wires the SPA's Off-site SEO tab (GA4 referral + organic social/video sessions) to a real DRF
+endpoint. Unlike C1/C2, this page's core metrics come from GA4 (already live/credentialed via
+`pipeline/connectors/ga4.py`) rather than a blocked connector — so more of this response is real
+than C1/C2's.
+
+- [x] Off-site query logic in `apps/dashboard/services/offsite_service.py` (Task 1) — raw
+      calculators for `totals`/`prev`/`trend`/`landingPages` (real `SEODaily` aggregation,
+      matching `overview_service`'s existing patterns) plus `build_offsite_response`. Honest
+      `0` (not fabricated) for `totals.revenue`/`totals.referringDomains` (no revenue column /
+      no `sessionSource` dimension in the DB yet); honest true-empty `[]` for `channels`/
+      `referrers`/`social` (require GA4 dimensions/connectors not yet wired); `connectors{}`
+      all honestly `false` (LinkedIn/Meta credentials blank, Reddit/YouTube/X/Instagram
+      connectors don't exist); `syncMeta` honestly `state:"setup"` (no GA4-pull-tracking table).
+- [x] `GET /api/projects/<slug>/offsite?range=7d|30d|90d` — real DB-backed (Task 2), uses the
+      shared `resolve_range_periods` helper (range-aware, unlike C1/C2's no-range endpoints)
+- [x] Test suite: 5 new tests in `apps/api/tests/test_offsite.py` — real-data period isolation
+      (current vs. previous, not summed), `range=7d`/`90d` boundary-shift proofs (seeded
+      out-of-window rows asserted excluded), 404 unknown slug, 401 unauthenticated
+- [x] All 162 tests pass (157 baseline + 5 new)
+
+**SPA fidelity fix, scoped precisely (2026-07-13, commit 1774d90):** unlike C1/C2, this tab does
+**not** need a whole-tab `state:"setup"` guard — `totals`/`prev`/`trend`/`landingPages` are
+always real objects/arrays and `channels`/`referrers`/`social` are real (possibly-empty)
+arrays, so every `.map`/`.slice`/`.find`/`Math.max.apply` call in the SPA's `if (tab ===
+'offsite')` block already handles empty data safely via its own fallbacks. The one real gap:
+`data.syncMeta` is genuinely `state:"setup"`, and `off.cadence`/`off.tokens` read off it with
+no fallback, rendering the literal string `"undefined / — GA4 tokens"` in the source banner.
+Fixed with a minimal 2-line JS fallback (`"not yet connected"` for cadence, hide the token
+count) plus a small template guard to avoid a trailing `"· "` separator — not a tab-wide
+rebuild, since the actual verified risk here was much narrower than C1/C2's.
+
+---
+
 ## PHASE 7 — Deployment (VPS)
 - [ ] Ubuntu 22.04, Python 3.11+, venv, requirements, `.env` on server
 - [ ] `collectstatic` · `migrate` · `seed_users`
