@@ -26,6 +26,8 @@ from apps.dashboard.services.backlinks_service import build_backlinks_response
 from apps.dashboard.services.site_audit_service import build_site_audit_response
 from apps.dashboard.services.offsite_service import build_offsite_response
 from apps.dashboard.services.ads_service import build_ads_response
+from apps.dashboard.services.ai_service import build_ai_response
+from apps.dashboard.models import AITarget, AIPromptList, AIPrompt
 from apps.dashboard.views import (
     _get_ads_overview, _get_keywords_overview,
 )
@@ -204,3 +206,93 @@ class ProjectAdsView(APIView):
     def get(self, request, slug):
         site_id, curr_start, curr_end, prev_start, prev_end = resolve_range_periods(request, slug)
         return Response(build_ads_response(site_id, curr_start, curr_end, prev_start, prev_end))
+
+
+@method_decorator(login_not_required, name="dispatch")
+class ProjectAIView(APIView):
+    """Phase D: GET /api/projects/<slug>/ai -- no `range` param, unlike Ads/Offsite/Positions
+    (AI Optimization's real data -- targets/lists/prompts/aiKeywords -- isn't period-scoped)."""
+
+    def get(self, request, slug):
+        site_id = resolve_project_or_404(slug).site_url
+        return Response(build_ai_response(site_id))
+
+
+@method_decorator(login_not_required, name="dispatch")
+class ProjectAIActionView(APIView):
+    """Phase D: POST /api/projects/<slug>/ai/<action> -- dispatches to one of 6 real
+    first-party mutation handlers by `action` path segment. Every handler persists to our own
+    DB (never an external API) and returns a minimal ack; the SPA always re-fetches
+    ProjectAIView after any mutation, so no handler needs to echo authoritative state back.
+    `run`/`inspect` (and any other unmapped action) fall through to a clean 400 -- those call
+    external LLM Responses/scraper APIs this codebase has no connector for (explicitly out of
+    scope this phase), and a clear 4xx is preferable to a 404 or an unhandled crash."""
+
+    def post(self, request, slug, action):
+        site_id = resolve_project_or_404(slug).site_url
+        handler = getattr(self, f"_handle_{action.replace('-', '_')}", None)
+        if handler is None:
+            return Response({"detail": f"Unknown or not-yet-available action: {action}"}, status=400)
+        return handler(request, site_id)
+
+    def _handle_setup(self, request, site_id):
+        data = request.data
+        AITarget.objects.update_or_create(
+            site_url=site_id,
+            defaults={
+                "brand": data.get("brand", ""),
+                "aliases": data.get("aliases", []),
+                "competitors": data.get("competitors", []),
+                "setup_done": True,
+            },
+        )
+        for text in data.get("prompts", []):
+            if text and text.strip():
+                AIPrompt.objects.create(site_url=site_id, text=text.strip())
+        return Response({})
+
+    def _handle_targets(self, request, site_id):
+        data = request.data
+        AITarget.objects.update_or_create(
+            site_url=site_id,
+            defaults={
+                "brand": data.get("brand", ""),
+                "aliases": data.get("aliases", []),
+                "competitors": data.get("competitors", []),
+            },
+        )
+        return Response({})
+
+    def _handle_prompts(self, request, site_id):
+        data = request.data
+        list_id = data.get("listId")
+        texts = [t.strip() for t in data.get("texts", []) if t and t.strip()]
+        created = [AIPrompt(site_url=site_id, list_id=list_id, text=t) for t in texts]
+        AIPrompt.objects.bulk_create(created)
+        return Response({"added": len(created)})
+
+    def _handle_prompts_remove(self, request, site_id):
+        AIPrompt.objects.filter(site_url=site_id, id=request.data.get("id")).delete()
+        return Response({})
+
+    def _handle_prompts_config(self, request, site_id):
+        AIPrompt.objects.filter(site_url=site_id, id=request.data.get("id")).update(
+            tracked_models=request.data.get("models", [])
+        )
+        return Response({})
+
+    def _handle_lists(self, request, site_id):
+        data = request.data
+        op = data.get("op")
+        if op == "create":
+            obj = AIPromptList.objects.create(site_url=site_id, name=data.get("name", "Untitled"))
+            return Response({"id": obj.id})
+        if op == "rename":
+            AIPromptList.objects.filter(site_url=site_id, id=data.get("id")).update(
+                name=data.get("name", "")
+            )
+            return Response({})
+        if op == "delete":
+            AIPromptList.objects.filter(site_url=site_id, id=data.get("id")).delete()
+            return Response({})
+        return Response({"detail": f"Unknown list op: {op}"}, status=400)
