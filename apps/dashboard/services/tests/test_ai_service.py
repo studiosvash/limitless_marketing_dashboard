@@ -32,14 +32,21 @@ class QueryAiKeywordsRawTests(TestCase):
     def setUp(self):
         _new_analytics_db(self)
 
-        self.full_trend = list(range(10, 130, 10))  # 12 elements: 10..120
+        # Real shape (pipeline/connectors/dataforseo_ai_keywords.py::_normalize): a list of
+        # {year, month, ai_search_volume} objects, NOT a flat list of numbers -- and
+        # deliberately out of chronological order here, to prove the reshape sorts by
+        # (year, month) rather than trusting input order. Aug 2025 (10) .. Jul 2026 (120).
+        months = [(2025, m, (m - 7) * 10) for m in range(8, 13)] + [(2026, m, (m + 5) * 10) for m in range(1, 8)]
+        self.full_trend = [{"year": y, "month": m, "ai_search_volume": v} for (y, m, v) in months]
+        self.expected_flat_trend = [v for (_, _, v) in months]  # already chronological
+        shuffled = self.full_trend[3:] + self.full_trend[:3]  # rotate, still all present
         with get_session() as session:
             session.add_all([
                 # Latest-date rows -- both must be included.
                 AIKeywordData(
                     site_id=SITE_ID, date=date(2026, 7, 10), keyword="best crm software",
                     ai_search_volume=120, prev_ai_search_volume=100, search_volume=400,
-                    intent="commercial", trend=json.dumps(self.full_trend),
+                    intent="commercial", trend=json.dumps(shuffled),
                 ),
                 AIKeywordData(
                     site_id=SITE_ID, date=date(2026, 7, 10), keyword="what is agile",
@@ -73,7 +80,9 @@ class QueryAiKeywordsRawTests(TestCase):
         self.assertEqual(row["gVolume"], 400)
         self.assertEqual(row["ratio"], round(120 / 400 * 100))
         self.assertEqual(row["intent"], "commercial")
-        self.assertEqual(row["trend"], self.full_trend)
+        # Proves the reshape flattens {year,month,ai_search_volume} objects into a plain
+        # number list AND sorts chronologically, even though the seeded JSON was shuffled.
+        self.assertEqual(row["trend"], self.expected_flat_trend)
         self.assertEqual(len(row["trend"]), 12)
 
     def test_null_trend_row_gets_real_12_zero_list(self):
@@ -82,7 +91,9 @@ class QueryAiKeywordsRawTests(TestCase):
         self.assertEqual(row["trend"], [0] * 12)
         self.assertIsNotNone(row["trend"])
         self.assertEqual(row["gVolume"], 0)
-        self.assertEqual(row["ratio"], 0)  # divide-by-zero-safe
+        # None (not a fabricated 0%) -- there's no Google-volume denominator to compare
+        # against, which is a different honest state than "0% AI share."
+        self.assertIsNone(row["ratio"])
         self.assertEqual(row["intent"], "")
 
     def test_mentions_and_gap_are_always_honest_zero_false(self):
@@ -91,6 +102,46 @@ class QueryAiKeywordsRawTests(TestCase):
         for row in rows:
             self.assertEqual(row["mentions"], 0)
             self.assertIs(row["gap"], False)
+
+    def test_excludes_other_sites_data(self):
+        from apps.dashboard.services.ai_service import query_ai_keywords_raw
+        with get_session() as session:
+            session.add(AIKeywordData(
+                site_id="https://other-project.com", date=date(2026, 7, 10),
+                keyword="other project keyword", ai_search_volume=999, search_volume=999,
+                intent=None, trend=None,
+            ))
+        rows = query_ai_keywords_raw(SITE_ID)
+        self.assertNotIn("other project keyword", {r["kw"] for r in rows})
+        other_rows = query_ai_keywords_raw("https://other-project.com")
+        self.assertEqual({r["kw"] for r in other_rows}, {"other project keyword"})
+
+
+class QueryAiKeywordsRawShortTrendTests(TestCase):
+    """A trend shorter than 12 months (a keyword newly tracked mid-year) must pad with
+    zeros at the START, not the end -- the SPA treats trend[11] as the current month, so
+    end-padding would push real (older) data forward and fabricate zero as "most recent"."""
+
+    def setUp(self):
+        _new_analytics_db(self)
+        with get_session() as session:
+            session.add(AIKeywordData(
+                site_id=SITE_ID, date=date(2026, 7, 10), keyword="new keyword",
+                ai_search_volume=90, search_volume=None, intent=None,
+                trend=json.dumps([
+                    {"year": 2026, "month": 6, "ai_search_volume": 80},
+                    {"year": 2026, "month": 7, "ai_search_volume": 90},
+                ]),
+            ))
+
+    def test_short_trend_is_padded_at_start(self):
+        from apps.dashboard.services.ai_service import query_ai_keywords_raw
+        rows = query_ai_keywords_raw(SITE_ID)
+        self.assertEqual(len(rows), 1)
+        trend = rows[0]["trend"]
+        self.assertEqual(len(trend), 12)
+        self.assertEqual(trend[-2:], [80, 90])
+        self.assertEqual(trend[:10], [0] * 10)
 
 
 class QueryAiKeywordsRawEmptyDbTests(TestCase):
@@ -148,6 +199,9 @@ class BuildAiResponseListsAndPromptsTests(TestCase):
         self.prompt_no_list = AIPrompt.objects.create(
             site_url=SITE_ID, text="best widget brands 2026",
         )
+        # Different project's data -- must never leak into this site's response.
+        AIPromptList.objects.create(site_url="https://other-project.com", name="Other project list")
+        AIPrompt.objects.create(site_url="https://other-project.com", text="other project prompt")
 
     def test_lists_appear_in_response(self):
         from apps.dashboard.services.ai_service import build_ai_response
@@ -176,6 +230,12 @@ class BuildAiResponseListsAndPromptsTests(TestCase):
         self.assertEqual(no_list["models"], [])
         self.assertEqual(no_list["results"], [])
 
+    def test_excludes_other_sites_lists_and_prompts(self):
+        from apps.dashboard.services.ai_service import build_ai_response
+        body = build_ai_response(SITE_ID)
+        self.assertNotIn("Other project list", [l["name"] for l in body["lists"]])
+        self.assertNotIn("other project prompt", [p["text"] for p in body["prompts"]])
+
 
 class BuildAiResponseHonestEmptyFieldsTests(TestCase):
     """Even with real data seeded on both DBs (target/prompts/keywords), everything requiring
@@ -191,7 +251,7 @@ class BuildAiResponseHonestEmptyFieldsTests(TestCase):
             session.add(AIKeywordData(
                 site_id=SITE_ID, date=date(2026, 7, 10), keyword="best crm software",
                 ai_search_volume=120, search_volume=400, intent="commercial",
-                trend=json.dumps(list(range(10, 130, 10))),
+                trend=json.dumps([{"year": 2026, "month": m, "ai_search_volume": m * 10} for m in range(1, 13)]),
             ))
 
     def test_honest_empty_zero_fields_exact_equality(self):

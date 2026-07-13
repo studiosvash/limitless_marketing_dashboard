@@ -48,16 +48,26 @@ def query_ai_keywords_raw(site_id: str) -> list[dict]:
         ai_vol = r.ai_search_volume or 0
         g_vol = r.search_volume or 0
         try:
-            trend = json.loads(r.trend) if r.trend else []
+            monthly = json.loads(r.trend) if r.trend else []
         except (ValueError, TypeError):
-            trend = []
+            monthly = []
+        # trend is stored as a list of {year, month, ai_search_volume} objects (see
+        # pipeline/connectors/dataforseo_ai_keywords.py::_normalize), not a flat list of
+        # numbers -- flatten + sort chronologically before handing it to the SPA's sparkline,
+        # which expects trend[11] to be the most recent month.
+        ordered = sorted(monthly, key=lambda m: (m.get("year") or 0, m.get("month") or 0))
+        trend = [int(m["ai_search_volume"]) if m.get("ai_search_volume") is not None else 0 for m in ordered]
         if len(trend) < 12:
-            trend = trend + [0] * (12 - len(trend))
+            # Pad at the START with zeros so the most-recent real month stays last (index 11).
+            trend = [0] * (12 - len(trend)) + trend
         out.append({
             "kw": r.keyword,
             "aiVolume": ai_vol,
             "gVolume": g_vol,
-            "ratio": round(ai_vol / g_vol * 100) if g_vol else 0,
+            # None (not a fabricated 0%) when there's no Google-volume denominator to compare
+            # against -- the connector doesn't fetch search_volume yet, so g_vol==0 means "no
+            # signal," not "0% AI share." A flat 0% would misleadingly read as "no AI interest."
+            "ratio": round(ai_vol / g_vol * 100) if g_vol else None,
             "intent": r.intent or "",
             "trend": trend[-12:],
             "mentions": 0,   # honest -- no LLM Mentions data exists
