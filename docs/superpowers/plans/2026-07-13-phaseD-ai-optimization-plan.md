@@ -327,7 +327,24 @@ Report DONE with commit hash and final full-suite test count after this task.
 
 ## Task 4: SPA fidelity fix — crash guard + remove the false "Live" claim
 
-**Two independent, narrow fixes in `static/spa/index.html`:**
+**Three independent, narrow fixes in `static/spa/index.html`** (a third was added after Task 2's
+review found `query_ai_keywords_raw` now honestly returns `ratio: None` — not a fabricated `0%`
+— when there's no Google-volume denominator to compare against; see `ai_service.py`'s current
+code and commit `fbed14e` for why):
+
+0. **`aiKeywords[]` row `ratio` null-guard** (`static/spa/index.html:5894-5895`, inside the
+   `aiv.kwRows = rows.map(...)` block): `ratioLabel: r.ratio + '%'` renders the literal string
+   `"null%"` when `r.ratio` is `None` (JS `null`); `ratioStyle`'s `r.ratio >= 30` comparison is
+   safe (evaluates to `false` for `null`, no crash) but the label itself is wrong. Fix:
+   ```js
+   ratioLabel: r.ratio == null ? '—' : r.ratio + '%',
+   ```
+   Verify the segment-filter counts (`heavy: allRows.filter(r => r.ratio >= 30).length`, line
+   ~5824) and the KPI computation (`allRows.filter(r => r.ratio >= 30).length`, line ~5817)
+   still behave sensibly with `ratio: null` rows mixed in — `null >= 30` is `false`, so these
+   rows are correctly excluded from "AI-heavy," not crashed on. No other fix needed there.
+
+**Two more independent, narrow fixes in `static/spa/index.html`:**
 
 1. **Crash fix** (line ~5627, verify exact line at implementation — search `d.trend[0].date`):
    `aiv.trendFrom = d.trend[0].date; aiv.trendTo = d.trend[d.trend.length - 1].date;` crashes
