@@ -13,11 +13,14 @@ from pipeline.utils.db_connection import get_session
 
 logger = logging.getLogger(__name__)
 
+# Final-review finding: the SPA reads pl2.name (not .label) off both mentionPlatforms and
+# llmPlatforms, and treats llmPlatforms as the SAME {id,name,color} object shape as
+# mentionPlatforms (pl2.id/.name/.color all dereferenced against it) -- not a bare id string.
 MENTION_PLATFORMS = [
-    {"id": "chatgpt", "label": "ChatGPT", "color": "#10a37f"},
-    {"id": "claude", "label": "Claude", "color": "#d97757"},
-    {"id": "gemini", "label": "Gemini", "color": "#4285f4"},
-    {"id": "perplexity", "label": "Perplexity", "color": "#20808d"},
+    {"id": "chatgpt", "name": "ChatGPT", "color": "#10a37f"},
+    {"id": "claude", "name": "Claude", "color": "#d97757"},
+    {"id": "gemini", "name": "Gemini", "color": "#4285f4"},
+    {"id": "perplexity", "name": "Perplexity", "color": "#20808d"},
 ]
 
 
@@ -123,7 +126,10 @@ def build_ai_response(site_id: str) -> dict:
         "costs": {"model": None, "inspect": None},
         "next_run": None,
         "mentionPlatforms": MENTION_PLATFORMS,
-        "llmPlatforms": [p["id"] for p in MENTION_PLATFORMS],
+        # Same {id,name,color} object shape as mentionPlatforms -- the SPA uses llmPlatforms
+        # (aliased "llm") for the Prompts table's model-column headers/dots/coverage counts
+        # via pl2.name/.id/.color, not a bare id string.
+        "llmPlatforms": MENTION_PLATFORMS,
         "sov": {"you": 0, "delta": 0, "rows": []},
         "kpis": {"mentions": 0, "impressions": 0, "cited_pages": 0, "prompt_coverage": {"cited": 0, "total": len(prompts)}},
         "trend": [],

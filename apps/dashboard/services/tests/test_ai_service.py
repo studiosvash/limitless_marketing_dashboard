@@ -242,6 +242,26 @@ class BuildAiResponseListsAndPromptsTests(TestCase):
         self.assertNotIn("other project prompt", [p["text"] for p in body["prompts"]])
 
 
+class BuildAiResponsePlatformShapeTests(TestCase):
+    """Final-review finding: the SPA reads pl2.name/.id/.color off BOTH mentionPlatforms and
+    llmPlatforms -- llmPlatforms must be the same {id,name,color} object shape, not a bare
+    id string, or platform labels/dots render blank across every AI Optimization sub-tab."""
+
+    def setUp(self):
+        _new_analytics_db(self)
+
+    def test_mention_and_llm_platforms_are_full_objects_with_name_key(self):
+        from apps.dashboard.services.ai_service import build_ai_response
+        body = build_ai_response(SITE_ID)
+        for platforms in (body["mentionPlatforms"], body["llmPlatforms"]):
+            self.assertTrue(len(platforms) > 0)
+            for p in platforms:
+                self.assertIn("id", p)
+                self.assertIn("name", p)
+                self.assertIn("color", p)
+                self.assertNotIn("label", p)
+
+
 class BuildAiResponseHonestEmptyFieldsTests(TestCase):
     """Even with real data seeded on both DBs (target/prompts/keywords), everything requiring
     the nonexistent LLM Mentions/Responses/scraper infra must stay exactly honest empty/zero --

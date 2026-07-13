@@ -276,11 +276,21 @@ class ProjectAIActionView(APIView):
         return Response({})
 
     def _handle_prompts_config(self, request, site_id):
-        # update() returning 0 means the id didn't match this site's prompts (unknown id, or
-        # cross-project) -- a silent 200 here would tell the SPA "saved" when nothing changed,
-        # a false-success signal the same class as this project's "no fake data" findings.
+        # Final-review finding: the SPA's actual "Save settings" call posts
+        # {id, cfg: {models, webSearch, country, city, cadence}, listId} -- NOT a top-level
+        # "models" key. Reading request.data.get("models", []) silently wiped
+        # tracked_models to [] on every save. cadence/country/city/webSearch are accepted
+        # but not persisted -- AIPrompt has no backing field for them yet (an honestly
+        # scoped-out gap, not a silent drop: see design spec / checklist), so listId
+        # (moving a prompt to another list) is the other real, persistable field from
+        # this payload and IS applied.
+        cfg = request.data.get("cfg", {})
+        update_fields = {"tracked_models": cfg.get("models", [])}
+        list_id = request.data.get("listId")
+        if list_id is not None:
+            update_fields["list_id"] = list_id
         updated = AIPrompt.objects.filter(site_url=site_id, id=request.data.get("id")).update(
-            tracked_models=request.data.get("models", [])
+            **update_fields
         )
         if not updated:
             return Response({"detail": "Prompt not found"}, status=404)

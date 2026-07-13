@@ -199,22 +199,57 @@ class AIPromptsConfigActionTests(APITestCase):
         self.client_auth = _bootstrap_ai_test_env(self)
 
     def test_updates_tracked_models(self):
+        # Body shape here is the REAL one the SPA's "Save settings" button sends
+        # ({id, cfg: {models, ...}, listId}) -- a final-review finding caught that an
+        # earlier version of this test used a top-level "models" key that the SPA never
+        # actually sends, masking a silent-data-loss bug (see the handler's own comment).
         prompt = AIPrompt.objects.create(site_url=SITE_URL, text="best iv therapy")
         resp = self.client_auth.post(
             "/api/projects/fusehealth/ai/prompts-config",
-            {"id": prompt.id, "models": ["chatgpt", "claude"]},
+            {"id": prompt.id, "cfg": {"models": ["chatgpt", "claude"], "cadence": "weekly",
+                                       "country": "US", "city": "", "webSearch": False},
+             "listId": None},
             format="json",
         )
         self.assertEqual(resp.status_code, 200)
         prompt.refresh_from_db()
         self.assertEqual(prompt.tracked_models, ["chatgpt", "claude"])
 
+    def test_a_save_with_no_model_changes_does_not_wipe_tracked_models(self):
+        # The exact regression this bug caused: opening "Settings" and saving without
+        # touching models used to wipe tracked_models to [] because the handler read a
+        # top-level "models" key the real request body never had.
+        prompt = AIPrompt.objects.create(site_url=SITE_URL, text="best iv therapy",
+                                          tracked_models=["chatgpt"])
+        resp = self.client_auth.post(
+            "/api/projects/fusehealth/ai/prompts-config",
+            {"id": prompt.id, "cfg": {"models": ["chatgpt"], "cadence": "weekly",
+                                       "country": "", "city": "", "webSearch": False},
+             "listId": None},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 200)
+        prompt.refresh_from_db()
+        self.assertEqual(prompt.tracked_models, ["chatgpt"])
+
+    def test_config_save_moves_prompt_to_a_new_list(self):
+        plist = AIPromptList.objects.create(site_url=SITE_URL, name="New List")
+        prompt = AIPrompt.objects.create(site_url=SITE_URL, text="best iv therapy")
+        resp = self.client_auth.post(
+            "/api/projects/fusehealth/ai/prompts-config",
+            {"id": prompt.id, "cfg": {"models": []}, "listId": plist.id},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 200)
+        prompt.refresh_from_db()
+        self.assertEqual(prompt.list_id, plist.id)
+
     def test_unknown_id_is_a_clean_404_not_a_false_success(self):
         # Final-review finding: a silent 200 here would tell the SPA "saved" for a config
         # change that never happened -- a false-success signal, not just a no-op.
         resp = self.client_auth.post(
             "/api/projects/fusehealth/ai/prompts-config",
-            {"id": 999999, "models": ["chatgpt"]},
+            {"id": 999999, "cfg": {"models": ["chatgpt"]}},
             format="json",
         )
         self.assertEqual(resp.status_code, 404)
@@ -223,7 +258,7 @@ class AIPromptsConfigActionTests(APITestCase):
         other_prompt = AIPrompt.objects.create(site_url="https://other-project.com", text="not yours")
         resp = self.client_auth.post(
             "/api/projects/fusehealth/ai/prompts-config",
-            {"id": other_prompt.id, "models": ["chatgpt"]},
+            {"id": other_prompt.id, "cfg": {"models": ["chatgpt"]}},
             format="json",
         )
         self.assertEqual(resp.status_code, 404)
