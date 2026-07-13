@@ -1132,12 +1132,12 @@
               <span style="width: 30px; height: 30px; border-radius: 7px; background: #0a66c2; display: flex; align-items: center; justify-content: center; color: white; font-weight: 700; font-size: 15px; font-family: Georgia, serif;">in</span>
               <div>
                 <h2 style="font-size: 15px; font-weight: 600; margin: 0;">LinkedIn</h2>
-                <p style="font-size: 11px; color: #94a3b8; margin: 2px 0 0;">Connector live · impressions + click-throughs</p>
+                <p style="font-size: 11px; color: #94a3b8; margin: 2px 0 0;">{{ off.li.subtitle }}</p>
               </div>
-              <span style="margin-left: auto; font-size: 10px; font-weight: 600; color: #059669; background: #ecfdf5; padding: 3px 8px; border-radius: 9999px;">Connected</span>
+              <span style="{{ off.li.badgeStyle }}">{{ off.li.badgeLabel }}</span>
             </div>
             <div style="padding: 18px 20px; display: grid; grid-template-columns: 1fr 1fr; gap: 18px 16px;">
-              <div><div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8;">Impressions</div><div style="font-size: 22px; font-weight: 700; color: #0f172a; margin-top: 4px;">{{ off.li.impressions }}</div><div style="font-size:11px;color:#cbd5e1;margin-top:2px;">from LinkedIn API</div></div>
+              <div><div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8;">Impressions</div><div style="font-size: 22px; font-weight: 700; color: #0f172a; margin-top: 4px;">{{ off.li.impressions }}</div><div style="font-size:11px;color:#cbd5e1;margin-top:2px;">{{ off.li.imprCaption }}</div></div>
               <div><div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8;">Click-throughs</div><div style="font-size: 22px; font-weight: 700; color: #0f172a; margin-top: 4px;">{{ off.li.sessions }}</div><div style="font-size:11px;color:#cbd5e1;margin-top:2px;">GA4 sessions</div></div>
               <div><div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8;">CTR</div><div style="font-size: 22px; font-weight: 700; color: #0a66c2; margin-top: 4px;">{{ off.li.ctr }}</div><div style="font-size:11px;color:#cbd5e1;margin-top:2px;">impr → session</div></div>
               <div><div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8;">Key events</div><div style="font-size: 22px; font-weight: 700; color: #0f172a; margin-top: 4px;">{{ off.li.keyEvents }}</div><div style="font-size:11px;color:#cbd5e1;margin-top:2px;">{{ off.li.revenue }} revenue</div></div>
@@ -5050,10 +5050,18 @@ class Component extends DCLogic {
 
       /* LinkedIn spotlight */
       const li = data.social.find(x => x.platform === 'LinkedIn') || { impressions: 0, sessions: 0, keyEvents: 0, revenue: 0 };
+      const liConnected = !!(data.connectors && data.connectors.linkedin);
       off.li = {
         impressions: this.fmt(li.impressions || 0), sessions: this.fmt(li.sessions),
         ctr: li.impressions ? +(li.sessions / li.impressions * 100).toFixed(1) + '%' : '—',
-        keyEvents: this.fmt(Math.round(li.keyEvents)), revenue: this.money(li.revenue)
+        keyEvents: this.fmt(Math.round(li.keyEvents)), revenue: this.money(li.revenue),
+        connected: liConnected,
+        badgeLabel: liConnected ? 'Connected' : 'Not connected',
+        badgeStyle: liConnected
+          ? { marginLeft: 'auto', fontSize: '10px', fontWeight: 600, color: '#059669', background: '#ecfdf5', padding: '3px 8px', borderRadius: '9999px' }
+          : { marginLeft: 'auto', fontSize: '10px', fontWeight: 600, color: '#64748b', background: '#f1f5f9', padding: '3px 8px', borderRadius: '9999px' },
+        subtitle: liConnected ? 'Connector live · impressions + click-throughs' : 'Connector not set up yet',
+        imprCaption: liConnected ? 'from LinkedIn API' : 'not connected'
       };
 
       /* social table */
