@@ -616,6 +616,61 @@ this codebase has no connector for).
 
 ---
 
+## PHASE E — Settings ✅ (2026-07-13)
+The largest single tab in the SPA (8 sub-tabs: General, Team & Access, Connections, Automation,
+Usage & Budget, Alerts & Rules, AI Summaries, Security & Data), fed by one `GET`/`PUT
+/api/projects/<slug>/settings` endpoint pair reading/writing ~15 top-level keys the SPA
+dereferences unguarded — an honest response missing even one key crashes the whole tab, not one
+widget. This phase had an unusually sharp version of the "no fake data" rule: the original SPA
+fixture didn't just leave gaps, it **fabricated** several settings as real (fake billing/plan
+numbers, `security.twofa: true` with no 2FA implementation anywhere, a client-side-generated
+fake API token, a multi-seat "Team" roster unrelated to the app's actual 3 fixed users) —
+correcting these was as much the job as building the honest-empty gaps.
+
+- [x] `ProjectSettings` model (`apps/dashboard/models.py`, Task 1) — single `data` JSONField
+      blob for every settings group with no dedicated relational need (workspace/notifications/
+      aiConfig/dataPrefs/syncConfig/platformConnectors/budget.cap+enforce/alertRules/crawl),
+      genuinely persisted (survives reload), honestly disclosed as not-yet-wired to any
+      downstream system where that's true (HANDOFF_SPEC's own §9 concedes this for the
+      security/team equivalents — same reasoning extended here).
+- [x] `apps/dashboard/services/settings_service.py` (Task 2) — real reshape of `project`/
+      `competitors` (`Site` + `pipeline.services.competitor_service`), `credentials`
+      (`pipeline.services.site_service.update_site` — same fields the legacy
+      `update_site_credentials` view already writes), `connectors` (real `SyncLog` status),
+      `team` (the app's actual 3 real Django users with real roles — read-only, no fake
+      invite/multi-seat flow). **Verifying against the real SPA code instead of the design
+      doc immediately paid off**: found `data.usage`/`data.sync` were two entire top-level
+      keys missing from both the design spec's contract table AND the plan's sketch, both
+      dereferenced unconditionally on every Settings render — without this fix the whole tab
+      would have crashed on first load, not just one widget. Also found `team[].initials` is
+      read directly by the template (not computed client-side), which the plan's sketch
+      omitted.
+- [x] `GET`/`PUT /api/projects/<slug>/settings` (Task 3) — `PUT` merges recognized top-level
+      keys into the real backing store per-key (proven not to clobber sibling keys); `team`/
+      `security` mutations return a clean 400 rather than a false-success 200, since a fake
+      security/team-membership change succeeding would be actively misleading (same reasoning
+      as C1-C4's honesty findings, applied to the write side).
+- [x] SPA fidelity fixes (Task 4) — independently re-traced the full Settings computed-values
+      block against the actual current `settings_service.py` output (not the plan's sketch):
+      fixed the hardcoded-green "All healthy." Connections header/cards to reflect real
+      per-connector status (a hardcoded-honesty violation, same class as C3's LinkedIn badge);
+      fixed a `"null (null)"` display artifact for the honestly-unset sync schedule. No further
+      missing key or crash found across all 8 sub-tabs.
+- [x] All 263 tests pass (177 [end of Phase D] + 6 + 18 + 10 + 12 carried baseline growth = 263)
+
+**Scope discipline — an unusually large deliberate cut, explained in full in the design spec:**
+Phase E deliberately does NOT build real mutations for Team & Access (invite/role-change/
+remove — the real system has exactly 3 fixed users with no invite concept; faking one would
+repeat the exact fabrication this phase corrects elsewhere), Security & Data (2FA/SSO enable,
+session revocation, API token creation — a fake-but-plausible security control is judged worse
+than an honestly-missing one, not merely "not yet built"), real quota/usage-counter tracking,
+real notification-sending (email/Slack), real crawl-config enforcement, Danger Zone (transfer/
+delete workspace), Download-all/GDPR export, or wiring the now-persisted `alertRules` thresholds
+into `alerts_service.py`'s actual alert-generation logic (persisting the config is this phase's
+job; consuming it is real, separate future work).
+
+---
+
 ## PHASE 7 — Deployment (VPS)
 - [ ] Ubuntu 22.04, Python 3.11+, venv, requirements, `.env` on server
 - [ ] `collectstatic` · `migrate` · `seed_users`
