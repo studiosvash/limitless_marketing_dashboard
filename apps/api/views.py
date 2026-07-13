@@ -25,6 +25,7 @@ from apps.dashboard.services.alerts_service import build_alerts_response
 from apps.dashboard.services.backlinks_service import build_backlinks_response
 from apps.dashboard.services.site_audit_service import build_site_audit_response
 from apps.dashboard.services.offsite_service import build_offsite_response
+from apps.dashboard.services.ads_service import build_ads_response
 from apps.dashboard.views import (
     _get_ads_overview, _get_keywords_overview,
 )
@@ -196,3 +197,10 @@ class ProjectOffsiteView(APIView):
     def get(self, request, slug):
         site_id, curr_start, curr_end, prev_start, prev_end = resolve_range_periods(request, slug)
         return Response(build_offsite_response(site_id, curr_start, curr_end, prev_start, prev_end))
+
+
+@method_decorator(login_not_required, name="dispatch")
+class ProjectAdsView(APIView):
+    def get(self, request, slug):
+        site_id, curr_start, curr_end, prev_start, prev_end = resolve_range_periods(request, slug)
+        return Response(build_ads_response(site_id, curr_start, curr_end, prev_start, prev_end))
