@@ -428,9 +428,14 @@ class AIKeywordData(Base):
 
 class SavedKeyword(Base):
     """
-    Ad-hoc research keywords a user explicitly bookmarked from the Keyword Explorer.
-    Intentionally separate from keyword_rankings (the tracking pipeline) — this is a
-    research list, never synced or position-tracked. Site-scoped, shared by the team.
+    The site's TRACKED keyword list — keywords an admin explicitly bookmarked from the
+    Keyword Explorer ("Track"). This is the dashboard-managed source of truth that the paid
+    per-keyword connectors read (SERP position tracking, AI keyword volume) via
+    pipeline.utils.keywords.load_tracked_keywords, so the admin controls the tracking list —
+    and therefore the API spend — entirely from the UI, with no file to edit.
+
+    Distinct from keyword_rankings, which is the *synced result* data (what the site actually
+    ranks for, discovered from GSC). Site-scoped, shared by the team.
     """
     __tablename__ = "saved_keywords"
 

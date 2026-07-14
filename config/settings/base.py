@@ -134,7 +134,9 @@ AUTH_PASSWORD_VALIDATORS = [
 
 # Where unauthenticated users get sent, and where login lands them.
 LOGIN_URL = "login"
-LOGIN_REDIRECT_URL = "dashboard:overview"
+# After login, land on the SPA at the site root. (Was "dashboard:overview" -- the old
+# template dashboard, which no longer exists.)
+LOGIN_REDIRECT_URL = "spa"
 LOGOUT_REDIRECT_URL = "login"
 
 
