@@ -29,7 +29,7 @@ from apps.dashboard.services.ads_service import build_ads_response
 from apps.dashboard.services.ai_service import build_ai_response
 from apps.dashboard.services.settings_service import build_settings_response, apply_settings_update
 from apps.dashboard.models import AITarget, AIPromptList, AIPrompt
-from apps.dashboard.views import (
+from apps.dashboard.services.shared_queries import (
     _get_ads_overview, _get_keywords_overview,
 )
 from apps.dashboard.services.sync_api_service import (

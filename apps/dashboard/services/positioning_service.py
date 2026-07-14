@@ -13,7 +13,9 @@ def build_positions_response(site_id: str, curr_start: date, curr_end: date,
                               prev_start: date, prev_end: date) -> dict:
     """HANDOFF_SPEC.md `positions` view shape — verified against the real fixture's
     positionsView() in Limitless marketing dashboard2/app/api.js."""
-    from apps.dashboard.views import _get_ranking_distribution, _get_position_changes, _get_competitor_grid
+    from apps.dashboard.services.shared_queries import (
+        _get_ranking_distribution, _get_position_changes, _get_competitor_grid,
+    )
 
     dist = _get_ranking_distribution(site_id, curr_start, curr_end)
     changes = _get_position_changes(site_id, curr_start, curr_end, prev_start, prev_end)
