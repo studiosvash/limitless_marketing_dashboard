@@ -19,4 +19,10 @@ urlpatterns = [
     path("projects/<slug:slug>/ai", views.ProjectAIView.as_view(), name="project-ai"),
     path("projects/<slug:slug>/ai/<str:action>", views.ProjectAIActionView.as_view(), name="project-ai-action"),
     path("projects/<slug:slug>/settings", views.ProjectSettingsView.as_view(), name="project-settings"),
+    # Refresh / Sync
+    path("projects/<slug:slug>/sync", views.ProjectSyncView.as_view(), name="project-sync"),
+    path("tasks/<int:task_id>", views.TaskStatusView.as_view(), name="task-status"),
+    # Keyword / Prompt Explorer (project id in body)
+    path("research", views.KeywordResearchView.as_view(), name="keyword-research"),
+    path("prompt-research", views.PromptResearchView.as_view(), name="prompt-research"),
 ]

@@ -32,6 +32,12 @@ from apps.dashboard.models import AITarget, AIPromptList, AIPrompt
 from apps.dashboard.views import (
     _get_ads_overview, _get_keywords_overview,
 )
+from apps.dashboard.services.sync_api_service import (
+    start_sync_run, task_status,
+)
+from apps.dashboard.services.keyword_research_service import (
+    run_keyword_research, run_prompt_research,
+)
 
 from .serializers import OverviewQuerySerializer, ProjectCreateSerializer, ProjectSerializer
 
@@ -164,6 +170,27 @@ class ProjectKeywordsView(APIView):
         curr_start, curr_end, prev_start, prev_end = range_to_period_dates("30d", anchor)
 
         return Response(build_keywords_response(site_id, curr_start, curr_end, prev_start, prev_end))
+
+    def post(self, request, slug):
+        """Track a keyword found in the Keyword Explorer -- persists it to the site's saved
+        keyword list (SavedKeyword), reusing the old MVP's saved_keyword_service. The SPA posts
+        one keyword per call: {kw, volume, kd, cpc, intent}."""
+        from pipeline.services.saved_keyword_service import save_keywords
+
+        site_id = resolve_project_or_404(slug).site_url
+        kw = (request.data.get("kw") or "").strip()
+        if not kw:
+            return Response({"detail": "kw is required"}, status=400)
+
+        row = {
+            "keyword": kw,
+            "search_volume": request.data.get("volume"),
+            "keyword_difficulty": request.data.get("kd"),
+            "cpc": request.data.get("cpc"),
+            "intent": request.data.get("intent"),
+        }
+        saved = save_keywords(site_id, [row], location=request.data.get("location") or "United States")
+        return Response({"saved": saved})
 
 
 @method_decorator(login_not_required, name="dispatch")
@@ -337,3 +364,48 @@ class ProjectSettingsView(APIView):
         if "error" in result:
             return Response({"detail": result["error"]}, status=400)
         return Response(build_settings_response(site_id))
+
+
+# ---------------------------------------------------------------------------
+# Refresh / Sync -- the database-first "Refresh" path: calls the connectors,
+# writes the DB, and the page then reads the fresh DB. (Engine already exists:
+# pipeline.services.sync_engine + apps.sync.models.RefreshRun.)
+# ---------------------------------------------------------------------------
+@method_decorator(login_not_required, name="dispatch")
+class ProjectSyncView(APIView):
+    def post(self, request, slug):
+        site_id = resolve_project_or_404(slug).site_url
+        scope = request.data.get("scope", "all")
+        return Response(start_sync_run(site_id, scope, user=request.user))
+
+
+@method_decorator(login_not_required, name="dispatch")
+class TaskStatusView(APIView):
+    """Polled by the SPA every ~500ms during a sync (GET /api/tasks/<id>)."""
+    def get(self, request, task_id):
+        status_data = task_status(task_id)
+        if status_data is None:
+            raise Http404(f"No task with id {task_id}")
+        return Response(status_data)
+
+
+# ---------------------------------------------------------------------------
+# Keyword Explorer / Prompt Explorer -- on-demand research (like Refresh, a
+# user action, so the live connector call here is consistent with the
+# database-first contract). project id comes in the body, URL is flat.
+# ---------------------------------------------------------------------------
+@method_decorator(login_not_required, name="dispatch")
+class KeywordResearchView(APIView):
+    def post(self, request):
+        site_id = resolve_project_or_404(request.data.get("project", "")).site_url
+        keywords = request.data.get("keywords") or []
+        location = request.data.get("location") or "United States"
+        return Response(run_keyword_research(site_id, keywords, location))
+
+
+@method_decorator(login_not_required, name="dispatch")
+class PromptResearchView(APIView):
+    def post(self, request):
+        site_id = resolve_project_or_404(request.data.get("project", "")).site_url
+        seeds = request.data.get("seeds") or []
+        return Response(run_prompt_research(site_id, seeds))

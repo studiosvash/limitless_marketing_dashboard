@@ -26,15 +26,25 @@ logger = get_logger("sync_engine")
 PAGE_CONNECTORS: dict[str, list[str]] = {
     "overview":    ["gsc", "ga4"],
     "seo":         ["gsc", "ga4"],
-    "ads":         [],                    # blocked — no credentials
+    # Ads + Backlinks connectors DO exist (google_ads.py / dataforseo_backlinks.py). They were
+    # previously left empty because credentials were blocked, but that made the Refresh button
+    # a silent no-op. Wire them to their real connectors so Refresh actually runs them the
+    # moment credentials are valid; with no credentials the connector factory returns None and
+    # the run records a clean "skipped/error" for that connector instead of silently doing
+    # nothing.
+    "ads":         ["google_ads", "ga4"],
     "keywords":    ["gsc_keywords", "dataforseo_ai_keywords"],
     "pages":       ["gsc_pages", "url_inspection", "pagespeed"],
-    "backlinks":   [],                    # blocked — DataForSEO balance negative
+    "backlinks":   ["dataforseo_backlinks"],
     "insights":    [],                    # no connectors — data entered by user
     "alerts":      ["gsc", "ga4"],        # anomaly detection runs on fresh data
     "settings":    [],                    # no data to sync
     # Positioning per-page refresh captures per-keyword competitor ranks (SEMrush-style).
     "positioning": ["gsc_keywords", "dataforseo_serp_competitors"],
+    # AI visibility / AI-keyword volume refresh (DataForSEO AI Optimization API).
+    "ai":          ["dataforseo_ai_keywords"],
+    # Site-audit crawl (DataForSEO OnPage) -- distinct from the "pages" GSC/PageSpeed refresh.
+    "audit":       ["dataforseo_onpage"],
 }
 
 ALL_CONNECTORS: list[str] = [
