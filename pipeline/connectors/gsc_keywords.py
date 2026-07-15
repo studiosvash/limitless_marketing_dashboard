@@ -46,12 +46,17 @@ class GSCKeywordsConnector(BaseConnector):
         self._default_site_url = os.getenv("GSC_SITE_URL")
 
     def _resolve_site(self, site_id: Optional[str]) -> str:
-        """Return the GSC site URL to query, from the Site row or .env fallback."""
+        """Return the GSC site URL to query, from the Site row or .env fallback. Auto-matched
+        against the account's property list (see gsc_property.py) so a bare-domain value
+        can't 403 as an http:// URL-prefix property."""
+        from pipeline.connectors.gsc_property import resolve_gsc_property
         from pipeline.services.site_service import get_site
         with get_session() as session:
             site = get_site(session, site_id)
-            if site:
-                return site.gsc_property or site.site_url
+            stored = (site.gsc_property or site.site_url) if site else None
+            key = site.site_url if site else None
+        if stored:
+            return resolve_gsc_property(key, stored)
         return self._default_site_url or ""
 
     def _get_last_synced_date(self, site_url: str):

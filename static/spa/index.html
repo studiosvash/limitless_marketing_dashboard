@@ -3527,12 +3527,25 @@ class Component extends DCLogic {
     let kwLists = [];
     try { kwLists = JSON.parse(localStorage.getItem('fh_keyword_lists') || '[]') || []; } catch (e) {}
     if (!kwLists.length) kwLists = [{ id: 'l1', name: 'Priority targets', keywords: [] }];
-    this.setState({ tab, range, kwLists, seoOpen: this.state.seoOpen || this.SEOTABS.includes(tab), adsOpen: this.state.adsOpen || this.ADSTABS.includes(tab) });
-    this._hist = [Object.assign(this.navSnapshot(), { tab })];
+    /* Served-copy patch: restore the last selected project across page reloads (the upstream
+       design file resets to the hardcoded default project on every reload). Falls back to
+       the first real project if the remembered one no longer exists. */
+    let pid = this.state.projectId;
+    try { pid = localStorage.getItem('fh_selected_project') || pid; } catch (e) {}
+    this.setState({ tab, range, kwLists, projectId: pid, seoOpen: this.state.seoOpen || this.SEOTABS.includes(tab), adsOpen: this.state.adsOpen || this.ADSTABS.includes(tab) });
+    this._hist = [Object.assign(this.navSnapshot(), { tab, projectId: pid })];
     this._histIdx = 0;
-    api.get('/api/projects').then(ps => { if (this._alive) this.setState({ projects: ps }); }).catch(() => {});
-    this.fetchTab(tab, this.state.projectId, range, false);
-    if (tab !== 'alerts') this.fetchTab('alerts', this.state.projectId, range, false);
+    api.get('/api/projects').then(ps => {
+      if (!this._alive) return;
+      this.setState({ projects: ps });
+      if (ps.length && !ps.some(p => p.id === pid)) {
+        this.setState({ projectId: ps[0].id });
+        this.fetchTab(tab, ps[0].id, range, false);
+        if (tab !== 'alerts') this.fetchTab('alerts', ps[0].id, range, false);
+      }
+    }).catch(() => {});
+    this.fetchTab(tab, pid, range, false);
+    if (tab !== 'alerts') this.fetchTab('alerts', pid, range, false);
   }
 
   /* ---------- data ---------- */
@@ -3652,6 +3665,7 @@ class Component extends DCLogic {
       .catch(() => { if (this._alive) this.setState({ addSiteBusy: false, addSiteError: 'Could not add site' }); });
   }
   setProject(pid) {
+    try { localStorage.setItem('fh_selected_project', pid); } catch (e) {}
     this.pushNav({ projectId: pid, research: null, kwSeg: null, blFilter: 'all', alFilter: 'all' });
     this.setState({ projectId: pid, research: null, kwSeg: null, blFilter: 'all', alFilter: 'all', crawlCfg: null, crawlSaved: false, auPage: null, rules: null, termCampaign: null, cmpSearch: '', cmpOpenId: null, editBudgetId: null });
     this.fetchTab(this.state.tab, pid, this.state.range, false);

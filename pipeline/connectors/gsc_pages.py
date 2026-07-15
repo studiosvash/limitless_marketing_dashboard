@@ -36,11 +36,16 @@ class GSCPagesConnector(BaseConnector):
         self._default_site_url = os.getenv("GSC_SITE_URL")
 
     def _resolve_site(self, site_id: Optional[str]) -> str:
+        """Auto-matched against the account's property list (see gsc_property.py) so a
+        bare-domain value can't 403 as an http:// URL-prefix property."""
+        from pipeline.connectors.gsc_property import resolve_gsc_property
         from pipeline.services.site_service import get_site
         with get_session() as session:
             site = get_site(session, site_id)
-            if site:
-                return site.gsc_property or site.site_url
+            stored = (site.gsc_property or site.site_url) if site else None
+            key = site.site_url if site else None
+        if stored:
+            return resolve_gsc_property(key, stored)
         return self._default_site_url or ""
 
     @with_retry(max_retries=3, base_delay=5.0)
