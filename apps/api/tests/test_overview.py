@@ -66,6 +66,42 @@ class OverviewEndpointTests(APITestCase):
         self.assertEqual(site_health["state"], "setup")
         self.assertIsNone(site_health["value"])
 
+    def test_site_health_pillar_goes_live_with_audit_data(self):
+        """Overview's Site health pillar/module must show the SAME score the Site Audit page
+        computes (60% Lighthouse perf + 40% indexed share) — it used to stay hardcoded
+        'setup' even when the audit page had real data."""
+        from pipeline.db.schema import IndexingStatus, PageSpeed, TechnicalIssue
+        from datetime import datetime
+
+        with get_session() as session:
+            # 1 indexed of 2 pages (50%) + avg mobile perf 80 -> round(0.6*80 + 0.4*50) = 68
+            session.add(IndexingStatus(site_id="sc-domain:fusehealth.com",
+                                       url="https://fusehealth.com/", verdict="PASS"))
+            session.add(IndexingStatus(site_id="sc-domain:fusehealth.com",
+                                       url="https://fusehealth.com/404",
+                                       coverage_state="Not found (404)"))
+            session.add(PageSpeed(site_id="sc-domain:fusehealth.com",
+                                  url="https://fusehealth.com/", strategy="mobile",
+                                  performance_score=80))
+            session.add(TechnicalIssue(site_id="sc-domain:fusehealth.com",
+                                       url="https://fusehealth.com/404",
+                                       issue_type="not_found_404", severity="high",
+                                       description="404", detected_at=datetime(2026, 7, 1)))
+
+        body = self.client_auth.get("/api/projects/fusehealth/overview", {"range": "30d"}).json()
+
+        pillar = next(p for p in body["pillars"] if p["label"] == "Site health")
+        self.assertEqual(pillar["state"], "ok")
+        self.assertEqual(pillar["value"], 68)
+        self.assertEqual(pillar["sub"], "1 error to fix")
+
+        audit_score = self.client_auth.get("/api/projects/fusehealth/audit").json()["score"]
+        self.assertEqual(pillar["value"], audit_score)  # the two views must never disagree
+
+        module = next(m for m in body["modules"] if m["label"] == "Site Audit")
+        self.assertEqual(module["stat"], "68/100")
+        self.assertEqual(module["tone"], "warn")
+
     def test_unknown_slug_is_404(self):
         resp = self.client_auth.get("/api/projects/does-not-exist/overview")
         self.assertEqual(resp.status_code, 404)

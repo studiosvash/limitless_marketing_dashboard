@@ -133,7 +133,7 @@ class ProjectOverviewView(APIView):
 
         pillars = build_pillars(site_id, kpis_current, kpis_previous, top3_count)
         seo_stat = f"{int(kpis_current['clicks']):,} clicks"
-        modules = build_modules(seo_stat, len(keywords_overview), top3_count, kpis_current["avg_position"])
+        modules = build_modules(site_id, seo_stat, len(keywords_overview), top3_count, kpis_current["avg_position"])
 
         ai_summary_sections = parse_ai_summary(get_ai_summary_text(site_id))
         summary = build_summary_lists(ai_summary_sections)

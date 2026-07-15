@@ -156,6 +156,47 @@ def _cwv_field(metric: dict, unit: str, good: float, poor: float) -> dict:
     }
 
 
+def site_health_summary(site_id: str) -> dict | None:
+    """Lightweight Site-health rollup for the Overview pillar/module card — the exact score
+    formula build_site_audit_response uses (60% avg Lighthouse mobile performance + 40%
+    share of pages indexed) without building the full audit payload. Returns {score, errors}
+    or None when no audit data exists yet — None is the honest 'setup' state, so the
+    Overview card only goes live once the Site Audit page itself has data. `errors` counts
+    error-severity issues excluding checks the user hid (same rule as audit totals)."""
+    try:
+        with get_session() as session:
+            perf_vals = session.execute(
+                select(PageSpeed.performance_score).where(
+                    PageSpeed.site_id == site_id, PageSpeed.strategy == "mobile",
+                    PageSpeed.performance_score.isnot(None))
+            ).scalars().all()
+            idx_count = session.execute(
+                select(func.count()).select_from(IndexingStatus).where(
+                    IndexingStatus.site_id == site_id)
+            ).scalar() or 0
+            issue_rows = session.execute(
+                select(TechnicalIssue.issue_type, TechnicalIssue.severity).where(
+                    TechnicalIssue.site_id == site_id)
+            ).all()
+    except Exception as e:
+        logger.error(f"site_health_summary error: {e}", exc_info=True)
+        return None
+
+    if not perf_vals and not idx_count:
+        return None
+
+    breakdown = query_indexing_breakdown_raw(site_id)
+    indexed_pct = round(breakdown["healthy"] / idx_count * 100) if idx_count else 0
+    perf = round(sum(perf_vals) / len(perf_vals)) if perf_vals else 0
+    hidden_ids = set(get_state(site_id, "auditHidden", []))
+    errors = sum(
+        1 for issue_type, severity in issue_rows
+        if issue_type not in hidden_ids
+        and _SEVERITY_MAP.get((severity or "").lower(), "notice") == "error"
+    )
+    return {"score": round(0.6 * perf + 0.4 * indexed_pct), "errors": errors}
+
+
 def toggle_audit_check(site_id: str, check_id: str) -> list[str]:
     """Hide/restore an audit check (HANDOFF_SPEC POST audit/toggle-check). Persisted per
     project; returns the full hidden list, which is also the endpoint's response body."""

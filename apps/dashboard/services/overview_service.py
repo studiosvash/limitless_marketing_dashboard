@@ -257,8 +257,12 @@ def build_top_pages_api(site_id: str, start_date: date, end_date: date, limit: i
 
 
 def build_pillars(site_id: str, kpis_current: dict, kpis_previous: dict, top3_count: int) -> list[dict]:
-    """HANDOFF_SPEC.md §2.2 pillar shape. Site health / Paid ROAS / AI visibility report
-    state='setup' — Site Audit, Ads, and AI Optimization aren't built yet (Phases C/D)."""
+    """HANDOFF_SPEC.md §2.2 pillar shape. Site health goes live as soon as the Site Audit
+    page has real data (same score the audit page shows — the two must never disagree);
+    Paid ROAS / AI visibility stay state='setup' until Ads credentials / AI connectors
+    exist. Lazy import: pillar cards are rollups OF the sibling pages, so this is the one
+    place overview_service legitimately reads a sibling page's service."""
+    from apps.dashboard.services.site_audit_service import site_health_summary
     # .get(..., default) fallbacks: kpis_current/kpis_previous can be {} when get_kpi_raw hit
     # a DB error and returned its safe fallback (see format_kpi_cards for the same pattern) —
     # must not KeyError in that case.
@@ -275,9 +279,7 @@ def build_pillars(site_id: str, kpis_current: dict, kpis_previous: dict, top3_co
         {"label": "Avg. position", "target": "positioning", "valueKind": "pos",
          "value": round(kpis_current.get("avg_position", 0.0), 1), "delta": None, "deltaUnit": "pos",
          "sub": f"{top3_count} keywords in top 3", "state": "ok"},
-        {"label": "Site health", "target": "pages", "valueKind": "score",
-         "value": None, "delta": None, "deltaUnit": "pts", "sub": "Site Audit not set up yet",
-         "state": "setup"},
+        _site_health_pillar(site_health_summary(site_id)),
         {"label": "Paid ROAS", "target": "ads", "valueKind": "roas",
          "value": None, "delta": None, "deltaUnit": None, "sub": "Ads not connected yet",
          "state": "setup"},
@@ -287,9 +289,53 @@ def build_pillars(site_id: str, kpis_current: dict, kpis_previous: dict, top3_co
     ]
 
 
-def build_modules(seo_module_stat: str, keywords_count: int, top3_count: int,
+def _site_health_pillar(health: dict | None) -> dict:
+    """Site health pillar card — real score when audit data exists, honest setup otherwise."""
+    if health is None:
+        return {"label": "Site health", "target": "pages", "valueKind": "score",
+                "value": None, "delta": None, "deltaUnit": "pts",
+                "sub": "Site Audit not set up yet", "state": "setup"}
+    errors = health["errors"]
+    return {"label": "Site health", "target": "pages", "valueKind": "score",
+            "value": health["score"], "delta": None, "deltaUnit": "pts",
+            "sub": f"{errors} error{'s' if errors != 1 else ''} to fix" if errors else "no errors found",
+            "state": "ok"}
+
+
+def _score_tone(score: int) -> str:
+    """Module-card status dot from a 0-100 score, matching the audit page's own bands
+    (>=80 healthy, >=60 needs work, else poor)."""
+    return "ok" if score >= 80 else ("warn" if score >= 60 else "bad")
+
+
+def build_modules(site_id: str, seo_module_stat: str, keywords_count: int, top3_count: int,
                    avg_position: float) -> list[dict]:
-    """HANDOFF_SPEC.md §2.2 module-status card shape."""
+    """HANDOFF_SPEC.md §2.2 module-status card shape. Backlinks / Site Audit cards go live
+    when their pages have real data (same rollups those pages show); Ads / AI stay setup."""
+    from apps.dashboard.services.backlinks_service import query_backlinks_summary_raw
+    from apps.dashboard.services.site_audit_service import site_health_summary
+
+    health = site_health_summary(site_id)
+    if health is None:
+        audit_card = {"label": "Site Audit", "target": "pages", "stat": "Not set up",
+                      "sub": "", "tone": "setup"}
+    else:
+        audit_card = {"label": "Site Audit", "target": "pages",
+                      "stat": f"{health['score']}/100",
+                      "sub": (f"{health['errors']} error{'s' if health['errors'] != 1 else ''}"
+                              if health["errors"] else "no errors"),
+                      "tone": _score_tone(health["score"])}
+
+    bl = query_backlinks_summary_raw(site_id)
+    if bl["total"]:
+        backlinks_card = {"label": "Backlinks", "target": "backlinks",
+                          "stat": f"{bl['live']} live",
+                          "sub": f"{bl['unique_domains']} referring domains",
+                          "tone": "ok" if bl["live"] >= bl["lost"] else "warn"}
+    else:
+        backlinks_card = {"label": "Backlinks", "target": "backlinks", "stat": "Not connected",
+                          "sub": "", "tone": "setup"}
+
     return [
         {"label": "SEO Performance", "target": "seo", "stat": seo_module_stat, "sub": "",
          "tone": "ok"},
@@ -297,10 +343,8 @@ def build_modules(seo_module_stat: str, keywords_count: int, top3_count: int,
          "sub": f"{top3_count} in top 3", "tone": "ok"},
         {"label": "Position Tracking", "target": "positioning", "stat": f"#{avg_position:.1f} avg",
          "sub": "", "tone": "ok"},
-        {"label": "Backlinks", "target": "backlinks", "stat": "Not connected", "sub": "",
-         "tone": "setup"},
-        {"label": "Site Audit", "target": "pages", "stat": "Not set up", "sub": "",
-         "tone": "setup"},
+        backlinks_card,
+        audit_card,
         {"label": "AI Optimization", "target": "ai", "stat": "Not set up",
          "sub": "Track ChatGPT, Claude, Gemini", "tone": "setup"},
         {"label": "Paid Media", "target": "ads", "stat": "Not connected", "sub": "",
