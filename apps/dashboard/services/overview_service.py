@@ -3,7 +3,7 @@ DRF API view) plus the old view's presentation formatters. Query logic lives her
 exactly once; each caller formats it however its output needs (see
 docs/superpowers/specs/2026-07-10-limitless-migration-roadmap-and-phaseA-design.md 2.2)."""
 
-from datetime import date
+from datetime import date, timedelta
 
 from sqlalchemy import func, select
 
@@ -138,6 +138,47 @@ def build_traffic_chart(points: list[dict]) -> dict | None:
         },
         "config": {"displayModeBar": False, "responsive": True},
     }
+
+
+def range_to_period_dates(range_key: str, anchor: date) -> tuple[date, date, date, date]:
+    """Maps the API's stateless `range` query param (7d/30d/90d) to
+    (curr_start, curr_end, prev_start, prev_end), anchored to the latest data date.
+    Unlike the old view, this never reads/writes Django session state -- the API is
+    stateless per HANDOFF_SPEC.md's caching model (cache key includes `range`)."""
+    from pipeline.utils.period_utils import get_period_dates
+
+    if range_key == "7d":
+        return get_period_dates("weekly", 0, anchor=anchor)
+    if range_key == "90d":
+        custom_end = anchor - timedelta(days=1)
+        custom_start = custom_end - timedelta(days=89)
+        return get_period_dates("custom", 0, custom_start=custom_start, custom_end=custom_end, anchor=anchor)
+    return get_period_dates("monthly", 0, anchor=anchor)  # "30d" and any unrecognized value
+
+
+def build_kpis_api(current: dict, previous: dict) -> list[dict]:
+    """HANDOFF_SPEC.md 2.1 kpi shape: [{label, value, delta, unit}], numeric -- not the old
+    view's pre-formatted display strings (see format_kpi_cards for that)."""
+    from pipeline.utils.period_utils import compute_delta
+
+    clicks_delta = compute_delta(current["clicks"], previous["clicks"])
+    impr_delta = compute_delta(current["impressions"], previous["impressions"])
+    ctr_delta = compute_delta(current["ctr"] * 100, previous["ctr"] * 100)
+    # Avg position: lower is better, so "improvement" delta is (previous - current).
+    pos_delta_val = round((previous["avg_position"] or 0) - (current["avg_position"] or 0), 1)
+
+    return [
+        {"label": "Total clicks", "value": int(current["clicks"]), "delta": clicks_delta["pct_change"], "unit": "%"},
+        {"label": "Impressions", "value": int(current["impressions"]), "delta": impr_delta["pct_change"], "unit": "%"},
+        {"label": "Avg. CTR", "value": round(current["ctr"] * 100, 2), "delta": ctr_delta["pct_change"], "unit": "%"},
+        {"label": "Avg. position", "value": round(current["avg_position"], 1), "delta": pos_delta_val, "unit": "pos"},
+    ]
+
+
+def build_top_pages_api(site_id: str, start_date: date, end_date: date, limit: int = 6) -> list[dict]:
+    """HANDOFF_SPEC.md overview `topPages[<=6]` shape: [{url, clicks, impressions, ctr}]."""
+    raw = query_top_pages_raw(site_id, start_date, end_date, limit=limit)
+    return [{"url": p["page"], "clicks": p["clicks"], "impressions": p["impressions"], "ctr": p["ctr"]} for p in raw]
 
 
 def get_ai_summary_text(site_id: str) -> str | None:

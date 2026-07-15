@@ -68,3 +68,58 @@ class OverviewServiceTests(TestCase):
         self.assertEqual(len(points), 2)
         self.assertEqual(points[0]["date"], "2026-07-01")
         self.assertEqual(points[0]["clicks"], 100)
+
+
+class RangeAndApiShapeTests(TestCase):
+    def setUp(self):
+        db_connection._SessionFactory = None
+        self.addCleanup(setattr, db_connection, "_SessionFactory", None)
+        tmp = tempfile.mkdtemp()
+        db_path = str(Path(tmp) / "fusehealth.db")
+        init_db(get_engine(db_path))
+        self._ctx = override_settings(ANALYTICS_DB_PATH=db_path)
+        self._ctx.enable()
+        self.addCleanup(self._ctx.disable)
+
+        with get_session() as session:
+            session.add_all([
+                SEODaily(date=date(2026, 7, 1), site_id="sc-domain:fusehealth.com",
+                         clicks=100, impressions=1000, ctr=0.10, avg_position=8.0,
+                         landing_page="https://fusehealth.com/a"),
+                SEODaily(date=date(2026, 7, 2), site_id="sc-domain:fusehealth.com",
+                         clicks=120, impressions=1100, ctr=0.109, avg_position=7.5,
+                         landing_page="https://fusehealth.com/a"),
+            ])
+
+    def test_range_to_period_dates_7d(self):
+        from apps.dashboard.services.overview_service import range_to_period_dates
+        curr_start, curr_end, prev_start, prev_end = range_to_period_dates("7d", date(2026, 7, 10))
+        self.assertEqual((curr_end - curr_start).days, 6)
+        self.assertEqual(curr_end, date(2026, 7, 9))
+
+    def test_range_to_period_dates_90d(self):
+        from apps.dashboard.services.overview_service import range_to_period_dates
+        curr_start, curr_end, prev_start, prev_end = range_to_period_dates("90d", date(2026, 7, 10))
+        self.assertEqual((curr_end - curr_start).days, 89)
+
+    def test_range_to_period_dates_defaults_to_30d(self):
+        from apps.dashboard.services.overview_service import range_to_period_dates
+        a = range_to_period_dates("garbage", date(2026, 7, 10))
+        b = range_to_period_dates("30d", date(2026, 7, 10))
+        self.assertEqual(a, b)
+
+    def test_build_kpis_api_shape(self):
+        from apps.dashboard.services.overview_service import build_kpis_api
+        current = {"clicks": 220, "impressions": 2100, "ctr": 0.10, "avg_position": 8.0}
+        previous = {"clicks": 200, "impressions": 2000, "ctr": 0.09, "avg_position": 9.0}
+        kpis = build_kpis_api(current, previous)
+        self.assertEqual(kpis[0], {"label": "Total clicks", "value": 220, "delta": 10.0, "unit": "%"})
+        self.assertEqual(kpis[3]["unit"], "pos")
+        self.assertEqual(kpis[3]["value"], 8.0)
+
+    def test_build_top_pages_api_shape(self):
+        from apps.dashboard.services.overview_service import build_top_pages_api
+        pages = build_top_pages_api("sc-domain:fusehealth.com", date(2026, 7, 1), date(2026, 7, 2))
+        self.assertEqual(pages[0]["url"], "https://fusehealth.com/a")
+        self.assertIn("ctr", pages[0])
+        self.assertNotIn("page", pages[0])
