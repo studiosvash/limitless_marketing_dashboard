@@ -45,6 +45,39 @@ class AlertsEndpointTests(APITestCase):
         self.assertEqual(len(body["feed"]), 1)
         self.assertEqual(body["feed"][0]["kind"], "anomaly")
 
+    def test_failed_refresh_appears_as_system_alert(self):
+        """When the latest refresh ended in error, the feed must lead with a kind=system
+        alert naming the failed connector(s) — so the failure shows on the Overview
+        priority feed instead of the page just staying blank."""
+        from apps.sync.models import RefreshRun, RefreshStatus, SyncLog, SyncStatus
+
+        RefreshRun.objects.create(
+            site_url="sc-domain:fusehealth.com", scope="all", status=RefreshStatus.ERROR,
+            completed_count=7, total_count=7,
+            error_message="gsc: <HttpError 403 insufficient permission>",
+        )
+        SyncLog.objects.create(
+            connector="gsc", site_url="sc-domain:fusehealth.com", status=SyncStatus.ERROR,
+            error_message="<HttpError 403 insufficient permission for site>",
+        )
+
+        feed = self.client_auth.get("/api/projects/fusehealth/alerts").json()["feed"]
+        system = [f for f in feed if f["kind"] == "system"]
+        self.assertEqual(len(system), 1)
+        self.assertEqual(system[0]["severity"], "high")
+        self.assertIn("gsc", system[0]["title"])
+        self.assertIn("Settings", system[0]["detail"])
+
+    def test_successful_latest_refresh_produces_no_system_alert(self):
+        from apps.sync.models import RefreshRun, RefreshStatus
+
+        RefreshRun.objects.create(
+            site_url="sc-domain:fusehealth.com", scope="all", status=RefreshStatus.SUCCESS,
+            completed_count=7, total_count=7,
+        )
+        feed = self.client_auth.get("/api/projects/fusehealth/alerts").json()["feed"]
+        self.assertEqual([f for f in feed if f["kind"] == "system"], [])
+
     def test_unknown_slug_is_404(self):
         resp = self.client_auth.get("/api/projects/does-not-exist/alerts")
         self.assertEqual(resp.status_code, 404)

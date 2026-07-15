@@ -40,15 +40,17 @@ class GA4Connector(BaseConnector):
         self._default_site_url = os.getenv("GSC_SITE_URL", "")
 
     def _resolve_site(self, site_id: Optional[str]) -> tuple[str, str]:
-        """Return (site_url, ga4_property_id) for site_id, falling back to .env."""
+        """Return (site_url, ga4_property_id) for site_id. The .env GA4_PROPERTY_ID is a
+        fallback ONLY when no Site row exists (legacy single-site mode). When a Site row
+        exists without its own ga4_property_id, return "" so fetch() fails loudly — the
+        .env property belongs to the PRIMARY site, and falling back to it here used to
+        write the primary site's GA4 rows under the new site's id (real bug: 6,654
+        fusehealth rows stored as eventstaff.com on 2026-07-15)."""
         from pipeline.services.site_service import get_site
         with get_session() as session:
             site = get_site(session, site_id)
             if site:
-                return (
-                    site.site_url,
-                    site.ga4_property_id or self._default_property_id or "",
-                )
+                return (site.site_url, site.ga4_property_id or "")
         return (self._default_site_url, self._default_property_id or "")
 
     @with_retry(max_retries=3, base_delay=10.0)
@@ -67,8 +69,8 @@ class GA4Connector(BaseConnector):
         site_url, property_id = self._resolve_site(site_id)
         if not property_id:
             raise ValueError(
-                "[ga4] No GA4 property configured for this site. "
-                "Set ga4_property_id in Settings → Manage Sites or GA4_PROPERTY_ID in .env."
+                f"No GA4 property configured for {site_url or site_id or 'this site'}. "
+                "Add its GA4 property ID in Settings → Connections, then Refresh again."
             )
 
         start_str, end_str = ga4_safe_range(days)

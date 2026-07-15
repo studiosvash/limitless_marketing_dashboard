@@ -74,16 +74,22 @@ def task_status(task_id: int) -> dict | None:
         return None
 
     done = run.status != RefreshStatus.RUNNING
+    error = None
     if run.status == RefreshStatus.RUNNING:
         step = f"Syncing {run.current_connector or '...'}"
     elif run.status == RefreshStatus.SUCCESS:
         step = f"Done -- {run.records_written:,} records written"
     else:
-        step = run.error_message or "Sync error"
+        # Failed connectors: short readable step line (the SPA renders it verbatim);
+        # the full messages ride along in `error` and in Settings -> Connections.
+        first_line = (run.error_message or "Sync error").splitlines()[0]
+        step = f"Completed with errors -- {first_line[:160]}"
+        error = run.error_message
 
     return {
         "done": done,
         "progress": (run.percent / 100.0) if not done else 1.0,
         "step": step,
         "status": run.status,
+        "error": error,
     }

@@ -118,6 +118,23 @@ class TaskStatusEndpointTests(APITestCase):
         self.assertEqual(body["progress"], 1.0)
         self.assertIn("7,269", body["step"])
 
+    def test_failed_run_surfaces_error_in_step_and_error_field(self):
+        """A refresh that completed with connector errors must SAY so — it used to dump the
+        raw joined error string as the step (or the SPA just showed 'done'), leaving the
+        user with a silent, blank page and no clue which connector failed."""
+        from apps.sync.models import RefreshRun, RefreshStatus
+
+        run = RefreshRun.objects.create(
+            site_url="sc-domain:fusehealth.com", scope="all",
+            status=RefreshStatus.ERROR, completed_count=7, total_count=7,
+            error_message="gsc: <HttpError 403 ... insufficient permission>; ga4: quota",
+        )
+        body = self.client_auth.get(f"/api/tasks/{run.pk}").json()
+        self.assertTrue(body["done"])
+        self.assertTrue(body["step"].startswith("Completed with errors"))
+        self.assertIn("gsc", body["step"])
+        self.assertIn("insufficient permission", body["error"])
+
     def test_unknown_task_returns_done_true(self):
         # HANDOFF_SPEC 1: "unknown ids should return {done: true}" — the SPA polls every
         # 500ms and treats non-2xx as a hard error, so 404 would break the progress bar

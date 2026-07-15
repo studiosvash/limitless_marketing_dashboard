@@ -112,6 +112,31 @@ def query_alert_technical_issues_raw(site_id: str) -> list[dict]:
         return []
 
 
+def query_sync_failure_alert_raw(site_id: str) -> dict | None:
+    """System alert when the site's LATEST refresh completed with connector errors — the
+    answer to 'I clicked Refresh, nothing showed up, and nothing told me why'. Derived from
+    the same RefreshRun row the progress bar polls; disappears once a newer run succeeds."""
+    from apps.sync.models import RefreshRun, RefreshStatus, SyncLog, SyncStatus
+
+    run = RefreshRun.objects.filter(site_url=site_id).order_by("-started_at").first()
+    if run is None or run.status != RefreshStatus.ERROR:
+        return None
+    # SyncLog holds the last per-connector result — authoritative for WHICH failed and WHY
+    # (RefreshRun.error_message is a single '; '-joined string, unsafe to parse).
+    failures = list(SyncLog.objects.filter(site_url=site_id, status=SyncStatus.ERROR))
+    names = [f.connector for f in failures] or ["sync"]
+    detail = (failures[0].error_message or run.error_message or "").splitlines()[0][:220] if failures else \
+        (run.error_message or "").splitlines()[0][:220]
+    return {
+        "id": f"syncerr-{run.pk}",
+        "ts": run.started_at.date().isoformat(),
+        "kind": "system",
+        "severity": "high",
+        "title": f"Last refresh failed for {len(names)} connector(s): {', '.join(names[:4])}",
+        "detail": f"{detail} — full detail in Settings → Connections.",
+    }
+
+
 def build_alerts_response(site_id: str) -> dict:
     """HANDOFF_SPEC.md `alerts` view shape: {feed: [{id, ts, kind, severity, title, detail,
     acknowledged}]}. See docs/superpowers/specs/2026-07-11-phaseB4-alerts-design.md."""
@@ -120,6 +145,9 @@ def build_alerts_response(site_id: str) -> dict:
     acked = get_acked_ids(site_id)
 
     feed = []
+    sync_alert = query_sync_failure_alert_raw(site_id)
+    if sync_alert is not None:
+        feed.append({**sync_alert, "acknowledged": sync_alert["id"] in acked})
     for a in anomalies:
         metric_label = _METRIC_LABELS.get(a["metric_type"], a["metric_type"])
         pct = f"{'+' if a['direction'] == 'up' else '-'}{abs(a['deviation_pct']):.0f}%"
