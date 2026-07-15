@@ -13,6 +13,10 @@ from django.views.decorators.http import require_POST
 from sqlalchemy import func, select
 
 from apps.accounts.decorators import role_required
+from apps.dashboard.services.overview_service import (
+    get_kpi_raw, format_kpi_cards, query_top_pages_raw, query_daily_traffic_raw,
+    build_traffic_chart, get_ai_summary_text, parse_ai_summary,
+)
 from pipeline.db.schema import SEODaily, SEOAggregate, AISummary, KeywordRanking, AdMetricDaily, CompetitorDomain, Anomaly, TechnicalIssue, PageSpeed, IndexingStatus, Backlink, KeywordOpportunity, CompetitorKeywordRanking, AIKeywordData
 from pipeline.services.site_service import get_default_site_id
 from pipeline.utils.period_utils import get_period_dates
@@ -55,93 +59,6 @@ def get_active_period(request, site_id: str = None):
     return curr_s, curr_e, prev_s, prev_e, mode
 
 
-def _get_kpi_stats(site_id: str, curr_start: date, curr_end: date, prev_start: date, prev_end: date) -> tuple[list[dict], dict, dict]:
-    """Query KPI cards: current period vs. previous period."""
-    try:
-        with get_session() as session:
-            def get_stats(start, end):
-                row = session.execute(
-                    select(
-                        func.sum(SEODaily.clicks).label("clicks"),
-                        func.sum(SEODaily.impressions).label("impressions"),
-                        func.avg(SEODaily.ctr).label("ctr"),
-                        func.avg(SEODaily.avg_position).label("avg_position"),
-                    )
-                    .where(SEODaily.site_id == site_id, SEODaily.date >= start, SEODaily.date <= end)
-                ).first()
-                return {
-                    "clicks": row.clicks or 0,
-                    "impressions": row.impressions or 0,
-                    "ctr": row.ctr or 0.0,
-                    "avg_position": row.avg_position or 0.0
-                }
-
-            current = get_stats(curr_start, curr_end)
-            previous = get_stats(prev_start, prev_end)
-
-            def calc_delta(curr_val, prev_val):
-                if not prev_val or prev_val == 0:
-                    return "0%", "neutral"
-                delta_pct = ((curr_val - prev_val) / prev_val) * 100
-                direction = "up" if delta_pct > 0 else "down" if delta_pct < 0 else "neutral"
-                return f"{abs(delta_pct):.1f}%", direction
-
-            def calc_delta_inv(curr_val, prev_val):
-                # For avg position, lower is better
-                if not prev_val or prev_val == 0:
-                    return "0%", "neutral"
-                delta_pct = ((curr_val - prev_val) / prev_val) * 100
-                direction = "up" if delta_pct < 0 else "down" if delta_pct > 0 else "neutral"
-                return f"{abs(delta_pct):.1f}%", direction
-
-            clicks_delta, clicks_dir = calc_delta(current["clicks"], previous["clicks"])
-            impr_delta, impr_dir = calc_delta(current["impressions"], previous["impressions"])
-            ctr_delta, ctr_dir = calc_delta(current["ctr"], previous["ctr"])
-            pos_delta, pos_dir = calc_delta_inv(current["avg_position"], previous["avg_position"])
-
-            cards = [
-                {"label": "Clicks", "value": f"{int(current['clicks']):,}", "delta": clicks_delta, "delta_dir": clicks_dir},
-                {"label": "Impressions", "value": f"{int(current['impressions']):,}", "delta": impr_delta, "delta_dir": impr_dir},
-                {"label": "Avg. CTR", "value": f"{(current['ctr'] * 100):.2f}%", "delta": ctr_delta, "delta_dir": ctr_dir},
-                {"label": "Avg. Position", "value": f"{current['avg_position']:.1f}", "delta": pos_delta, "delta_dir": pos_dir},
-            ]
-            return cards, current, previous
-    except Exception as e:
-        import logging; logging.getLogger(__name__).error(f"Error: {e}", exc_info=True)
-        return [], {}, {}
-
-
-def _get_top_pages(site_id: str, start_date: date, end_date: date) -> list[dict]:
-    """Query top pages by clicks for the given period."""
-    try:
-        with get_session() as session:
-            rows = session.execute(
-                select(
-                    SEODaily.landing_page,
-                    func.sum(SEODaily.clicks).label("total_clicks"),
-                    func.sum(SEODaily.impressions).label("total_impressions"),
-                    func.avg(SEODaily.ctr).label("avg_ctr"),
-                )
-                .where(SEODaily.site_id == site_id, SEODaily.date >= start_date, SEODaily.date <= end_date, SEODaily.landing_page.isnot(None))
-                .group_by(SEODaily.landing_page)
-                .order_by(func.sum(SEODaily.clicks).desc())
-                .limit(10)
-            ).all()
-
-            return [
-                {
-                    "page": row.landing_page or "/",
-                    "clicks": f"{row.total_clicks:,.0f}",
-                    "impressions": f"{row.total_impressions:,.0f}",
-                    "ctr": f"{(row.avg_ctr * 100):.1f}%",
-                }
-                for row in rows
-            ]
-    except Exception as e:
-        import logging; logging.getLogger(__name__).error(f"Error: {e}", exc_info=True)
-        return []
-
-
 def _get_last_sync_time(site_id: str) -> str:
     """Calculate time since last successful sync."""
     try:
@@ -163,138 +80,6 @@ def _get_last_sync_time(site_id: str) -> str:
     except Exception as e:
         import logging; logging.getLogger(__name__).error(f"_get_last_sync_time error: {e}", exc_info=True)
         return "Unknown"
-
-def _get_traffic_chart(site_id: str, start_date: date, end_date: date) -> dict:
-    """Query clicks + impressions trend for the period."""
-    try:
-        with get_session() as session:
-            rows = session.execute(
-                select(
-                    SEODaily.date,
-                    func.sum(SEODaily.clicks).label("total_clicks"),
-                    func.sum(SEODaily.impressions).label("total_impressions"),
-                )
-                .where(SEODaily.site_id == site_id, SEODaily.date >= start_date, SEODaily.date <= end_date)
-                .group_by(SEODaily.date)
-                .order_by(SEODaily.date.asc())
-            ).all()
-
-            if not rows:
-                return None
-
-            dates = [str(r.date) for r in rows]
-            clicks = [r.total_clicks for r in rows]
-            impressions = [r.total_impressions for r in rows]
-
-            return {
-                "data": [
-                    {
-                        "x": dates,
-                        "y": clicks,
-                        "name": "Clicks",
-                        "type": "scatter",
-                        "mode": "lines",
-                        "line": {"color": "#4f46e5", "width": 3, "shape": "spline"},
-                        "fill": "tozeroy",
-                        "fillcolor": "rgba(79,70,229,0.08)",
-                    },
-                    {
-                        "x": dates,
-                        "y": impressions,
-                        "name": "Impressions",
-                        "type": "scatter",
-                        "mode": "lines",
-                        "yaxis": "y2",
-                        "line": {"color": "#94a3b8", "width": 2, "dash": "dot", "shape": "spline"},
-                    },
-                ],
-                "layout": {
-                    "font": {"family": "Inter", "size": 12, "color": "#64748b"},
-                    "paper_bgcolor": "white",
-                    "plot_bgcolor": "white",
-                    "margin": {"l": 40, "r": 40, "t": 10, "b": 30},
-                    "xaxis": {"showgrid": False},
-                    "yaxis": {"gridcolor": "#f1f5f9", "zeroline": False},
-                    "yaxis2": {"overlaying": "y", "side": "right", "showgrid": False},
-                    "legend": {"orientation": "h", "y": 1.15, "x": 0},
-                    "hovermode": "x unified",
-                },
-                "config": {"displayModeBar": False, "responsive": True},
-            }
-    except Exception as e:
-        import logging; logging.getLogger(__name__).error(f"Error: {e}", exc_info=True)
-        return None
-
-
-
-def _get_ai_summary(site_id: str) -> str:
-    """Query latest AI summary."""
-    try:
-        with get_session() as session:
-            row = (
-                session.execute(
-                    select(AISummary)
-                    .where(AISummary.site_id == site_id)
-                    .order_by(AISummary.week_start.desc())
-                    .limit(1)
-                )
-                .scalars()
-                .first()
-            )
-            return row.summary_text if row and row.summary_text else None
-    except Exception as e:
-        import logging; logging.getLogger(__name__).error(f"Error: {e}", exc_info=True)
-        return None
-
-
-def _parse_ai_summary(text: str) -> list[dict]:
-    """Turn the markdown AI summary into structured, styled sections.
-
-    The generator emits clean markdown (## headings, numbered **bold**: lists,
-    a closing assessment paragraph) — but it was being dumped into one <p>, so
-    all the markup showed as raw text. This splits it into typed sections the
-    template can render as cards: critical (red), win (green), info (slate)."""
-    import re
-    from django.utils.html import escape, mark_safe
-
-    if not text:
-        return []
-
-    def render_inline(s: str):
-        # Escape first, then re-introduce **bold** as <strong>.
-        s = escape(s.strip())
-        s = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", s)
-        return mark_safe(s)
-
-    def classify(title: str) -> str:
-        t = title.lower()
-        if "🔴" in title or "critical" in t or "issue" in t or "fix" in t:
-            return "critical"
-        if "🟢" in title or "win" in t or "maintain" in t or "strength" in t:
-            return "win"
-        return "info"
-
-    sections, current = [], None
-    for raw_line in text.splitlines():
-        line = raw_line.rstrip()
-        if not line.strip():
-            continue
-        heading = re.match(r"^#{1,4}\s+(.*)$", line)
-        if heading:
-            title = heading.group(1).strip()
-            current = {"kind": classify(title), "title": title, "items": [], "prose": []}
-            sections.append(current)
-            continue
-        if current is None:
-            current = {"kind": "info", "title": "Summary", "items": [], "prose": []}
-            sections.append(current)
-        item = re.match(r"^\s*(?:\d+\.|[-*])\s+(.*)$", line)
-        if item:
-            current["items"].append(render_inline(item.group(1)))
-        else:
-            current["prose"].append(render_inline(line))
-    return sections
-
 
 def _get_ads_overview(site_id: str, curr_start: date, curr_end: date, prev_start: date, prev_end: date) -> tuple[dict, dict, dict]:
     """Query ads summary (Google Ads + Meta) for current and previous period."""
@@ -627,11 +412,16 @@ def overview(request):
 
     curr_start, curr_end, prev_start, prev_end, mode = get_active_period(request)
 
-    stats, seo_curr, seo_prev = _get_kpi_stats(site_id, curr_start, curr_end, prev_start, prev_end)
-    top_pages = _get_top_pages(site_id, curr_start, curr_end)
-    chart = _get_traffic_chart(site_id, curr_start, curr_end)
-    ai_summary = _get_ai_summary(site_id)
-    ai_summary_sections = _parse_ai_summary(ai_summary)
+    seo_curr, seo_prev = get_kpi_raw(site_id, curr_start, curr_end, prev_start, prev_end)
+    stats = format_kpi_cards(seo_curr, seo_prev)
+    top_pages_raw = query_top_pages_raw(site_id, curr_start, curr_end)
+    top_pages = [
+        {"page": p["page"], "clicks": f"{p['clicks']:,}", "impressions": f"{p['impressions']:,}", "ctr": f"{p['ctr']:.1f}%"}
+        for p in top_pages_raw
+    ]
+    chart = build_traffic_chart(query_daily_traffic_raw(site_id, curr_start, curr_end))
+    ai_summary = get_ai_summary_text(site_id)
+    ai_summary_sections = parse_ai_summary(ai_summary)
     ads_overview, ads_curr, ads_prev = _get_ads_overview(site_id, curr_start, curr_end, prev_start, prev_end)
     keywords_overview = _get_keywords_overview(site_id)
     positioning_overview = _get_positioning_overview(site_id)
@@ -2068,7 +1858,7 @@ def export_csv(request, table_name):
     data = []
     try:
         if table_name == "top_pages":
-            data = _get_top_pages(site_id, curr_start, curr_end)
+            data = query_top_pages_raw(site_id, curr_start, curr_end, limit=5000)
         elif table_name == "keywords":
             data = _get_keywords_overview(site_id, limit=5000)
         elif table_name == "seo_country":

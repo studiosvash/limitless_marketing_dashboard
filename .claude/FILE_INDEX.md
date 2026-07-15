@@ -51,6 +51,16 @@ worse than none. Status: (exists) = on disk now · (planned: Phase N) = not yet 
 | `apps/sync/views.py` | `sync_all_view`, `sync_page_view`, `sync_status_view` — HTMX polling endpoints | exists |
 | `apps/sync/urls.py` | `/sync/all/`, `/sync/page/<page>/`, `/sync/status/` (app_name="sync") | exists |
 | `templates/sync/progress.html` | HTMX progress bar partial (self-polling when active_sync=True) | exists |
+| `apps/api/authentication.py` | `BearerTokenAuthentication` (DRF token auth, `Bearer` keyword) | exists (Phase A) |
+| `apps/api/serializers.py` | `ProjectSerializer`, `ProjectCreateSerializer`, `OverviewQuerySerializer` | exists (Phase A) |
+| `apps/api/views.py` | `PingView`, `ProjectListCreateView`, `ProjectOverviewView` (all `login_not_required` + DRF `IsAuthenticated`) | exists (Phase A) |
+| `apps/api/urls.py` | `/api/ping`, `/api/projects`, `/api/projects/<slug>/overview` | exists (Phase A) |
+| `apps/api/tests/` | `test_ping`, `test_projects`, `test_overview` (E1 Site health + E2 cross-module feed) | exists (Phase A) |
+| `apps/dashboard/services/overview_service.py` | Shared Overview data layer: KPI/trend/top-page builders, `range_to_period_dates`, `compute_site_health` (E1), `build_pillars`/`build_modules`/`build_priority_feed` (E2), `build_summary_lists` | exists (Phase A) |
+| `apps/dashboard/services/tests/test_overview_service.py` | Pinning + API-shape tests for `overview_service` | exists (Phase A) |
+| `apps/dashboard/spa_views.py` | Serves the approved SPA at `/app/` with per-request token bootstrap (baseUrl `'/'`) | exists (Phase A) |
+| `apps/sync/management/commands/add_project_fields.py` | Idempotent: adds `slug`/`vertical`/`location` to `sites`, backfills | exists (Phase A) |
+| `static/spa/` | Copy of the approved Limitless SPA (`index.html`, `support.js`, `app/`, `assets/`, `css/`) served at `/app/` | exists (Phase A) |
 
 *Each app currently holds the default Django files (`models.py`, `views.py`, `admin.py`,
 `apps.py`, `tests.py`, `migrations/`). App configs use dotted name `apps.<name>` with a short

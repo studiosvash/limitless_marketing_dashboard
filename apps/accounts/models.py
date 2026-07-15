@@ -9,6 +9,7 @@ from django.conf import settings
 from django.db import models
 from django.db.models.signals import post_save
 from django.dispatch import receiver
+from rest_framework.authtoken.models import Token
 
 
 class Role(models.TextChoices):
@@ -49,3 +50,11 @@ def ensure_profile(sender, instance, created, **kwargs):
     is overridden by seed_users / admin as needed."""
     if created:
         UserProfile.objects.get_or_create(user=instance)
+
+
+@receiver(post_save, sender=settings.AUTH_USER_MODEL)
+def ensure_auth_token(sender, instance, created, **kwargs):
+    """Every user gets a DRF token so the SPA can authenticate as `Authorization: Bearer <key>`
+    (see apps.api.authentication.BearerTokenAuthentication). get_or_create is idempotent, so
+    this is safe to run on every save, not just creation."""
+    Token.objects.get_or_create(user=instance)

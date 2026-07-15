@@ -17,10 +17,13 @@ Including another URLconf
 from django.contrib import admin
 from django.urls import include, path
 
+from apps.dashboard.spa_views import spa_index
+
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('', include('apps.accounts.urls')),
     path('', include('apps.dashboard.urls')),
     path('', include('apps.sync.urls')),
     path('api/', include('apps.api.urls')),
+    path('app/', spa_index, name='spa'),
 ]

@@ -2,6 +2,23 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **EXECUTED 2026-07-15 with two client-requested enhancements to Task 7 (recorded here so the
+> plan matches what shipped):**
+> - **E1 — Site health is real, not `setup`.** Task 7's original `build_pillars` hardcoded
+>   Site health to `state:"setup"`. Instead `overview_service.compute_site_health()` computes a
+>   real composite score (GSC page coverage + indexing + PageSpeed-when-present), resilient to a
+>   missing `pagespeed` table. The Site Audit module reflects the same score. Only Paid ROAS and
+>   AI visibility stay `setup` (genuinely unconnected). Task 7's `test_unbuilt_pillars_report_setup_state`
+>   became `test_site_health_pillar_is_real_when_page_data_exists`.
+> - **E2 — the priority feed is cross-module, not `[]`.** Task 7 originally returned
+>   `priority: []` ("Phase B"). Instead `overview_service.build_priority_feed()` aggregates
+>   unacknowledged alerts across modules (SEO anomalies, Site Audit technical + indexing issues,
+>   decision signals), severity-sorted, top 6. Heading stays "Priority feed" (user kept the name).
+> - Also: Task 8 sets `baseUrl = '/'` (NOT `''` — empty is falsy in api.js's `if(config.baseUrl)`
+>   fixture switch) and injects the bootstrap right after api.js (not before `</body>`) so it beats
+>   the component's first fetch. DRF views carry `@login_not_required` to bypass the session
+>   `LoginRequiredMiddleware` so unauth requests get DRF's 401, not a 302 redirect.
+
 **Goal:** Stand up the DRF API foundation (token auth, project model, Overview endpoint) and
 serve the approved SPA (`Limitless Marketing Dashboard v2.dc.html`) against real data — proving
 the whole new architecture end-to-end on one page before Phase B ports the rest.
