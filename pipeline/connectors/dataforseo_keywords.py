@@ -215,6 +215,136 @@ class DataForSEOKeywordsConnector(BaseConnector):
         return {"status": "ok", "rows": rows, "no_data": no_data,
                 "location": location_name, "error": None}
 
+    # ─────────────────────────────────────────────
+    # Keyword Explorer EXPANSION (on-demand research). Unlike lookup_keywords (which only
+    # returns metrics for the exact seeds), this uses Labs keyword_ideas — the widest-net
+    # category-relevance expansion — so one seed returns many *new* keyword ideas. Read-only,
+    # metered, triggered by an explicit user click → consistent with the data-first contract.
+    # ─────────────────────────────────────────────
+
+    _QUESTION_WORDS = frozenset({
+        "how", "what", "why", "when", "where", "who", "which", "whose", "whom",
+        "is", "are", "can", "could", "should", "would", "will", "do", "does",
+        "did", "was", "were", "has", "have",
+    })
+
+    @staticmethod
+    def _classify_match(kw: str, seed_phrases: list[str], seed_token_sets: list[set]) -> str:
+        """Bucket a keyword_ideas result relative to the seeds for the SPA's tab filters.
+        keyword_ideas IS the 'broad' category-relevance set (widest net — includes terms that
+        don't contain the seed), so the default is 'broad'; only the narrower forms peel off.
+        Precedence: exact > questions > phrase > broad. ('related' is reserved for a future
+        related_keywords call and stays empty here.) seed_token_sets is unused now but kept for
+        signature stability with callers/tests."""
+        k = (kw or "").lower().strip()
+        if not k:
+            return "broad"
+        if k in seed_phrases:
+            return "exact"
+        first = k.split()[0] if k.split() else ""
+        if first in DataForSEOKeywordsConnector._QUESTION_WORDS or "?" in k:
+            return "questions"
+        if any(p and p in k for p in seed_phrases):
+            return "phrase"
+        return "broad"
+
+    @with_retry(max_retries=2, base_delay=3.0)
+    def _fetch_keyword_ideas(self, seeds: list[str], location_name: str, limit: int) -> dict:
+        """One Labs keyword_ideas/live call. Returns the raw task dict (items + cost)."""
+        payload = [{
+            "keywords": [s.lower() for s in seeds][:200],
+            "location_name": location_name,
+            "language_name": "English",
+            "include_serp_info": True,
+            "limit": max(1, min(limit, 1000)),
+            "order_by": ["keyword_info.search_volume,desc"],
+        }]
+        resp = requests.post(
+            f"{DATAFORSEO_BASE}/dataforseo_labs/google/keyword_ideas/live",
+            auth=self.auth,
+            json=payload,
+            timeout=45,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    @staticmethod
+    def _parse_idea_item(item: dict) -> Optional[dict]:
+        """Map one keyword_ideas item to the Explorer's row shape (before match/tracked).
+        Returns None if the item has no keyword."""
+        kw = item.get("keyword")
+        if not kw:
+            return None
+        info = item.get("keyword_info") or {}
+        props = item.get("keyword_properties") or {}
+        intent_info = item.get("search_intent_info") or {}
+        serp = item.get("serp_info") or {}
+
+        # monthly_searches comes newest-first; the sparkline wants oldest→newest.
+        monthly_raw = info.get("monthly_searches") or []
+        monthly = [int(m.get("search_volume") or 0) for m in reversed(monthly_raw)][-12:]
+
+        main_intent = intent_info.get("main_intent") if isinstance(intent_info, dict) else None
+        serp_types = serp.get("serp_item_types") if isinstance(serp, dict) else None
+
+        return {
+            "kw": kw,
+            "volume": info.get("search_volume") or 0,
+            "kd": props.get("keyword_difficulty") if props.get("keyword_difficulty") is not None else 0,
+            "cpc": round(info.get("cpc"), 2) if info.get("cpc") is not None else 0,
+            "intent": (main_intent or "informational").lower(),
+            "monthly": monthly,
+            "serpFeatures": list(serp_types) if serp_types else [],
+        }
+
+    def expand_keywords(self, seeds: list[str], location_name: str = "United States",
+                        limit: int = 100) -> dict:
+        """Keyword Explorer expansion. Read-only — never writes to the DB. Always returns a
+        dict the endpoint can branch on:
+
+            {"status": "ok"|"error", "location": str, "cost": float,
+             "rows": [{kw, volume, kd, cpc, intent, match, monthly, serpFeatures}], "error": str|None}
+        """
+        import re
+        cleaned, seen = [], set()
+        for kw in seeds:
+            k = (kw or "").strip()
+            if k and k.lower() not in seen:
+                seen.add(k.lower())
+                cleaned.append(k)
+
+        if not cleaned:
+            return {"status": "error", "location": location_name, "cost": 0, "rows": [],
+                    "error": "Enter at least one seed keyword."}
+        if not self.login or not self.password:
+            return {"status": "error", "location": location_name, "cost": 0, "rows": [],
+                    "error": "DataForSEO credentials are not configured."}
+
+        try:
+            payload = self._fetch_keyword_ideas(cleaned, location_name, limit)
+        except Exception as exc:
+            self.logger.warning(f"[dataforseo_keywords] expand_keywords failed: {exc}")
+            return {"status": "error", "location": location_name, "cost": 0, "rows": [],
+                    "error": f"Couldn't fetch keyword ideas: {exc}"}
+
+        task = (payload.get("tasks") or [{}])[0]
+        result = (task.get("result") or [{}])[0]
+        items = result.get("items") or []
+        cost = payload.get("cost") or 0
+
+        seed_phrases = [s.lower().strip() for s in cleaned]
+        seed_token_sets = [set(re.findall(r"[a-z0-9]+", p)) for p in seed_phrases]
+
+        rows = []
+        for item in items:
+            row = self._parse_idea_item(item)
+            if row:
+                row["match"] = self._classify_match(row["kw"], seed_phrases, seed_token_sets)
+                rows.append(row)
+
+        return {"status": "ok", "location": location_name, "cost": round(float(cost), 4),
+                "rows": rows, "error": None}
+
     def fetch(self, site_id: Optional[str] = None) -> list[dict]:
         """
         Fetch keyword metadata (volume, KD, CPC) for all tracked keywords.

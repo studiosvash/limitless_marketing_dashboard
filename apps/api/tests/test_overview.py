@@ -1,6 +1,7 @@
 import tempfile
 from datetime import date
 from pathlib import Path
+from unittest import mock
 
 from django.contrib.auth import get_user_model
 from django.test import override_settings
@@ -117,3 +118,39 @@ class OverviewEndpointTests(APITestCase):
     def test_alerts_unknown_slug_is_404(self):
         resp = self.client_auth.get("/api/projects/does-not-exist/alerts")
         self.assertEqual(resp.status_code, 404)
+
+    def test_research_returns_rows_and_flags_tracked(self):
+        # Seed one tracked keyword so the endpoint flags it.
+        from pipeline.db.schema import KeywordRanking
+        with get_session() as session:
+            session.add(KeywordRanking(date=date(2026, 7, 1), site_id="sc-domain:fusehealth.com",
+                                       keyword="iv therapy", search_volume=100))
+
+        fake = {
+            "status": "ok", "location": "United States", "cost": 0.02, "error": None,
+            "rows": [
+                {"kw": "iv therapy", "volume": 8100, "kd": 42, "cpc": 3.99, "intent": "commercial",
+                 "match": "exact", "monthly": [1, 2, 3], "serpFeatures": ["organic"]},
+                {"kw": "mobile iv drip", "volume": 500, "kd": 20, "cpc": 1.10, "intent": "informational",
+                 "match": "related", "monthly": [3, 2, 1], "serpFeatures": []},
+            ],
+        }
+        with mock.patch(
+            "pipeline.connectors.dataforseo_keywords.DataForSEOKeywordsConnector.expand_keywords",
+            return_value=fake,
+        ):
+            resp = self.client_auth.post("/api/research", {
+                "project": "fusehealth", "keywords": ["iv therapy"], "location": "United States",
+            }, format="json")
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(body["location"], "United States")
+        self.assertEqual(body["cost"], 0.02)
+        by_kw = {r["kw"]: r for r in body["rows"]}
+        self.assertTrue(by_kw["iv therapy"]["tracked"])
+        self.assertFalse(by_kw["mobile iv drip"]["tracked"])
+
+    def test_research_empty_seeds_is_400(self):
+        resp = self.client_auth.post("/api/research", {"project": "fusehealth", "keywords": []},
+                                     format="json")
+        self.assertEqual(resp.status_code, 400)

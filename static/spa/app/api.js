@@ -10,7 +10,12 @@
 window.FuseAPI = (function () {
   'use strict';
 
-  const config = { baseUrl: null, authToken: null, minLatency: 160, maxLatency: 420 };
+  // baseUrl defaults to '/' in this served copy (NOT null) so EVERY call hits the real DRF API.
+  // The dc framework relocates the <helmet> scripts and executes api.js twice, creating a second
+  // window.FuseAPI whose config would otherwise reset to fixture mode (null) after boot() ran on
+  // the first instance — making POSTs silently fall back to fixtures. A '/' default is immune to
+  // that ordering. (The upstream design file keeps null = fixture mode; only this copy is patched.)
+  const config = { baseUrl: '/', authToken: null, minLatency: 160, maxLatency: 420 };
   const LS_KEY = 'fuse.mutations.v1';
 
   /* ---------- persisted demo mutations (replaced by real DB later) ---------- */
@@ -42,6 +47,12 @@ window.FuseAPI = (function () {
     if (params) Object.entries(params).forEach(([k, v]) => { if (v != null) url.searchParams.set(k, v); });
     const headers = { 'Content-Type': 'application/json' };
     if (config.authToken) headers['Authorization'] = 'Bearer ' + config.authToken;
+    // Django CSRF: echo the csrftoken cookie back on unsafe methods so DRF SessionAuthentication
+    // accepts the request (the /app/ view sets the cookie via @ensure_csrf_cookie).
+    if (method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS') {
+      const m = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
+      if (m) headers['X-CSRFToken'] = decodeURIComponent(m[1]);
+    }
     const res = await fetch(url, {
       method,
       headers,

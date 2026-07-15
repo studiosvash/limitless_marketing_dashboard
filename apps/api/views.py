@@ -1,3 +1,4 @@
+import math
 from datetime import date as date_cls
 
 from django.contrib.auth.decorators import login_not_required
@@ -12,6 +13,19 @@ from pipeline.services.site_service import add_site, list_sites
 from pipeline.utils.db_connection import get_session
 
 from .serializers import OverviewQuerySerializer, ProjectCreateSerializer, ProjectSerializer
+
+
+def json_safe(obj):
+    """Recursively replace NaN/inf floats with None. pandas leaves NaN in numeric columns,
+    and DRF's JSON renderer rejects them ('Out of range float values are not JSON compliant').
+    Applied to any payload built from a DataFrame before it goes out the wire."""
+    if isinstance(obj, float):
+        return None if (math.isnan(obj) or math.isinf(obj)) else obj
+    if isinstance(obj, dict):
+        return {k: json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [json_safe(v) for v in obj]
+    return obj
 
 
 @method_decorator(login_not_required, name="dispatch")
@@ -167,3 +181,141 @@ class ProjectAlertsView(APIView):
 
         feed = build_alerts_feed(site_url, curr_start, curr_end, signals)
         return Response({"feed": feed})
+
+
+@method_decorator(login_not_required, name="dispatch")
+class ProjectKeywordsView(APIView):
+    """GET /api/projects/<slug>/keywords -> {keywords, segments, kpis, intents, difficulty}
+
+    The tracked-keyword portfolio for the Keywords page (DB-first, reads keyword_rankings).
+    The Keyword Explorer (POST /api/research) sits on top of this page, so the page must
+    render for the Explorer to be reachable. Reuses the existing keyword-intelligence query
+    (apps.dashboard.views._get_keyword_intelligence) rather than re-deriving segments."""
+
+    _KD_HARD = 60
+    _KD_MED = 30
+
+    def get(self, request, slug):
+        from datetime import timedelta
+
+        from django.http import Http404
+
+        from apps.dashboard.views import _get_keyword_intelligence
+        from pipeline.db.schema import KeywordRanking
+
+        with get_session() as session:
+            site = session.execute(select(Site).where(Site.slug == slug)).scalars().first()
+            site_url = site.site_url if site else None
+        if site_url is None:
+            raise Http404(f"No project with slug '{slug}'")
+
+        with get_session() as session:
+            anchor = session.execute(
+                select(func.max(KeywordRanking.date)).where(KeywordRanking.site_id == site_url)
+            ).scalar() or date_cls.today()
+
+        # Include the anchor date (unlike the Overview window, which treats it as "today").
+        curr_end, curr_start = anchor, anchor - timedelta(days=90)
+        prev_end, prev_start = curr_start - timedelta(days=1), curr_start - timedelta(days=91)
+        intel = _get_keyword_intelligence(site_url, curr_start, curr_end, prev_start, prev_end)
+
+        import math
+
+        def _num(v):
+            # pandas leaves NaN (a float) in numeric columns even after None-substitution, and
+            # `float('nan') or 0` is NaN (truthy) -> int(NaN) explodes. Coerce NaN/None -> None.
+            if v is None:
+                return None
+            try:
+                f = float(v)
+            except (TypeError, ValueError):
+                return None
+            return None if math.isnan(f) else f
+
+        def _row(r):
+            pos, prev = _num(r.get("position")), _num(r.get("prev_position"))
+            return {
+                "id": r["keyword"],
+                "kw": r["keyword"],
+                "url": r.get("url"),
+                "source": r.get("source") or "gsc",
+                "intent": (r.get("intent") or "informational").lower(),
+                "pos": round(pos) if pos is not None else None,
+                "prevPos": round(prev) if prev is not None else None,
+                "volume": int(_num(r.get("search_volume")) or 0),
+                "kd": int(_num(r.get("keyword_difficulty")) or 0),
+                "clicks": int(_num(r.get("clicks")) or 0),
+                "monthly": [],  # per-keyword monthly trend not stored; sparkline renders flat
+            }
+
+        keywords = [_row(r) for r in intel["all_keywords"]]
+        seg_ids = lambda seg: [r["keyword"] for r in intel.get(seg, [])]
+
+        return Response(json_safe({
+            "keywords": keywords,
+            "segments": {
+                "quick_wins": seg_ids("quick_wins"),
+                "striking": seg_ids("striking"),
+                "declining": seg_ids("declining"),
+                "low_ctr": seg_ids("low_ctr"),
+            },
+            "kpis": {
+                "total": int(_num(intel["total_tracked"]) or 0),
+                "avg_pos": round(_num(intel["avg_position"]), 1) if _num(intel["avg_position"]) else 0,
+                "total_volume": int(_num(intel["total_volume"]) or 0),
+                "total_clicks": int(_num(intel["total_clicks"]) or 0),
+            },
+            "intents": intel["intent_distribution"],
+            "difficulty": {
+                "easy": intel["kd_easy"],
+                "medium": intel["kd_medium"],
+                "hard": intel["kd_hard"],
+            },
+        }))
+
+
+@method_decorator(login_not_required, name="dispatch")
+class KeywordResearchView(APIView):
+    """POST /api/research  {project, keywords:[...], location} -> {location, cost, rows:[...]}
+
+    The Keyword Explorer's on-demand expansion: one metered DataForSEO keyword_ideas call
+    turns seed(s) into many keyword ideas. Read-only (never writes) and user-triggered, so
+    calling the API here is consistent with the data-first contract. Rows already tracked for
+    the project are flagged so the SPA can show the 'Tracked' badge."""
+
+    def post(self, request):
+        from pipeline.db.schema import KeywordRanking
+        from pipeline.connectors.dataforseo_keywords import DataForSEOKeywordsConnector
+
+        keywords = request.data.get("keywords") or []
+        location = (request.data.get("location") or "United States").strip()
+        slug = (request.data.get("project") or "").strip()
+        if isinstance(keywords, str):
+            keywords = keywords.split(",")
+        seeds = [k.strip() for k in keywords if isinstance(k, str) and k.strip()]
+        if not seeds:
+            return Response({"detail": "At least one seed keyword is required."},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        result = DataForSEOKeywordsConnector().expand_keywords(seeds, location)
+        if result["status"] != "ok":
+            return Response({"detail": result["error"]}, status=status.HTTP_502_BAD_GATEWAY)
+
+        # Flag rows already tracked for this project (cheap distinct lookup, best-effort).
+        tracked: set[str] = set()
+        if slug:
+            with get_session() as session:
+                site = session.execute(select(Site).where(Site.slug == slug)).scalars().first()
+                if site:
+                    rows = session.execute(
+                        select(KeywordRanking.keyword).where(KeywordRanking.site_id == site.site_url).distinct()
+                    ).scalars().all()
+                    tracked = {(k or "").lower() for k in rows}
+        for row in result["rows"]:
+            row["tracked"] = row["kw"].lower() in tracked
+
+        return Response({
+            "location": result["location"],
+            "cost": result["cost"],
+            "rows": result["rows"],
+        })

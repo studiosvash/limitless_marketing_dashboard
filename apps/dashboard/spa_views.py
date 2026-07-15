@@ -18,11 +18,16 @@ from pathlib import Path
 from django.conf import settings
 from django.contrib.auth.decorators import login_required
 from django.http import HttpResponse
+from django.views.decorators.csrf import ensure_csrf_cookie
 
 _SPA_HTML_PATH = Path(settings.BASE_DIR) / "static" / "spa" / "index.html"
 
 
 @login_required
+@ensure_csrf_cookie
 def spa_index(request):
+    # @ensure_csrf_cookie sets the `csrftoken` cookie on load so the SPA's fetch() can echo it
+    # back as X-CSRFToken on POST/PUT/DELETE (see static/spa/app/api.js). Required because
+    # DRF SessionAuthentication enforces CSRF on unsafe methods.
     html = _SPA_HTML_PATH.read_text(encoding="utf-8")
     return HttpResponse(html, content_type="text/html; charset=utf-8")
