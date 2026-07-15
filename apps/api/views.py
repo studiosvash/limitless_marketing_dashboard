@@ -1,33 +1,87 @@
-import math
 from datetime import date as date_cls
 
 from django.contrib.auth.decorators import login_not_required
+from django.http import Http404
 from django.utils.decorators import method_decorator
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from sqlalchemy import func, select
 
-from pipeline.db.schema import Site, SEODaily
 from pipeline.services.site_service import add_site, list_sites
 from pipeline.utils.db_connection import get_session
+from pipeline.db.schema import Site, SEODaily
+
+from apps.dashboard.services.overview_service import (
+    get_kpi_raw, build_kpis_api, build_top_pages_api, query_daily_traffic_raw,
+    range_to_period_dates, get_ai_summary_text, parse_ai_summary, build_summary_lists,
+    build_pillars, build_modules, build_priority_feed,
+)
+from apps.dashboard.services.decision_engine import generate_signals, generate_ad_overlap_signals
+from apps.dashboard.services.keywords_service import build_keywords_response
+from apps.dashboard.services.positioning_service import build_positions_response
+from apps.dashboard.services.seo_service import build_seo_response
+from apps.dashboard.services.alerts_service import build_alerts_response
+from apps.dashboard.services.backlinks_service import build_backlinks_response
+from apps.dashboard.services.site_audit_service import build_site_audit_response
+from apps.dashboard.services.offsite_service import build_offsite_response
+from apps.dashboard.services.ads_service import build_ads_response
+from apps.dashboard.services.ai_service import build_ai_response
+from apps.dashboard.services.settings_service import build_settings_response, apply_settings_update
+from apps.dashboard.models import AITarget, AIPromptList, AIPrompt
+from apps.dashboard.services.shared_queries import (
+    _get_ads_overview, _get_keywords_overview,
+)
+from apps.dashboard.services.sync_api_service import (
+    start_sync_run, task_status,
+)
+from apps.dashboard.services.keyword_research_service import (
+    run_keyword_research, run_prompt_research,
+)
 
 from .serializers import OverviewQuerySerializer, ProjectCreateSerializer, ProjectSerializer
 
 
-def json_safe(obj):
-    """Recursively replace NaN/inf floats with None. pandas leaves NaN in numeric columns,
-    and DRF's JSON renderer rejects them ('Out of range float values are not JSON compliant').
-    Applied to any payload built from a DataFrame before it goes out the wire."""
-    if isinstance(obj, float):
-        return None if (math.isnan(obj) or math.isinf(obj)) else obj
-    if isinstance(obj, dict):
-        return {k: json_safe(v) for k, v in obj.items()}
-    if isinstance(obj, (list, tuple)):
-        return [json_safe(v) for v in obj]
-    return obj
+def resolve_project_or_404(slug: str) -> Site:
+    """Look up a Site by its public slug (the API's project `id`). Raises Http404 if no
+    active or inactive site matches — used by every apps.api view that takes a `slug` URL
+    kwarg."""
+    with get_session() as session:
+        site = session.execute(select(Site).where(Site.slug == slug)).scalars().first()
+    if site is None:
+        raise Http404(f"No project with slug '{slug}'")
+    return site
 
 
+def latest_data_anchor(site_id: str) -> date_cls:
+    """Most recent date we have SEO data for, or today if none — periods anchor to this so
+    the API never defaults to a window that postdates the data."""
+    with get_session() as session:
+        return session.execute(
+            select(func.max(SEODaily.date)).where(SEODaily.site_id == site_id)
+        ).scalar() or date_cls.today()
+
+
+def resolve_range_periods(request, slug: str):
+    """Resolve a range-taking view's full request context in one call: site lookup (404 on
+    unknown slug), `range` query param validation (default 30d), and period-date resolution
+    anchored to the latest data date. Returns (site_id, curr_start, curr_end, prev_start,
+    prev_end). Used by every apps.api view that takes both a `slug` and a `range` param."""
+    site_id = resolve_project_or_404(slug).site_url
+
+    query = OverviewQuerySerializer(data=request.query_params)
+    query.is_valid(raise_exception=True)
+    range_key = query.validated_data["range"]
+
+    anchor = latest_data_anchor(site_id)
+    curr_start, curr_end, prev_start, prev_end = range_to_period_dates(range_key, anchor)
+    return site_id, curr_start, curr_end, prev_start, prev_end
+
+
+# login_not_required bypasses session-based LoginRequiredMiddleware (active project-wide)
+# so DRF's own TokenAuthentication/IsAuthenticated run instead — without this, anonymous
+# requests get a 302 to the login page rather than DRF's 401. Every future apps.api view
+# needs this too.
 @method_decorator(login_not_required, name="dispatch")
 class PingView(APIView):
     """Smoke-test endpoint: proves auth + routing work before any real data endpoint exists."""
@@ -38,9 +92,6 @@ class PingView(APIView):
 
 @method_decorator(login_not_required, name="dispatch")
 class ProjectListCreateView(APIView):
-    """GET  /api/projects        -> list active projects (sites), HANDOFF_SPEC project shape.
-    POST /api/projects         -> create a new project (site)."""
-
     def get(self, request):
         sites = list_sites(active_only=True)
         return Response(ProjectSerializer(sites, many=True).data)
@@ -64,78 +115,37 @@ class ProjectListCreateView(APIView):
 
 @method_decorator(login_not_required, name="dispatch")
 class ProjectOverviewView(APIView):
-    """GET /api/projects/<slug>/overview?range=7d|30d|90d
-
-    Returns {kpis, pillars, modules, priority, signals, trend, summary, topPages} per
-    HANDOFF_SPEC.md 1/2.2 -- all real DB data. Site health (pillars/modules) and the
-    cross-module Intelligence (priority) feed are populated from data we already have
-    (GSC coverage, indexing, anomalies, technical issues, decision signals)."""
-
     def get(self, request, slug):
-        from django.http import Http404
+        site_id, curr_start, curr_end, prev_start, prev_end = resolve_range_periods(request, slug)
 
-        from apps.dashboard.services.overview_service import (
-            get_kpi_raw, build_kpis_api, build_top_pages_api, query_daily_traffic_raw,
-            range_to_period_dates, get_ai_summary_text, parse_ai_summary,
-            build_summary_lists, build_pillars, build_modules, compute_site_health,
-            build_priority_feed,
-        )
-        from apps.dashboard.services.decision_engine import (
-            generate_signals, generate_ad_overlap_signals,
-        )
-        from apps.dashboard.views import (
-            _get_ads_overview, _get_keywords_overview,
-        )
-
-        with get_session() as session:
-            site = session.execute(select(Site).where(Site.slug == slug)).scalars().first()
-            site_url = site.site_url if site else None
-        if site_url is None:
-            raise Http404(f"No project with slug '{slug}'")
-
-        query = OverviewQuerySerializer(data=request.query_params)
-        query.is_valid(raise_exception=True)
-        range_key = query.validated_data["range"]
-
-        with get_session() as session:
-            anchor = session.execute(
-                select(func.max(SEODaily.date)).where(SEODaily.site_id == site_url)
-            ).scalar() or date_cls.today()
-
-        curr_start, curr_end, prev_start, prev_end = range_to_period_dates(range_key, anchor)
-
-        kpis_current, kpis_previous = get_kpi_raw(site_url, curr_start, curr_end, prev_start, prev_end)
+        kpis_current, kpis_previous = get_kpi_raw(site_id, curr_start, curr_end, prev_start, prev_end)
         kpis = build_kpis_api(kpis_current, kpis_previous)
-        trend = query_daily_traffic_raw(site_url, curr_start, curr_end)
-        top_pages = build_top_pages_api(site_url, curr_start, curr_end)
+        trend = query_daily_traffic_raw(site_id, curr_start, curr_end)
+        top_pages = build_top_pages_api(site_id, curr_start, curr_end)
 
-        ads_overview, ads_curr, ads_prev = _get_ads_overview(site_url, curr_start, curr_end, prev_start, prev_end)
+        ads_overview, ads_curr, ads_prev = _get_ads_overview(site_id, curr_start, curr_end, prev_start, prev_end)
         signals = generate_signals(kpis_current, kpis_previous, ads_curr, ads_prev)
-        signals += generate_ad_overlap_signals(site_url, curr_start, curr_end)
+        signals += generate_ad_overlap_signals(site_id, curr_start, curr_end)
+        signals = signals[:3]
 
-        keywords_overview = _get_keywords_overview(site_url)
-        top3_count = sum(
-            1 for k in keywords_overview
-            if k["position"] not in ("N/A",) and float(k["position"] or 99) <= 3
-        )
+        keywords_overview = _get_keywords_overview(site_id)
+        top3_count = sum(1 for k in keywords_overview if k["position"] not in ("N/A",) and float(k["position"] or 99) <= 3)
 
-        site_health = compute_site_health(site_url, curr_start, curr_end)
-        pillars = build_pillars(kpis_current, kpis_previous, top3_count, site_health)
+        pillars = build_pillars(site_id, kpis_current, kpis_previous, top3_count)
         seo_stat = f"{int(kpis_current['clicks']):,} clicks"
-        modules = build_modules(seo_stat, len(keywords_overview), top3_count,
-                                kpis_current["avg_position"], site_health)
+        modules = build_modules(seo_stat, len(keywords_overview), top3_count, kpis_current["avg_position"])
 
-        priority = build_priority_feed(site_url, curr_start, curr_end, signals)
-
-        ai_summary_sections = parse_ai_summary(get_ai_summary_text(site_url))
+        ai_summary_sections = parse_ai_summary(get_ai_summary_text(site_id))
         summary = build_summary_lists(ai_summary_sections)
+
+        priority = build_priority_feed(build_alerts_response(site_id)["feed"])
 
         return Response({
             "kpis": kpis,
             "pillars": pillars,
             "modules": modules,
             "priority": priority,
-            "signals": signals[:3],
+            "signals": signals,
             "trend": trend,
             "summary": summary,
             "topPages": top_pages,
@@ -143,291 +153,259 @@ class ProjectOverviewView(APIView):
 
 
 @method_decorator(login_not_required, name="dispatch")
-class ProjectAlertsView(APIView):
-    """GET /api/projects/<slug>/alerts -> {feed: [alert, ...]}
-
-    The SPA fetches this on EVERY boot (for the sidebar 'Alerts' badge), so without it
-    the app sets a global error and no view -- including Overview -- can render. The feed
-    is the same cross-module aggregation that powers the Overview priority feed, returned
-    in full (severity-sorted). Ack/mutation is Phase B; every item is unacknowledged here."""
-
+class ProjectSEOView(APIView):
     def get(self, request, slug):
-        from django.http import Http404
+        site_id = resolve_project_or_404(slug).site_url
+        anchor = latest_data_anchor(site_id)
+        curr_start, curr_end, _, _ = range_to_period_dates("30d", anchor)
 
-        from apps.dashboard.services.overview_service import (
-            range_to_period_dates, get_kpi_raw, build_alerts_feed,
-        )
-        from apps.dashboard.services.decision_engine import (
-            generate_signals, generate_ad_overlap_signals,
-        )
-        from apps.dashboard.views import _get_ads_overview
-
-        with get_session() as session:
-            site = session.execute(select(Site).where(Site.slug == slug)).scalars().first()
-            site_url = site.site_url if site else None
-        if site_url is None:
-            raise Http404(f"No project with slug '{slug}'")
-
-        with get_session() as session:
-            anchor = session.execute(
-                select(func.max(SEODaily.date)).where(SEODaily.site_id == site_url)
-            ).scalar() or date_cls.today()
-
-        curr_start, curr_end, prev_start, prev_end = range_to_period_dates("30d", anchor)
-        kpis_current, kpis_previous = get_kpi_raw(site_url, curr_start, curr_end, prev_start, prev_end)
-        _, ads_curr, ads_prev = _get_ads_overview(site_url, curr_start, curr_end, prev_start, prev_end)
-        signals = generate_signals(kpis_current, kpis_previous, ads_curr, ads_prev)
-        signals += generate_ad_overlap_signals(site_url, curr_start, curr_end)
-
-        feed = build_alerts_feed(site_url, curr_start, curr_end, signals)
-        return Response({"feed": feed})
+        return Response(build_seo_response(site_id, curr_start, curr_end))
 
 
 @method_decorator(login_not_required, name="dispatch")
 class ProjectKeywordsView(APIView):
-    """GET /api/projects/<slug>/keywords -> {keywords, segments, kpis, intents, difficulty}
-
-    The tracked-keyword portfolio for the Keywords page (DB-first, reads keyword_rankings).
-    The Keyword Explorer (POST /api/research) sits on top of this page, so the page must
-    render for the Explorer to be reachable. Reuses the existing keyword-intelligence query
-    (apps.dashboard.views._get_keyword_intelligence) rather than re-deriving segments."""
-
-    _KD_HARD = 60
-    _KD_MED = 30
-
     def get(self, request, slug):
-        from datetime import timedelta
+        site_id = resolve_project_or_404(slug).site_url
+        anchor = latest_data_anchor(site_id)
+        curr_start, curr_end, prev_start, prev_end = range_to_period_dates("30d", anchor)
 
-        from django.http import Http404
+        return Response(build_keywords_response(site_id, curr_start, curr_end, prev_start, prev_end))
 
-        from apps.dashboard.views import _get_keyword_intelligence
-        from pipeline.db.schema import KeywordRanking
+    def post(self, request, slug):
+        """Track a keyword found in the Keyword Explorer -- persists it to the site's saved
+        keyword list (SavedKeyword), reusing the old MVP's saved_keyword_service. The SPA posts
+        one keyword per call: {kw, volume, kd, cpc, intent}."""
+        from pipeline.services.saved_keyword_service import save_keywords
 
-        with get_session() as session:
-            site = session.execute(select(Site).where(Site.slug == slug)).scalars().first()
-            site_url = site.site_url if site else None
-        if site_url is None:
-            raise Http404(f"No project with slug '{slug}'")
+        site_id = resolve_project_or_404(slug).site_url
+        kw = (request.data.get("kw") or "").strip()
+        if not kw:
+            return Response({"detail": "kw is required"}, status=400)
 
-        with get_session() as session:
-            anchor = session.execute(
-                select(func.max(KeywordRanking.date)).where(KeywordRanking.site_id == site_url)
-            ).scalar() or date_cls.today()
-
-        # Include the anchor date (unlike the Overview window, which treats it as "today").
-        curr_end, curr_start = anchor, anchor - timedelta(days=90)
-        prev_end, prev_start = curr_start - timedelta(days=1), curr_start - timedelta(days=91)
-        intel = _get_keyword_intelligence(site_url, curr_start, curr_end, prev_start, prev_end)
-
-        import math
-
-        def _num(v):
-            # pandas leaves NaN (a float) in numeric columns even after None-substitution, and
-            # `float('nan') or 0` is NaN (truthy) -> int(NaN) explodes. Coerce NaN/None -> None.
-            if v is None:
-                return None
-            try:
-                f = float(v)
-            except (TypeError, ValueError):
-                return None
-            return None if math.isnan(f) else f
-
-        def _row(r):
-            pos, prev = _num(r.get("position")), _num(r.get("prev_position"))
-            return {
-                "id": r["keyword"],
-                "kw": r["keyword"],
-                "url": r.get("url"),
-                "source": r.get("source") or "gsc",
-                "intent": (r.get("intent") or "informational").lower(),
-                "pos": round(pos) if pos is not None else None,
-                "prevPos": round(prev) if prev is not None else None,
-                "volume": int(_num(r.get("search_volume")) or 0),
-                "kd": int(_num(r.get("keyword_difficulty")) or 0),
-                "clicks": int(_num(r.get("clicks")) or 0),
-                "monthly": [],  # per-keyword monthly trend not stored; sparkline renders flat
-            }
-
-        keywords = [_row(r) for r in intel["all_keywords"]]
-        seg_ids = lambda seg: [r["keyword"] for r in intel.get(seg, [])]
-
-        return Response(json_safe({
-            "keywords": keywords,
-            "segments": {
-                "quick_wins": seg_ids("quick_wins"),
-                "striking": seg_ids("striking"),
-                "declining": seg_ids("declining"),
-                "low_ctr": seg_ids("low_ctr"),
-            },
-            "kpis": {
-                "total": int(_num(intel["total_tracked"]) or 0),
-                "avg_pos": round(_num(intel["avg_position"]), 1) if _num(intel["avg_position"]) else 0,
-                "total_volume": int(_num(intel["total_volume"]) or 0),
-                "total_clicks": int(_num(intel["total_clicks"]) or 0),
-            },
-            "intents": intel["intent_distribution"],
-            "difficulty": {
-                "easy": intel["kd_easy"],
-                "medium": intel["kd_medium"],
-                "hard": intel["kd_hard"],
-            },
-        }))
+        row = {
+            "keyword": kw,
+            "search_volume": request.data.get("volume"),
+            "keyword_difficulty": request.data.get("kd"),
+            "cpc": request.data.get("cpc"),
+            "intent": request.data.get("intent"),
+        }
+        saved = save_keywords(site_id, [row], location=request.data.get("location") or "United States")
+        return Response({"saved": saved})
 
 
 @method_decorator(login_not_required, name="dispatch")
-class ProjectPositioningView(APIView):
-    """GET /api/projects/<slug>/positioning -> {distribution, kpis, movement, movers, competitors}
-
-    DB-first from keyword_rankings: current vs previous 14-day window per keyword gives the
-    position distribution, movement counts, and biggest movers. Competitor grid is empty until
-    competitor_keyword_rankings is populated (separate connector)."""
-
+class ProjectPositionsView(APIView):
     def get(self, request, slug):
-        from datetime import timedelta
+        site_id, curr_start, curr_end, prev_start, prev_end = resolve_range_periods(request, slug)
 
-        from django.http import Http404
-        from pipeline.db.schema import KeywordRanking
+        return Response(build_positions_response(site_id, curr_start, curr_end, prev_start, prev_end))
 
-        with get_session() as session:
-            site = session.execute(select(Site).where(Site.slug == slug)).scalars().first()
-            site_url = site.site_url if site else None
-            if site_url is None:
-                raise Http404(f"No project with slug '{slug}'")
 
-            anchor = session.execute(
-                select(func.max(KeywordRanking.date)).where(KeywordRanking.site_id == site_url)
-            ).scalar() or date_cls.today()
-
-            def window(start, end):
-                rows = session.execute(
-                    select(
-                        KeywordRanking.keyword,
-                        func.avg(KeywordRanking.position).label("pos"),
-                        func.max(KeywordRanking.search_volume).label("vol"),
-                        func.sum(KeywordRanking.impressions).label("impr"),
-                        func.sum(KeywordRanking.clicks).label("clicks"),
-                    )
-                    .where(KeywordRanking.site_id == site_url,
-                           KeywordRanking.date >= start, KeywordRanking.date <= end,
-                           KeywordRanking.position.isnot(None))
-                    .group_by(KeywordRanking.keyword)
-                ).all()
-                return {r.keyword: r for r in rows}
-
-            curr = window(anchor - timedelta(days=13), anchor)
-            prev = window(anchor - timedelta(days=27), anchor - timedelta(days=14))
-
-        dist = {"top3": 0, "p4_10": 0, "p11_20": 0, "p21_100": 0}
-        impressions = est_traffic = 0
-        pos_sum = 0
-        movers = []
-        improved = declined = added = 0
-        for kw, r in curr.items():
-            pos = r.pos or 0
-            pos_sum += pos
-            impressions += int(r.impr or 0)
-            est_traffic += int(r.clicks or 0)
-            if pos <= 3:
-                dist["top3"] += 1
-            elif pos <= 10:
-                dist["p4_10"] += 1
-            elif pos <= 20:
-                dist["p11_20"] += 1
-            else:
-                dist["p21_100"] += 1
-            pr = prev.get(kw)
-            if pr is None:
-                added += 1
-            else:
-                change = (pr.pos or 0) - pos
-                if change > 0.5:
-                    improved += 1
-                elif change < -0.5:
-                    declined += 1
-                movers.append({"kw": kw, "prevPos": round(pr.pos or 0), "pos": round(pos),
-                               "volume": int(r.vol or 0), "_chg": abs(change)})
-        lost = sum(1 for kw in prev if kw not in curr)
-        movers.sort(key=lambda m: m["_chg"], reverse=True)
-        for m in movers:
-            m.pop("_chg", None)
-
-        tracked = len(curr)
-        payload = {
-            "distribution": dist,
-            "kpis": {"tracked": tracked, "avg_pos": round(pos_sum / tracked, 1) if tracked else 0,
-                     "est_traffic": est_traffic, "impressions": impressions},
-            "movement": {"improved": improved, "declined": declined, "added": added, "lost": lost},
-            "movers": movers[:12],
-            "competitors": {"domains": [], "rows": []},
-        }
-        return Response(json_safe(payload))
+@method_decorator(login_not_required, name="dispatch")
+class ProjectAlertsView(APIView):
+    def get(self, request, slug):
+        site_id = resolve_project_or_404(slug).site_url
+        return Response(build_alerts_response(site_id))
 
 
 @method_decorator(login_not_required, name="dispatch")
 class ProjectBacklinksView(APIView):
-    """GET /api/projects/<slug>/backlinks -> the SPA Backlinks `data` payload.
-
-    DB-first: returns the stored DataForSEO snapshot (built by backlinks_service on Refresh).
-    Before the first Refresh there's no snapshot, so a zeroed empty-state payload is returned
-    and the page renders cleanly instead of erroring."""
-
     def get(self, request, slug):
-        from django.http import Http404
-
-        from pipeline.services.backlinks_service import load_backlinks, empty_backlinks_payload
-
-        with get_session() as session:
-            site = session.execute(select(Site).where(Site.slug == slug)).scalars().first()
-            site_url = site.site_url if site else None
-        if site_url is None:
-            raise Http404(f"No project with slug '{slug}'")
-
-        _, payload = load_backlinks(site_url)
-        return Response(json_safe(payload or empty_backlinks_payload()))
+        site_id = resolve_project_or_404(slug).site_url
+        return Response(build_backlinks_response(site_id))
 
 
 @method_decorator(login_not_required, name="dispatch")
+class ProjectSiteAuditView(APIView):
+    def get(self, request, slug):
+        site_id = resolve_project_or_404(slug).site_url
+        return Response(build_site_audit_response(site_id))
+
+
+@method_decorator(login_not_required, name="dispatch")
+class ProjectOffsiteView(APIView):
+    def get(self, request, slug):
+        site_id, curr_start, curr_end, prev_start, prev_end = resolve_range_periods(request, slug)
+        return Response(build_offsite_response(site_id, curr_start, curr_end, prev_start, prev_end))
+
+
+@method_decorator(login_not_required, name="dispatch")
+class ProjectAdsView(APIView):
+    def get(self, request, slug):
+        site_id, curr_start, curr_end, prev_start, prev_end = resolve_range_periods(request, slug)
+        return Response(build_ads_response(site_id, curr_start, curr_end, prev_start, prev_end))
+
+
+@method_decorator(login_not_required, name="dispatch")
+class ProjectAIView(APIView):
+    """Phase D: GET /api/projects/<slug>/ai -- no `range` param, unlike Ads/Offsite/Positions
+    (AI Optimization's real data -- targets/lists/prompts/aiKeywords -- isn't period-scoped)."""
+
+    def get(self, request, slug):
+        site_id = resolve_project_or_404(slug).site_url
+        return Response(build_ai_response(site_id))
+
+
+@method_decorator(login_not_required, name="dispatch")
+class ProjectAIActionView(APIView):
+    """Phase D: POST /api/projects/<slug>/ai/<action> -- dispatches to one of 6 real
+    first-party mutation handlers by `action` path segment. Every handler persists to our own
+    DB (never an external API) and returns a minimal ack; the SPA always re-fetches
+    ProjectAIView after any mutation, so no handler needs to echo authoritative state back.
+    `run`/`inspect` (and any other unmapped action) fall through to a clean 400 -- those call
+    external LLM Responses/scraper APIs this codebase has no connector for (explicitly out of
+    scope this phase), and a clear 4xx is preferable to a 404 or an unhandled crash."""
+
+    def post(self, request, slug, action):
+        site_id = resolve_project_or_404(slug).site_url
+        handler = getattr(self, f"_handle_{action.replace('-', '_')}", None)
+        if handler is None:
+            return Response({"detail": f"Unknown or not-yet-available action: {action}"}, status=400)
+        return handler(request, site_id)
+
+    def _handle_setup(self, request, site_id):
+        data = request.data
+        AITarget.objects.update_or_create(
+            site_url=site_id,
+            defaults={
+                "brand": data.get("brand", ""),
+                "aliases": data.get("aliases", []),
+                "competitors": data.get("competitors", []),
+                "setup_done": True,
+            },
+        )
+        for text in data.get("prompts", []):
+            if text and text.strip():
+                AIPrompt.objects.create(site_url=site_id, text=text.strip())
+        return Response({})
+
+    def _handle_targets(self, request, site_id):
+        data = request.data
+        AITarget.objects.update_or_create(
+            site_url=site_id,
+            defaults={
+                "brand": data.get("brand", ""),
+                "aliases": data.get("aliases", []),
+                "competitors": data.get("competitors", []),
+            },
+        )
+        return Response({})
+
+    def _handle_prompts(self, request, site_id):
+        data = request.data
+        list_id = data.get("listId")
+        texts = [t.strip() for t in data.get("texts", []) if t and t.strip()]
+        created = [AIPrompt(site_url=site_id, list_id=list_id, text=t) for t in texts]
+        AIPrompt.objects.bulk_create(created)
+        return Response({"added": len(created)})
+
+    def _handle_prompts_remove(self, request, site_id):
+        AIPrompt.objects.filter(site_url=site_id, id=request.data.get("id")).delete()
+        return Response({})
+
+    def _handle_prompts_config(self, request, site_id):
+        # Final-review finding: the SPA's actual "Save settings" call posts
+        # {id, cfg: {models, webSearch, country, city, cadence}, listId} -- NOT a top-level
+        # "models" key. Reading request.data.get("models", []) silently wiped
+        # tracked_models to [] on every save. cadence/country/city/webSearch are accepted
+        # but not persisted -- AIPrompt has no backing field for them yet (an honestly
+        # scoped-out gap, not a silent drop: see design spec / checklist), so listId
+        # (moving a prompt to another list) is the other real, persistable field from
+        # this payload and IS applied.
+        cfg = request.data.get("cfg", {})
+        update_fields = {"tracked_models": cfg.get("models", [])}
+        list_id = request.data.get("listId")
+        if list_id is not None:
+            update_fields["list_id"] = list_id
+        updated = AIPrompt.objects.filter(site_url=site_id, id=request.data.get("id")).update(
+            **update_fields
+        )
+        if not updated:
+            return Response({"detail": "Prompt not found"}, status=404)
+        return Response({})
+
+    def _handle_lists(self, request, site_id):
+        data = request.data
+        op = data.get("op")
+        if op == "create":
+            obj = AIPromptList.objects.create(site_url=site_id, name=data.get("name", "Untitled"))
+            return Response({"id": obj.id})
+        if op == "rename":
+            # Same false-success reasoning as _handle_prompts_config above -- rename is not
+            # safely idempotent the way delete is, so a no-match must be a real 404.
+            updated = AIPromptList.objects.filter(site_url=site_id, id=data.get("id")).update(
+                name=data.get("name", "")
+            )
+            if not updated:
+                return Response({"detail": "List not found"}, status=404)
+            return Response({})
+        if op == "delete":
+            AIPromptList.objects.filter(site_url=site_id, id=data.get("id")).delete()
+            return Response({})
+        return Response({"detail": f"Unknown list op: {op}"}, status=400)
+
+
+@method_decorator(login_not_required, name="dispatch")
+class ProjectSettingsView(APIView):
+    """Phase E: GET/PUT /api/projects/<slug>/settings -- no `range` param (Settings has no
+    period concept, matching Backlinks/SiteAudit/Alerts/AI). GET returns the fully-shaped
+    real+honestly-defaulted response from `build_settings_response`; PUT routes a partial
+    body's top-level key(s) to `apply_settings_update`, which returns a clean 400 (never a
+    false-success 200) for `team`/`security` -- the two groups this phase explicitly does not
+    persist (see docs/superpowers/specs/2026-07-13-phaseE-settings-design.md)."""
+
+    def get(self, request, slug):
+        site_id = resolve_project_or_404(slug).site_url
+        return Response(build_settings_response(site_id))
+
+    def put(self, request, slug):
+        site_id = resolve_project_or_404(slug).site_url
+        result = apply_settings_update(site_id, request.data)
+        if "error" in result:
+            return Response({"detail": result["error"]}, status=400)
+        return Response(build_settings_response(site_id))
+
+
+# ---------------------------------------------------------------------------
+# Refresh / Sync -- the database-first "Refresh" path: calls the connectors,
+# writes the DB, and the page then reads the fresh DB. (Engine already exists:
+# pipeline.services.sync_engine + apps.sync.models.RefreshRun.)
+# ---------------------------------------------------------------------------
+@method_decorator(login_not_required, name="dispatch")
+class ProjectSyncView(APIView):
+    def post(self, request, slug):
+        site_id = resolve_project_or_404(slug).site_url
+        scope = request.data.get("scope", "all")
+        return Response(start_sync_run(site_id, scope, user=request.user))
+
+
+@method_decorator(login_not_required, name="dispatch")
+class TaskStatusView(APIView):
+    """Polled by the SPA every ~500ms during a sync (GET /api/tasks/<id>)."""
+    def get(self, request, task_id):
+        status_data = task_status(task_id)
+        if status_data is None:
+            raise Http404(f"No task with id {task_id}")
+        return Response(status_data)
+
+
+# ---------------------------------------------------------------------------
+# Keyword Explorer / Prompt Explorer -- on-demand research (like Refresh, a
+# user action, so the live connector call here is consistent with the
+# database-first contract). project id comes in the body, URL is flat.
+# ---------------------------------------------------------------------------
+@method_decorator(login_not_required, name="dispatch")
 class KeywordResearchView(APIView):
-    """POST /api/research  {project, keywords:[...], location} -> {location, cost, rows:[...]}
-
-    The Keyword Explorer's on-demand expansion: one metered DataForSEO keyword_ideas call
-    turns seed(s) into many keyword ideas. Read-only (never writes) and user-triggered, so
-    calling the API here is consistent with the data-first contract. Rows already tracked for
-    the project are flagged so the SPA can show the 'Tracked' badge."""
-
     def post(self, request):
-        from pipeline.db.schema import KeywordRanking
-        from pipeline.connectors.dataforseo_keywords import DataForSEOKeywordsConnector
-
+        site_id = resolve_project_or_404(request.data.get("project", "")).site_url
         keywords = request.data.get("keywords") or []
-        location = (request.data.get("location") or "United States").strip()
-        slug = (request.data.get("project") or "").strip()
-        if isinstance(keywords, str):
-            keywords = keywords.split(",")
-        seeds = [k.strip() for k in keywords if isinstance(k, str) and k.strip()]
-        if not seeds:
-            return Response({"detail": "At least one seed keyword is required."},
-                            status=status.HTTP_400_BAD_REQUEST)
+        location = request.data.get("location") or "United States"
+        return Response(run_keyword_research(site_id, keywords, location))
 
-        result = DataForSEOKeywordsConnector().expand_keywords(seeds, location)
-        if result["status"] != "ok":
-            return Response({"detail": result["error"]}, status=status.HTTP_502_BAD_GATEWAY)
 
-        # Flag rows already tracked for this project (cheap distinct lookup, best-effort).
-        tracked: set[str] = set()
-        if slug:
-            with get_session() as session:
-                site = session.execute(select(Site).where(Site.slug == slug)).scalars().first()
-                if site:
-                    rows = session.execute(
-                        select(KeywordRanking.keyword).where(KeywordRanking.site_id == site.site_url).distinct()
-                    ).scalars().all()
-                    tracked = {(k or "").lower() for k in rows}
-        for row in result["rows"]:
-            row["tracked"] = row["kw"].lower() in tracked
-
-        return Response({
-            "location": result["location"],
-            "cost": result["cost"],
-            "rows": result["rows"],
-        })
+@method_decorator(login_not_required, name="dispatch")
+class PromptResearchView(APIView):
+    def post(self, request):
+        site_id = resolve_project_or_404(request.data.get("project", "")).site_url
+        seeds = request.data.get("seeds") or []
+        return Response(run_prompt_research(site_id, seeds))

@@ -68,10 +68,10 @@ class DataForSEOSERPConnector(BaseConnector):
                 return (site.site_url, target)
         return (site_id or "", self._default_target)
 
-    def _load_keywords(self) -> list[str]:
+    def _load_keywords(self, site_id: str = "") -> list[str]:
         """Load tracked keywords from keywords.txt (skips comments/blanks)."""
         from pipeline.utils.keywords import load_tracked_keywords
-        keywords = load_tracked_keywords()
+        keywords = load_tracked_keywords(site_id)
         if keywords:
             self.logger.info(f"[dataforseo_serp] Loaded {len(keywords)} keywords from keywords.txt")
         else:
@@ -261,7 +261,7 @@ class DataForSEOSERPConnector(BaseConnector):
                 "Set dataforseo_target_domain in Settings → Manage Sites."
             )
 
-        keywords = self._load_keywords()
+        keywords = self._load_keywords(resolved_site_id)
         if not keywords:
             self.logger.warning("[dataforseo_serp] No keywords to track (keywords.txt empty/missing).")
             return []

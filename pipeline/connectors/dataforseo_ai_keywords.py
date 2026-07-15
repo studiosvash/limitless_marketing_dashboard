@@ -59,9 +59,9 @@ class DataForSEOAIKeywordsConnector(BaseConnector):
                 return site.site_url
         return site_id or ""
 
-    def _load_keywords(self) -> list[str]:
+    def _load_keywords(self, site_id: str = "") -> list[str]:
         from pipeline.utils.keywords import load_tracked_keywords
-        keywords = load_tracked_keywords()
+        keywords = load_tracked_keywords(site_id)
         if not keywords:
             self.logger.warning(
                 "[dataforseo_ai_keywords] No keywords in keywords.txt — nothing to fetch."
@@ -134,7 +134,7 @@ class DataForSEOAIKeywordsConnector(BaseConnector):
         ai_keyword_data. Returns [] (not an error) when keywords.txt is empty.
         """
         resolved_site_id = self._resolve_site_id(site_id)
-        keywords = self._load_keywords()
+        keywords = self._load_keywords(resolved_site_id)
         if not keywords:
             return []
 

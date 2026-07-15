@@ -226,7 +226,7 @@
         <div>
           <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
             <div style="display: flex; align-items: center; gap: 8px;">
-              <h2 style="font-size: 15px; font-weight: 600; margin: 0;">Intelligence</h2>
+              <h2 style="font-size: 15px; font-weight: 600; margin: 0;">Priority feed</h2>
               <span style="font-size: 12px; color: #94a3b8;">What changed across every module · highest severity first</span>
             </div>
             <span onClick="{{ h.navAlerts }}" style="font-size: 12px; color: #4f46e5; font-weight: 500; cursor: pointer;" style-hover="opacity:0.7">View all in Alerts →</span>
@@ -452,7 +452,7 @@
         <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
           <div style="padding: 16px 20px; border-bottom: 1px solid #f1f5f9; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;">
             <div>
-              <h2 style="font-size: 15px; font-weight: 600; margin: 0; display: flex; align-items: center; gap: 8px;"><span style="font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; background: #eef2ff; color: #4338ca; padding: 2px 6px; border-radius: 4px;">Live</span> Keyword Explorer</h2>
+              <h2 style="font-size: 15px; font-weight: 600; margin: 0; display: flex; align-items: center; gap: 8px;">Keyword Explorer</h2>
               <p style="font-size: 12px; color: #94a3b8; margin: 4px 0 0;">Research keywords on demand (comma-separate seeds) — one metered expansion per search (~$0.01–0.13), then filters &amp; groups run free on the cached set.</p>
             </div>
             <div style="display: flex; align-items: center; gap: 8px; flex-shrink: 0;">
@@ -775,6 +775,17 @@
       <sc-if value="{{ showBacklinks }}" hint-placeholder-val="{{ false }}">
       <div data-screen-label="Backlinks" style="display: flex; flex-direction: column; gap: 18px;">
 
+        <!-- ===== SETUP PENDING (no DataForSEO Backlinks connector yet) ===== -->
+        <sc-if value="{{ bl.setup }}" hint-placeholder-val="{{ false }}">
+        <div style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 56px 32px; text-align: center; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+          <div style="font-size: 15px; font-weight: 600; color: #0f172a; margin-bottom: 6px;">Backlinks data isn't connected yet</div>
+          <div style="font-size: 13px; color: #64748b; max-width: 420px; margin: 0 auto;">Once the Backlinks data source is connected, authority score, referring domains, anchor text, and link gap analysis will appear here automatically.</div>
+        </div>
+        </sc-if>
+
+        <!-- ===== LIVE BACKLINKS UI ===== -->
+        <sc-if value="{{ !bl.setup }}" hint-placeholder-val="{{ true }}">
+
         <!-- source line -->
         <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;">
           <div style="font-size: 12px; color: #94a3b8;">Database: <b style="color:#475569;">DataForSEO Backlinks</b> · Last updated {{ bl.lastUpdated }} · Refreshes weekly</div>
@@ -1036,6 +1047,8 @@
         </div>
         </sc-if>
 
+        </sc-if>
+
       </div>
       </sc-if>
 
@@ -1051,7 +1064,7 @@
           </span>
           <span>Off-site = sessions attributed to <b style="color:#475569;">Referral</b> + <b style="color:#475569;">Organic Social/Video</b> — the click-throughs your links, PR &amp; social earn.</span>
           <span style="margin-left: auto; display: inline-flex; align-items: center; gap: 6px;">
-            <span style="width:6px;height:6px;border-radius:9999px;background:#10b981;"></span> {{ off.cadence }} · {{ off.tokens }}
+            <span style="width:6px;height:6px;border-radius:9999px;background:#10b981;"></span> {{ off.cadence }}<sc-if value="{{ !off.tokensEmpty }}" hint-placeholder-val="{{ true }}"> · {{ off.tokens }}</sc-if>
           </span>
         </div>
 
@@ -1119,12 +1132,12 @@
               <span style="width: 30px; height: 30px; border-radius: 7px; background: #0a66c2; display: flex; align-items: center; justify-content: center; color: white; font-weight: 700; font-size: 15px; font-family: Georgia, serif;">in</span>
               <div>
                 <h2 style="font-size: 15px; font-weight: 600; margin: 0;">LinkedIn</h2>
-                <p style="font-size: 11px; color: #94a3b8; margin: 2px 0 0;">Connector live · impressions + click-throughs</p>
+                <p style="font-size: 11px; color: #94a3b8; margin: 2px 0 0;">{{ off.li.subtitle }}</p>
               </div>
-              <span style="margin-left: auto; font-size: 10px; font-weight: 600; color: #059669; background: #ecfdf5; padding: 3px 8px; border-radius: 9999px;">Connected</span>
+              <span style="{{ off.li.badgeStyle }}">{{ off.li.badgeLabel }}</span>
             </div>
             <div style="padding: 18px 20px; display: grid; grid-template-columns: 1fr 1fr; gap: 18px 16px;">
-              <div><div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8;">Impressions</div><div style="font-size: 22px; font-weight: 700; color: #0f172a; margin-top: 4px;">{{ off.li.impressions }}</div><div style="font-size:11px;color:#cbd5e1;margin-top:2px;">from LinkedIn API</div></div>
+              <div><div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8;">Impressions</div><div style="font-size: 22px; font-weight: 700; color: #0f172a; margin-top: 4px;">{{ off.li.impressions }}</div><div style="font-size:11px;color:#cbd5e1;margin-top:2px;">{{ off.li.imprCaption }}</div></div>
               <div><div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8;">Click-throughs</div><div style="font-size: 22px; font-weight: 700; color: #0f172a; margin-top: 4px;">{{ off.li.sessions }}</div><div style="font-size:11px;color:#cbd5e1;margin-top:2px;">GA4 sessions</div></div>
               <div><div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8;">CTR</div><div style="font-size: 22px; font-weight: 700; color: #0a66c2; margin-top: 4px;">{{ off.li.ctr }}</div><div style="font-size:11px;color:#cbd5e1;margin-top:2px;">impr → session</div></div>
               <div><div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8;">Key events</div><div style="font-size: 22px; font-weight: 700; color: #0f172a; margin-top: 4px;">{{ off.li.keyEvents }}</div><div style="font-size:11px;color:#cbd5e1;margin-top:2px;">{{ off.li.revenue }} revenue</div></div>
@@ -1240,6 +1253,17 @@
       <!-- ============ SITE AUDIT ============ -->
       <sc-if value="{{ showPages }}" hint-placeholder-val="{{ false }}">
       <div data-screen-label="Site Audit" style="display: flex; flex-direction: column; gap: 20px;">
+
+        <!-- ===== SETUP PENDING (no crawl/checks-catalog data yet) ===== -->
+        <sc-if value="{{ au.setup }}" hint-placeholder-val="{{ false }}">
+        <div style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 56px 32px; text-align: center; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+          <div style="font-size: 15px; font-weight: 600; color: #0f172a; margin-bottom: 6px;">Site Audit data isn't connected yet</div>
+          <div style="font-size: 13px; color: #64748b; max-width: 420px; margin: 0 auto;">Once site crawling is connected, health score, crawled pages, issue checks, and Core Web Vitals will appear here automatically.</div>
+        </div>
+        </sc-if>
+
+        <!-- ===== LIVE SITE AUDIT UI ===== -->
+        <sc-if value="{{ !au.setup }}" hint-placeholder-val="{{ true }}">
 
         <!-- header -->
         <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap;">
@@ -1586,6 +1610,8 @@
               </div>
             </sc-for>
           </div>
+        </sc-if>
+
         </sc-if>
       </div>
       </sc-if>
@@ -2247,7 +2273,7 @@
       <div data-screen-label="Paid Overview" style="display: flex; flex-direction: column; gap: 20px;">
 
         <div style="display: flex; align-items: center; gap: 18px; flex-wrap: wrap; border-radius: 10px; background: white; border: 1px solid #e2e8f0; padding: 10px 16px; font-size: 12px; color: #64748b;">
-          <span style="display: inline-flex; align-items: center; gap: 7px; font-weight: 600; color: #334155;"><span style="width: 7px; height: 7px; border-radius: 9999px; background: #10b981;"></span>{{ adsSync.cadence }}</span>
+          <span style="display: inline-flex; align-items: center; gap: 7px; font-weight: 600; color: #334155;"><span style="{{ adsSync.dotStyle }}"></span>{{ adsSync.cadence }}</span>
           <span>Last pull <b style="color: #334155; font-weight: 600;">{{ adsSync.last }}</b></span>
           <span>Next pull <b style="color: #334155; font-weight: 600;">{{ adsSync.next }}</b></span>
           <span style="margin-left: auto;">Google Ads API {{ adsSync.quota }}</span>
@@ -2433,7 +2459,7 @@
         </div>
 
         <div style="display: flex; align-items: center; gap: 18px; flex-wrap: wrap; border-radius: 10px; background: white; border: 1px solid #e2e8f0; padding: 10px 16px; font-size: 12px; color: #64748b;">
-          <span style="display: inline-flex; align-items: center; gap: 7px; font-weight: 600; color: #334155;"><span style="width: 7px; height: 7px; border-radius: 9999px; background: #10b981;"></span>{{ adsSync.cadence }}</span>
+          <span style="display: inline-flex; align-items: center; gap: 7px; font-weight: 600; color: #334155;"><span style="{{ adsSync.dotStyle }}"></span>{{ adsSync.cadence }}</span>
           <span>Source <b style="color: #334155; font-weight: 600; font-family: monospace; font-size: 11.5px;">GoogleAdsService.searchStream</b> (campaign + ad_group GAQL) · status &amp; budget edits via <b style="color: #334155; font-weight: 600; font-family: monospace; font-size: 11.5px;">CampaignService</b> apply immediately</span>
           <span style="margin-left: auto;">Last pull <b style="color: #334155; font-weight: 600;">{{ adsSync.last }}</b></span>
           <span>Next <b style="color: #334155; font-weight: 600;">{{ adsSync.next }}</b></span>
@@ -2573,7 +2599,7 @@
         </div>
 
         <div style="display: flex; align-items: center; gap: 18px; flex-wrap: wrap; border-radius: 10px; background: white; border: 1px solid #e2e8f0; padding: 10px 16px; font-size: 12px; color: #64748b;">
-          <span style="display: inline-flex; align-items: center; gap: 7px; font-weight: 600; color: #334155;"><span style="width: 7px; height: 7px; border-radius: 9999px; background: #10b981;"></span>{{ adsSync.cadence }}</span>
+          <span style="display: inline-flex; align-items: center; gap: 7px; font-weight: 600; color: #334155;"><span style="{{ adsSync.dotStyle }}"></span>{{ adsSync.cadence }}</span>
           <span>Source <b style="color: #334155; font-weight: 600; font-family: monospace; font-size: 11.5px;">search_term_view</b> via GAQL · negatives written back through <b style="color: #334155; font-weight: 600; font-family: monospace; font-size: 11.5px;">CampaignCriterionService</b></span>
           <span style="margin-left: auto;">Last pull <b style="color: #334155; font-weight: 600;">{{ adsSync.last }}</b></span>
           <span>Next <b style="color: #334155; font-weight: 600;">{{ adsSync.next }}</b></span>
@@ -2650,7 +2676,7 @@
         </div>
 
         <div style="display: flex; align-items: center; gap: 18px; flex-wrap: wrap; border-radius: 10px; background: white; border: 1px solid #e2e8f0; padding: 10px 16px; font-size: 12px; color: #64748b;">
-          <span style="display: inline-flex; align-items: center; gap: 7px; font-weight: 600; color: #334155;"><span style="width: 7px; height: 7px; border-radius: 9999px; background: #10b981;"></span>{{ adsSync.cadence }}</span>
+          <span style="display: inline-flex; align-items: center; gap: 7px; font-weight: 600; color: #334155;"><span style="{{ adsSync.dotStyle }}"></span>{{ adsSync.cadence }}</span>
           <span>Last pull <b style="color: #334155; font-weight: 600;">{{ adsSync.last }}</b></span>
           <span>Next pull <b style="color: #334155; font-weight: 600;">{{ adsSync.next }}</b></span>
           <span style="margin-left: auto;">Google Ads API {{ adsSync.quota }}</span>
@@ -2867,14 +2893,14 @@
         <sc-if value="{{ st.conn }}" hint-placeholder-val="{{ false }}">
         <div style="display: flex; flex-direction: column; gap: 22px;">
           <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
-            <div style="padding: 16px 24px; border-bottom: 1px solid #f1f5f9;"><h2 style="font-size: 15px; font-weight: 600; margin: 0;">Data pipeline</h2><p style="font-size: 12px; color: #94a3b8; margin: 4px 0 0;">Core sources that feed every dashboard. All healthy.</p></div>
+            <div style="padding: 16px 24px; border-bottom: 1px solid #f1f5f9;"><h2 style="font-size: 15px; font-weight: 600; margin: 0;">Data pipeline</h2><p style="font-size: 12px; color: #94a3b8; margin: 4px 0 0;">Core sources that feed every dashboard. {{ st.healthLabel }}</p></div>
             <div style="padding: 24px;">
               <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px;">
                 <sc-for list="{{ st.dataConnectors }}" as="c" hint-placeholder-count="5">
-                  <div style="padding: 14px; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 10px;">
-                    <div style="font-weight: 600; font-size: 14px; color: #0f172a; display: flex; align-items: center; gap: 8px;"><span style="width: 8px; height: 8px; border-radius: 9999px; background: #22c55e;"></span>{{ c.name }}</div>
+                  <div style="{{ c.cardStyle }}">
+                    <div style="font-weight: 600; font-size: 14px; color: #0f172a; display: flex; align-items: center; gap: 8px;"><span style="{{ c.dotStyle }}"></span>{{ c.name }}</div>
                     <div style="font-size: 12px; color: #64748b; margin-top: 5px;">Last synced: {{ c.last }}</div>
-                    <div style="font-size: 12px; color: #15803d; margin-top: 2px;">{{ c.records }}</div>
+                    <div style="{{ c.recordsStyle }}">{{ c.records }}</div>
                   </div>
                 </sc-for>
               </div>
@@ -3352,8 +3378,8 @@
 </x-dc>
 <script type="text/x-dc" data-dc-script data-props="{
   &quot;$preview&quot;: { &quot;width&quot;: 1440, &quot;height&quot;: 900 },
-  &quot;apiBaseUrl&quot;: { &quot;editor&quot;: &quot;text&quot;, &quot;default&quot;: &quot;/&quot;, &quot;tsType&quot;: &quot;string&quot;, &quot;section&quot;: &quot;Backend&quot;, &quot;description&quot;: &quot;Django API base URL. Empty = demo fixture mode. Set to '/' so boot() talks to the real DRF API.&quot; },
-  &quot;demoLatency&quot;: { &quot;editor&quot;: &quot;boolean&quot;, &quot;default&quot;: false, &quot;tsType&quot;: &quot;boolean&quot;, &quot;section&quot;: &quot;Backend&quot;, &quot;description&quot;: &quot;Simulate network latency in fixture mode.&quot; },
+  &quot;apiBaseUrl&quot;: { &quot;editor&quot;: &quot;text&quot;, &quot;default&quot;: &quot;&quot;, &quot;tsType&quot;: &quot;string&quot;, &quot;section&quot;: &quot;Backend&quot;, &quot;description&quot;: &quot;Django API base URL. Empty = demo fixture mode.&quot; },
+  &quot;demoLatency&quot;: { &quot;editor&quot;: &quot;boolean&quot;, &quot;default&quot;: true, &quot;tsType&quot;: &quot;boolean&quot;, &quot;section&quot;: &quot;Backend&quot;, &quot;description&quot;: &quot;Simulate network latency in fixture mode.&quot; },
   &quot;defaultRange&quot;: { &quot;editor&quot;: &quot;enum&quot;, &quot;options&quot;: [&quot;7d&quot;, &quot;30d&quot;, &quot;90d&quot;], &quot;default&quot;: &quot;30d&quot;, &quot;tsType&quot;: &quot;string&quot;, &quot;section&quot;: &quot;Behavior&quot; }
 }">
 class Component extends DCLogic {
@@ -3378,7 +3404,7 @@ class Component extends DCLogic {
     pgSort: { key: 'clicks', dir: -1 },
     auSub: 'overview', auSev: 'all', auCat: 'all', auSearch: '', auOpen: null, auView: 'table', auPgSearch: '', auPgSort: { key: 'score', dir: 1 },
     auCmpA: null, auCmpB: null, auCmpFilter: 'all', auProg: { score: true, errors: true, warnings: true, notices: false, pages: false },
-    aiSub: 'visibility', aiPlat: { ai_overview: true, chat_gpt: true }, aiOpen: null,
+    aiSub: 'visibility', aiPlat: { chatgpt: true, perplexity: true }, aiOpen: null,
     aiWiz: 1, aiWizBrand: null, aiWizAliases: null, aiWizComps: null, aiWizCompInput: '', aiWizSel: null, aiWizCustom: '', aiWizBusy: false,
     aiTgOpen: false, aiListFilter: 'all', aiListsOpen: false, aiNewPlName: '',
     aiComposerOpen: false, aiComposerText: '', aiComposerList: null,
@@ -4836,8 +4862,23 @@ class Component extends DCLogic {
     /* ============ BACKLINKS ============ */
     if (tab === 'backlinks') {
       vals.showBacklinks = true;
-      const links = data.links;
       const sum = data.summary;
+      const setup = !sum || sum.state === 'setup';
+
+      if (setup) {
+        vals.bl = {
+          setup: true,
+          tabs: [], isOverview: false, isLinks: false, isRefDom: false, isAnchors: false, isGap: false,
+          lastUpdated: '', chartBars: [], chartLabels: [], typeArcs: [], typeLegend: [],
+          asBuckets: [], topAnchors: [], topRefDomains: [], allRefDomains: [],
+          rows: [], statusFilters: [], followFilters: [], allAnchors: [],
+          gapCols: [], gapRows: [], gapOnly: false,
+          gapBtnBorder: '#e2e8f0', gapBtnBg: 'white', gapBtnColor: '#64748b'
+        };
+        return vals;
+      }
+
+      const links = data.links;
       const asColorOf = as => as >= 60 ? '#059669' : as >= 40 ? '#0891b2' : as >= 20 ? '#d97706' : '#94a3b8';
       const asBgOf = as => as >= 60 ? '#ecfdf5' : as >= 40 ? '#ecfeff' : as >= 20 ? '#fffbeb' : '#f1f5f9';
       const spamColorOf = sp => sp >= 30 ? '#dc2626' : sp >= 10 ? '#d97706' : '#059669';
@@ -4963,8 +5004,10 @@ class Component extends DCLogic {
       };
       const kpiCard = (label, value, c, note) => ({ label, value, hasChip: c.has, chipLabel: c.label, chipStyle: c.style, note });
       const off = {};
-      off.cadence = data.syncMeta.cadence;
-      off.tokens = data.syncMeta.ga4_tokens_used + ' / ' + this.fmt(data.syncMeta.ga4_tokens_limit) + ' GA4 tokens';
+      const syncSetup = data.syncMeta.state === 'setup';
+      off.cadence = syncSetup ? 'not yet connected' : data.syncMeta.cadence;
+      off.tokens = syncSetup ? '' : (data.syncMeta.ga4_tokens_used + ' / ' + this.fmt(data.syncMeta.ga4_tokens_limit) + ' GA4 tokens');
+      off.tokensEmpty = syncSetup;
       off.rangeLabel = s.range === '7d' ? 'last 7 days' : s.range === '90d' ? 'last 90 days' : 'last 30 days';
       off.kpis = [
         kpiCard('Off-site sessions', this.fmt(t.sessions), chip(pctD(t.sessions, pv.sessions)), 'vs. previous period'),
@@ -5007,10 +5050,18 @@ class Component extends DCLogic {
 
       /* LinkedIn spotlight */
       const li = data.social.find(x => x.platform === 'LinkedIn') || { impressions: 0, sessions: 0, keyEvents: 0, revenue: 0 };
+      const liConnected = !!(data.connectors && data.connectors.linkedin);
       off.li = {
         impressions: this.fmt(li.impressions || 0), sessions: this.fmt(li.sessions),
         ctr: li.impressions ? +(li.sessions / li.impressions * 100).toFixed(1) + '%' : '—',
-        keyEvents: this.fmt(Math.round(li.keyEvents)), revenue: this.money(li.revenue)
+        keyEvents: this.fmt(Math.round(li.keyEvents)), revenue: this.money(li.revenue),
+        connected: liConnected,
+        badgeLabel: liConnected ? 'Connected' : 'Not connected',
+        badgeStyle: liConnected
+          ? { marginLeft: 'auto', fontSize: '10px', fontWeight: 600, color: '#059669', background: '#ecfdf5', padding: '3px 8px', borderRadius: '9999px' }
+          : { marginLeft: 'auto', fontSize: '10px', fontWeight: 600, color: '#64748b', background: '#f1f5f9', padding: '3px 8px', borderRadius: '9999px' },
+        subtitle: liConnected ? 'Connector live · impressions + click-throughs' : 'Connector not set up yet',
+        imprCaption: liConnected ? 'from LinkedIn API' : 'not connected'
       };
 
       /* social table */
@@ -5051,6 +5102,26 @@ class Component extends DCLogic {
     /* ============ SITE AUDIT ============ */
     if (tab === 'pages') {
       vals.showPages = true;
+      const auSetup = data.score == null || data.score.state === 'setup';
+
+      if (auSetup) {
+        vals.au = {
+          setup: true,
+          subTabs: [], showOverview: false, showIssues: false, showCrawled: false,
+          showCompare: false, showProgress: false, showStats: false,
+          domain: project.domain, crawlDate: '', pagesCrawled: 0, crawlDuration: '', userAgent: '',
+          barSegs: [], breakRows: [], sevTotals: [], cats: [], vitals: [], domChecks: [], topIssues: [],
+          sevFilters: [], catFilters: [], noIssues: true, issueRows: [], search: '',
+          tableTabStyle: {}, treeTabStyle: {}, showTable: false, showTree: false,
+          pgSearch: '', pageRows: [], pageRowCount: '', treeRows: [],
+          statKpis: [], statCharts: [],
+          cmpOptions: [], cmpOptions2: [], cmpFilters: [], cmpKpis: [], cmpEmpty: true, cmpRows: [],
+          cmpA: '', cmpB: '', cmpALabel: '', cmpBLabel: '',
+          progToggles: [], progLines: [], progFrom: '', progTo: '', progRows: []
+        };
+        return vals;
+      }
+
       const SEVC = { error: '#dc2626', warning: '#d97706', notice: '#2563eb' };
       const sevRank = { error: 0, warning: 1, notice: 2 };
       const scoreColor = v => v >= 80 ? '#059669' : v >= 60 ? '#d97706' : '#dc2626';
@@ -5270,7 +5341,13 @@ class Component extends DCLogic {
         ];
       }
 
-      if (sub === 'compare') {
+      if (sub === 'compare' && !data.snapshots.length) {
+        // No audit history yet (nothing records historical crawl snapshots) -- show an empty
+        // state instead of crashing on snaps[0].
+        au.cmpOptions = []; au.cmpOptions2 = []; au.cmpFilters = []; au.cmpKpis = [];
+        au.cmpRows = []; au.cmpEmpty = true; au.cmpA = ''; au.cmpB = '';
+        au.cmpALabel = '—'; au.cmpBLabel = '—';
+      } else if (sub === 'compare') {
         const snaps = data.snapshots;
         const iA = Math.min(s.auCmpA != null ? s.auCmpA : 0, snaps.length - 1);
         const iB = Math.min(s.auCmpB != null ? s.auCmpB : snaps.length - 1, snaps.length - 1);
@@ -5315,7 +5392,11 @@ class Component extends DCLogic {
         }));
       }
 
-      if (sub === 'progress') {
+      if (sub === 'progress' && !data.snapshots.length) {
+        // No audit history yet -- empty state instead of crashing on snaps[0].date.
+        au.progToggles = []; au.progLines = []; au.progRows = [];
+        au.progFrom = '—'; au.progTo = '—';
+      } else if (sub === 'progress') {
         const snaps = data.snapshots;
         const prog = s.auProg;
         const METRICS = [
@@ -5486,7 +5567,7 @@ class Component extends DCLogic {
         const overCap = d.budget.spent / d.budget.cap;
         aiv.budgetLabel = 'AI spend ' + this.money(d.budget.spent) + ' of ' + this.money(d.budget.cap) + ' cap';
         aiv.budgetStyle = { fontSize: '12px', fontWeight: 600, padding: '4px 10px', borderRadius: '6px', background: overCap >= 0.8 ? '#fee2e2' : '#f1f5f9', color: overCap >= 0.8 ? '#b91c1c' : '#475569' };
-        aiv.nextRunLabel = 'Runs weekly · next ' + d.next_run;
+        aiv.nextRunLabel = d.next_run ? ('Runs weekly · next ' + d.next_run) : 'Runs weekly · not yet scheduled';
         const allCost = prompts.reduce((a2, pr) => a2 + runCostOf(pr), 0);
         aiv.runAllLabel = 'Run all now · ' + money3(allCost);
         aiv.runAllStyle = redBtn;
@@ -5553,7 +5634,8 @@ class Component extends DCLogic {
             }).join(' ');
             return { pts, color: pl2.color };
           });
-          aiv.trendFrom = d.trend[0].date; aiv.trendTo = d.trend[d.trend.length - 1].date;
+          aiv.trendFrom = d.trend.length ? d.trend[0].date : '';
+          aiv.trendTo = d.trend.length ? d.trend[d.trend.length - 1].date : '';
           aiv.topPages = d.topPages.map(pg2 => ({
             url: pg2.url, mentions: pg2.mentions, imprFmt: this.fmt(pg2.impressions),
             platforms: pg2.platforms.join(' · ') || '—'
@@ -5644,11 +5726,11 @@ class Component extends DCLogic {
 
           /* --- composer --- */
           aiv.composerOpen = s.aiComposerOpen;
-          aiv.composerShow = () => this.setState({ aiComposerOpen: true, aiComposerList: this.state.aiComposerList || d.lists[0].id });
+          aiv.composerShow = () => this.setState({ aiComposerOpen: true, aiComposerList: this.state.aiComposerList || (d.lists[0] || {}).id });
           aiv.composerHide = () => this.setState({ aiComposerOpen: false });
           aiv.compText = s.aiComposerText;
           aiv.compTextSet = e => this.setState({ aiComposerText: e.target.value });
-          aiv.compList = s.aiComposerList || d.lists[0].id;
+          aiv.compList = s.aiComposerList || (d.lists[0] || {}).id;
           aiv.compListSet = e => this.setState({ aiComposerList: e.target.value });
           aiv.compListOptions = d.lists.map(l => ({ value: l.id, label: l.name }));
           aiv.compSugs = d.suggestions.slice(0, 5).map(x => ({
@@ -5659,7 +5741,7 @@ class Component extends DCLogic {
           aiv.compCount = compLines.length;
           aiv.compAddLabel = 'Add ' + compLines.length + ' prompt' + (compLines.length === 1 ? '' : 's');
           aiv.compAddStyle = Object.assign({}, priBtn, { opacity: compLines.length ? 1 : 0.5, cursor: compLines.length ? 'pointer' : 'default' });
-          aiv.compAdd = () => { if (compLines.length) this.aiAddPrompts(compLines, this.state.aiComposerList || d.lists[0].id, () => this.setState({ aiComposerOpen: false, aiComposerText: '' })); };
+          aiv.compAdd = () => { if (compLines.length) this.aiAddPrompts(compLines, this.state.aiComposerList || (d.lists[0] || {}).id, () => this.setState({ aiComposerOpen: false, aiComposerText: '' })); };
 
           /* --- prompt table --- */
           aiv.noPrompts = prompts.length === 0;
@@ -5820,7 +5902,7 @@ class Component extends DCLogic {
               kw: r.kw, aiVolFmt: this.fmt(r.aiVolume), gVolFmt: this.fmt(r.gVolume),
               spark: this.spark(r.trend, 46, 16),
               sparkColor: r.trend[11] >= r.trend[0] ? '#22c55e' : '#ef4444',
-              ratioLabel: r.ratio + '%',
+              ratioLabel: r.ratio == null ? '—' : r.ratio + '%',
               ratioStyle: { fontSize: '12px', fontWeight: 700, color: r.ratio >= 30 ? '#7c3aed' : '#64748b', textAlign: 'right' },
               intentLabel: iv.label, intentStyle: iv.style,
               mentions: r.mentions,
@@ -5898,12 +5980,14 @@ class Component extends DCLogic {
       const roasSt = v => ({ fontWeight: 600, color: v >= 3 ? '#059669' : v >= 1.5 ? '#2563eb' : '#dc2626' });
       const fBase = { padding: '4px 12px', fontSize: '12px', fontWeight: 500, borderRadius: '6px', cursor: 'pointer', color: '#64748b' };
       const fActive = Object.assign({}, fBase, { background: 'white', color: '#0f172a', boxShadow: '0 1px 2px rgba(0,0,0,0.05)' });
-      const fmtTs = z => new Date(z).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+      const fmtTs = z => z ? new Date(z).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '—';
       const sm = data.syncMeta;
       vals.adsSync = {
-        cadence: sm.cadence, last: fmtTs(sm.last_pull), next: fmtTs(sm.next_pull),
+        cadence: sm.connected ? sm.cadence : 'not yet connected',
+        last: fmtTs(sm.last_pull), next: fmtTs(sm.next_pull),
         quota: sm.ops_used + ' / ' + this.fmt(sm.ops_limit) + ' ops today',
-        ga4: sm.ga4_tokens_used + ' / ' + this.fmt(sm.ga4_tokens_limit) + ' tokens'
+        ga4: sm.ga4_tokens_used + ' / ' + this.fmt(sm.ga4_tokens_limit) + ' tokens',
+        dotStyle: { width: '7px', height: '7px', borderRadius: '9999px', background: sm.connected ? '#10b981' : '#cbd5e1' }
       };
       const fmtD = z => new Date(z + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
       vals.adsWindow = data.window && data.window.from ? (fmtD(data.window.from) + ' – ' + fmtD(data.window.to) + ' · ' + data.window.days + ' days') : '';
@@ -6333,7 +6417,32 @@ class Component extends DCLogic {
         inviteEmail: s.inviteEmail, inviteRole: s.inviteRole, roleOptions,
 
         /* ---- connections ---- */
-        dataConnectors: data.connectors.map(c => ({ name: c.name, last: c.last_sync, records: this.fmt(c.records) + ' records' })),
+        // Final-review finding: every connector card was hardcoded green with a static
+        // "All healthy" header, regardless of the real SyncLog status -- an error/never-run
+        // connector would still render as healthy. Derive the card color and header text
+        // from the real status instead.
+        dataConnectors: data.connectors.map(c => {
+          // Real SyncLog.status values (apps/sync/models.py SyncStatus) are
+          // never/running/success/error -- NOT "ok". Final-review finding: comparing
+          // against 'ok' meant no connector ever matched, so every successfully-synced
+          // connector rendered red -- the opposite of honest, worse than the hardcoded
+          // green it replaced. Only "error" is unhealthy; never/running are neutral (a
+          // connector that hasn't synced yet isn't "broken").
+          const ok = c.status === 'success';
+          const bad = c.status === 'error';
+          return {
+            name: c.name, last: c.last_sync || 'never', records: this.fmt(c.records) + ' records',
+            error: c.error,
+            cardStyle: bad
+              ? { padding: '14px', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '10px' }
+              : { padding: '14px', background: ok ? '#f0fdf4' : '#f8fafc', border: '1px solid ' + (ok ? '#bbf7d0' : '#e2e8f0'), borderRadius: '10px' },
+            dotStyle: { width: '8px', height: '8px', borderRadius: '9999px', background: bad ? '#dc2626' : (ok ? '#22c55e' : '#cbd5e1') },
+            recordsStyle: { fontSize: '12px', color: bad ? '#b91c1c' : (ok ? '#15803d' : '#64748b'), marginTop: '2px' }
+          };
+        }),
+        healthLabel: data.connectors.length === 0
+          ? 'No sources synced yet.'
+          : (data.connectors.some(c => c.status === 'error') ? 'Some sources need attention.' : 'All healthy.'),
         platRows: PLAT.map(p => {
           const on = !!platConn[p[0]]; const tg = toggle(on);
           return {
@@ -6347,7 +6456,10 @@ class Component extends DCLogic {
         }),
 
         /* ---- automation: sync + crawl ---- */
-        nextRun: data.sync.next_run + ' (' + data.sync.day + ')', lastRun: data.sync.last_run,
+        // data.sync.next_run/.day are honestly null (no scheduler exists yet) -- avoid the
+        // literal "null (null)" string JS string-concatenation would otherwise produce.
+        nextRun: data.sync.next_run ? (data.sync.next_run + ' (' + data.sync.day + ')') : 'not yet scheduled',
+        lastRun: data.sync.last_run || 'never',
         syncRows: SYNC_MODS.map(m => ({
           label: m[1], desc: m[2], value: syncCfg[m[0]] || 'weekly', options: mkOpts(m[3]),
           onChange: e => this.editSyncCfg(m[0], e.target.value),

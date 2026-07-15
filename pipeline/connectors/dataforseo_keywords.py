@@ -46,10 +46,10 @@ class DataForSEOKeywordsConnector(BaseConnector):
                 return site.site_url
         return site_id or os.getenv("GSC_SITE_URL", "")
 
-    def _load_keywords(self) -> list[str]:
+    def _load_keywords(self, site_id: str = "") -> list[str]:
         """Load tracked keywords from keywords.txt (skips comments/blanks)."""
         from pipeline.utils.keywords import load_tracked_keywords
-        return load_tracked_keywords()
+        return load_tracked_keywords(site_id)
 
     @with_retry(max_retries=3, base_delay=5.0)
     def _fetch_search_volume(self, keywords: list[str]) -> list[dict]:
@@ -354,7 +354,7 @@ class DataForSEOKeywordsConnector(BaseConnector):
             raise ValueError("[dataforseo_keywords] Missing DATAFORSEO_LOGIN or DATAFORSEO_PASSWORD in .env.")
         resolved_site_id = self._resolve_site_id(site_id)
 
-        keywords = self._load_keywords()
+        keywords = self._load_keywords(resolved_site_id)
         if not keywords:
             self.logger.warning("[dataforseo_keywords] No keywords found.")
             return []

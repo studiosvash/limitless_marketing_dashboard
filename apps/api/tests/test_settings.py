@@ -1,0 +1,191 @@
+import tempfile
+from pathlib import Path
+
+from django.contrib.auth import get_user_model
+from django.test import override_settings
+from rest_framework.authtoken.models import Token
+from rest_framework.test import APIClient, APITestCase
+
+from apps.accounts.models import Role, UserProfile
+from apps.dashboard.models import ProjectSettings
+from apps.dashboard.services.settings_service import DEFAULT_SETTINGS_BLOB
+from apps.sync.models import SyncLog, SyncStatus
+from pipeline.db.engine import get_engine
+from pipeline.db.schema import init_db, Site
+from pipeline.utils.db_connection import get_session
+import pipeline.utils.db_connection as db_connection
+
+
+SITE_URL = "sc-domain:fusehealth.com"
+
+
+def _bootstrap_settings_test_env(test_case):
+    """Point the SQLAlchemy analytics DB at a fresh temp sqlite file, seed the `Site` row
+    resolve_project_or_404 needs, and hand back an authenticated APIClient -- same pattern as
+    test_ai.py's `_bootstrap_ai_test_env` (a plain function, not a shared TestCase subclass,
+    matching this project's test-class-hygiene rule: every test class inherits directly from
+    APITestCase, never a sibling test class)."""
+    db_connection._SessionFactory = None
+    test_case.addCleanup(setattr, db_connection, "_SessionFactory", None)
+    tmp = tempfile.mkdtemp()
+    db_path = str(Path(tmp) / "fusehealth.db")
+    init_db(get_engine(db_path))
+    ctx = override_settings(ANALYTICS_DB_PATH=db_path)
+    ctx.enable()
+    test_case.addCleanup(ctx.disable)
+
+    with get_session() as session:
+        session.add(Site(site_url=SITE_URL, site_name="FuseHealth",
+                          slug="fusehealth", is_active=1))
+
+    user = get_user_model().objects.create_user("founder1", password="x")
+    token = Token.objects.get(user=user)
+    client_auth = APIClient()
+    client_auth.credentials(HTTP_AUTHORIZATION=f"Bearer {token.key}")
+    return client_auth
+
+
+class SettingsGetEndpointTests(APITestCase):
+    def setUp(self):
+        self.client_auth = _bootstrap_settings_test_env(self)
+
+    def test_get_returns_real_connectors_and_team(self):
+        SyncLog.objects.create(
+            connector="gsc", site_url=SITE_URL, status=SyncStatus.SUCCESS,
+            records_written=120, error_message=None,
+        )
+        SyncLog.objects.create(
+            connector="ga4", site_url=SITE_URL, status=SyncStatus.ERROR,
+            records_written=0, error_message="401 Unauthorized: token expired",
+        )
+        seo_user = get_user_model().objects.create_user("seo1")
+        UserProfile.objects.filter(user=seo_user).update(role=Role.SEO)
+
+        resp = self.client_auth.get("/api/projects/fusehealth/settings")
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+
+        connectors_by_name = {c["name"]: c for c in body["connectors"]}
+        self.assertEqual(connectors_by_name["gsc"]["status"], SyncStatus.SUCCESS)
+        self.assertEqual(connectors_by_name["gsc"]["records"], 120)
+        self.assertEqual(connectors_by_name["ga4"]["status"], SyncStatus.ERROR)
+        self.assertEqual(connectors_by_name["ga4"]["error"], "401 Unauthorized: token expired")
+
+        team_by_name = {m["name"]: m for m in body["team"]}
+        self.assertIn("founder1", team_by_name)
+        self.assertIn("seo1", team_by_name)
+        self.assertEqual(team_by_name["seo1"]["role"], Role.SEO)
+
+    def test_get_fresh_project_is_honest_not_a_crash(self):
+        # No ProjectSettings row, no SyncLog rows beyond the auth user's own profile --
+        # every blob-backed key (incl. usage/sync, which neither the design spec nor the
+        # plan's original sketch mentioned but which Task 2 found are unguarded SPA reads)
+        # must still come back as a real, non-crashing, honestly-defaulted shape.
+        resp = self.client_auth.get("/api/projects/fusehealth/settings")
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+
+        for key, default in DEFAULT_SETTINGS_BLOB.items():
+            self.assertEqual(body[key], default, f"{key} did not match honest default")
+        self.assertEqual(body["connectors"], [])
+        self.assertEqual(body["sync"], {"next_run": None, "day": None, "last_run": None})
+        self.assertEqual(body["usage"]["budget"], 0)
+        self.assertEqual(body["usage"]["month_to_date"], 0)
+        self.assertEqual(body["credentials"], {
+            "gsc_property": "", "ga4_property_id": "", "dataforseo_target_domain": "",
+        })
+
+    def test_unknown_slug_is_404(self):
+        resp = self.client_auth.get("/api/projects/does-not-exist/settings")
+        self.assertEqual(resp.status_code, 404)
+
+    def test_unauthenticated_is_401(self):
+        resp = APIClient().get("/api/projects/fusehealth/settings")
+        self.assertEqual(resp.status_code, 401)
+
+
+class SettingsPutCredentialsTests(APITestCase):
+    def setUp(self):
+        self.client_auth = _bootstrap_settings_test_env(self)
+
+    def test_put_credentials_persists_on_next_get(self):
+        payload = {"credentials": {
+            "gsc_property": "sc-domain:new.com",
+            "ga4_property_id": "new-ga4",
+            "dataforseo_target_domain": "new.com",
+        }}
+        resp = self.client_auth.put("/api/projects/fusehealth/settings", payload, format="json")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["credentials"], payload["credentials"])
+
+        get_resp = self.client_auth.get("/api/projects/fusehealth/settings")
+        self.assertEqual(get_resp.json()["credentials"], payload["credentials"])
+
+
+class SettingsPutPerKeyMergeTests(APITestCase):
+    def setUp(self):
+        self.client_auth = _bootstrap_settings_test_env(self)
+
+    def test_budget_cap_then_notifications_do_not_clobber_each_other(self):
+        cap_resp = self.client_auth.put(
+            "/api/projects/fusehealth/settings", {"budgetCap": 50}, format="json"
+        )
+        self.assertEqual(cap_resp.status_code, 200)
+
+        notif_resp = self.client_auth.put(
+            "/api/projects/fusehealth/settings",
+            {"notifications": {"weekly_digest": True, "recipients": "a@b.com"}},
+            format="json",
+        )
+        self.assertEqual(notif_resp.status_code, 200)
+
+        get_resp = self.client_auth.get("/api/projects/fusehealth/settings")
+        body = get_resp.json()
+        # the budgetCap save must still be there after the notifications-only save
+        self.assertEqual(body["budget"]["cap"], 50)
+        self.assertEqual(body["budget"]["quotas"], DEFAULT_SETTINGS_BLOB["budget"]["quotas"])
+        # and the notifications save landed, merged over defaults rather than replacing them
+        self.assertIs(body["notifications"]["weekly_digest"], True)
+        self.assertEqual(body["notifications"]["recipients"], "a@b.com")
+        self.assertEqual(body["notifications"]["digest_day"],
+                          DEFAULT_SETTINGS_BLOB["notifications"]["digest_day"])
+
+
+class SettingsPutRejectedKeysTests(APITestCase):
+    def setUp(self):
+        self.client_auth = _bootstrap_settings_test_env(self)
+
+    def test_put_team_is_a_clean_400_and_persists_nothing(self):
+        resp = self.client_auth.put(
+            "/api/projects/fusehealth/settings",
+            {"team": [{"id": 1, "role": "Owner"}]},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertFalse(ProjectSettings.objects.filter(site_url=SITE_URL).exists())
+
+    def test_put_security_is_a_clean_400_and_persists_nothing(self):
+        resp = self.client_auth.put(
+            "/api/projects/fusehealth/settings",
+            {"security": {"twofa": True}},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertFalse(ProjectSettings.objects.filter(site_url=SITE_URL).exists())
+
+
+class SettingsPutAuthAndSlugTests(APITestCase):
+    def setUp(self):
+        self.client_auth = _bootstrap_settings_test_env(self)
+
+    def test_unauthenticated_put_is_401(self):
+        resp = APIClient().put(
+            "/api/projects/fusehealth/settings", {"budgetCap": 10}, format="json"
+        )
+        self.assertEqual(resp.status_code, 401)
+
+    def test_unknown_slug_put_is_404(self):
+        resp = self.client_auth.put(
+            "/api/projects/does-not-exist/settings", {"budgetCap": 10}, format="json"
+        )
+        self.assertEqual(resp.status_code, 404)

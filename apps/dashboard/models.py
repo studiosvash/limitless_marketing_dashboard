@@ -8,6 +8,18 @@ from django.conf import settings
 from django.db import models
 
 
+def _empty_list():
+    """Callable default for JSONField list defaults. Used instead of the bare
+    builtin `list` because AIPrompt has a field literally named `list` (the FK to
+    AIPromptList) -- inside that class body, `list = models.ForeignKey(...)` shadows
+    the builtin `list` name for every subsequent line, so `default=list` on a later
+    field would silently bind to the ForeignKey descriptor instance, not the builtin
+    type (confirmed via Django's own fields.E010 system-check warning). This helper
+    sidesteps the shadowing entirely, and is used on every list-default JSONField
+    here for consistency."""
+    return []
+
+
 class Insight(models.Model):
     """Team-entered context linking business events to metrics."""
 
@@ -45,3 +57,78 @@ class Insight(models.Model):
 
     def __str__(self) -> str:
         return f"[{self.team}] {self.title} ({self.date})"
+
+
+class AITarget(models.Model):
+    """AI Optimization tracked brand/competitors — one row per project. First-party app
+    state (which brand/competitors/aliases to watch for in AI-answer-engine mentions), not
+    analytics data -- same site_url-string-keyed pattern as Insight."""
+
+    site_url = models.CharField(max_length=255, unique=True, db_index=True)
+    brand = models.CharField(max_length=255, blank=True, default="")
+    aliases = models.JSONField(default=_empty_list)
+    competitors = models.JSONField(default=_empty_list)
+    setup_done = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self) -> str:
+        return f"AITarget({self.site_url}, brand={self.brand!r})"
+
+
+class AIPromptList(models.Model):
+    """User-defined grouping of AIPrompt rows (e.g. "Branded", "Competitor")."""
+
+    site_url = models.CharField(max_length=255, db_index=True)
+    name = models.CharField(max_length=255)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self) -> str:
+        return f"AIPromptList({self.site_url}, {self.name!r})"
+
+
+class AIPrompt(models.Model):
+    """A tracked prompt to (eventually) check against external AI answer engines.
+    tracked_models is a persisted preference of which LLMs this prompt WOULD check once
+    'run' exists -- never a live/fabricated check result."""
+
+    site_url = models.CharField(max_length=255, db_index=True)
+    list = models.ForeignKey(
+        AIPromptList, null=True, blank=True, on_delete=models.SET_NULL, related_name="prompts"
+    )
+    text = models.TextField()
+    tracked_models = models.JSONField(default=_empty_list)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self) -> str:
+        return f"AIPrompt({self.site_url}, {self.text[:40]!r})"
+
+
+def _empty_dict():
+    """Callable default for JSONField dict defaults (Phase E, ProjectSettings.data).
+    Named/defined separately from `_empty_list` above (rather than reusing a generic
+    helper) for the same reason `_empty_list` exists in the first place: AIPrompt above
+    has a field literally named `list`, which shadows the builtin `list` for every
+    subsequent line in that class body. `ProjectSettings` below has no field named `dict`,
+    but this helper is still defined as an explicit callable -- never `default=dict` or
+    `default={}` -- to match this file's established convention and avoid the same class of
+    bug if a future field here is ever named `dict`."""
+    return {}
+
+
+class ProjectSettings(models.Model):
+    """Blob store for Settings groups with no dedicated relational need (workspace,
+    notifications, aiConfig, dataPrefs, syncConfig, platformConnectors, budget.cap/.enforce,
+    alertRules, crawl) -- see design spec for why these are a single JSONField rather than
+    one model each. Genuine persistence (saves survive reload); several groups are honestly
+    disclosed as not yet wired to any downstream system."""
+
+    site_url = models.CharField(max_length=255, unique=True, db_index=True)
+    data = models.JSONField(default=_empty_dict)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self) -> str:
+        return f"ProjectSettings({self.site_url})"

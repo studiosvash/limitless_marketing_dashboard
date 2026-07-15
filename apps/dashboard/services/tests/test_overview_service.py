@@ -1,11 +1,13 @@
 import tempfile
 from datetime import date
 from pathlib import Path
+from unittest.mock import patch
 
 from django.test import TestCase, override_settings
+from sqlalchemy import select
 
 from pipeline.db.engine import get_engine
-from pipeline.db.schema import init_db, SEODaily
+from pipeline.db.schema import init_db, SEODaily, AISummary
 from pipeline.utils.db_connection import get_session
 import pipeline.utils.db_connection as db_connection
 
@@ -69,6 +71,51 @@ class OverviewServiceTests(TestCase):
         self.assertEqual(points[0]["date"], "2026-07-01")
         self.assertEqual(points[0]["clicks"], 100)
 
+    # ── Error-path resilience: a transient DB error must degrade gracefully to
+    # the same safe fallback the pre-refactor _get_kpi_stats/_get_top_pages/
+    # _get_traffic_chart/_get_ai_summary returned, not propagate and 500 the page.
+
+    def test_get_kpi_raw_returns_empty_dicts_on_db_error(self):
+        from apps.dashboard.services import overview_service
+        with patch.object(overview_service, "get_session", side_effect=RuntimeError("db down")):
+            current, previous = overview_service.get_kpi_raw(
+                "sc-domain:fusehealth.com",
+                date(2026, 7, 1), date(2026, 7, 2),
+                date(2026, 6, 1), date(2026, 6, 1),
+            )
+        self.assertEqual(current, {})
+        self.assertEqual(previous, {})
+
+    def test_format_kpi_cards_does_not_crash_on_empty_fallback(self):
+        # Proves the view-level chain (get_kpi_raw error -> format_kpi_cards) survives:
+        # format_kpi_cards must not KeyError when handed the {} / {} fallback shape.
+        from apps.dashboard.services.overview_service import format_kpi_cards
+        cards = format_kpi_cards({}, {})
+        self.assertEqual(cards[0]["value"], "0")
+        self.assertEqual(cards[0]["delta"], "0%")
+
+    def test_query_top_pages_raw_returns_empty_list_on_db_error(self):
+        from apps.dashboard.services import overview_service
+        with patch.object(overview_service, "get_session", side_effect=RuntimeError("db down")):
+            pages = overview_service.query_top_pages_raw(
+                "sc-domain:fusehealth.com", date(2026, 7, 1), date(2026, 7, 2)
+            )
+        self.assertEqual(pages, [])
+
+    def test_query_daily_traffic_raw_returns_empty_list_on_db_error(self):
+        from apps.dashboard.services import overview_service
+        with patch.object(overview_service, "get_session", side_effect=RuntimeError("db down")):
+            points = overview_service.query_daily_traffic_raw(
+                "sc-domain:fusehealth.com", date(2026, 7, 1), date(2026, 7, 2)
+            )
+        self.assertEqual(points, [])
+
+    def test_get_ai_summary_text_returns_none_on_db_error(self):
+        from apps.dashboard.services import overview_service
+        with patch.object(overview_service, "get_session", side_effect=RuntimeError("db down")):
+            summary = overview_service.get_ai_summary_text("sc-domain:fusehealth.com")
+        self.assertIsNone(summary)
+
 
 class RangeAndApiShapeTests(TestCase):
     def setUp(self):
@@ -88,6 +135,9 @@ class RangeAndApiShapeTests(TestCase):
                          landing_page="https://fusehealth.com/a"),
                 SEODaily(date=date(2026, 7, 2), site_id="sc-domain:fusehealth.com",
                          clicks=120, impressions=1100, ctr=0.109, avg_position=7.5,
+                         landing_page="https://fusehealth.com/a"),
+                SEODaily(date=date(2026, 6, 1), site_id="sc-domain:fusehealth.com",
+                         clicks=50, impressions=900, ctr=0.055, avg_position=9.0,
                          landing_page="https://fusehealth.com/a"),
             ])
 
@@ -123,3 +173,89 @@ class RangeAndApiShapeTests(TestCase):
         self.assertEqual(pages[0]["url"], "https://fusehealth.com/a")
         self.assertIn("ctr", pages[0])
         self.assertNotIn("page", pages[0])
+
+    def test_build_kpis_api_and_build_pillars_do_not_crash_on_empty_fallback(self):
+        # Mirrors test_format_kpi_cards_does_not_crash_on_empty_fallback: proves the
+        # API-shaped builders survive the same {} / {} fallback get_kpi_raw returns on a
+        # DB error, instead of KeyError-ing and 500ing the new endpoint.
+        from apps.dashboard.services.overview_service import build_kpis_api, build_pillars
+        kpis = build_kpis_api({}, {})
+        self.assertEqual(kpis[0], {"label": "Total clicks", "value": 0, "delta": 0.0, "unit": "%"})
+        self.assertEqual(kpis[3], {"label": "Avg. position", "value": 0.0, "delta": 0.0, "unit": "pos"})
+
+        pillars = build_pillars("sc-domain:fusehealth.com", {}, {}, 0)
+        self.assertEqual(pillars[0]["value"], 0)
+        self.assertEqual(pillars[0]["delta"], 0)
+        self.assertEqual(pillars[1]["value"], 0.0)
+
+
+class BuildPriorityFeedTests(TestCase):
+    def test_filters_out_acknowledged_items(self):
+        from apps.dashboard.services.overview_service import build_priority_feed
+        feed = [
+            {"id": "anomaly-1", "ts": "2026-06-28", "kind": "anomaly", "severity": "high",
+             "title": "Clicks dropped", "detail": "...", "acknowledged": False},
+            {"id": "anomaly-2", "ts": "2026-06-27", "kind": "anomaly", "severity": "high",
+             "title": "Already handled", "detail": "...", "acknowledged": True},
+        ]
+        priority = build_priority_feed(feed)
+        self.assertEqual(len(priority), 1)
+        self.assertEqual(priority[0]["id"], "anomaly-1")
+
+    def test_tags_each_item_with_its_owning_module(self):
+        from apps.dashboard.services.overview_service import build_priority_feed
+        feed = [
+            {"id": "anomaly-1", "ts": "2026-06-28", "kind": "anomaly", "severity": "high",
+             "title": "x", "detail": "y", "acknowledged": False},
+            {"id": "issue-1", "ts": "2026-06-28", "kind": "technical", "severity": "high",
+             "title": "x", "detail": "y", "acknowledged": False},
+        ]
+        priority = build_priority_feed(feed)
+        by_id = {p["id"]: p for p in priority}
+        self.assertEqual(by_id["anomaly-1"]["module"], {"label": "SEO", "target": "seo"})
+        self.assertEqual(by_id["issue-1"]["module"], {"label": "Site Audit", "target": "pages"})
+
+    def test_caps_at_limit(self):
+        from apps.dashboard.services.overview_service import build_priority_feed
+        feed = [
+            {"id": f"anomaly-{i}", "ts": "2026-06-28", "kind": "anomaly", "severity": "high",
+             "title": "x", "detail": "y", "acknowledged": False}
+            for i in range(10)
+        ]
+        priority = build_priority_feed(feed, limit=6)
+        self.assertEqual(len(priority), 6)
+
+    def test_sorts_by_severity_high_to_low(self):
+        """Regression test: verify the sort actually reorders items by severity rank.
+        Deliberately scrambles input order (low, high, info, medium) to catch any
+        regression that breaks the sort (e.g., swapped reverse direction, empty rank dict)."""
+        from apps.dashboard.services.overview_service import build_priority_feed
+        feed = [
+            {"id": "low-item", "ts": "2026-06-28", "kind": "anomaly", "severity": "low",
+             "title": "Low severity", "detail": "...", "acknowledged": False},
+            {"id": "high-item", "ts": "2026-06-28", "kind": "anomaly", "severity": "high",
+             "title": "High severity", "detail": "...", "acknowledged": False},
+            {"id": "info-item", "ts": "2026-06-28", "kind": "anomaly", "severity": "info",
+             "title": "Info severity", "detail": "...", "acknowledged": False},
+            {"id": "medium-item", "ts": "2026-06-28", "kind": "anomaly", "severity": "medium",
+             "title": "Medium severity", "detail": "...", "acknowledged": False},
+        ]
+        priority = build_priority_feed(feed)
+        # Verify exact output order: high (rank 0), medium (rank 1), info (rank 2), low (rank 3)
+        self.assertEqual([p["id"] for p in priority], ["high-item", "medium-item", "info-item", "low-item"])
+
+    def test_same_severity_ties_break_newest_first(self):
+        """Regression test for the tiebreak direction: matches the approved SPA's
+        `.sort((a, b) => (sevRank[a.severity] - sevRank[b.severity]) || (a.ts < b.ts ? 1 : -1))`
+        (app/api.js) — within the same severity, newer items (larger ts) must sort first."""
+        from apps.dashboard.services.overview_service import build_priority_feed
+        feed = [
+            {"id": "oldest", "ts": "2026-06-01", "kind": "anomaly", "severity": "high",
+             "title": "x", "detail": "y", "acknowledged": False},
+            {"id": "newest", "ts": "2026-06-28", "kind": "anomaly", "severity": "high",
+             "title": "x", "detail": "y", "acknowledged": False},
+            {"id": "middle", "ts": "2026-06-15", "kind": "anomaly", "severity": "high",
+             "title": "x", "detail": "y", "acknowledged": False},
+        ]
+        priority = build_priority_feed(feed)
+        self.assertEqual([p["id"] for p in priority], ["newest", "middle", "oldest"])

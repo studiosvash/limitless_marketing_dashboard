@@ -68,9 +68,9 @@ class DataForSEOSerpCompetitorsConnector(BaseConnector):
                 return site.site_url
         return site_id or ""
 
-    def _load_keywords(self) -> list[str]:
+    def _load_keywords(self, site_id: str = "") -> list[str]:
         from pipeline.utils.keywords import load_tracked_keywords
-        keywords = load_tracked_keywords()
+        keywords = load_tracked_keywords(site_id)
         if not keywords:
             self.logger.warning(
                 "[dataforseo_serp_competitors] No keywords in keywords.txt — nothing to track."
@@ -216,7 +216,7 @@ class DataForSEOSerpCompetitorsConnector(BaseConnector):
             )
             return []
 
-        keywords = self._load_keywords()
+        keywords = self._load_keywords(resolved_site_id)
         if not keywords:
             return []
 

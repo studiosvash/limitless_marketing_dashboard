@@ -111,17 +111,11 @@ ANALYTICS_DB_PATH = env("ANALYTICS_DB_PATH", str(BASE_DIR / "data" / "fusehealth
 
 
 # --- REST API (Limitless Marketing SPA) --------------------------------------
-# The SPA is served at /app/ behind Django's session login and calls the API with
-# `fetch(..., credentials:"include")` (see app/api.js) — so SessionAuthentication is the
-# primary auth path (no token to inject, no bootstrap race). BearerTokenAuthentication is
-# kept for headless/API clients (curl, tests, future integrations) that send
-# `Authorization: Bearer <token>`.
+# The frontend (`Limitless marketing dashboard2/`) sends `Authorization: Bearer <token>`
+# (see app/api.js), not DRF's default `Token <token>` scheme — hence the custom auth class.
 REST_FRAMEWORK = {
-    # Bearer first so unauthenticated requests get a 401 (its WWW-Authenticate header) rather
-    # than a 403; DRF still tries every authenticator, so the SPA's session cookie authenticates.
     "DEFAULT_AUTHENTICATION_CLASSES": [
         "apps.api.authentication.BearerTokenAuthentication",
-        "rest_framework.authentication.SessionAuthentication",
     ],
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated",
@@ -140,7 +134,9 @@ AUTH_PASSWORD_VALIDATORS = [
 
 # Where unauthenticated users get sent, and where login lands them.
 LOGIN_URL = "login"
-LOGIN_REDIRECT_URL = "dashboard:overview"
+# After login, land on the SPA at the site root. (Was "dashboard:overview" -- the old
+# template dashboard, which no longer exists.)
+LOGIN_REDIRECT_URL = "spa"
 LOGOUT_REDIRECT_URL = "login"
 
 

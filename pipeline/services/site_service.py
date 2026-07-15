@@ -41,6 +41,8 @@ def _slugify(value: str) -> str:
 def slugify_unique(session, base: str) -> str:
     """Return a slug derived from `base` that doesn't collide with an existing Site.slug.
     Appends -2, -3, ... on collision."""
+    from pipeline.db.schema import Site  # local import: avoids a circular import at module load
+
     root = _slugify(base)
     candidate = root
     n = 2

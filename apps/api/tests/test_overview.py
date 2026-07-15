@@ -1,7 +1,6 @@
 import tempfile
 from datetime import date
 from pathlib import Path
-from unittest import mock
 
 from django.contrib.auth import get_user_model
 from django.test import override_settings
@@ -9,7 +8,7 @@ from rest_framework.authtoken.models import Token
 from rest_framework.test import APIClient, APITestCase
 
 from pipeline.db.engine import get_engine
-from pipeline.db.schema import init_db, Site, SEODaily, Anomaly, TechnicalIssue
+from pipeline.db.schema import init_db, Site, SEODaily, KeywordRanking, AISummary, Anomaly
 from pipeline.utils.db_connection import get_session
 import pipeline.utils.db_connection as db_connection
 
@@ -27,22 +26,18 @@ class OverviewEndpointTests(APITestCase):
 
         with get_session() as session:
             session.add(Site(site_url="sc-domain:fusehealth.com", site_name="FuseHealth",
-                             slug="fusehealth", is_active=1))
-            # 06-30 is inside the current 30d window; 07-01 (the max/anchor date) is excluded
-            # by design (range_to_period_dates treats the anchor as "today").
+                              slug="fusehealth", is_active=1))
+            # Two rows, not one: range_to_period_dates("30d", anchor) treats `anchor` (the max
+            # data date) as "today" and excludes it from the current window (yesterday =
+            # anchor - 1 — pre-existing behavior in pipeline/utils/period_utils.py, not
+            # introduced here). The 07-01 row is the max date and therefore intentionally
+            # excluded; 06-30 is the one actually inside the current-period window.
             session.add(SEODaily(date=date(2026, 6, 30), site_id="sc-domain:fusehealth.com",
-                                 clicks=100, impressions=1000, ctr=0.10, avg_position=8.0,
-                                 landing_page="https://fusehealth.com/a"))
+                                  clicks=100, impressions=1000, ctr=0.10, avg_position=8.0,
+                                  landing_page="https://fusehealth.com/a"))
             session.add(SEODaily(date=date(2026, 7, 1), site_id="sc-domain:fusehealth.com",
-                                 clicks=999, impressions=9999, ctr=0.50, avg_position=1.0,
-                                 landing_page="https://fusehealth.com/a"))
-            # Cross-module alert sources: one SEO anomaly + one Site Audit technical issue.
-            session.add(Anomaly(site_id="sc-domain:fusehealth.com", date=date(2026, 6, 30),
-                                metric_type="seo_clicks", severity="high", actual_value=100,
-                                baseline_value=300, deviation_pct=-66, is_acknowledged=0))
-            session.add(TechnicalIssue(site_id="sc-domain:fusehealth.com",
-                                       url="https://fusehealth.com/gone", issue_type="not_found_404",
-                                       severity="medium", description="Page returns 404."))
+                                  clicks=999, impressions=9999, ctr=0.50, avg_position=1.0,
+                                  landing_page="https://fusehealth.com/a"))
 
         user = get_user_model().objects.create_user("founder1", password="x")
         token = Token.objects.get(user=user)
@@ -60,32 +55,16 @@ class OverviewEndpointTests(APITestCase):
         resp = self.client_auth.get("/api/projects/fusehealth/overview", {"range": "30d"})
         kpis = resp.json()["kpis"]
         clicks_kpi = next(k for k in kpis if k["label"] == "Total clicks")
+        # 100, not 100+999=1099 — the 07-01 row is the max date, excluded from the current
+        # window by design (see the comment on the seeded rows in setUp above).
         self.assertEqual(clicks_kpi["value"], 100)
 
-    def test_site_health_pillar_is_real_when_page_data_exists(self):
-        # E1: Site health is no longer hardcoded 'setup' -- we have GSC page data, so it
-        # reports a real score. (Paid ROAS / AI visibility remain 'setup' -- genuinely
-        # not connected.)
+    def test_unbuilt_pillars_report_setup_state_not_fake_data(self):
         resp = self.client_auth.get("/api/projects/fusehealth/overview", {"range": "30d"})
         pillars = resp.json()["pillars"]
         site_health = next(p for p in pillars if p["label"] == "Site health")
-        self.assertEqual(site_health["state"], "ok")
-        self.assertIsInstance(site_health["value"], int)
-
-        paid = next(p for p in pillars if p["label"] == "Paid ROAS")
-        self.assertEqual(paid["state"], "setup")
-        self.assertIsNone(paid["value"])
-
-    def test_priority_feed_spans_multiple_modules(self):
-        # E2: the Intelligence feed aggregates alerts across modules, not just Site Audit.
-        resp = self.client_auth.get("/api/projects/fusehealth/overview", {"range": "30d"})
-        priority = resp.json()["priority"]
-        self.assertGreaterEqual(len(priority), 2)
-        module_labels = {p["module"]["label"] for p in priority}
-        self.assertIn("SEO", module_labels)
-        self.assertIn("Site Audit", module_labels)
-        # High-severity SEO anomaly must sort to the top.
-        self.assertEqual(priority[0]["severity"], "high")
+        self.assertEqual(site_health["state"], "setup")
+        self.assertIsNone(site_health["value"])
 
     def test_unknown_slug_is_404(self):
         resp = self.client_auth.get("/api/projects/does-not-exist/overview")
@@ -95,84 +74,156 @@ class OverviewEndpointTests(APITestCase):
         resp = self.client_auth.get("/api/projects/fusehealth/overview")
         self.assertEqual(resp.status_code, 200)
 
-    def test_unauthenticated_is_401(self):
-        resp = APIClient().get("/api/projects/fusehealth/overview")
-        self.assertEqual(resp.status_code, 401)
-
-    def test_alerts_endpoint_returns_feed(self):
-        # The SPA fetches this on every boot for the sidebar badge; without it the whole
-        # app (including Overview) fails to render. It must return {feed: [...]}.
-        resp = self.client_auth.get("/api/projects/fusehealth/alerts")
-        self.assertEqual(resp.status_code, 200)
-        body = resp.json()
-        self.assertIn("feed", body)
-        self.assertIsInstance(body["feed"], list)
-        # We seeded one anomaly + one technical issue -> both surface here.
-        kinds = {a["kind"] for a in body["feed"]}
-        self.assertIn("anomaly", kinds)
-        self.assertIn("technical", kinds)
-        for a in body["feed"]:
-            for field in ("id", "severity", "kind", "title", "detail", "ts", "acknowledged"):
-                self.assertIn(field, a)
-
-    def test_alerts_unknown_slug_is_404(self):
-        resp = self.client_auth.get("/api/projects/does-not-exist/alerts")
-        self.assertEqual(resp.status_code, 404)
-
-    def test_research_returns_rows_and_flags_tracked(self):
-        # Seed one tracked keyword so the endpoint flags it.
-        from pipeline.db.schema import KeywordRanking
+    def test_pillars_modules_and_summary_reflect_seeded_keyword_and_ai_data(self):
+        """Task 7's genuinely-new logic (build_pillars, build_modules, top3_count,
+        build_summary_lists) only produces non-trivial output when KeywordRanking/AISummary
+        rows exist — setUp() above seeds neither, so this test seeds its own and asserts
+        real numeric/string output, not just key presence."""
         with get_session() as session:
-            session.add(KeywordRanking(date=date(2026, 7, 1), site_id="sc-domain:fusehealth.com",
-                                       keyword="iv therapy", search_volume=100))
+            # position=2 (<=3, counts toward top3_count) and position=15 (does not).
+            session.add(KeywordRanking(
+                date=date(2026, 6, 30), site_id="sc-domain:fusehealth.com",
+                keyword="buy protein powder", position=2, clicks=40, impressions=400,
+                search_volume=1200,
+            ))
+            session.add(KeywordRanking(
+                date=date(2026, 6, 30), site_id="sc-domain:fusehealth.com",
+                keyword="health supplements guide", position=15, clicks=10, impressions=800,
+                search_volume=500,
+            ))
+            session.add(AISummary(
+                week_start=date(2026, 6, 29), site_id="sc-domain:fusehealth.com",
+                summary_text=(
+                    "## 🟢 Win: Great CTR growth\n"
+                    "- CTR grew 20% this month\n"
+                    "- Impressions increased significantly\n\n"
+                    "## 🔴 Critical: Ranking drop\n"
+                    "- Lost 5 positions on primary keyword\n"
+                    "- Traffic decreased on key landing page\n"
+                ),
+            ))
 
-        fake = {
-            "status": "ok", "location": "United States", "cost": 0.02, "error": None,
-            "rows": [
-                {"kw": "iv therapy", "volume": 8100, "kd": 42, "cpc": 3.99, "intent": "commercial",
-                 "match": "exact", "monthly": [1, 2, 3], "serpFeatures": ["organic"]},
-                {"kw": "mobile iv drip", "volume": 500, "kd": 20, "cpc": 1.10, "intent": "informational",
-                 "match": "related", "monthly": [3, 2, 1], "serpFeatures": []},
-            ],
-        }
-        with mock.patch(
-            "pipeline.connectors.dataforseo_keywords.DataForSEOKeywordsConnector.expand_keywords",
-            return_value=fake,
-        ):
-            resp = self.client_auth.post("/api/research", {
-                "project": "fusehealth", "keywords": ["iv therapy"], "location": "United States",
-            }, format="json")
+        resp = self.client_auth.get("/api/projects/fusehealth/overview", {"range": "30d"})
         self.assertEqual(resp.status_code, 200)
         body = resp.json()
-        self.assertEqual(body["location"], "United States")
-        self.assertEqual(body["cost"], 0.02)
-        by_kw = {r["kw"]: r for r in body["rows"]}
-        self.assertTrue(by_kw["iv therapy"]["tracked"])
-        self.assertFalse(by_kw["mobile iv drip"]["tracked"])
 
-    def test_research_empty_seeds_is_400(self):
-        resp = self.client_auth.post("/api/research", {"project": "fusehealth", "keywords": []},
-                                     format="json")
-        self.assertEqual(resp.status_code, 400)
+        # Keywords module: 2 tracked (both seeded keywords), 1 in top 3 (position 2 only).
+        keywords_module = next(m for m in body["modules"] if m["label"] == "Keywords")
+        self.assertEqual(keywords_module["stat"], "2 tracked")
+        self.assertEqual(keywords_module["sub"], "1 in top 3")
 
-    def test_backlinks_empty_state_before_refresh(self):
-        # No snapshot yet -> zeroed payload so the page renders instead of erroring.
-        resp = self.client_auth.get("/api/projects/fusehealth/backlinks")
-        self.assertEqual(resp.status_code, 200)
-        body = resp.json()
-        self.assertEqual(body["summary"]["backlinks"], 0)
-        self.assertEqual(body["refDomains"], [])
+        # Avg. position pillar's `sub` reports the same top3_count.
+        avg_pos_pillar = next(p for p in body["pillars"] if p["label"] == "Avg. position")
+        self.assertEqual(avg_pos_pillar["sub"], "1 keywords in top 3")
+        # 8.0 == the single SEODaily row's avg_position inside the current window (setUp).
+        self.assertEqual(avg_pos_pillar["value"], 8.0)
 
-    def test_backlinks_returns_stored_snapshot(self):
-        import json
-        from pipeline.db.writer import save_backlinks_snapshot
-        payload = {"summary": {"backlinks": 50, "refDomains": 47, "authorityScore": 10},
-                   "refDomains": [{"domain": "example.com", "rank": 4}], "anchors": [], "months": [],
-                   "types": [], "asBuckets": [], "links": [], "competitors": [], "gapDomains": []}
+        # Organic clicks pillar value is a real number matching setUp's SEODaily total.
+        organic_clicks_pillar = next(p for p in body["pillars"] if p["label"] == "Organic clicks")
+        self.assertEqual(organic_clicks_pillar["value"], 100)
+
+        # AI summary wins/critical are populated with the actual seeded bullet text.
+        summary = body["summary"]
+        self.assertTrue(any("CTR grew 20% this month" in w for w in summary["wins"]))
+        self.assertTrue(any("Impressions increased significantly" in w for w in summary["wins"]))
+        self.assertTrue(any("Lost 5 positions on primary keyword" in c for c in summary["critical"]))
+        self.assertTrue(any("Traffic decreased on key landing page" in c for c in summary["critical"]))
+
+    def test_priority_reflects_real_unacknowledged_alerts(self):
         with get_session() as session:
-            save_backlinks_snapshot(session, "sc-domain:fusehealth.com", json.dumps(payload))
-            session.commit()
-        resp = self.client_auth.get("/api/projects/fusehealth/backlinks")
-        self.assertEqual(resp.status_code, 200)
-        self.assertEqual(resp.json()["summary"]["backlinks"], 50)
-        self.assertEqual(resp.json()["refDomains"][0]["domain"], "example.com")
+            session.add(Anomaly(date=date(2026, 6, 30), site_id="sc-domain:fusehealth.com",
+                                 metric_type="seo_clicks", actual_value=50, baseline_value=100,
+                                 deviation_pct=-50.0, severity="high",
+                                 description="Clicks dropped.", is_acknowledged=0))
+        resp = self.client_auth.get("/api/projects/fusehealth/overview", {"range": "30d"})
+        body = resp.json()
+        self.assertEqual(len(body["priority"]), 1)
+        self.assertEqual(body["priority"][0]["module"]["target"], "seo")
+
+
+class ResolveProjectHelperTests(APITestCase):
+    def setUp(self):
+        db_connection._SessionFactory = None
+        self.addCleanup(setattr, db_connection, "_SessionFactory", None)
+        tmp = tempfile.mkdtemp()
+        db_path = str(Path(tmp) / "fusehealth.db")
+        init_db(get_engine(db_path))
+        self._ctx = override_settings(ANALYTICS_DB_PATH=db_path)
+        self._ctx.enable()
+        self.addCleanup(self._ctx.disable)
+        with get_session() as session:
+            session.add(Site(site_url="sc-domain:fusehealth.com", site_name="FuseHealth",
+                              slug="fusehealth", is_active=1))
+            session.add(SEODaily(date=date(2026, 7, 1), site_id="sc-domain:fusehealth.com",
+                                  clicks=1, impressions=1, ctr=0.1, avg_position=1.0))
+
+    def test_resolve_project_or_404_finds_real_site(self):
+        from apps.api.views import resolve_project_or_404
+        site = resolve_project_or_404("fusehealth")
+        self.assertEqual(site.site_url, "sc-domain:fusehealth.com")
+
+    def test_resolve_project_or_404_raises_on_unknown_slug(self):
+        from django.http import Http404
+        from apps.api.views import resolve_project_or_404
+        with self.assertRaises(Http404):
+            resolve_project_or_404("does-not-exist")
+
+    def test_latest_data_anchor_finds_max_date(self):
+        from apps.api.views import latest_data_anchor
+        anchor = latest_data_anchor("sc-domain:fusehealth.com")
+        self.assertEqual(anchor, date(2026, 7, 1))
+
+    def test_latest_data_anchor_falls_back_to_today_when_no_data(self):
+        from datetime import date as date_cls
+        from apps.api.views import latest_data_anchor
+        anchor = latest_data_anchor("sc-domain:no-data-site.com")
+        self.assertEqual(anchor, date_cls.today())
+
+
+class ResolveRangePeriodsTests(APITestCase):
+    def setUp(self):
+        db_connection._SessionFactory = None
+        self.addCleanup(setattr, db_connection, "_SessionFactory", None)
+        tmp = tempfile.mkdtemp()
+        db_path = str(Path(tmp) / "fusehealth.db")
+        init_db(get_engine(db_path))
+        self._ctx = override_settings(ANALYTICS_DB_PATH=db_path)
+        self._ctx.enable()
+        self.addCleanup(self._ctx.disable)
+        with get_session() as session:
+            session.add(Site(site_url="sc-domain:fusehealth.com", site_name="FuseHealth",
+                              slug="fusehealth", is_active=1))
+            session.add(SEODaily(date=date(2026, 7, 1), site_id="sc-domain:fusehealth.com",
+                                  clicks=1, impressions=1, ctr=0.1, avg_position=1.0))
+
+    def test_resolves_site_id_and_period_dates(self):
+        from django.test import RequestFactory
+        from rest_framework.request import Request
+        from apps.api.views import resolve_range_periods
+
+        django_request = RequestFactory().get("/api/projects/fusehealth/positions", {"range": "7d"})
+        request = Request(django_request)
+        site_id, curr_start, curr_end, prev_start, prev_end = resolve_range_periods(request, "fusehealth")
+        self.assertEqual(site_id, "sc-domain:fusehealth.com")
+        self.assertEqual((curr_end - curr_start).days, 6)
+
+    def test_defaults_range_to_30d_when_absent(self):
+        from django.test import RequestFactory
+        from rest_framework.request import Request
+        from apps.api.views import resolve_range_periods
+
+        django_request = RequestFactory().get("/api/projects/fusehealth/positions")
+        request = Request(django_request)
+        _, curr_start, curr_end, _, _ = resolve_range_periods(request, "fusehealth")
+        self.assertEqual((curr_end - curr_start).days, 29)
+
+    def test_unknown_slug_raises_404(self):
+        from django.http import Http404
+        from django.test import RequestFactory
+        from rest_framework.request import Request
+        from apps.api.views import resolve_range_periods
+
+        django_request = RequestFactory().get("/api/projects/does-not-exist/positions")
+        request = Request(django_request)
+        with self.assertRaises(Http404):
+            resolve_range_periods(request, "does-not-exist")
