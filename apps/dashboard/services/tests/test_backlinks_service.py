@@ -86,13 +86,22 @@ class BuildBacklinksResponseTests(TestCase):
     def test_unbuilt_fields_report_setup_not_fake_data(self):
         from apps.dashboard.services.backlinks_service import build_backlinks_response
         body = build_backlinks_response("sc-domain:fusehealth.com")
-        self.assertEqual(body["summary"], {"state": "setup"})
-        self.assertEqual(body["months"], [])
-        self.assertEqual(body["types"], [])
+        # summary is REAL now (it used to be hardcoded {"state": "setup"}, which made the SPA
+        # hide the entire Backlinks page -- even after a successful backlinks sync).
+        self.assertNotEqual(body["summary"], {"state": "setup"})
+        self.assertEqual(body["summary"]["backlinks"], body["kpis"]["total"])
+        self.assertEqual(body["summary"]["refDomains"], body["kpis"]["referring_domains"])
+        # Genuinely no data source for these -- must stay empty, never fabricated.
+        self.assertEqual(body["months"], [])       # no backlink history table
+        self.assertEqual(body["types"], [])        # link types aren't captured
         self.assertEqual(body["asBuckets"], [])
-        self.assertEqual(body["refDomains"], [])
-        self.assertEqual(body["anchors"], [])
-        self.assertEqual(body["gapDomains"], [])
+        self.assertEqual(body["anchors"], [])      # needs an anchor-rollup connector
+        self.assertEqual(body["gapDomains"], [])   # needs a domain-intersection connector
+
+        # refDomains IS real now -- rolled up from the actual Backlink rows.
+        self.assertEqual(len(body["refDomains"]), 1)
+        self.assertEqual(body["refDomains"][0]["domain"], "healthline.com")
+        self.assertEqual(body["refDomains"][0]["backlinks"], 1)
 
     def test_competitors_uses_real_tracked_list(self):
         from unittest import mock

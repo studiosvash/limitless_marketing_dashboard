@@ -5341,7 +5341,13 @@ class Component extends DCLogic {
         ];
       }
 
-      if (sub === 'compare') {
+      if (sub === 'compare' && !data.snapshots.length) {
+        // No audit history yet (nothing records historical crawl snapshots) -- show an empty
+        // state instead of crashing on snaps[0].
+        au.cmpOptions = []; au.cmpOptions2 = []; au.cmpFilters = []; au.cmpKpis = [];
+        au.cmpRows = []; au.cmpEmpty = true; au.cmpA = ''; au.cmpB = '';
+        au.cmpALabel = '—'; au.cmpBLabel = '—';
+      } else if (sub === 'compare') {
         const snaps = data.snapshots;
         const iA = Math.min(s.auCmpA != null ? s.auCmpA : 0, snaps.length - 1);
         const iB = Math.min(s.auCmpB != null ? s.auCmpB : snaps.length - 1, snaps.length - 1);
@@ -5386,7 +5392,11 @@ class Component extends DCLogic {
         }));
       }
 
-      if (sub === 'progress') {
+      if (sub === 'progress' && !data.snapshots.length) {
+        // No audit history yet -- empty state instead of crashing on snaps[0].date.
+        au.progToggles = []; au.progLines = []; au.progRows = [];
+        au.progFrom = '—'; au.progTo = '—';
+      } else if (sub === 'progress') {
         const snaps = data.snapshots;
         const prog = s.auProg;
         const METRICS = [

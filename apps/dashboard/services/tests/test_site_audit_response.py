@@ -85,23 +85,83 @@ class BuildSiteAuditResponseTests(TestCase):
         self.assertEqual(cls["buckets"]["mid"], 1)    # 0.15
         self.assertEqual(cls["buckets"]["poor"], 1)   # 0.3
 
-    def test_all_setup_state_fields_present_and_honest(self):
-        """Assert every state:"setup" field is exactly as specified (no fabrication)."""
+    def _seed_real_site(self):
+        """2 indexed pages + 1 broken, a PageSpeed row, and a real TechnicalIssue."""
+        from pipeline.db.schema import TechnicalIssue
+        with get_session() as session:
+            session.add_all([
+                IndexingStatus(site_id=self.site_id, url="https://fusehealth.com/a",
+                                verdict="PASS", coverage_state="Submitted and indexed",
+                                robots_txt_state="ALLOWED"),
+                IndexingStatus(site_id=self.site_id, url="https://fusehealth.com/b",
+                                verdict="PASS", coverage_state="Submitted and indexed",
+                                robots_txt_state="ALLOWED"),
+                IndexingStatus(site_id=self.site_id, url="https://fusehealth.com/gone",
+                                verdict="FAIL", coverage_state="Not found (404)",
+                                robots_txt_state="ALLOWED"),
+                PageSpeed(site_id=self.site_id, url="https://fusehealth.com/a",
+                          strategy="mobile", performance_score=80, seo_score=90,
+                          accessibility_score=70, best_practices_score=100,
+                          lcp_ms=2000.0, cls=0.05, ttfb_ms=400.0),
+                TechnicalIssue(site_id=self.site_id, url="https://fusehealth.com/gone",
+                                issue_type="not_found_404", severity="high",
+                                description="Returns 404"),
+            ])
+
+    def test_score_and_crawl_are_real_not_setup_sentinels(self):
+        """Regression: score/crawl/catScore used to be hardcoded {"state": "setup"}. The SPA
+        gates the WHOLE Site Audit page on data.score.state === 'setup', so the page could
+        never render -- even with real IndexingStatus/PageSpeed rows sitting in the DB."""
         from apps.dashboard.services.site_audit_service import build_site_audit_response
 
+        self._seed_real_site()
         response = build_site_audit_response(self.site_id)
 
-        # Exact-equality assertions for every setup field
-        self.assertEqual(response["score"], {"state": "setup"})
-        self.assertEqual(response["crawl"], {"state": "setup"})
-        self.assertEqual(response["catScore"], {"state": "setup"})
-        self.assertEqual(response["cwv"]["tbt"], {"state": "setup"})
-        self.assertEqual(response["domainChecks"], [])
-        self.assertEqual(response["checks"], [])
-        self.assertEqual(response["totals"], {"errors": 0, "warnings": 0, "notices": 0})
-        self.assertEqual(response["crawledPages"], [])
-        self.assertEqual(response["structure"], [])
-        self.assertEqual(response["snapshots"], [])
+        self.assertIsInstance(response["score"], int)
+        self.assertNotIsInstance(response["score"], dict)   # never a setup sentinel again
+        self.assertGreaterEqual(response["score"], 0)
+        self.assertLessEqual(response["score"], 100)
+
+        self.assertEqual(response["crawl"]["pagesCrawled"], 3)
+        self.assertEqual(response["crawl"]["status"], "complete")
+        self.assertEqual(response["catScore"]["Performance"], 80)   # real Lighthouse score
+        self.assertEqual(response["catScore"]["Indexing"], 67)      # 2 of 3 indexed
+
+    def test_real_technical_issues_become_checks_and_totals(self):
+        """The real TechnicalIssue rows must surface as checks + totals (they used to be
+        dropped entirely: checks was hardcoded [])."""
+        from apps.dashboard.services.site_audit_service import build_site_audit_response
+
+        self._seed_real_site()
+        response = build_site_audit_response(self.site_id)
+
+        self.assertEqual(len(response["checks"]), 1)
+        check = response["checks"][0]
+        self.assertEqual(check["id"], "not_found_404")
+        self.assertEqual(check["severity"], "error")     # high -> error
+        self.assertEqual(check["count"], 1)
+        self.assertEqual(check["pages"][0]["url"], "https://fusehealth.com/gone")
+        self.assertEqual(response["totals"], {"errors": 1, "warnings": 0, "notices": 0})
+
+        # every indexed page shows up as a real crawled page
+        self.assertEqual(len(response["crawledPages"]), 3)
+        gone = next(p for p in response["crawledPages"] if p["url"].endswith("/gone"))
+        self.assertEqual(gone["statusCode"], 404)
+        self.assertEqual(gone["errors"], 1)
+
+    def test_fields_with_no_data_source_stay_honestly_empty(self):
+        """Whatever genuinely has no data source must stay empty -- never fabricated."""
+        from apps.dashboard.services.site_audit_service import build_site_audit_response
+
+        self._seed_real_site()
+        response = build_site_audit_response(self.site_id)
+
+        self.assertEqual(response["domainChecks"], [])   # no SSL/robots/sitemap probe exists
+        self.assertEqual(response["snapshots"], [])      # no audit-history table exists
+        # PageSpeed stores INP, not TBT -- never substitute a different metric.
+        self.assertIsNone(response["cwv"]["tbt"]["p75"])
+        # nothing measures internal in-links
+        self.assertTrue(all(p["inLinks"] == 0 for p in response["crawledPages"]))
 
     def test_empty_db_returns_zeros_and_none_p75_not_crash(self):
         """Empty-DB case (no IndexingStatus/PageSpeed rows at all): assert breakdown is all zeros
@@ -129,12 +189,14 @@ class BuildSiteAuditResponseTests(TestCase):
         self.assertEqual(response["cwv"]["cls"]["buckets"]["mid"], 0)
         self.assertEqual(response["cwv"]["cls"]["buckets"]["poor"], 0)
 
-        # Assert all other fields are still present and correct
-        self.assertEqual(response["score"], {"state": "setup"})
-        self.assertEqual(response["crawl"], {"state": "setup"})
+        # Assert all other fields are still present and correct (honest zeros/empties, and
+        # a real score of 0 -- not a crash, not a fabricated default)
+        self.assertEqual(response["score"], 0)
+        self.assertEqual(response["crawl"]["pagesCrawled"], 0)
+        self.assertEqual(response["crawl"]["status"], "never")
         self.assertEqual(response["domainChecks"], [])
-        self.assertEqual(response["catScore"], {"state": "setup"})
-        self.assertEqual(response["cwv"]["tbt"], {"state": "setup"})
+        self.assertEqual(response["catScore"]["Performance"], 0)
+        self.assertIsNone(response["cwv"]["tbt"]["p75"])
         self.assertEqual(response["checks"], [])
         self.assertEqual(response["totals"], {"errors": 0, "warnings": 0, "notices": 0})
         self.assertEqual(response["crawledPages"], [])

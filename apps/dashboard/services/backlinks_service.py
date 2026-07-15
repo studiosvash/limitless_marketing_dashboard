@@ -62,31 +62,79 @@ def query_backlinks_table_raw(site_id: str, limit: int = 200) -> list[dict]:
         return []
 
 
+def query_referring_domains_raw(site_id: str) -> list[dict]:
+    """Referring domains rolled up from the real Backlink rows."""
+    from collections import defaultdict
+
+    links = query_backlinks_table_raw(site_id, limit=5000)
+    by_domain = defaultdict(list)
+    for l in links:
+        by_domain[l.get("domain") or "—"].append(l)
+
+    out = []
+    for domain, rows in sorted(by_domain.items(), key=lambda kv: -len(kv[1])):
+        ranks = [r.get("domain_rank") or 0 for r in rows]
+        out.append({
+            "domain": domain,
+            "flag": "",                                   # honest: no country data is stored
+            "rank": round(sum(ranks) / len(ranks)) if ranks else 0,
+            "backlinks": len(rows),
+            "linksToUs": len(rows),
+            "follow": any(r.get("dofollow") for r in rows),
+            "firstSeen": "—",                             # honest: not exposed by the raw query
+            "isNew": False,                               # honest: no new/lost history stored
+            "category": "—",                              # honest: no category data is stored
+            "spam": 0,                                    # honest: no spam score is stored
+        })
+    return out
+
+
 def build_backlinks_response(site_id: str) -> dict:
-    """HANDOFF_SPEC.md `backlinks` view shape. Only kpis/links/competitors are real — the
-    rest need DataForSEO sub-endpoint connectors this codebase doesn't have yet, so they
-    honestly report state:"setup" rather than fabricated numbers. See
-    docs/superpowers/specs/2026-07-12-phaseC1-backlinks-design.md."""
+    """Backlinks view, derived from the real `Backlink` rows.
+
+    BUG HISTORY: `summary` used to be hardcoded {"state": "setup"}. The SPA gates the WHOLE
+    Backlinks page on data.summary.state === 'setup', so the page could never render -- not
+    even after a successful backlinks sync. `summary` is now derived from the real rows.
+
+    Fields with no data source in the Backlink table (new/lost history, anchor rollups, link
+    gap, spam scores) stay honestly empty -- never fabricated.
+    """
     summary_raw = query_backlinks_summary_raw(site_id)
     links = query_backlinks_table_raw(site_id)
+    ref_domains = query_referring_domains_raw(site_id)
 
+    total = summary_raw["total"]
     kpis = {
-        "total": summary_raw["total"],
+        "total": total,
         "live": summary_raw["live"],
         "lost": summary_raw["lost"],
         "referring_domains": summary_raw["unique_domains"],
         "avg_rank": summary_raw["avg_dr"],
     }
 
+    dofollow_n = sum(1 for l in links if l.get("dofollow"))
+    dofollow_pct = round(dofollow_n / len(links) * 100) if links else 0
+
     return {
         "kpis": kpis,
         "links": links,
-        "summary": {"state": "setup"},
-        "months": [],
-        "types": [],
+        "summary": {
+            # Authority score: the average referring-domain rank we actually have.
+            "authorityScore": summary_raw["avg_dr"],
+            "asDelta": 0,                 # honest: no historical snapshot to diff against
+            "refDomains": summary_raw["unique_domains"],
+            "backlinks": total,
+            "dofollowPct": dofollow_pct,
+            "broken": summary_raw["lost"],
+            "spamScore": 0,               # honest: no spam score is stored
+            "newRdMonth": 0,              # honest: no new/lost history is stored
+            "lastUpdated": "—",
+        },
+        "months": [],                     # honest: no backlink history table exists
+        "types": [],                      # honest: link types aren't captured
         "asBuckets": [],
-        "refDomains": [],
-        "anchors": [],
+        "refDomains": ref_domains,        # real, rolled up from the Backlink rows
+        "anchors": [],                    # honest: no anchor rollup endpoint/connector yet
         "competitors": get_tracked_competitors(site_id),
-        "gapDomains": [],
+        "gapDomains": [],                 # honest: needs a domain-intersection connector
     }

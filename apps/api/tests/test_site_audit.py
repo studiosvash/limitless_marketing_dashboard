@@ -59,9 +59,13 @@ class SiteAuditEndpointTests(APITestCase):
         self.assertIn("cls", body["cwv"])
         self.assertIsNotNone(body["cwv"]["lcp"]["p75"])
         self.assertIsNotNone(body["cwv"]["cls"]["p75"])
-        # Check setup states for unimplemented features
-        self.assertEqual(body["score"]["state"], "setup")
-        self.assertEqual(body["crawl"]["state"], "setup")
+        # score/crawl are real derived values now (they used to be {"state": "setup"}, which
+        # made the SPA hide the entire Site Audit page even when real data existed).
+        self.assertIsInstance(body["score"], int)
+        self.assertGreaterEqual(body["crawl"]["pagesCrawled"], 1)
+        # things with genuinely no data source stay honestly empty
+        self.assertEqual(body["domainChecks"], [])
+        self.assertEqual(body["snapshots"], [])
 
     def test_unknown_slug_is_404(self):
         resp = self.client_auth.get("/api/projects/does-not-exist/audit")

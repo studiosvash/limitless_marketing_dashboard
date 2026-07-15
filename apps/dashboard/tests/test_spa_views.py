@@ -7,14 +7,22 @@ from rest_framework.authtoken.models import Token
 
 class SpaViewTests(TestCase):
     def test_anonymous_redirects_to_login(self):
-        resp = self.client.get("/app/")
+        resp = self.client.get("/")
         self.assertEqual(resp.status_code, 302)
         self.assertIn("/login/", resp.url)
+
+    def test_legacy_app_url_still_redirects_to_root(self):
+        """The SPA moved from /app/ to / -- old links must keep working, not 404."""
+        user = get_user_model().objects.create_user("legacy", password="x")
+        self.client.force_login(user)
+        resp = self.client.get("/app/")
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(resp.url, "/")
 
     def test_logged_in_gets_html_with_bootstrap_script(self):
         user = get_user_model().objects.create_user("viewer", password="x")
         self.client.force_login(user)
-        resp = self.client.get("/app/")
+        resp = self.client.get("/")
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp["Content-Type"], "text/html; charset=utf-8")
         token = Token.objects.get(user=user).key

@@ -40,7 +40,11 @@ class BacklinksEndpointTests(APITestCase):
         self.assertEqual(resp.status_code, 200)
         body = resp.json()
         self.assertEqual(body["kpis"]["total"], 1)
-        self.assertEqual(body["summary"], {"state": "setup"})
+        # summary is REAL now (it used to be hardcoded {"state": "setup"}, which made the SPA
+        # hide the entire Backlinks page -- even after a successful backlinks sync).
+        self.assertNotEqual(body["summary"], {"state": "setup"})
+        self.assertEqual(body["summary"]["backlinks"], body["kpis"]["total"])
+        self.assertEqual(body["summary"]["refDomains"], body["kpis"]["referring_domains"])
 
     def test_unknown_slug_is_404(self):
         resp = self.client_auth.get("/api/projects/does-not-exist/backlinks")
