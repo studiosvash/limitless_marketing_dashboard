@@ -1,0 +1,287 @@
+{% extends "base.html" %}
+
+{% block title %}Page Health · FuseHealth{% endblock %}
+{% block page_title %}Page Health Intelligence{% endblock %}
+{% block page_subtitle %}GSC traffic · PageSpeed scores · Indexing status — merged view{% endblock %}
+
+{% block content %}
+<div x-data="{ slideOverOpen: false }">
+  {# Live sync progress #}
+  {% include "components/sync_progress.html" %}
+
+  {# Site Health Score Banner #}
+  <div class="rounded-xl border shadow-sm p-6 mb-6"
+       style="background: linear-gradient(135deg, {{ page_health.health_color }}15, {{ page_health.health_color }}08); border-left: 4px solid {{ page_health.health_color }};">
+    <div class="flex items-center gap-5 flex-wrap">
+      <div>
+        <div class="text-5xl font-extrabold leading-none" style="color: {{ page_health.health_color }};">
+          {{ page_health.site_health }}
+        </div>
+        <div class="text-xs text-slate-500 uppercase tracking-widest mt-1">Site Health Score</div>
+      </div>
+      <div class="flex-1 min-w-[200px]">
+        <div class="text-lg font-semibold text-slate-800">
+          {{ page_health.health_label }} — {{ page_health.total_pages }} pages analysed
+        </div>
+        <div class="flex flex-wrap gap-3 mt-2 text-xs text-slate-500">
+          {% if page_health.has_indexing %}
+          <span class="bg-white border border-slate-200 rounded px-2 py-0.5">
+            📋 {{ page_health.not_indexed|length }} not indexed
+          </span>
+          {% endif %}
+          {% if page_health.has_speed %}
+          <span class="bg-white border border-slate-200 rounded px-2 py-0.5">
+            ⚡ {{ page_health.slow_pages|length }} slow pages (&lt;50/100)
+          </span>
+          {% endif %}
+          <span class="bg-white border border-slate-200 rounded px-2 py-0.5">
+            👀 {{ page_health.zero_traffic_high_impr|length }} high impr, zero clicks
+          </span>
+        </div>
+      </div>
+    </div>
+    {% if not page_health.has_speed %}
+    <div class="mt-4 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+      ⚡ Page speed data isn't loaded yet. Enable the <span class="font-medium">PageSpeed Insights API</span> for this project's Google API key, then run Refresh — mobile &amp; desktop scores will populate the Speed column automatically.
+    </div>
+    {% endif %}
+  </div>
+
+  {# Critical Issues Section #}
+  {% if page_health.not_indexed or page_health.slow_pages or page_health.zero_traffic_high_impr %}
+  <div class="mb-6">
+    <h2 class="text-[15px] font-semibold tracking-tight mb-3">🔴 Critical Issues — Fix these first</h2>
+
+    {# Not Indexed #}
+    {% if page_health.not_indexed %}
+    <details class="rounded-xl bg-white border border-red-200 shadow-sm mb-3 overflow-hidden" open>
+      <summary class="px-5 py-4 cursor-pointer flex items-center justify-between hover:bg-red-50">
+        <div class="font-semibold text-red-700">❌ Not Indexed ({{ page_health.not_indexed|length }} pages)</div>
+        <div class="text-xs text-slate-500">These pages won't appear in Google search results</div>
+      </summary>
+      <div class="px-5 py-3 border-t border-red-100">
+        <div class="bg-red-50 border border-red-200 rounded-lg p-3 mb-3 text-sm text-red-700">
+          💡 Action: Check robots.txt, noindex tags, and submit URLs for indexing in Google Search Console.
+        </div>
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="text-left text-slate-400 text-xs uppercase tracking-wider">
+              <th class="font-medium py-2">URL</th>
+              <th class="font-medium py-2">Verdict</th>
+              <th class="font-medium py-2 text-right">Impressions</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100">
+            {% for p in page_health.not_indexed %}
+            <tr>
+              <td class="py-2 text-slate-700 max-w-sm truncate">{{ p.url_short }}</td>
+              <td class="py-2">
+                <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700">
+                  {{ p.index_verdict }}
+                </span>
+              </td>
+              <td class="py-2 text-right text-slate-500">{{ p.impressions }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </details>
+    {% endif %}
+
+    {# Slow Pages #}
+    {% if page_health.slow_pages %}
+    <details class="rounded-xl bg-white border border-amber-200 shadow-sm mb-3 overflow-hidden">
+      <summary class="px-5 py-4 cursor-pointer flex items-center justify-between hover:bg-amber-50">
+        <div class="font-semibold text-amber-700">⚡ Slow Pages — Score &lt;50 ({{ page_health.slow_pages|length }} pages)</div>
+        <div class="text-xs text-slate-500">PageSpeed Insights · Mobile</div>
+      </summary>
+      <div class="px-5 py-3 border-t border-amber-100">
+        <div class="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-3 text-sm text-amber-700">
+          💡 Action: Use PageSpeed Insights to identify bottlenecks. Optimise images, reduce JavaScript, improve server response time.
+        </div>
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="text-left text-slate-400 text-xs uppercase tracking-wider">
+              <th class="font-medium py-2">URL</th>
+              <th class="font-medium py-2 text-center">Speed Score</th>
+              <th class="font-medium py-2 text-right">Clicks</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100">
+            {% for p in page_health.slow_pages %}
+            <tr>
+              <td class="py-2 text-slate-700 max-w-sm truncate">{{ p.url_short }}</td>
+              <td class="py-2 text-center">
+                {% if p.speed_score is not None %}
+                <span class="inline-flex items-center justify-center w-8 h-6 rounded text-xs font-semibold
+                  {% if p.speed_score >= 70 %}bg-green-100 text-green-700{% elif p.speed_score >= 50 %}bg-amber-100 text-amber-700{% else %}bg-red-100 text-red-700{% endif %}">
+                  {{ p.speed_score }}
+                </span>
+                {% else %}—{% endif %}
+              </td>
+              <td class="py-2 text-right text-slate-500">{{ p.clicks }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </details>
+    {% endif %}
+
+    {# Zero Traffic High Impressions #}
+    {% if page_health.zero_traffic_high_impr %}
+    <details class="rounded-xl bg-white border border-blue-200 shadow-sm mb-3 overflow-hidden">
+      <summary class="px-5 py-4 cursor-pointer flex items-center justify-between hover:bg-blue-50">
+        <div class="font-semibold text-blue-700">👀 High Impressions, Zero Clicks ({{ page_health.zero_traffic_high_impr|length }} pages)</div>
+        <div class="text-xs text-slate-500">Google shows them, nobody clicks</div>
+      </summary>
+      <div class="px-5 py-3 border-t border-blue-100">
+        <div class="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-3 text-sm text-blue-700">
+          💡 Action: Rewrite meta titles and descriptions to be more compelling. Match search intent. These are traffic recovery opportunities.
+        </div>
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="text-left text-slate-400 text-xs uppercase tracking-wider">
+              <th class="font-medium py-2">URL</th>
+              <th class="font-medium py-2 text-right">Impressions</th>
+              <th class="font-medium py-2 text-center">Position</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100">
+            {% for p in page_health.zero_traffic_high_impr %}
+            <tr>
+              <td class="py-2 text-slate-700 max-w-sm truncate">{{ p.url_short }}</td>
+              <td class="py-2 text-right font-semibold text-slate-700">{{ p.impressions }}</td>
+              <td class="py-2 text-center text-slate-500">{{ p.avg_position }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </details>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {# Full Page Audit Table #}
+  <div class="rounded-xl bg-white border border-slate-200 shadow-sm overflow-hidden">
+    <div class="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
+      <h2 class="text-[15px] font-semibold tracking-tight">All Pages</h2>
+      <div class="flex items-center gap-4">
+        <span class="text-xs text-slate-400">{{ page_health.total_pages }} pages · sorted by clicks</span>
+        <a href="{% url 'dashboard:export_csv' 'top_pages' %}" class="text-xs text-brand-600 hover:text-brand-700 font-medium">Export CSV</a>
+      </div>
+    </div>
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-left text-slate-400 text-xs uppercase tracking-wider bg-slate-50 border-b border-slate-100">
+            <th class="font-medium px-5 py-3">Page</th>
+            <th class="font-medium px-5 py-3 text-right">Clicks</th>
+            <th class="font-medium px-5 py-3 text-right">Impressions</th>
+            <th class="font-medium px-5 py-3 text-right">CTR</th>
+            <th class="font-medium px-5 py-3 text-center">Position</th>
+            <th class="font-medium px-5 py-3 text-center">Speed</th>
+            <th class="font-medium px-5 py-3 text-center">Indexed</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100">
+          {% for p in page_health.pages %}
+          <tr class="hover:bg-slate-50 cursor-pointer"
+              hx-get="{% url 'dashboard:page_detail' %}?url={{ p.url|urlencode }}"
+              hx-target="#slide-over-content"
+              @click="slideOverOpen = true">
+            <td class="px-5 py-3 max-w-xs">
+              <span class="text-brand-600 font-medium truncate block" title="{{ p.url }}">
+                {{ p.url_short }}
+              </span>
+            </td>
+            <td class="px-5 py-3 text-right font-semibold text-slate-700">{{ p.clicks }}</td>
+            <td class="px-5 py-3 text-right text-slate-600">{{ p.impressions }}</td>
+            <td class="px-5 py-3 text-right text-slate-500">{{ p.ctr }}%</td>
+            <td class="px-5 py-3 text-center text-slate-500">{{ p.avg_position }}</td>
+            <td class="px-5 py-3 text-center">
+              {% if p.speed_score is not None %}
+              <span class="inline-flex items-center justify-center w-8 h-6 rounded text-xs font-semibold
+                {% if p.speed_score >= 70 %}bg-green-100 text-green-700{% elif p.speed_score >= 50 %}bg-amber-100 text-amber-700{% else %}bg-red-100 text-red-700{% endif %}">
+                {{ p.speed_score }}
+              </span>
+              {% else %}
+              <span class="text-slate-300 text-xs">—</span>
+              {% endif %}
+            </td>
+            <td class="px-5 py-3 text-center">
+              {% if p.index_verdict == "PASS" %}
+              <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-700">✓ Indexed</span>
+              {% elif p.index_verdict %}
+              <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700">✗ {{ p.index_verdict }}</span>
+              {% else %}
+              <span class="text-slate-300 text-xs">—</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% empty %}
+          <tr>
+            <td colspan="7" class="p-8">
+              {% include "components/empty_state.html" with icon="📄" title="No page data found" detail="No page data found for this period. Run a sync to pull data from Google Search Console." %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  {# Slide-over Panel #}
+  <div class="relative z-50" aria-labelledby="slide-over-title" role="dialog" aria-modal="true" x-show="slideOverOpen" x-cloak>
+    <div class="fixed inset-0 bg-slate-900/50 backdrop-blur-sm transition-opacity" 
+         x-show="slideOverOpen" 
+         x-transition:enter="ease-in-out duration-500" 
+         x-transition:enter-start="opacity-0" 
+         x-transition:enter-end="opacity-100" 
+         x-transition:leave="ease-in-out duration-500" 
+         x-transition:leave-start="opacity-100" 
+         x-transition:leave-end="opacity-0"></div>
+
+    <div class="fixed inset-0 overflow-hidden">
+      <div class="absolute inset-0 overflow-hidden">
+        <div class="pointer-events-none fixed inset-y-0 right-0 flex max-w-full pl-10">
+          <div class="pointer-events-auto w-screen max-w-md transform transition ease-in-out duration-500 sm:duration-700"
+               x-show="slideOverOpen"
+               x-transition:enter="transform transition ease-in-out duration-500 sm:duration-700"
+               x-transition:enter-start="translate-x-full"
+               x-transition:enter-end="translate-x-0"
+               x-transition:leave="transform transition ease-in-out duration-500 sm:duration-700"
+               x-transition:leave-start="translate-x-0"
+               x-transition:leave-end="translate-x-full"
+               @click.away="slideOverOpen = false">
+            <div class="flex h-full flex-col overflow-y-scroll bg-white shadow-xl">
+              <div class="px-4 py-6 sm:px-6 bg-slate-50 border-b border-slate-100 flex items-start justify-between">
+                <div>
+                  <h2 class="text-base font-semibold leading-6 text-slate-900" id="slide-over-title">Page Detail</h2>
+                  <p class="mt-1 text-sm text-slate-500">Keywords driving traffic to this URL</p>
+                </div>
+                <div class="ml-3 flex h-7 items-center">
+                  <button type="button" class="relative rounded-md bg-transparent text-slate-400 hover:text-slate-500 focus:outline-none" @click="slideOverOpen = false">
+                    <span class="absolute -inset-2.5"></span>
+                    <span class="sr-only">Close panel</span>
+                    <svg class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+              <div class="relative flex-1 px-4 py-6 sm:px-6" id="slide-over-content">
+                <div class="flex justify-center items-center h-full">
+                  <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-brand-600"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,10 @@
+<div class="flex flex-col items-center justify-center p-8 text-center border border-slate-200 rounded-xl bg-slate-50 border-dashed h-full min-h-[200px]">
+  <div class="text-4xl mb-3">{{ icon|default:"🔌" }}</div>
+  <h3 class="text-[15px] font-semibold text-slate-700">{{ title|default:"No data available" }}</h3>
+  <p class="text-sm text-slate-500 mt-1 max-w-sm">{{ detail|default:"We couldn't find any data for this view." }}</p>
+  {% if action_url %}
+  <a href="{{ action_url }}" class="mt-4 inline-flex items-center justify-center px-4 py-2 text-sm font-medium text-white bg-brand-600 border border-transparent rounded-lg shadow-sm hover:bg-brand-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-brand-500">
+    {{ action_label|default:"Configure" }}
+  </a>
+  {% endif %}
+</div>
