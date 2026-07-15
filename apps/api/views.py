@@ -126,3 +126,44 @@ class ProjectOverviewView(APIView):
             "summary": summary,
             "topPages": top_pages,
         })
+
+
+@method_decorator(login_not_required, name="dispatch")
+class ProjectAlertsView(APIView):
+    """GET /api/projects/<slug>/alerts -> {feed: [alert, ...]}
+
+    The SPA fetches this on EVERY boot (for the sidebar 'Alerts' badge), so without it
+    the app sets a global error and no view -- including Overview -- can render. The feed
+    is the same cross-module aggregation that powers the Overview priority feed, returned
+    in full (severity-sorted). Ack/mutation is Phase B; every item is unacknowledged here."""
+
+    def get(self, request, slug):
+        from django.http import Http404
+
+        from apps.dashboard.services.overview_service import (
+            range_to_period_dates, get_kpi_raw, build_alerts_feed,
+        )
+        from apps.dashboard.services.decision_engine import (
+            generate_signals, generate_ad_overlap_signals,
+        )
+        from apps.dashboard.views import _get_ads_overview
+
+        with get_session() as session:
+            site = session.execute(select(Site).where(Site.slug == slug)).scalars().first()
+            site_url = site.site_url if site else None
+        if site_url is None:
+            raise Http404(f"No project with slug '{slug}'")
+
+        with get_session() as session:
+            anchor = session.execute(
+                select(func.max(SEODaily.date)).where(SEODaily.site_id == site_url)
+            ).scalar() or date_cls.today()
+
+        curr_start, curr_end, prev_start, prev_end = range_to_period_dates("30d", anchor)
+        kpis_current, kpis_previous = get_kpi_raw(site_url, curr_start, curr_end, prev_start, prev_end)
+        _, ads_curr, ads_prev = _get_ads_overview(site_url, curr_start, curr_end, prev_start, prev_end)
+        signals = generate_signals(kpis_current, kpis_previous, ads_curr, ads_prev)
+        signals += generate_ad_overlap_signals(site_url, curr_start, curr_end)
+
+        feed = build_alerts_feed(site_url, curr_start, curr_end, signals)
+        return Response({"feed": feed})

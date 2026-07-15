@@ -226,7 +226,7 @@
         <div>
           <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
             <div style="display: flex; align-items: center; gap: 8px;">
-              <h2 style="font-size: 15px; font-weight: 600; margin: 0;">Priority feed</h2>
+              <h2 style="font-size: 15px; font-weight: 600; margin: 0;">Intelligence</h2>
               <span style="font-size: 12px; color: #94a3b8;">What changed across every module · highest severity first</span>
             </div>
             <span onClick="{{ h.navAlerts }}" style="font-size: 12px; color: #4f46e5; font-weight: 500; cursor: pointer;" style-hover="opacity:0.7">View all in Alerts →</span>
@@ -3352,8 +3352,8 @@
 </x-dc>
 <script type="text/x-dc" data-dc-script data-props="{
   &quot;$preview&quot;: { &quot;width&quot;: 1440, &quot;height&quot;: 900 },
-  &quot;apiBaseUrl&quot;: { &quot;editor&quot;: &quot;text&quot;, &quot;default&quot;: &quot;&quot;, &quot;tsType&quot;: &quot;string&quot;, &quot;section&quot;: &quot;Backend&quot;, &quot;description&quot;: &quot;Django API base URL. Empty = demo fixture mode.&quot; },
-  &quot;demoLatency&quot;: { &quot;editor&quot;: &quot;boolean&quot;, &quot;default&quot;: true, &quot;tsType&quot;: &quot;boolean&quot;, &quot;section&quot;: &quot;Backend&quot;, &quot;description&quot;: &quot;Simulate network latency in fixture mode.&quot; },
+  &quot;apiBaseUrl&quot;: { &quot;editor&quot;: &quot;text&quot;, &quot;default&quot;: &quot;/&quot;, &quot;tsType&quot;: &quot;string&quot;, &quot;section&quot;: &quot;Backend&quot;, &quot;description&quot;: &quot;Django API base URL. Empty = demo fixture mode. Set to '/' so boot() talks to the real DRF API.&quot; },
+  &quot;demoLatency&quot;: { &quot;editor&quot;: &quot;boolean&quot;, &quot;default&quot;: false, &quot;tsType&quot;: &quot;boolean&quot;, &quot;section&quot;: &quot;Backend&quot;, &quot;description&quot;: &quot;Simulate network latency in fixture mode.&quot; },
   &quot;defaultRange&quot;: { &quot;editor&quot;: &quot;enum&quot;, &quot;options&quot;: [&quot;7d&quot;, &quot;30d&quot;, &quot;90d&quot;], &quot;default&quot;: &quot;30d&quot;, &quot;tsType&quot;: &quot;string&quot;, &quot;section&quot;: &quot;Behavior&quot; }
 }">
 class Component extends DCLogic {

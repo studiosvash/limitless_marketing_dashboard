@@ -97,3 +97,23 @@ class OverviewEndpointTests(APITestCase):
     def test_unauthenticated_is_401(self):
         resp = APIClient().get("/api/projects/fusehealth/overview")
         self.assertEqual(resp.status_code, 401)
+
+    def test_alerts_endpoint_returns_feed(self):
+        # The SPA fetches this on every boot for the sidebar badge; without it the whole
+        # app (including Overview) fails to render. It must return {feed: [...]}.
+        resp = self.client_auth.get("/api/projects/fusehealth/alerts")
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertIn("feed", body)
+        self.assertIsInstance(body["feed"], list)
+        # We seeded one anomaly + one technical issue -> both surface here.
+        kinds = {a["kind"] for a in body["feed"]}
+        self.assertIn("anomaly", kinds)
+        self.assertIn("technical", kinds)
+        for a in body["feed"]:
+            for field in ("id", "severity", "kind", "title", "detail", "ts", "acknowledged"):
+                self.assertIn(field, a)
+
+    def test_alerts_unknown_slug_is_404(self):
+        resp = self.client_auth.get("/api/projects/does-not-exist/alerts")
+        self.assertEqual(resp.status_code, 404)

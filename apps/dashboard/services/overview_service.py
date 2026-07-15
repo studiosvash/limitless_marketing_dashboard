@@ -336,10 +336,12 @@ def build_modules(seo_module_stat: str, keywords_count: int, top3_count: int,
 
 
 # --- E2: Cross-module Intelligence (priority) feed ---------------------------------
-def build_priority_feed(site_id: str, curr_start: date, curr_end: date,
-                        signals: list[dict], limit: int = 6) -> list[dict]:
-    """Unacknowledged alerts across EVERY module (not just Site Audit), severity-sorted,
-    each tagged with its owning module for the colored chip + click-through.
+def collect_alert_items(site_id: str, curr_start: date, curr_end: date,
+                        signals: list[dict]) -> list[dict]:
+    """The single source of cross-module alerts, severity-sorted. Feeds BOTH the Overview
+    'priority' feed (top slice) AND the Alerts view's `feed` (full list). Each item carries
+    the HANDOFF alert shape {id, severity, kind, title, detail, ts, acknowledged} plus a
+    `module` object (used by the Overview chip / click-through; harmless in the Alerts view).
 
     Sources (all DB-only, all pre-existing tables):
       - Anomaly            -> SEO           (metric spikes/drops)
@@ -449,8 +451,24 @@ def build_priority_feed(site_id: str, curr_start: date, curr_end: date,
                       else {"label": "SEO", "target": "seo"},
         })
 
+    for it in items:
+        it.setdefault("acknowledged", False)
     items.sort(key=lambda x: _SEV_RANK.get(x["severity"], 1))
-    return items[:limit]
+    return items
+
+
+def build_priority_feed(site_id: str, curr_start: date, curr_end: date,
+                        signals: list[dict], limit: int = 6) -> list[dict]:
+    """Overview 'priority' feed: the top `limit` cross-module alerts (severity-sorted)."""
+    return collect_alert_items(site_id, curr_start, curr_end, signals)[:limit]
+
+
+def build_alerts_feed(site_id: str, curr_start: date, curr_end: date,
+                      signals: list[dict], limit: int = 50) -> list[dict]:
+    """Alerts view `feed`: the full cross-module alert list (severity-sorted, capped).
+    The SPA fetches this on every boot for the sidebar badge, so the Overview cannot
+    render until this endpoint exists -- see apps/api/views.ProjectAlertsView."""
+    return collect_alert_items(site_id, curr_start, curr_end, signals)[:limit]
 
 
 def build_summary_lists(ai_summary_sections: list[dict]) -> dict:
