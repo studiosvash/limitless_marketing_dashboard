@@ -275,6 +275,95 @@ class ProjectKeywordsView(APIView):
 
 
 @method_decorator(login_not_required, name="dispatch")
+class ProjectPositioningView(APIView):
+    """GET /api/projects/<slug>/positioning -> {distribution, kpis, movement, movers, competitors}
+
+    DB-first from keyword_rankings: current vs previous 14-day window per keyword gives the
+    position distribution, movement counts, and biggest movers. Competitor grid is empty until
+    competitor_keyword_rankings is populated (separate connector)."""
+
+    def get(self, request, slug):
+        from datetime import timedelta
+
+        from django.http import Http404
+        from pipeline.db.schema import KeywordRanking
+
+        with get_session() as session:
+            site = session.execute(select(Site).where(Site.slug == slug)).scalars().first()
+            site_url = site.site_url if site else None
+            if site_url is None:
+                raise Http404(f"No project with slug '{slug}'")
+
+            anchor = session.execute(
+                select(func.max(KeywordRanking.date)).where(KeywordRanking.site_id == site_url)
+            ).scalar() or date_cls.today()
+
+            def window(start, end):
+                rows = session.execute(
+                    select(
+                        KeywordRanking.keyword,
+                        func.avg(KeywordRanking.position).label("pos"),
+                        func.max(KeywordRanking.search_volume).label("vol"),
+                        func.sum(KeywordRanking.impressions).label("impr"),
+                        func.sum(KeywordRanking.clicks).label("clicks"),
+                    )
+                    .where(KeywordRanking.site_id == site_url,
+                           KeywordRanking.date >= start, KeywordRanking.date <= end,
+                           KeywordRanking.position.isnot(None))
+                    .group_by(KeywordRanking.keyword)
+                ).all()
+                return {r.keyword: r for r in rows}
+
+            curr = window(anchor - timedelta(days=13), anchor)
+            prev = window(anchor - timedelta(days=27), anchor - timedelta(days=14))
+
+        dist = {"top3": 0, "p4_10": 0, "p11_20": 0, "p21_100": 0}
+        impressions = est_traffic = 0
+        pos_sum = 0
+        movers = []
+        improved = declined = added = 0
+        for kw, r in curr.items():
+            pos = r.pos or 0
+            pos_sum += pos
+            impressions += int(r.impr or 0)
+            est_traffic += int(r.clicks or 0)
+            if pos <= 3:
+                dist["top3"] += 1
+            elif pos <= 10:
+                dist["p4_10"] += 1
+            elif pos <= 20:
+                dist["p11_20"] += 1
+            else:
+                dist["p21_100"] += 1
+            pr = prev.get(kw)
+            if pr is None:
+                added += 1
+            else:
+                change = (pr.pos or 0) - pos
+                if change > 0.5:
+                    improved += 1
+                elif change < -0.5:
+                    declined += 1
+                movers.append({"kw": kw, "prevPos": round(pr.pos or 0), "pos": round(pos),
+                               "volume": int(r.vol or 0), "_chg": abs(change)})
+        lost = sum(1 for kw in prev if kw not in curr)
+        movers.sort(key=lambda m: m["_chg"], reverse=True)
+        for m in movers:
+            m.pop("_chg", None)
+
+        tracked = len(curr)
+        payload = {
+            "distribution": dist,
+            "kpis": {"tracked": tracked, "avg_pos": round(pos_sum / tracked, 1) if tracked else 0,
+                     "est_traffic": est_traffic, "impressions": impressions},
+            "movement": {"improved": improved, "declined": declined, "added": added, "lost": lost},
+            "movers": movers[:12],
+            "competitors": {"domains": [], "rows": []},
+        }
+        return Response(json_safe(payload))
+
+
+@method_decorator(login_not_required, name="dispatch")
 class ProjectBacklinksView(APIView):
     """GET /api/projects/<slug>/backlinks -> the SPA Backlinks `data` payload.
 
