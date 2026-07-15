@@ -154,3 +154,25 @@ class OverviewEndpointTests(APITestCase):
         resp = self.client_auth.post("/api/research", {"project": "fusehealth", "keywords": []},
                                      format="json")
         self.assertEqual(resp.status_code, 400)
+
+    def test_backlinks_empty_state_before_refresh(self):
+        # No snapshot yet -> zeroed payload so the page renders instead of erroring.
+        resp = self.client_auth.get("/api/projects/fusehealth/backlinks")
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(body["summary"]["backlinks"], 0)
+        self.assertEqual(body["refDomains"], [])
+
+    def test_backlinks_returns_stored_snapshot(self):
+        import json
+        from pipeline.db.writer import save_backlinks_snapshot
+        payload = {"summary": {"backlinks": 50, "refDomains": 47, "authorityScore": 10},
+                   "refDomains": [{"domain": "example.com", "rank": 4}], "anchors": [], "months": [],
+                   "types": [], "asBuckets": [], "links": [], "competitors": [], "gapDomains": []}
+        with get_session() as session:
+            save_backlinks_snapshot(session, "sc-domain:fusehealth.com", json.dumps(payload))
+            session.commit()
+        resp = self.client_auth.get("/api/projects/fusehealth/backlinks")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["summary"]["backlinks"], 50)
+        self.assertEqual(resp.json()["refDomains"][0]["domain"], "example.com")

@@ -165,6 +165,18 @@ class Backlink(Base):
     )
 
 
+class BacklinksSnapshot(Base):
+    """One stored Backlinks-page payload per site (DB-first cache of the DataForSEO Backlinks
+    aggregates: summary, referring domains, anchors, new/lost history). The page reads the
+    latest snapshot; a Refresh re-fetches and overwrites it. Stored as a JSON blob because the
+    data is display-only (never cross-queried), which keeps this to one table instead of four."""
+    __tablename__ = "backlinks_snapshot"
+
+    site_id = Column(String(255), primary_key=True, default="")
+    fetched_at = Column(DateTime, nullable=False)
+    payload = Column(Text, nullable=False)  # JSON string of the SPA Backlinks `data` shape
+
+
 class CompetitorVisibility(Base):
     """Competitor domain search visibility over time."""
     __tablename__ = "competitor_visibility"

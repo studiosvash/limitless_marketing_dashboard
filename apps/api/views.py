@@ -275,6 +275,29 @@ class ProjectKeywordsView(APIView):
 
 
 @method_decorator(login_not_required, name="dispatch")
+class ProjectBacklinksView(APIView):
+    """GET /api/projects/<slug>/backlinks -> the SPA Backlinks `data` payload.
+
+    DB-first: returns the stored DataForSEO snapshot (built by backlinks_service on Refresh).
+    Before the first Refresh there's no snapshot, so a zeroed empty-state payload is returned
+    and the page renders cleanly instead of erroring."""
+
+    def get(self, request, slug):
+        from django.http import Http404
+
+        from pipeline.services.backlinks_service import load_backlinks, empty_backlinks_payload
+
+        with get_session() as session:
+            site = session.execute(select(Site).where(Site.slug == slug)).scalars().first()
+            site_url = site.site_url if site else None
+        if site_url is None:
+            raise Http404(f"No project with slug '{slug}'")
+
+        _, payload = load_backlinks(site_url)
+        return Response(json_safe(payload or empty_backlinks_payload()))
+
+
+@method_decorator(login_not_required, name="dispatch")
 class KeywordResearchView(APIView):
     """POST /api/research  {project, keywords:[...], location} -> {location, cost, rows:[...]}
 

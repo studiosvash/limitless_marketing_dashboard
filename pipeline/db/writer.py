@@ -26,7 +26,7 @@ from pipeline.db.schema import (
     PageSpeed, IndexingStatus, SEOAggregate,
     Anomaly, ComparativeMetrics,
     CompetitorKeywordRanking, TrackedCompetitor, AIKeywordData,
-    SavedKeyword,
+    SavedKeyword, BacklinksSnapshot,
 )
 from pipeline.utils.logger import get_logger
 
@@ -543,3 +543,28 @@ def upsert_saved_keywords(session: Session, records: list[dict], site_id: Option
         total += len(batch)
     logger.debug(f"[writer] saved_keywords: upserted {total} rows")
     return total
+
+
+# ─────────────────────────────────────────────
+# Backlinks page snapshot (one JSON payload per site; DB-first cache)
+# ─────────────────────────────────────────────
+
+def save_backlinks_snapshot(session: Session, site_id: str, payload_json: str) -> None:
+    """Overwrite the stored Backlinks payload for a site (one row per site_id)."""
+    ensure_tables(session, BacklinksSnapshot)
+    stmt = sqlite_insert(BacklinksSnapshot).values(
+        site_id=site_id or "", fetched_at=datetime.now(timezone.utc), payload=payload_json,
+    )
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["site_id"],
+        set_={"fetched_at": stmt.excluded.fetched_at, "payload": stmt.excluded.payload},
+    )
+    session.execute(stmt)
+    logger.debug(f"[writer] backlinks_snapshot: saved for {site_id}")
+
+
+def get_backlinks_snapshot(session: Session, site_id: str):
+    """Return (fetched_at, payload_json) for a site, or None if never fetched."""
+    ensure_tables(session, BacklinksSnapshot)
+    row = session.get(BacklinksSnapshot, site_id or "")
+    return (row.fetched_at, row.payload) if row else None
