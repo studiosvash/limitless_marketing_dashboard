@@ -163,6 +163,34 @@ Spec: `docs/superpowers/specs/2026-06-15-dataforseo-competitor-intelligence-desi
 
 ---
 
+## PHASE A — Limitless SPA + API Foundation ✅ (2026-07-15)
+
+Spec: `docs/superpowers/specs/2026-07-10-limitless-migration-roadmap-and-phaseA-design.md`
+Plan: `docs/superpowers/plans/2026-07-10-phaseA-foundation-plan.md`
+Proves the new architecture end-to-end on Overview: the approved SPA served against a real
+DRF API. Old Django dashboard still serves unchanged at `/`.
+
+- [x] DRF foundation — `apps/api`, `BearerTokenAuthentication`, `/api/ping` smoke test
+- [x] Auto-issue a DRF Bearer token per user (signal) + backfill existing users
+- [x] Project registry — `slug`/`vertical`/`location` on `Site`; idempotent `add_project_fields`
+- [x] `GET`/`POST /api/projects` (both projects: fusehealth + eventstaff)
+- [x] Extract Overview query logic → `apps/dashboard/services/overview_service.py`
+      (shared by old view + API; no duplicated SQL)
+- [x] `range_to_period_dates` (stateless 7d/30d/90d) + API-shaped KPI/top-page builders
+- [x] `GET /api/projects/<slug>/overview` — real data. **Enhancements beyond the plan:**
+      - **E1:** Site health pillar + Site Audit module compute a real composite score
+        (GSC coverage + indexing + PageSpeed-when-present; resilient to a missing pagespeed
+        table). Only Paid ROAS + AI visibility stay `state:setup` (genuinely unconnected).
+      - **E2:** the priority feed aggregates alerts across **all modules** (SEO anomalies,
+        Site Audit technical + indexing issues, decision signals), severity-sorted — not
+        site-audit-only. (Heading kept as "Priority feed" per user; content is now cross-module.)
+- [x] Serve the approved SPA at `/app/` with per-request token bootstrap (baseUrl `'/'`,
+      injected right after api.js so it beats the app's first fetch — never falls back to fixtures)
+- [x] 52 tests green; overview verified live against real fusehealth.com data
+- [ ] *(follow-up)* Keyword Explorer `POST /api/research` wiring (Phase D — deferred by user)
+
+---
+
 ## PHASE 6 — Production Hardening ⏸️ (Paused for Phase 5.5)
 - [ ] `DEBUG=False`, `ALLOWED_HOSTS` locked, CSRF on all POST, SSL redirect
 - [ ] View-level caching; query optimization; WhiteNoise for static
