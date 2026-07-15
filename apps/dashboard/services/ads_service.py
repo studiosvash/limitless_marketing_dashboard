@@ -13,10 +13,76 @@ from datetime import date
 
 from sqlalchemy import func, select
 
+from apps.dashboard.services.mutation_state import get_state, set_state
 from pipeline.db.schema import AdMetricDaily, SEODaily
 from pipeline.utils.db_connection import get_session
 
 logger = logging.getLogger(__name__)
+
+_ADS_OVERRIDES_DEFAULT = {"status": {}, "budget": {}, "negatives": [], "promoted": []}
+
+
+def get_ads_overrides(site_id: str) -> dict:
+    """User-recorded Ads intent (HANDOFF_SPEC 8 'write-back semantics'): campaign pause/
+    budget edits, negative keywords, promoted terms. Persisted immediately so subsequent
+    GETs reflect them; the actual Google Ads write-back happens on the next 12h sync once
+    the Ads connector has credentials."""
+    stored = get_state(site_id, "adsOverrides", {})
+    return {**_ADS_OVERRIDES_DEFAULT, **stored}
+
+
+def set_campaign_status(site_id: str, campaign_id: str, status: str) -> str:
+    if status not in ("enabled", "paused"):
+        raise ValueError("status must be 'enabled' or 'paused'")
+    overrides = get_ads_overrides(site_id)
+    overrides["status"] = {**overrides["status"], str(campaign_id): status}
+    set_state(site_id, "adsOverrides", overrides)
+    return status
+
+
+def set_campaign_budget(site_id: str, campaign_id: str, budget_daily) -> int:
+    """HANDOFF_SPEC 2.7: budget_daily edits round to integers >= 1."""
+    value = max(1, round(float(budget_daily)))
+    overrides = get_ads_overrides(site_id)
+    overrides["budget"] = {**overrides["budget"], str(campaign_id): value}
+    set_state(site_id, "adsOverrides", overrides)
+    return value
+
+
+def add_negative(site_id: str, term: str, match_type: str, campaign_id=None) -> list[dict]:
+    """Campaign-level negative when campaign_id is given, shared set otherwise. Returns the
+    full negatives list (the endpoint's response body). Idempotent per (term, campaignId)."""
+    overrides = get_ads_overrides(site_id)
+    negatives = overrides["negatives"]
+    key = (term.strip().lower(), str(campaign_id) if campaign_id else None)
+    if not any((n["term"].strip().lower(), n.get("campaignId")) == key for n in negatives):
+        negatives = negatives + [{
+            "term": term.strip(),
+            "matchType": match_type if match_type in ("exact", "phrase", "broad") else "exact",
+            "campaignId": str(campaign_id) if campaign_id else None,
+        }]
+        overrides["negatives"] = negatives
+        set_state(site_id, "adsOverrides", overrides)
+    return negatives
+
+
+def mark_promoted(site_id: str, term: str) -> None:
+    overrides = get_ads_overrides(site_id)
+    if term not in overrides["promoted"]:
+        overrides["promoted"] = overrides["promoted"] + [term]
+        set_state(site_id, "adsOverrides", overrides)
+
+
+def _search_term_status(term_row: dict, negatives: list[dict], promoted: list[str]) -> str:
+    """HANDOFF_SPEC 2.7: derived server-side, precedence negative > tracked > converting > wasted."""
+    term_l = (term_row.get("term") or "").strip().lower()
+    if any(n["term"].strip().lower() == term_l for n in negatives):
+        return "negative"
+    if term_row.get("term") in promoted:
+        return "tracked"
+    if (term_row.get("conversions") or 0) > 0:
+        return "converting"
+    return "wasted"
 
 
 def query_ads_totals_raw(site_id: str, start: date, end: date) -> dict:
@@ -156,6 +222,22 @@ def build_ads_response(site_id: str, curr_start: date, curr_end: date, prev_star
     prev = query_ads_totals_raw(site_id, prev_start, prev_end)
     trend = query_ads_trend_raw(site_id, curr_start, curr_end)
     pacing = query_ads_pacing_raw(site_id)
+    overrides = get_ads_overrides(site_id)
+
+    # Campaign/searchTerm rows are [] until the Google Ads connector has credentials, but
+    # user intent (negatives, promoted terms, status/budget edits) must be visible in GETs
+    # immediately (HANDOFF_SPEC 8 'Mutation -> refetch'). When campaign rows exist, apply
+    # the recorded status/budget overrides and the derived searchTerm status here.
+    campaigns: list[dict] = []
+    for c in campaigns:
+        cid = str(c.get("id"))
+        if cid in overrides["status"]:
+            c["status"] = overrides["status"][cid]
+        if cid in overrides["budget"]:
+            c["budget_daily"] = overrides["budget"][cid]
+    search_terms: list[dict] = []
+    for t in search_terms:
+        t["status"] = _search_term_status(t, overrides["negatives"], overrides["promoted"])
 
     connected = bool(os.getenv("GOOGLE_ADS_CUSTOMER_ID") and os.getenv("GOOGLE_ADS_DEVELOPER_TOKEN"))
 
@@ -164,11 +246,11 @@ def build_ads_response(site_id: str, curr_start: date, curr_end: date, prev_star
         "prev": prev,
         "trend": trend,
         "pacing": pacing,
-        "campaigns": [],
-        "searchTerms": [],
+        "campaigns": campaigns,
+        "searchTerms": search_terms,
         "attribution": [],
         "landingPages": [],
-        "negatives": [],
+        "negatives": overrides["negatives"],
         "window": {"from": curr_start.isoformat(), "to": curr_end.isoformat(), "days": (curr_end - curr_start).days + 1},
         "syncMeta": {
             "connected": connected,

@@ -19,6 +19,13 @@ urlpatterns = [
     path("projects/<slug:slug>/ai", views.ProjectAIView.as_view(), name="project-ai"),
     path("projects/<slug:slug>/ai/<str:action>", views.ProjectAIActionView.as_view(), name="project-ai-action"),
     path("projects/<slug:slug>/settings", views.ProjectSettingsView.as_view(), name="project-settings"),
+    # Mutations (HANDOFF_SPEC 1)
+    path("projects/<slug:slug>/audit/toggle-check", views.AuditToggleCheckView.as_view(), name="audit-toggle-check"),
+    path("projects/<slug:slug>/ads/status", views.AdsStatusView.as_view(), name="ads-status"),
+    path("projects/<slug:slug>/ads/budget", views.AdsBudgetView.as_view(), name="ads-budget"),
+    path("projects/<slug:slug>/ads/negatives", views.AdsNegativesView.as_view(), name="ads-negatives"),
+    path("projects/<slug:slug>/ads/promote", views.AdsPromoteView.as_view(), name="ads-promote"),
+    path("alerts/<str:alert_id>/ack", views.AlertAckView.as_view(), name="alert-ack"),
     # Refresh / Sync
     path("projects/<slug:slug>/sync", views.ProjectSyncView.as_view(), name="project-sync"),
     path("tasks/<int:task_id>", views.TaskStatusView.as_view(), name="task-status"),

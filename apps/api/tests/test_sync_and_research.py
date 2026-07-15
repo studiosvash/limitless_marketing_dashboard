@@ -118,8 +118,13 @@ class TaskStatusEndpointTests(APITestCase):
         self.assertEqual(body["progress"], 1.0)
         self.assertIn("7,269", body["step"])
 
-    def test_unknown_task_is_404(self):
-        self.assertEqual(self.client_auth.get("/api/tasks/999999").status_code, 404)
+    def test_unknown_task_returns_done_true(self):
+        # HANDOFF_SPEC 1: "unknown ids should return {done: true}" — the SPA polls every
+        # 500ms and treats non-2xx as a hard error, so 404 would break the progress bar
+        # for tasks that finished before a page reload.
+        resp = self.client_auth.get("/api/tasks/999999")
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.json()["done"])
 
 
 class KeywordResearchEndpointTests(APITestCase):

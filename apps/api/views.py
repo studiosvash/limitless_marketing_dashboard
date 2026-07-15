@@ -190,7 +190,8 @@ class ProjectKeywordsView(APIView):
             "intent": request.data.get("intent"),
         }
         saved = save_keywords(site_id, [row], location=request.data.get("location") or "United States")
-        return Response({"saved": saved})
+        # HANDOFF_SPEC 1: track-keyword returns {ok, keyword} (keyword echoed in spec shape).
+        return Response({"ok": True, "saved": saved, "keyword": _tracked_keyword_body(kw, request.data, "manual")})
 
 
 @method_decorator(login_not_required, name="dispatch")
@@ -385,7 +386,10 @@ class TaskStatusView(APIView):
     def get(self, request, task_id):
         status_data = task_status(task_id)
         if status_data is None:
-            raise Http404(f"No task with id {task_id}")
+            # HANDOFF_SPEC 1: "unknown ids should return {done: true}" — the SPA polls at
+            # 500ms and treats any non-2xx as a hard error, so a 404 here breaks the
+            # progress bar for tasks that finished before a page reload.
+            return Response({"task_id": task_id, "done": True})
         return Response(status_data)
 
 
@@ -409,3 +413,127 @@ class PromptResearchView(APIView):
         site_id = resolve_project_or_404(request.data.get("project", "")).site_url
         seeds = request.data.get("seeds") or []
         return Response(run_prompt_research(site_id, seeds))
+
+
+# ---------------------------------------------------------------------------
+# Mutations: alert ack, audit toggle-check, ads write-back intent
+# (HANDOFF_SPEC 1 'Mutations' + 8 'write-back semantics'). All persist per
+# project and are immediately visible in subsequent GETs.
+# ---------------------------------------------------------------------------
+def _tracked_keyword_body(kw: str, data: dict, source: str) -> dict:
+    """Spec keyword shape (2.1) for track/promote responses — echoes what was saved; rank
+    fields are honestly null until the next positions sync picks the keyword up."""
+    return {
+        "id": kw, "kw": kw, "intent": data.get("intent"), "pos": None, "prevPos": None,
+        "volume": data.get("volume"), "kd": data.get("kd"), "cpc": data.get("cpc"),
+        "clicks": 0, "impressions": 0, "ctr": 0, "url": None, "monthly": [],
+        "source": source, "serpFeatures": [],
+    }
+
+
+@method_decorator(login_not_required, name="dispatch")
+class AlertAckView(APIView):
+    """POST /api/alerts/<alert_id>/ack -> {ok}. The SPA's 'Acknowledge all' fires one POST
+    per unacknowledged item in parallel, so this must be idempotent. The alert's project is
+    derived from the id's row (anomaly-<pk>) or passed by the SPA; since feed ids embed no
+    site, ack is recorded for every project that could have produced the id -- in practice
+    ids are unique across sites because they embed the DB pk / a URL hash."""
+
+    def post(self, request, alert_id):
+        from apps.dashboard.services.alerts_service import ack_alert
+
+        # The SPA sends no body; resolve the owning project from ?project= if provided,
+        # else ack for all active projects (ids are globally unique, so this is safe).
+        slug = request.query_params.get("project") or request.data.get("project")
+        if slug:
+            sites = [resolve_project_or_404(slug).site_url]
+        else:
+            sites = [s.site_url for s in list_sites(active_only=True)]
+        for site_id in sites:
+            ack_alert(site_id, alert_id)
+        return Response({"ok": True})
+
+
+@method_decorator(login_not_required, name="dispatch")
+class AuditToggleCheckView(APIView):
+    """POST /api/projects/<slug>/audit/toggle-check {checkId} -> {hidden: [...]}."""
+
+    def post(self, request, slug):
+        from apps.dashboard.services.site_audit_service import toggle_audit_check
+
+        site_id = resolve_project_or_404(slug).site_url
+        check_id = (request.data.get("checkId") or "").strip()
+        if not check_id:
+            return Response({"detail": "checkId is required"}, status=400)
+        return Response({"hidden": toggle_audit_check(site_id, check_id)})
+
+
+@method_decorator(login_not_required, name="dispatch")
+class AdsStatusView(APIView):
+    """POST .../ads/status {campaignId, status} -> {ok, status}. Records intent; the real
+    CampaignService.mutate happens on the next 12h sync (spec 8: 'written back on next sync')."""
+
+    def post(self, request, slug):
+        from apps.dashboard.services.ads_service import set_campaign_status
+
+        site_id = resolve_project_or_404(slug).site_url
+        campaign_id = request.data.get("campaignId")
+        if not campaign_id:
+            return Response({"detail": "campaignId is required"}, status=400)
+        try:
+            new_status = set_campaign_status(site_id, campaign_id, request.data.get("status"))
+        except ValueError as e:
+            return Response({"detail": str(e)}, status=400)
+        return Response({"ok": True, "status": new_status})
+
+
+@method_decorator(login_not_required, name="dispatch")
+class AdsBudgetView(APIView):
+    """POST .../ads/budget {campaignId, budgetDaily} -> {ok, budgetDaily} (integer >= 1)."""
+
+    def post(self, request, slug):
+        from apps.dashboard.services.ads_service import set_campaign_budget
+
+        site_id = resolve_project_or_404(slug).site_url
+        campaign_id = request.data.get("campaignId")
+        if not campaign_id:
+            return Response({"detail": "campaignId is required"}, status=400)
+        try:
+            value = set_campaign_budget(site_id, campaign_id, request.data.get("budgetDaily"))
+        except (TypeError, ValueError):
+            return Response({"detail": "budgetDaily must be a number"}, status=400)
+        return Response({"ok": True, "budgetDaily": value})
+
+
+@method_decorator(login_not_required, name="dispatch")
+class AdsNegativesView(APIView):
+    """POST .../ads/negatives {term, matchType, campaignId?} -> {ok, negatives: [...]}."""
+
+    def post(self, request, slug):
+        from apps.dashboard.services.ads_service import add_negative
+
+        site_id = resolve_project_or_404(slug).site_url
+        term = (request.data.get("term") or "").strip()
+        if not term:
+            return Response({"detail": "term is required"}, status=400)
+        negatives = add_negative(site_id, term, request.data.get("matchType") or "exact",
+                                 request.data.get("campaignId"))
+        return Response({"ok": True, "negatives": negatives})
+
+
+@method_decorator(login_not_required, name="dispatch")
+class AdsPromoteView(APIView):
+    """POST .../ads/promote {term} -> {ok, keyword}. Tracks the search term as an organic
+    keyword (source ads_term) and marks the term tracked for status derivation."""
+
+    def post(self, request, slug):
+        from apps.dashboard.services.ads_service import mark_promoted
+        from pipeline.services.saved_keyword_service import save_keywords
+
+        site_id = resolve_project_or_404(slug).site_url
+        term = (request.data.get("term") or "").strip()
+        if not term:
+            return Response({"detail": "term is required"}, status=400)
+        save_keywords(site_id, [{"keyword": term}], location="United States")
+        mark_promoted(site_id, term)
+        return Response({"ok": True, "keyword": _tracked_keyword_body(term, {}, "ads_term")})

@@ -17,6 +17,7 @@ from urllib.parse import urlparse
 
 from sqlalchemy import func, select
 
+from apps.dashboard.services.mutation_state import get_state, set_state
 from pipeline.db.schema import IndexingStatus, PageSpeed, TechnicalIssue
 from pipeline.utils.db_connection import get_session
 
@@ -155,6 +156,15 @@ def _cwv_field(metric: dict, unit: str, good: float, poor: float) -> dict:
     }
 
 
+def toggle_audit_check(site_id: str, check_id: str) -> list[str]:
+    """Hide/restore an audit check (HANDOFF_SPEC POST audit/toggle-check). Persisted per
+    project; returns the full hidden list, which is also the endpoint's response body."""
+    hidden = get_state(site_id, "auditHidden", [])
+    hidden = [c for c in hidden if c != check_id] if check_id in hidden else hidden + [check_id]
+    set_state(site_id, "auditHidden", hidden)
+    return hidden
+
+
 def build_site_audit_response(site_id: str) -> dict:
     """Real Site Audit response, derived entirely from IndexingStatus + PageSpeed +
     TechnicalIssue rows."""
@@ -199,10 +209,13 @@ def build_site_audit_response(site_id: str) -> dict:
 
     checks = []
     totals = {"errors": 0, "warnings": 0, "notices": 0}
+    hidden_ids = set(get_state(site_id, "auditHidden", []))
     for issue_type, items in sorted(by_type.items(), key=lambda kv: -len(kv[1])):
         title, category, how_to_fix = _humanize(issue_type)
         severity = _SEVERITY_MAP.get((items[0].severity or "").lower(), "notice")
-        totals[_TOTALS_KEY[severity]] += len(items)
+        is_hidden = issue_type in hidden_ids
+        if not is_hidden:  # HANDOFF_SPEC 2.4: totals over non-hidden checks only
+            totals[_TOTALS_KEY[severity]] += len(items)
         checks.append({
             "id": issue_type,
             "severity": severity,
@@ -210,7 +223,7 @@ def build_site_audit_response(site_id: str) -> dict:
             "title": title,
             "howToFix": how_to_fix,
             "count": len(items),
-            "hidden": False,
+            "hidden": is_hidden,
             "pages": [{
                 "url": i.url,
                 "score": (ps_by_url[i.url].performance_score or 0) if i.url in ps_by_url else 0,

@@ -4,8 +4,11 @@ _get_technical_issues, which stay capped for the old page's display tables and a
 unmodified by this module. See
 docs/superpowers/specs/2026-07-11-phaseB4-alerts-design.md for the feed field mapping."""
 
-from sqlalchemy import select
+import hashlib
 
+from sqlalchemy import select, update
+
+from apps.dashboard.services.mutation_state import get_state, set_state
 from pipeline.db.schema import Anomaly, TechnicalIssue
 from pipeline.utils.db_connection import get_session
 
@@ -23,6 +26,38 @@ _ISSUE_LABELS = {
     "long_url": "Long URL",
 }
 _SEVERITY_RANK = {"high": 0, "medium": 1, "info": 2, "low": 3}
+
+
+def _issue_feed_id(url: str, issue_type: str) -> str:
+    """Stable feed id for a TechnicalIssue. Issue rows are wholesale-rebuilt after every
+    sync (rebuild_technical_issues), so their autoincrement PKs change — an ack keyed on
+    the PK would silently un-ack (or mis-ack) after the next refresh. A content hash of
+    (url, issue_type) survives rebuilds; if the same issue is re-detected it stays acked."""
+    digest = hashlib.sha1(f"{url or ''}|{issue_type or ''}".encode()).hexdigest()[:12]
+    return f"issue-{digest}"
+
+
+def get_acked_ids(site_id: str) -> set[str]:
+    """Feed ids the user has acknowledged (persisted per project)."""
+    return set(get_state(site_id, "alertAcks", []))
+
+
+def ack_alert(site_id: str, alert_id: str) -> None:
+    """Persist an acknowledgement. Idempotent — the SPA's 'Acknowledge all' fires one POST
+    per item in parallel. anomaly-<pk> acks are mirrored onto Anomaly.is_acknowledged so
+    the analytics table stays coherent with what the feed reports."""
+    acked = get_state(site_id, "alertAcks", [])
+    if alert_id not in acked:
+        set_state(site_id, "alertAcks", acked + [alert_id])
+    if alert_id.startswith("anomaly-"):
+        try:
+            pk = int(alert_id.removeprefix("anomaly-"))
+            with get_session() as session:
+                session.execute(
+                    update(Anomaly).where(Anomaly.id == pk).values(is_acknowledged=1)
+                )
+        except Exception as e:  # ack must never 500 on mirror failure
+            import logging; logging.getLogger(__name__).warning(f"ack_alert mirror failed: {e}")
 
 
 def query_alert_anomalies_raw(site_id: str) -> list[dict]:
@@ -82,31 +117,34 @@ def build_alerts_response(site_id: str) -> dict:
     acknowledged}]}. See docs/superpowers/specs/2026-07-11-phaseB4-alerts-design.md."""
     anomalies = query_alert_anomalies_raw(site_id)
     issues = query_alert_technical_issues_raw(site_id)
+    acked = get_acked_ids(site_id)
 
     feed = []
     for a in anomalies:
         metric_label = _METRIC_LABELS.get(a["metric_type"], a["metric_type"])
         pct = f"{'+' if a['direction'] == 'up' else '-'}{abs(a['deviation_pct']):.0f}%"
+        feed_id = f"anomaly-{a['id']}"
         feed.append({
-            "id": f"anomaly-{a['id']}",
+            "id": feed_id,
             "ts": str(a["date"]),
             "kind": "anomaly",
             "severity": a["severity"],
             "title": f"{metric_label} {'up' if a['direction'] == 'up' else 'dropped'} {pct}",
             "detail": a["description"],
-            "acknowledged": a["is_acknowledged"],
+            "acknowledged": a["is_acknowledged"] or feed_id in acked,
         })
     for i in issues:
         issue_label = _ISSUE_LABELS.get(i["issue_type"], i["issue_type"].replace("_", " ").title())
         short_url = (i["url"] or "").split("//")[-1][:55]
+        feed_id = _issue_feed_id(i["url"], i["issue_type"])
         feed.append({
-            "id": f"issue-{i['id']}",
+            "id": feed_id,
             "ts": str(i["detected_at"].date()) if i["detected_at"] else "",
             "kind": "technical",
             "severity": i["severity"],
             "title": f"{issue_label}: {short_url}",
             "detail": i["description"],
-            "acknowledged": False,  # honest — TechnicalIssue has no ack mechanism yet
+            "acknowledged": feed_id in acked,
         })
 
     feed.sort(key=lambda item: (item["ts"], -_SEVERITY_RANK.get(item["severity"], 9)), reverse=True)
