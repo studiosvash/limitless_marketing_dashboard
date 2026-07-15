@@ -165,11 +165,14 @@ class GSCKeywordsConnector(BaseConnector):
         site_url = self._resolve_site(site_id)
         if not site_url:
             raise ValueError("[gsc_keywords] No GSC site configured for this Site row or .env.")
+        # Query the resolved GSC property; STORE under the canonical Site.site_url key the
+        # app reads by (they differ when gsc_property is the sc-domain: form — see gsc.py).
+        canonical = site_id or site_url
 
         start_str, end_str = gsc_safe_range(days)
 
         # Incremental: only fetch new dates for this site
-        last_date = self._get_last_synced_date(site_url)
+        last_date = self._get_last_synced_date(canonical)
         if last_date:
             new_start = last_date + timedelta(days=1)
             new_end = date.fromisoformat(end_str)
@@ -182,7 +185,7 @@ class GSCKeywordsConnector(BaseConnector):
             self.logger.info(f"[gsc_keywords] Full fetch [{site_url}]: {start_str} to {end_str}")
 
         raw_rows = self._fetch_queries(site_url, start_str, end_str)
-        records = self._normalize(raw_rows, site_url)
+        records = self._normalize(raw_rows, canonical)
         self.logger.info(f"[gsc_keywords] {len(records)} keyword-date records for {site_url} (from {len(raw_rows)} raw rows)")
         return records
 

@@ -138,12 +138,15 @@ class GSCPagesConnector(BaseConnector):
         site_url = self._resolve_site(site_id)
         if not site_url:
             raise ValueError("[gsc_pages] No GSC site configured for this Site row or .env.")
+        # Query the resolved GSC property; STORE under the canonical Site.site_url key the
+        # app reads by (they differ when gsc_property is the sc-domain: form — see gsc.py).
+        canonical = site_id or site_url
 
         start_str, end_str = gsc_safe_range(days)
         self.logger.info(f"[gsc_pages] Fetching pages [{site_url}]: {start_str} to {end_str}")
 
         raw_rows = self._fetch_pages(site_url, start_str, end_str)
-        records = self._normalize(raw_rows, site_url)
+        records = self._normalize(raw_rows, canonical)
 
         self.logger.info(f"[gsc_pages] Got {len(records)} pages from GSC for {site_url}")
         return records

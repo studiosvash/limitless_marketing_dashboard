@@ -78,9 +78,11 @@ class URLInspectionConnector(BaseConnector):
 
         return urls[:200]  # Cap at 200 to be safe with daily quota
 
-    def _inspect_url(self, service, url: str, site_url: str) -> dict | None:
+    def _inspect_url(self, service, url: str, site_url: str, canonical: str) -> dict | None:
         """
         Call the URL Inspection API for a single URL.
+        `site_url` is the GSC property to query; `canonical` is the Site.site_url key the
+        record is stored under (they differ for sc-domain properties — see gsc.py).
         Returns parsed result dict, or None on failure.
         """
         try:
@@ -107,7 +109,7 @@ class URLInspectionConnector(BaseConnector):
                     pass
 
             return {
-                "site_id": site_url,
+                "site_id": canonical,
                 "url": url,
                 "verdict": index_status.get("verdict", "VERDICT_UNSPECIFIED"),
                 "coverage_state": index_status.get("coverageState", ""),
@@ -134,8 +136,9 @@ class URLInspectionConnector(BaseConnector):
         site_url = self._resolve_site(site_id)
         if not site_url:
             raise ValueError("[url_inspection] No GSC site configured for this Site row or .env.")
+        canonical = site_id or site_url
 
-        pages = self._get_pages_to_inspect(site_url, limit=100)
+        pages = self._get_pages_to_inspect(canonical, limit=100)
         if not pages:
             self.logger.warning(f"[url_inspection] No pages in DB for {site_url} — run gsc_pages first.")
             return []
@@ -149,7 +152,7 @@ class URLInspectionConnector(BaseConnector):
         for i, url in enumerate(pages):
             self.logger.info(f"[url_inspection] [{i+1}/{len(pages)}] {url}")
 
-            result = self._inspect_url(service, url, site_url)
+            result = self._inspect_url(service, url, site_url, canonical)
 
             if result == "QUOTA_EXCEEDED":
                 self.logger.warning(f"[url_inspection] Stopped at {i+1}/{len(pages)} due to quota")

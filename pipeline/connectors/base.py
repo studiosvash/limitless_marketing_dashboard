@@ -23,7 +23,10 @@ def _update_django_sync_log(connector: str, site_url: str, status: str, **kwargs
             defaults={
                 "status": status,
                 "last_synced": timezone.now() if status in ("success", "error") else None,
-                **{k: v for k, v in kwargs.items() if v is not None},
+                # error_message may be an EXPLICIT None (success path clearing a previous
+                # failure) — dropping None here made stale error text stick to success rows
+                # forever, which Settings → Connections then displayed as a live problem.
+                **{k: v for k, v in kwargs.items() if v is not None or k == "error_message"},
             },
         )
     except ImportError:

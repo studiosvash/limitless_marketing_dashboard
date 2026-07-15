@@ -169,11 +169,16 @@ class GSCConnector(BaseConnector):
                 "[gsc] No site configured. Add a Site row in Settings → Manage Sites "
                 "or set GSC_SITE_URL in .env."
             )
+        # `site_url` is the GSC property to QUERY; records are stored under the canonical
+        # Site.site_url key the app reads by. They differ whenever gsc_property is the
+        # sc-domain: form of a plain-domain site — stamping the property here once filed
+        # 47k eventstaff rows under a key no page ever read.
+        canonical = site_id or site_url
 
         start_str, end_str = gsc_safe_range(days)
 
         # Optimize: only fetch new dates if we already have data
-        last_date = self._get_last_synced_date(site_url)
+        last_date = self._get_last_synced_date(canonical)
         if last_date:
             new_start = last_date + timedelta(days=1)
             new_end = date.fromisoformat(end_str)
@@ -188,7 +193,7 @@ class GSCConnector(BaseConnector):
             self.logger.info(f"[gsc] Full historical fetch [{site_url}]: {start_str} → {end_str}")
 
         raw_rows = self._fetch_date_range(site_url, start_str, end_str)
-        records = self._normalize(raw_rows, site_url)
+        records = self._normalize(raw_rows, canonical)
 
         self.logger.info(f"[gsc] Fetched {len(records)} rows for {site_url}")
         return records
