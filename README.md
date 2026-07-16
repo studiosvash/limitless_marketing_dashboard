@@ -4,7 +4,7 @@ An internal dashboard that pulls SEO, analytics, and ads data from Google Search
 Google Analytics, PageSpeed, and keyword/backlink tools into one place, stores it locally, and
 presents it as decision-focused pages (opportunities, anomalies, health scores) for a small team.
 
-**Stack:** Django 6 · HTMX · Tailwind (CDN) · Plotly · SQLAlchemy (analytics DB) · Python 3.11+
+**Stack:** Django 6 · Vanilla JS SPA · Tailwind (Inline) · Plotly · SQLAlchemy (analytics DB) · Python 3.11+
 
 > The data-first contract: pages **only read from the database** and open instantly. Fetching from
 > external APIs happens on a **Refresh**, which writes to the DB and updates the UI. See
@@ -16,6 +16,7 @@ presents it as decision-focused pages (opportunities, anomalies, health scores) 
 
 - **Python 3.11+** (developed on 3.13)
 - A working **`.env`** file (copy from [`.env.example`](.env.example) and fill in credentials)
+- (Optional but recommended) A Python virtual environment (`venv`)
 
 ---
 
@@ -83,7 +84,7 @@ Pages read from the database, so a fresh checkout shows whatever data is already
 To pull the latest:
 
 - **In the app:** use **Refresh All** (top bar) or a page's own refresh button. A live progress bar
-  shows each connector running. This is the normal path.
+  shows each connector running (the SPA actively polls sync status from the DB). This is the normal path.
 - Each refresh also rebuilds aggregates, **detects traffic anomalies**, and **derives technical
   issues** (404s, long URLs, redirects) automatically — no external API needed for those.
 
@@ -100,11 +101,11 @@ fusehealth/
 ├── config/              # Django project (settings split: base / local / production)
 ├── apps/
 │   ├── accounts/        # auth, roles, seed_users
-│   ├── dashboard/       # the pages (views, templates, services)
+│   ├── dashboard/       # the pages (views, services)
 │   └── sync/            # refresh endpoints + sync logs
 ├── pipeline/            # the proven data layer (connectors, db, services, utils)
-├── templates/           # base, partials, components, per-page templates
-├── static/              # CSS
+├── templates/           # django base templates (auth, minimal wrappers)
+├── static/spa/          # the main Single Page Application bundle
 ├── data/                # fusehealth.db (analytics) — git-ignored
 ├── .claude/             # project reference docs (architecture, database, API, design)
 └── manage.py
