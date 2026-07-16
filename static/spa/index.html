@@ -153,6 +153,13 @@
           <div style="{{ rangeStyle.d90 }}" onClick="{{ h.range90 }}">90d</div>
         </div>
 
+        <sc-if value="{{ hasPageRefresh }}">
+          <div onClick="{{ h.refreshPage }}" style="{{ refreshPageBtnStyle }}" style-hover="box-shadow:0 3px 8px rgba(16,185,129,0.3)">
+            <svg style="{{ refreshIconStyle }}" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+            {{ refreshPageLabel }}
+          </div>
+        </sc-if>
+
         <div onClick="{{ h.refreshAll }}" style="{{ refreshBtnStyle }}" style-hover="box-shadow:0 3px 8px rgba(79,70,229,0.3)">
           <svg style="{{ refreshIconStyle }}" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
           {{ refreshLabel }}
@@ -402,6 +409,15 @@
       <!-- ============ KEYWORDS ============ -->
       <sc-if value="{{ showKeywords }}" hint-placeholder-val="{{ false }}">
       <div data-screen-label="Keywords" style="display: flex; flex-direction: column; gap: 24px;">
+
+        <sc-if value="{{ kw.setup }}" hint-placeholder-val="{{ false }}">
+        <div style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 56px 32px; text-align: center; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+          <div style="font-size: 15px; font-weight: 600; color: #0f172a; margin-bottom: 6px;">No Keyword Data Synced Yet</div>
+          <div style="font-size: 13px; color: #64748b; max-width: 420px; margin: 0 auto 20px;">We haven't synced keyword rankings for this domain into the database yet. Click below to fetch current keyword data right now.</div>
+          <div onClick="{{ h.refreshPage }}" style="display: inline-flex; align-items: center; gap: 8px; border-radius: 8px; background: #10b981; color: white; font-size: 14px; font-weight: 600; padding: 10px 20px; cursor: pointer; box-shadow: 0 1px 2px rgba(0,0,0,0.05);" style-hover="background:#059669">⚡ Fetch Keywords Now</div>
+        </div>
+        </sc-if>
+        <sc-if value="{{ !kw.setup }}" hint-placeholder-val="{{ true }}">
 
         <div style="display: flex; align-items: center; gap: 12px;">
           <div style="font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: #94a3b8;">Your tracked portfolio</div>
@@ -700,12 +716,23 @@
             </div>
           </div>
         </div>
+        </sc-if>
         </sc-if></div>
       </sc-if>
 
       <!-- ============ POSITION TRACKING ============ -->
       <sc-if value="{{ showPositioning }}" hint-placeholder-val="{{ false }}">
       <div data-screen-label="Position Tracking" style="display: flex; flex-direction: column; gap: 24px;">
+
+        <sc-if value="{{ pt.setup }}" hint-placeholder-val="{{ false }}">
+        <div style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 56px 32px; text-align: center; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+          <div style="font-size: 15px; font-weight: 600; color: #0f172a; margin-bottom: 6px;">No Position Tracking Data Synced Yet</div>
+          <div style="font-size: 13px; color: #64748b; max-width: 420px; margin: 0 auto 20px;">We haven't synced position tracking snapshots for this domain into the database yet. Click below to fetch current positions right now.</div>
+          <div onClick="{{ h.refreshPage }}" style="display: inline-flex; align-items: center; gap: 8px; border-radius: 8px; background: #10b981; color: white; font-size: 14px; font-weight: 600; padding: 10px 20px; cursor: pointer; box-shadow: 0 1px 2px rgba(0,0,0,0.05);" style-hover="background:#059669">⚡ Fetch Positions Now</div>
+        </div>
+        </sc-if>
+        <sc-if value="{{ !pt.setup }}" hint-placeholder-val="{{ true }}">
+
         <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px;">
           <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; padding: 20px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);"><div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: #64748b; margin-bottom: 4px;">Keywords Tracked</div><div style="font-size: 30px; font-weight: 700; color: #334155;">{{ pt.tracked }}</div></div>
           <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; padding: 20px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);"><div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: #64748b; margin-bottom: 4px;">Avg Position</div><div style="font-size: 30px; font-weight: 700; color: #334155;">{{ pt.avgPos }}</div></div>
@@ -768,6 +795,7 @@
             </div>
           </sc-for>
         </div>
+        </sc-if>
       </div>
       </sc-if>
 
@@ -778,8 +806,9 @@
         <!-- ===== SETUP PENDING (no DataForSEO Backlinks connector yet) ===== -->
         <sc-if value="{{ bl.setup }}" hint-placeholder-val="{{ false }}">
         <div style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 56px 32px; text-align: center; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
-          <div style="font-size: 15px; font-weight: 600; color: #0f172a; margin-bottom: 6px;">Backlinks data isn't connected yet</div>
-          <div style="font-size: 13px; color: #64748b; max-width: 420px; margin: 0 auto;">Once the Backlinks data source is connected, authority score, referring domains, anchor text, and link gap analysis will appear here automatically.</div>
+          <div style="font-size: 15px; font-weight: 600; color: #0f172a; margin-bottom: 6px;">No Backlinks Data Synced Yet</div>
+          <div style="font-size: 13px; color: #64748b; max-width: 420px; margin: 0 auto 20px;">We haven't synced backlink metrics for this domain into the database yet. Click below to fetch current backlink data right now.</div>
+          <div onClick="{{ h.refreshPage }}" style="display: inline-flex; align-items: center; gap: 8px; border-radius: 8px; background: #10b981; color: white; font-size: 14px; font-weight: 600; padding: 10px 20px; cursor: pointer; box-shadow: 0 1px 2px rgba(0,0,0,0.05);" style-hover="background:#059669">⚡ Fetch Backlinks Now</div>
         </div>
         </sc-if>
 
@@ -1056,6 +1085,15 @@
       <sc-if value="{{ showOffsite }}" hint-placeholder-val="{{ false }}">
       <div data-screen-label="Off-site SEO" style="display: flex; flex-direction: column; gap: 20px;">
 
+        <sc-if value="{{ off.setup }}" hint-placeholder-val="{{ false }}">
+        <div style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 56px 32px; text-align: center; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+          <div style="font-size: 15px; font-weight: 600; color: #0f172a; margin-bottom: 6px;">No Off-site Analytics Data Synced Yet</div>
+          <div style="font-size: 13px; color: #64748b; max-width: 420px; margin: 0 auto 20px;">We haven't synced off-site GA4 / social traffic sessions for this domain into the database yet. Click below to fetch current data right now.</div>
+          <div onClick="{{ h.refreshPage }}" style="display: inline-flex; align-items: center; gap: 8px; border-radius: 8px; background: #10b981; color: white; font-size: 14px; font-weight: 600; padding: 10px 20px; cursor: pointer; box-shadow: 0 1px 2px rgba(0,0,0,0.05);" style-hover="background:#059669">⚡ Fetch Off-site Data Now</div>
+        </div>
+        </sc-if>
+        <sc-if value="{{ !off.setup }}" hint-placeholder-val="{{ true }}">
+
         <!-- source banner -->
         <div style="display: flex; align-items: center; gap: 18px; flex-wrap: wrap; border-radius: 10px; background: white; border: 1px solid #e2e8f0; padding: 10px 16px; font-size: 12px; color: #64748b;">
           <span style="display: inline-flex; align-items: center; gap: 7px; font-weight: 600; color: #334155;">
@@ -1247,6 +1285,7 @@
             </tbody>
           </table>
         </div>
+        </sc-if>
       </div>
       </sc-if>
 
@@ -1257,8 +1296,9 @@
         <!-- ===== SETUP PENDING (no crawl/checks-catalog data yet) ===== -->
         <sc-if value="{{ au.setup }}" hint-placeholder-val="{{ false }}">
         <div style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 56px 32px; text-align: center; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
-          <div style="font-size: 15px; font-weight: 600; color: #0f172a; margin-bottom: 6px;">Site Audit data isn't connected yet</div>
-          <div style="font-size: 13px; color: #64748b; max-width: 420px; margin: 0 auto;">Once site crawling is connected, health score, crawled pages, issue checks, and Core Web Vitals will appear here automatically.</div>
+          <div style="font-size: 15px; font-weight: 600; color: #0f172a; margin-bottom: 6px;">No Site Audit Data Synced Yet</div>
+          <div style="font-size: 13px; color: #64748b; max-width: 420px; margin: 0 auto 20px;">We haven't crawled or synced site health data for this domain into the database yet. Click below to fetch current audit data right now.</div>
+          <div onClick="{{ h.refreshPage }}" style="display: inline-flex; align-items: center; gap: 8px; border-radius: 8px; background: #10b981; color: white; font-size: 14px; font-weight: 600; padding: 10px 20px; cursor: pointer; box-shadow: 0 1px 2px rgba(0,0,0,0.05);" style-hover="background:#059669">⚡ Fetch Site Audit Now</div>
         </div>
         </sc-if>
 
@@ -2272,6 +2312,15 @@
       <sc-if value="{{ showAds }}" hint-placeholder-val="{{ false }}">
       <div data-screen-label="Paid Overview" style="display: flex; flex-direction: column; gap: 20px;">
 
+        <sc-if value="{{ ads.setup }}" hint-placeholder-val="{{ false }}">
+        <div style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 56px 32px; text-align: center; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+          <div style="font-size: 15px; font-weight: 600; color: #0f172a; margin-bottom: 6px;">No Paid Ads Data Synced Yet</div>
+          <div style="font-size: 13px; color: #64748b; max-width: 420px; margin: 0 auto 20px;">We haven't synced Google Ads or Meta Ads campaign metrics for this domain into the database yet. Click below to fetch current ads data right now.</div>
+          <div onClick="{{ h.refreshPage }}" style="display: inline-flex; align-items: center; gap: 8px; border-radius: 8px; background: #10b981; color: white; font-size: 14px; font-weight: 600; padding: 10px 20px; cursor: pointer; box-shadow: 0 1px 2px rgba(0,0,0,0.05);" style-hover="background:#059669">⚡ Fetch Ads Data Now</div>
+        </div>
+        </sc-if>
+        <sc-if value="{{ !ads.setup }}" hint-placeholder-val="{{ true }}">
+
         <div style="display: flex; align-items: center; gap: 18px; flex-wrap: wrap; border-radius: 10px; background: white; border: 1px solid #e2e8f0; padding: 10px 16px; font-size: 12px; color: #64748b;">
           <span style="display: inline-flex; align-items: center; gap: 7px; font-weight: 600; color: #334155;"><span style="{{ adsSync.dotStyle }}"></span>{{ adsSync.cadence }}</span>
           <span>Last pull <b style="color: #334155; font-weight: 600;">{{ adsSync.last }}</b></span>
@@ -2350,12 +2399,21 @@
             </div>
           </div>
         </div>
+        </sc-if>
       </div>
       </sc-if>
 
       <!-- ============ ADS: CAMPAIGNS ============ -->
       <sc-if value="{{ showCampaigns }}" hint-placeholder-val="{{ false }}">
       <div data-screen-label="Campaigns" style="display: flex; flex-direction: column; gap: 20px;">
+        <sc-if value="{{ cmp.setup }}" hint-placeholder-val="{{ false }}">
+        <div style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 56px 32px; text-align: center; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+          <div style="font-size: 15px; font-weight: 600; color: #0f172a; margin-bottom: 6px;">No Campaigns Synced Yet</div>
+          <div style="font-size: 13px; color: #64748b; max-width: 420px; margin: 0 auto 20px;">We haven't synced Google Ads or Meta Ads campaigns for this domain into the database yet. Click below to fetch current campaigns right now.</div>
+          <div onClick="{{ h.refreshPage }}" style="display: inline-flex; align-items: center; gap: 8px; border-radius: 8px; background: #10b981; color: white; font-size: 14px; font-weight: 600; padding: 10px 20px; cursor: pointer; box-shadow: 0 1px 2px rgba(0,0,0,0.05);" style-hover="background:#059669">⚡ Fetch Campaigns Now</div>
+        </div>
+        </sc-if>
+        <sc-if value="{{ !cmp.setup }}" hint-placeholder-val="{{ true }}">
         <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
           <div style="padding: 14px 20px; border-bottom: 1px solid #f1f5f9; display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
             <div style="flex: 1; min-width: 220px;"><h2 style="font-size: 15px; font-weight: 600; margin: 0;">Campaigns</h2><p style="font-size: 12px; color: #94a3b8; margin: 4px 0 0;">{{ cmp.count }} · metrics aggregated {{ adsWindow }} · pause, resume, and edit budgets inline — changes write back to Google Ads / Meta</p></div>
@@ -2464,12 +2522,21 @@
           <span style="margin-left: auto;">Last pull <b style="color: #334155; font-weight: 600;">{{ adsSync.last }}</b></span>
           <span>Next <b style="color: #334155; font-weight: 600;">{{ adsSync.next }}</b></span>
         </div>
+        </sc-if>
       </div>
       </sc-if>
 
       <!-- ============ ADS: SEARCH TERMS ============ -->
       <sc-if value="{{ showTerms }}" hint-placeholder-val="{{ false }}">
       <div data-screen-label="Search Terms" style="display: flex; flex-direction: column; gap: 20px;">
+        <sc-if value="{{ trm.setup }}" hint-placeholder-val="{{ false }}">
+        <div style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 56px 32px; text-align: center; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+          <div style="font-size: 15px; font-weight: 600; color: #0f172a; margin-bottom: 6px;">No Search Terms Synced Yet</div>
+          <div style="font-size: 13px; color: #64748b; max-width: 420px; margin: 0 auto 20px;">We haven't synced Google Ads search terms for this domain into the database yet. Click below to fetch current search terms right now.</div>
+          <div onClick="{{ h.refreshPage }}" style="display: inline-flex; align-items: center; gap: 8px; border-radius: 8px; background: #10b981; color: white; font-size: 14px; font-weight: 600; padding: 10px 20px; cursor: pointer; box-shadow: 0 1px 2px rgba(0,0,0,0.05);" style-hover="background:#059669">⚡ Fetch Search Terms Now</div>
+        </div>
+        </sc-if>
+        <sc-if value="{{ !trm.setup }}" hint-placeholder-val="{{ true }}">
         <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px;">
           <sc-for list="{{ trm.kpis }}" as="k" hint-placeholder-count="4">
             <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; padding: 16px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
@@ -2604,13 +2671,21 @@
           <span style="margin-left: auto;">Last pull <b style="color: #334155; font-weight: 600;">{{ adsSync.last }}</b></span>
           <span>Next <b style="color: #334155; font-weight: 600;">{{ adsSync.next }}</b></span>
         </div>
+        </sc-if>
       </div>
       </sc-if>
 
       <!-- ============ ADS: ATTRIBUTION ============ -->
       <sc-if value="{{ showAttribution }}" hint-placeholder-val="{{ false }}">
       <div data-screen-label="Attribution" style="display: flex; flex-direction: column; gap: 20px;">
-
+        <sc-if value="{{ att.setup }}" hint-placeholder-val="{{ false }}">
+        <div style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 56px 32px; text-align: center; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+          <div style="font-size: 15px; font-weight: 600; color: #0f172a; margin-bottom: 6px;">No Attribution Data Synced Yet</div>
+          <div style="font-size: 13px; color: #64748b; max-width: 420px; margin: 0 auto 20px;">We haven't synced cross-channel attribution metrics for this domain into the database yet. Click below to fetch current attribution right now.</div>
+          <div onClick="{{ h.refreshPage }}" style="display: inline-flex; align-items: center; gap: 8px; border-radius: 8px; background: #10b981; color: white; font-size: 14px; font-weight: 600; padding: 10px 20px; cursor: pointer; box-shadow: 0 1px 2px rgba(0,0,0,0.05);" style-hover="background:#059669">⚡ Fetch Attribution Now</div>
+        </div>
+        </sc-if>
+        <sc-if value="{{ !att.setup }}" hint-placeholder-val="{{ true }}">
         <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
           <div style="padding: 16px 20px; border-bottom: 1px solid #f1f5f9; display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;">
             <div><h2 style="font-size: 15px; font-weight: 600; margin: 0;">Google Ads vs. GA4</h2><p style="font-size: 12px; color: #94a3b8; margin: 4px 0 0; max-width: 620px;">The two columns will never match: Google Ads credits its own last click (and view-through), GA4 uses data-driven attribution across all channels. Gaps beyond ±25% are flagged — they usually mean tracking issues, not performance changes.</p></div>
@@ -2682,6 +2757,7 @@
           <span style="margin-left: auto;">Google Ads API {{ adsSync.quota }}</span>
           <span>GA4 {{ adsSync.ga4 }}</span>
         </div>
+        </sc-if>
       </div>
       </sc-if>
 
@@ -2827,6 +2903,10 @@
             <div style="display: flex; align-items: center; justify-content: space-between; padding: 14px 0; border-top: 1px solid #fee2e2;">
               <div><div style="font-size: 14px; font-weight: 600; color: #0f172a;">Transfer ownership</div><div style="font-size: 12px; color: #94a3b8;">Move owner rights to another workspace member.</div></div>
               <div onClick="{{ h.transferOwner }}" style="padding: 7px 14px; border: 1px solid #fca5a5; color: #b91c1c; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; background: white;" style-hover="background:#fef2f2">Transfer</div>
+            </div>
+            <div style="display: flex; align-items: center; justify-content: space-between; padding: 14px 0; border-top: 1px solid #fee2e2;">
+              <div><div style="font-size: 14px; font-weight: 600; color: #0f172a;">Clear synced data</div><div style="font-size: 12px; color: #94a3b8;">Permanently deletes all historical tracked metrics, audit logs, and fetched analytics for this project.</div></div>
+              <div onClick="{{ h.clearData }}" style="padding: 7px 14px; background: #dc2626; color: white; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer;" style-hover="background:#b91c1c">Clear data</div>
             </div>
             <div style="display: flex; align-items: center; justify-content: space-between; padding: 14px 0; border-top: 1px solid #fee2e2;">
               <div><div style="font-size: 14px; font-weight: 600; color: #0f172a;">Delete workspace</div><div style="font-size: 12px; color: #94a3b8;">Permanently removes all projects, history and connections.</div></div>
@@ -3659,8 +3739,14 @@ class Component extends DCLogic {
       .then(p => {
         if (!this._alive) return;
         this.setState(s => ({ projects: s.projects.concat([p]), addSiteBusy: false, addSiteOpen: false, addSiteDomain: '', addSiteName: '' }));
-        this.notify('Added ' + p.domain);
+        this.notify('Added ' + p.domain + ' — fetching data…');
         this.setProject(p.id);
+        // Auto-start the initial sync that the backend kicked off when creating the site.
+        // p.sync_task_id is the task_id returned by POST /api/projects; passing it to
+        // startSync() skips the redundant POST /sync and goes straight to polling.
+        if (p.sync_task_id != null) {
+          setTimeout(() => { if (this._alive) this.startSync('all', p.sync_task_id); }, 300);
+        }
       })
       .catch(() => { if (this._alive) this.setState({ addSiteBusy: false, addSiteError: 'Could not add site' }); });
   }
@@ -3682,32 +3768,47 @@ class Component extends DCLogic {
   }
 
   /* ---------- sync ---------- */
-  startSync(scope) {
-    if (this.state.sync.active) return;
+  /* startSync(scope, preTaskId)
+   *   scope      – 'all' | 'positions' | 'backlinks' | etc.
+   *   preTaskId  – (optional) task_id already created server-side (e.g., from POST /api/projects).
+   *                When supplied the POST /api/projects/<slug>/sync call is skipped and we go
+   *                straight to polling, avoiding a redundant second sync run. */
+  startSync(scope, preTaskId) {
+    if (this.state.sync.active && (!this.state.sync.projectId || this.state.sync.projectId === this.state.projectId)) return;
     const pid = this.state.projectId;
+
+    const _startPolling = (t) => {
+      if (!this._alive) return;
+      this.setState({ sync: { active: true, progress: 0.02, step: (t.steps && t.steps[0]) || 'Starting…', cost: t.est_cost || 0, projectId: pid } });
+      this._iv = setInterval(() => {
+        window.FuseAPI.get('/api/tasks/' + t.task_id).then(st => {
+          if (!this._alive) { clearInterval(this._iv); return; }
+          if (st.done) {
+            clearInterval(this._iv); this._iv = null;
+            this.setState(s => {
+              const cache = {};
+              Object.keys(s.cache).forEach(k2 => { if (k2.indexOf(pid + ':') !== 0) cache[k2] = s.cache[k2]; });
+              return { sync: { active: false, progress: 1, step: 'Done', cost: t.est_cost || 0, projectId: null }, freshness: 'Just now', cache };
+            });
+            this.fetchTab(this.state.tab, pid, this.state.range, true);
+            if (this.state.tab !== 'alerts') this.fetchTab('alerts', pid, this.state.range, false);
+            this.notify(scope === 'audit' ? 'Crawl complete — Site Audit refreshed' : 'Sync complete — all data refreshed');
+          } else {
+            this.setState({ sync: { active: true, progress: st.progress, step: st.step, cost: t.est_cost || 0, projectId: pid } });
+          }
+        }).catch(() => {});
+      }, 500);
+    };
+
+    if (preTaskId != null) {
+      // Task already created server-side — skip POST /sync and go straight to polling.
+      _startPolling({ task_id: preTaskId, est_cost: 0, steps: ['Syncing…'] });
+      return;
+    }
+
     window.FuseAPI.post('/api/projects/' + pid + '/sync', { scope })
-      .then(t => {
-        if (!this._alive) return;
-        this.setState({ sync: { active: true, progress: 0.02, step: t.steps[0], cost: t.est_cost } });
-        this._iv = setInterval(() => {
-          window.FuseAPI.get('/api/tasks/' + t.task_id).then(st => {
-            if (!this._alive) { clearInterval(this._iv); return; }
-            if (st.done) {
-              clearInterval(this._iv); this._iv = null;
-              this.setState(s => {
-                const cache = {};
-                Object.keys(s.cache).forEach(k2 => { if (k2.indexOf(pid + ':') !== 0) cache[k2] = s.cache[k2]; });
-                return { sync: { active: false, progress: 1, step: 'Done', cost: t.est_cost }, freshness: 'Just now', cache };
-              });
-              this.fetchTab(this.state.tab, pid, this.state.range, true);
-              if (this.state.tab !== 'alerts') this.fetchTab('alerts', pid, this.state.range, false);
-              this.notify(scope === 'audit' ? 'Crawl complete — Site Audit refreshed' : 'Sync complete — all data refreshed');
-            } else {
-              this.setState({ sync: { active: true, progress: st.progress, step: st.step, cost: t.est_cost } });
-            }
-          }).catch(() => {});
-        }, 500);
-      }).catch(() => {});
+      .then(t => { _startPolling(t); })
+      .catch(() => {});
   }
 
   /* ---------- keyword explorer ---------- */
@@ -4048,6 +4149,17 @@ class Component extends DCLogic {
   }
   editWs(patch) { this.setState(s => ({ wsDraft: Object.assign({}, s.wsDraft, patch), savedWs: false })); }
   saveWs() { this.putSettings({ workspace: this.state.wsDraft }, 'Workspace saved', 'savedWs'); }
+  clearData() {
+    if (window.confirm("Are you sure you want to permanently delete all synced analytics data for this project? This action cannot be undone.")) {
+      const pid = this.props.ctx.route.params.id || window.activeProject;
+      window.FuseAPI.del('/api/projects/' + pid + '/data')
+        .then(() => {
+          this.notify("Data cleared successfully. Reloading...");
+          setTimeout(() => window.location.reload(), 1500);
+        })
+        .catch(e => this.notify("Failed to clear data: " + (e.message || "Unknown error")));
+    }
+  }
   editNotif(patch) { this.setState(s => ({ notifDraft: Object.assign({}, s.notifDraft, patch), savedNotif: false })); }
   toggleNotif(key) { this.setState(s => ({ notifDraft: Object.assign({}, s.notifDraft, { [key]: !s.notifDraft[key] }), savedNotif: false })); }
   saveNotif() { this.putSettings({ notifications: this.state.notifDraft }, 'Notification settings saved', 'savedNotif'); }
@@ -4339,7 +4451,33 @@ class Component extends DCLogic {
     /* range + refresh */
     const rBase = { padding: '6px 12px', color: '#64748b', cursor: 'pointer' };
     const rActive = { padding: '6px 12px', background: '#f1f5f9', color: '#1e293b', fontWeight: 500, cursor: 'pointer' };
-    const syncing = s.sync.active;
+    const syncing = s.sync.active && (!s.sync.projectId || s.sync.projectId === s.projectId);
+
+    const tabToScope = {
+      overview: 'overview',
+      seo: 'overview',
+      keywords: 'keywords',
+      positioning: 'positions',
+      backlinks: 'backlinks',
+      pages: 'audit',
+      ai: 'ai',
+      ads: 'ads',
+      campaigns: 'ads',
+      terms: 'ads'
+    };
+    const tabToLabel = {
+      overview: 'Fetch Overview',
+      seo: 'Fetch SEO Data',
+      keywords: 'Fetch Keywords',
+      positioning: 'Fetch Positions',
+      backlinks: 'Fetch Backlinks',
+      pages: 'Fetch Site Audit',
+      ai: 'Fetch AI Data',
+      ads: 'Fetch Ads',
+      campaigns: 'Fetch Campaigns',
+      terms: 'Fetch Terms'
+    };
+    const pageScope = tabToScope[tab];
 
     const data = s.cache[this.key(tab)];
     const alertsData = s.cache[this.key('alerts')];
@@ -4361,6 +4499,7 @@ class Component extends DCLogic {
       addSiteKeyDown: e => { if (e.key === 'Enter') this.addSiteSubmit(); if (e.key === 'Escape') this.toggleAddSite(); },
       addSiteSubmit: () => this.addSiteSubmit(),
       range7: () => this.setRange('7d'), range30: () => this.setRange('30d'), range90: () => this.setRange('90d'),
+      refreshPage: () => { if (pageScope) this.startSync(pageScope); },
       refreshAll: () => this.startSync('all'),
       retry: () => this.fetchTab(tab, s.projectId, s.range, true),
       explorerInput: e => this.setState({ explorerQ: e.target.value }),
@@ -4491,6 +4630,9 @@ class Component extends DCLogic {
       projectId: s.projectId, projectDomain: project.domain,
       addSiteOpen: s.addSiteOpen, addSiteDomain: s.addSiteDomain, addSiteName: s.addSiteName, addSiteError: s.addSiteError,
       rangeStyle: { d7: s.range === '7d' ? rActive : rBase, d30: s.range === '30d' ? rActive : rBase, d90: s.range === '90d' ? rActive : rBase },
+      hasPageRefresh: !!pageScope,
+      refreshPageLabel: syncing ? 'Syncing…' : (tabToLabel[tab] || 'Fetch page'),
+      refreshPageBtnStyle: { display: 'inline-flex', alignItems: 'center', gap: '8px', borderRadius: '8px', background: syncing ? '#6ee7b7' : '#10b981', color: 'white', fontSize: '14px', fontWeight: 500, padding: '8px 16px', boxShadow: '0 1px 2px rgba(0,0,0,0.05)', cursor: syncing ? 'default' : 'pointer' },
       refreshLabel: syncing ? 'Syncing…' : 'Refresh all',
       refreshBtnStyle: { display: 'inline-flex', alignItems: 'center', gap: '8px', borderRadius: '8px', background: syncing ? '#818cf8' : '#4f46e5', color: 'white', fontSize: '14px', fontWeight: 500, padding: '8px 16px', boxShadow: '0 1px 2px rgba(0,0,0,0.05)', cursor: syncing ? 'default' : 'pointer' },
       refreshIconStyle: syncing ? { animation: 'fuseSpin 1s linear infinite' } : {},
@@ -4781,6 +4923,11 @@ class Component extends DCLogic {
         ['Medium (30–59)', 'medium', '#f59e0b', '#fef3c7', '#d97706', 'M', '#b45309'],
         ['Hard (60+)', 'hard', '#ef4444', '#fee2e2', '#dc2626', 'H', '#b91c1c']
       ];
+      const kwSetup = !data || !data.kpis || data.kpis.state === 'setup' || (data.kpis.total === 0 && (!data.keywords || !data.keywords.length));
+      if (kwSetup) {
+        vals.kw = { setup: true, total: 0, avgPos: 0, totalVolume: 0, totalClicks: 0, intentRows: [], kdRows: [], tabs: [], rows: [] };
+        return vals;
+      }
       vals.kw = {
         total: data.kpis.total, avgPos: data.kpis.avg_pos,
         totalVolume: this.fmt(data.kpis.total_volume), totalClicks: this.fmt(data.kpis.total_clicks),
@@ -4832,6 +4979,11 @@ class Component extends DCLogic {
     /* ============ POSITIONING ============ */
     if (tab === 'positioning') {
       vals.showPositioning = true;
+      const ptSetup = !data || !data.kpis || data.kpis.state === 'setup' || (data.kpis.tracked === 0 && (!data.movers || !data.movers.length) && (!data.competitors || !data.competitors.rows || !data.competitors.rows.length));
+      if (ptSetup) {
+        vals.pt = { setup: true, tracked: 0, avgPos: 0, traffic: 0, impressions: 0, distSegs: [], distLegend: [], improved: 0, declined: 0, added: 0, lost: 0, movers: [], compDomains: [], compGridCols: '', compRows: [] };
+        return vals;
+      }
       const dist = data.distribution;
       const total = Math.max(1, dist.top3 + dist.p4_10 + dist.p11_20 + dist.p21_100);
       const distDefs = [
@@ -4877,7 +5029,7 @@ class Component extends DCLogic {
     if (tab === 'backlinks') {
       vals.showBacklinks = true;
       const sum = data.summary;
-      const setup = !sum || sum.state === 'setup';
+      const setup = !data || !sum || sum.state === 'setup' || (sum.backlinks === 0 && (!data.links || !data.links.length));
 
       if (setup) {
         vals.bl = {
@@ -5018,10 +5170,14 @@ class Component extends DCLogic {
       };
       const kpiCard = (label, value, c, note) => ({ label, value, hasChip: c.has, chipLabel: c.label, chipStyle: c.style, note });
       const off = {};
-      const syncSetup = data.syncMeta.state === 'setup';
-      off.cadence = syncSetup ? 'not yet connected' : data.syncMeta.cadence;
-      off.tokens = syncSetup ? '' : (data.syncMeta.ga4_tokens_used + ' / ' + this.fmt(data.syncMeta.ga4_tokens_limit) + ' GA4 tokens');
-      off.tokensEmpty = syncSetup;
+      const syncSetup = !data || !data.syncMeta || data.syncMeta.state === 'setup' || (data.totals && data.totals.sessions === 0 && (!data.referrers || !data.referrers.length));
+      if (syncSetup) {
+        vals.off = { setup: true };
+        return vals;
+      }
+      off.cadence = data.syncMeta.cadence;
+      off.tokens = (data.syncMeta.ga4_tokens_used + ' / ' + this.fmt(data.syncMeta.ga4_tokens_limit) + ' GA4 tokens');
+      off.tokensEmpty = false;
       off.rangeLabel = s.range === '7d' ? 'last 7 days' : s.range === '90d' ? 'last 90 days' : 'last 30 days';
       off.kpis = [
         kpiCard('Off-site sessions', this.fmt(t.sessions), chip(pctD(t.sessions, pv.sessions)), 'vs. previous period'),
@@ -5116,7 +5272,7 @@ class Component extends DCLogic {
     /* ============ SITE AUDIT ============ */
     if (tab === 'pages') {
       vals.showPages = true;
-      const auSetup = data.score == null || data.score.state === 'setup';
+      const auSetup = !data || data.score == null || (typeof data.score === 'object' && data.score.state === 'setup') || (data.crawl && (data.crawl.status === 'never' || data.crawl.pagesCrawled === 0));
 
       if (auSetup) {
         vals.au = {
@@ -5995,7 +6151,8 @@ class Component extends DCLogic {
       const fBase = { padding: '4px 12px', fontSize: '12px', fontWeight: 500, borderRadius: '6px', cursor: 'pointer', color: '#64748b' };
       const fActive = Object.assign({}, fBase, { background: 'white', color: '#0f172a', boxShadow: '0 1px 2px rgba(0,0,0,0.05)' });
       const fmtTs = z => z ? new Date(z).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '—';
-      const sm = data.syncMeta;
+      const sm = data.syncMeta || {};
+      const adsSetup = !data || !sm || !sm.connected || sm.state === 'setup' || (data.totals && data.totals.spend === 0 && (!data.campaigns || !data.campaigns.length));
       vals.adsSync = {
         cadence: sm.connected ? sm.cadence : 'not yet connected',
         last: fmtTs(sm.last_pull), next: fmtTs(sm.next_pull),
@@ -6011,6 +6168,10 @@ class Component extends DCLogic {
       /* ---- Paid Overview ---- */
       if (tab === 'ads') {
         vals.showAds = true;
+        if (adsSetup) {
+          vals.ads = { setup: true };
+          return vals;
+        }
         const cpa = t.conversions ? t.spend / t.conversions : 0;
         const pCpa = pv.conversions ? pv.spend / pv.conversions : 0;
         const kpi = (label, value, c, note) => ({ label, value, chipLabel: c.label, chipStyle: c.style, note: note || '' });
@@ -6078,6 +6239,10 @@ class Component extends DCLogic {
       /* ---- Campaigns ---- */
       if (tab === 'campaigns') {
         vals.showCampaigns = true;
+        if (adsSetup) {
+          vals.cmp = { setup: true };
+          return vals;
+        }
         let rows = cs.slice();
         if (s.cmpFilter === 'google') rows = rows.filter(c => c.platform === 'Google Ads');
         if (s.cmpFilter === 'meta') rows = rows.filter(c => c.platform === 'Meta');
@@ -6148,6 +6313,10 @@ class Component extends DCLogic {
       /* ---- Search Terms ---- */
       if (tab === 'terms') {
         vals.showTerms = true;
+        if (adsSetup) {
+          vals.trm = { setup: true };
+          return vals;
+        }
         const scopeCmp = s.termCampaign ? cs.find(c2 => c2.id === s.termCampaign) : null;
         const all = scopeCmp ? data.searchTerms.filter(x2 => x2.campaignId === scopeCmp.id) : data.searchTerms;
         const counts = {
@@ -6266,6 +6435,10 @@ class Component extends DCLogic {
       /* ---- Attribution ---- */
       if (tab === 'attribution') {
         vals.showAttribution = true;
+        if (adsSetup) {
+          vals.att = { setup: true };
+          return vals;
+        }
         const rowsA = data.attribution;
         const maxConv = Math.max.apply(null, rowsA.map(r2 => Math.max(r2.ads_conversions, r2.ga4_key_events)).concat([1]));
         vals.att = {

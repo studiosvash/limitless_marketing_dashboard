@@ -68,7 +68,7 @@ class SyncEndpointTests(APITestCase):
         )
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(
-            resp.json()["steps"], ["gsc_keywords", "dataforseo_serp_competitors"]
+            resp.json()["steps"], ["gsc_keywords", "dataforseo_labs_competitors", "dataforseo_serp_competitors"]
         )
 
     @patch("apps.dashboard.services.sync_api_service.threading.Thread")

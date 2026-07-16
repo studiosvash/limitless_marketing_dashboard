@@ -6,11 +6,16 @@ from django.utils.decorators import method_decorator
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from sqlalchemy import func, select
+from sqlalchemy import func, select, delete
 
 from pipeline.services.site_service import add_site, list_sites
 from pipeline.utils.db_connection import get_session
-from pipeline.db.schema import Site, SEODaily
+from pipeline.db.schema import (
+    Site, SEODaily, KeywordRanking, Page, AdMetricDaily, Backlink,
+    TechnicalIssue, PageSpeed, IndexingStatus, SEOAggregate, AISummary,
+    Anomaly, ComparativeMetrics, CompetitorKeywordRanking, TrackedCompetitor,
+    AIKeywordData, SavedKeyword, MetricForecast, KeywordOpportunity, RiskSignal
+)
 
 from apps.dashboard.services.overview_service import (
     get_kpi_raw, build_kpis_api, build_top_pages_api, query_daily_traffic_raw,
@@ -110,7 +115,39 @@ class ProjectListCreateView(APIView):
         with get_session() as session:
             site = session.get(Site, new_id)
             body = ProjectSerializer(site).data
+
+        # Auto-kick off initial data sync so the new site populates without requiring
+        # a manual Refresh click. Returns task_id so the SPA can start polling the
+        # progress bar immediately (GET /api/tasks/<task_id>).
+        try:
+            sync_info = start_sync_run(site_url, "all", user=request.user)
+            body["sync_task_id"] = sync_info["task_id"]
+        except Exception:
+            # Non-fatal: sync failure should never block site creation.
+            body["sync_task_id"] = None
+
         return Response(body, status=status.HTTP_201_CREATED)
+
+
+@method_decorator(login_not_required, name="dispatch")
+class ProjectDataCleanView(APIView):
+    def delete(self, request, slug):
+        site_id = resolve_project_or_404(slug).site_url
+        tables_to_clean = [
+            SEODaily, KeywordRanking, Page, AdMetricDaily, Backlink,
+            TechnicalIssue, PageSpeed, IndexingStatus, SEOAggregate, AISummary,
+            Anomaly, ComparativeMetrics, CompetitorKeywordRanking, TrackedCompetitor,
+            AIKeywordData, SavedKeyword, MetricForecast, KeywordOpportunity, RiskSignal
+        ]
+        
+        try:
+            with get_session() as session:
+                for table in tables_to_clean:
+                    session.execute(delete(table).where(table.site_id == site_id))
+                session.commit()
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @method_decorator(login_not_required, name="dispatch")

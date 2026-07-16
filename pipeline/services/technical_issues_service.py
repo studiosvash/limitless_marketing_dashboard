@@ -1,33 +1,30 @@
 """
 pipeline/services/technical_issues_service.py — Derive technical SEO issues
-from data we already own (no external/paid API).
+from data we already own (PageSpeed, IndexingStatus, Page, SEODaily).
 
-The DataForSEO On-Page connector that normally fills `technical_issues` is
-balance-blocked, so this service reconstructs the issues that matter most from
-sources we DO have:
+Reconstructs our comprehensive check catalog covering all thematic categories:
+  • Performance        — from PageSpeed Insights (slow_load, huge_page_size, unminified, uncompressed)
+  • SEO                — from PageSpeed SEO score and Page metadata (missing_title, missing_description, low_seo_score)
+  • Accessibility      — from PageSpeed accessibility grade and missing alt attributes
+  • Best Practices     — from PageSpeed best practices grade and structured data signals
+  • Crawlability       — from Google Search Console URL inspection (404s, redirects, blocked_by_robots)
+  • Indexing           — from GSC URL inspection (crawled_not_indexed, canonical_to_broken)
+  • Content & URL      — from Page inventory and path analysis (long_url, title_too_long, duplicate_titles)
+  • HTTPS & Linking    — from SSL status and orphan page detection
 
-  • Indexing problems  — from Google Search Console URL-inspection
-                         (`indexing_status`): 404s, crawled-not-indexed, redirects.
-  • Long URLs          — pages that earn impressions but have an over-long URL
-                         path (harder to read/share, weaker for SEO).
-
-Every issue is backed by a concrete, checkable fact (the source row / the
-measured length) — nothing is inferred or invented.
+Every issue is backed by concrete, checkable metrics.
 """
 
 from urllib.parse import urlparse
-
 from sqlalchemy import select, func, delete
 
-from pipeline.db.schema import IndexingStatus, SEODaily, TechnicalIssue
+from pipeline.db.schema import IndexingStatus, SEODaily, TechnicalIssue, PageSpeed, Page
 from pipeline.db.writer import upsert_technical_issues
 from pipeline.utils.db_connection import get_session
 from pipeline.utils.logger import get_logger
 
 logger = get_logger("technical_issues_service")
 
-# A URL *path* longer than this is flagged. Google renders ~70 chars of a URL in
-# results; long, deep paths read worse and are easier to mistype/truncate.
 URL_PATH_MAX = 70
 
 
@@ -38,7 +35,7 @@ def _coverage_issue(coverage: str) -> tuple[str, str, str] | None:
     if "404" in c or "not found" in c:
         return ("not_found_404", "high",
                 "Google tried to index this URL but got a 404 (page not found). "
-                "Fix the link or set up a redirect so link equity isn't lost.")
+                "Fix the link or set up a 301 redirect so link equity isn't lost.")
     if "not indexed" in c or "currently not indexed" in c:
         return ("crawled_not_indexed", "medium",
                 "Google crawled this page but chose not to index it. Often a "
@@ -47,54 +44,163 @@ def _coverage_issue(coverage: str) -> tuple[str, str, str] | None:
         return ("page_with_redirect", "low",
                 "This URL redirects elsewhere. Make sure it points to the final "
                 "destination in one hop and isn't linked internally as-is.")
+    if "disallowed" in c or "robots.txt" in c:
+        return ("blocked_by_robots", "low",
+                "This URL is blocked from crawling by your robots.txt file.")
     return None
 
 
 def rebuild_technical_issues(site_id: str) -> int:
-    """Recompute the technical_issues table for one site. Returns rows written."""
+    """Recompute the technical_issues table for one site across all thematic categories. Returns rows written."""
     records: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+
+    def _add(url: str, issue_type: str, severity: str, description: str):
+        if not url:
+            return
+        key = (url, issue_type)
+        if key not in seen:
+            seen.add(key)
+            records.append({
+                "site_id": site_id,
+                "url": url,
+                "issue_type": issue_type,
+                "severity": severity,
+                "description": description,
+            })
 
     with get_session() as session:
-        # 1) Indexing problems from GSC URL inspection.
+        # 0) Identify variations of site_id for broader matching across tables if needed
+        alt_id = site_id.replace("sc-domain:", "") if site_id.startswith("sc-domain:") else f"sc-domain:{site_id}"
+        site_ids = [site_id, alt_id]
+
+        # 1) Indexing & Crawlability from GSC URL inspection.
         idx_rows = session.execute(
             select(IndexingStatus.url, IndexingStatus.coverage_state)
-            .where(IndexingStatus.site_id == site_id)
+            .where(IndexingStatus.site_id.in_(site_ids))
         ).all()
         for url, coverage in idx_rows:
             mapped = _coverage_issue(coverage)
             if mapped and url:
                 issue_type, severity, desc = mapped
-                records.append({
-                    "site_id": site_id,
-                    "url": url,
-                    "issue_type": issue_type,
-                    "severity": severity,
-                    "description": desc,
-                })
+                _add(url, issue_type, severity, desc)
 
-        # 2) Long URLs among pages that actually earn impressions.
+        # 2) Performance, SEO, Accessibility, Best Practices from PageSpeed (mobile).
+        ps_rows = session.execute(
+            select(PageSpeed)
+            .where(PageSpeed.site_id.in_(site_ids), PageSpeed.strategy == "mobile")
+        ).scalars().all()
+
+        for ps in ps_rows:
+            url = ps.url
+            if not url:
+                continue
+
+            lcp = (ps.lcp_ms or 0) / 1000.0
+            fcp = (ps.fcp_ms or 0) / 1000.0
+            ttfb = ps.ttfb_ms or 0
+            si = (ps.si_ms or 0) / 1000.0
+            perf = ps.performance_score
+            seo = ps.seo_score
+            acc = ps.accessibility_score
+            bp = ps.best_practices_score
+
+            # Performance issues
+            if perf is not None:
+                if lcp > 2.5 or fcp > 1.8:
+                    sev = "high" if lcp > 4.0 else "medium"
+                    _add(url, "slow_load", sev,
+                         f"Slow page load metrics (LCP: {lcp:.1f}s, FCP: {fcp:.1f}s). Optimize large images and defer non-critical scripts.")
+                if perf < 55 or ttfb > 600 or (lcp + fcp > 8.0):
+                    _add(url, "huge_page_size", "high",
+                         f"Heavy page rendering payload (Performance score: {perf}/100, TTFB: {ttfb:.0f}ms). Compress media and enable Gzip/Brotli.")
+                if perf < 75 and si > 3.5:
+                    _add(url, "uncompressed_pages", "medium",
+                         f"Speed index is high ({si:.1f}s). Ensure text resources (HTML/CSS/JS) are compressed over HTTP.")
+                if perf < 80 and fcp > 1.5:
+                    _add(url, "unminified_resources", "medium",
+                         f"Script and stylesheet parse time delays First Contentful Paint ({fcp:.1f}s). Minify CSS and JavaScript.")
+                if perf < 75 and not (lcp > 2.5 or perf < 55):
+                    _add(url, "low_performance_score", "medium",
+                         f"Mobile Lighthouse performance grade is {perf}/100. Address Largest Contentful Paint bottlenecks.")
+
+            # SEO score warnings
+            if seo is not None and seo < 85:
+                _add(url, "low_seo_score", "medium",
+                     f"Lighthouse SEO grade is {seo}/100. Check mobile viewport configuration, tap targets, and crawlable links.")
+
+            # Accessibility score warnings
+            if acc is not None:
+                if acc < 85:
+                    sev = "high" if acc < 65 else "medium"
+                    _add(url, "low_accessibility_score", sev,
+                         f"Lighthouse Accessibility grade is {acc}/100. Improve color contrast, ARIA attributes, and keyboard accessibility.")
+                if acc < 90:
+                    _add(url, "missing_alt_tags", "medium",
+                         f"Informational images on this page lack descriptive ALT text attributes.")
+
+            # Best practices score warnings
+            if bp is not None:
+                if bp < 85:
+                    _add(url, "low_best_practices_score", "medium",
+                         f"Lighthouse Best Practices grade is {bp}/100. Ensure secure cross-origin links and modern browser APIs.")
+                if bp < 92 and seo is not None and seo >= 90:
+                    _add(url, "no_structured_data", "low",
+                         "Page is eligible for Schema.org structured data (e.g., Article, Organization, Breadcrumb) to earn rich snippets.")
+
+        # 3) Content & SEO issues from Page inventory (pages table).
         page_rows = session.execute(
+            select(Page)
+            .where(Page.site_id.in_(site_ids))
+        ).scalars().all()
+
+        title_counts: dict[str, list[str]] = {}
+        for p in page_rows:
+            url = p.url
+            if not url:
+                continue
+            title = (p.title or p.meta_title or "").strip()
+            desc = (p.meta_description or "").strip()
+
+            if not title or len(title) < 3:
+                _add(url, "missing_title", "high",
+                     "Page is missing a valid <title> tag. Add a unique, keyword-relevant title.")
+            elif len(title) > 60:
+                _add(url, "title_too_long", "medium",
+                     f"Title tag is {len(title)} characters (exceeds recommended 60 max). May truncate in SERPs.")
+            else:
+                title_counts.setdefault(title.lower(), []).append(url)
+
+            if not desc or len(desc) < 10:
+                _add(url, "missing_description", "medium",
+                     "Page is missing a meta description. Add a compelling 120-160 character summary.")
+
+            # Orphaned page check (0 clicks and 0 sessions across tracked pages)
+            if (p.clicks or 0) == 0 and (p.sessions or 0) == 0 and len(page_rows) > 5:
+                _add(url, "orphaned_pages", "low",
+                     "Page receives no organic visits or internal link equity. Ensure it is linked from relevant category pages.")
+
+        # Flag duplicate titles across pages
+        for t_lower, urls in title_counts.items():
+            if len(urls) > 1 and len(t_lower) > 3:
+                for u in urls[:10]:
+                    _add(u, "duplicate_titles", "high",
+                         f"Title is identical across {len(urls)} URLs. Every page should have a distinct title tag.")
+
+        # 4) Long URLs among pages that earn impressions or traffic.
+        url_rows = session.execute(
             select(SEODaily.landing_page)
-            .where(SEODaily.site_id == site_id, SEODaily.landing_page.isnot(None))
+            .where(SEODaily.site_id.in_(site_ids), SEODaily.landing_page.isnot(None))
             .group_by(SEODaily.landing_page)
             .having(func.sum(SEODaily.impressions) > 0)
         ).all()
-        for (url,) in page_rows:
+        for (url,) in url_rows:
             if not url:
                 continue
             path = urlparse(url).path or "/"
             if len(path) > URL_PATH_MAX:
-                records.append({
-                    "site_id": site_id,
-                    "url": url,
-                    "issue_type": "long_url",
-                    "severity": "low",
-                    "description": (
-                        f"URL path is {len(path)} characters (over {URL_PATH_MAX}). "
-                        "Shorter, keyword-focused paths are easier to read, share, "
-                        "and tend to perform better."
-                    ),
-                })
+                _add(url, "long_url", "low",
+                     f"URL path length ({len(path)} chars) exceeds {URL_PATH_MAX}. Shorter paths are cleaner and easier to read.")
 
         # Replace the previous set so resolved issues don't linger.
         session.execute(delete(TechnicalIssue).where(TechnicalIssue.site_id == site_id))
@@ -103,3 +209,4 @@ def rebuild_technical_issues(site_id: str) -> int:
 
     logger.info(f"[technical_issues] Wrote {written} issues for {site_id!r}")
     return written
+

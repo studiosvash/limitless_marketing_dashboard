@@ -45,10 +45,11 @@ class DataForSEOBacklinksConnector(BaseConnector):
     @with_retry(max_retries=3, base_delay=5.0)
     def fetch(self, site_id: Optional[str] = None) -> list[dict]:
         """Fetch live backlinks using DataForSEO Backlinks Live endpoint."""
-        self.logger.info(f"[dataforseo_backlinks] Fetching backlinks for target: {self.clean_target}")
+        target = site_id.replace("sc-domain:", "").replace("https://", "").replace("http://", "").rstrip("/") if site_id else self.clean_target
+        self.logger.info(f"[dataforseo_backlinks] Fetching backlinks for target: {target}")
 
         payload = [{
-            "target": self.clean_target,
+            "target": target,
             "limit": 1000,
             "filters": [["dofollow", "=", True]],  # Only dofollow backlinks
             "include_subdomains": True,
@@ -85,8 +86,8 @@ class DataForSEOBacklinksConnector(BaseConnector):
 
         records = []
         for item in items:
-            domain = item.get("domain")
-            target_url = item.get("target")
+            domain = item.get("domain_from") or item.get("domain")
+            target_url = item.get("url_to") or item.get("url_from") or item.get("target")
             if not domain or not target_url:
                 continue
 
@@ -104,6 +105,9 @@ class DataForSEOBacklinksConnector(BaseConnector):
         return records
 
     def _write_records(self, session, records: list[dict], site_id: Optional[str] = None) -> int:
+        from pipeline.db.writer import ensure_tables
+        from pipeline.db.schema import Backlink
+        ensure_tables(session, Backlink)
         return upsert_backlinks(session, records, site_id=site_id)
 
 

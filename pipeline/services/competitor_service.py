@@ -45,6 +45,7 @@ def get_tracked_competitors(site_id: str, limit: int = DEFAULT_COLUMN_COUNT) -> 
     Override set wins when present; otherwise auto-seed from competitor_domains.
     Returns an empty list when neither source has data (grid shows its empty state).
     """
+    bare_site = _bare(site_id)
     with get_session() as session:
         ensure_tables(session, TrackedCompetitor)
 
@@ -54,15 +55,27 @@ def get_tracked_competitors(site_id: str, limit: int = DEFAULT_COLUMN_COUNT) -> 
             .order_by(TrackedCompetitor.added_at.asc())
         ).scalars().all()
         if override:
-            return [_bare(d) for d in override]
+            results = []
+            for d in override:
+                bare_d = _bare(d)
+                if bare_d and bare_d != bare_site and bare_d not in results:
+                    results.append(bare_d)
+            return results
 
         discovered = session.execute(
             select(CompetitorDomain.competitor_domain)
             .where(CompetitorDomain.site_id == site_id)
             .order_by(CompetitorDomain.intersections.desc())
-            .limit(limit)
+            .limit(limit * 2)
         ).scalars().all()
-        return [_bare(d) for d in discovered]
+        results = []
+        for d in discovered:
+            bare_d = _bare(d)
+            if bare_d and bare_d != bare_site and bare_d not in results:
+                results.append(bare_d)
+                if len(results) == limit:
+                    break
+        return results
 
 
 def is_overridden(site_id: str) -> bool:
