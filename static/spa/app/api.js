@@ -48,7 +48,14 @@ window.FuseAPI = (function () {
       credentials: 'include',
       body: body ? JSON.stringify(body) : undefined
     });
-    if (!res.ok) throw new Error('API ' + res.status + ' ' + path);
+    if (!res.ok) {
+      let detail = 'API ' + res.status + ' ' + path;
+      try { const j = await res.json(); if (j.detail) detail = j.detail; } catch (e) {}
+      const err = new Error(detail);
+      err.detail = detail;
+      err.status = res.status;
+      throw err;
+    }
     return res.json();
   }
 
@@ -802,12 +809,16 @@ window.FuseAPI = (function () {
         billing_cycle: 'Annual', renews: '2027-02-01', mrr: 149, currency: 'USD',
         timezone: 'America/Chicago', week_start: 'Monday', owner_email: 'founder@limitlesshold.com'
       },
-      team: mut('team', null) || [
-        { id: 'u1', name: 'Founder', email: 'founder@limitlesshold.com', role: 'Owner', status: 'active', last_active: iso(now), initials: 'FO' },
-        { id: 'u2', name: 'Priya Shah', email: 'priya@limitlesshold.com', role: 'Admin', status: 'active', last_active: iso(now - 1 * DAY), initials: 'PS' },
-        { id: 'u3', name: 'Marcus Lee', email: 'marcus@limitlesshold.com', role: 'Analyst', status: 'active', last_active: iso(now - 4 * DAY), initials: 'ML' },
-        { id: 'u4', name: 'agency@driphydration.io', email: 'agency@driphydration.io', role: 'Viewer', status: 'invited', last_active: null, initials: 'AG' }
-      ],
+      team: (function() {
+        const cur = mut('team', null) || [
+          { id: 'u1', name: 'Founder', email: 'founder@limitlesshold.com', role: 'Owner', status: 'active', last_active: iso(now), initials: 'FO' },
+          { id: 'u2', name: 'Priya Shah', email: 'priya@limitlesshold.com', role: 'Admin', status: 'active', last_active: iso(now - 1 * DAY), initials: 'PS' },
+          { id: 'u3', name: 'Marcus Lee', email: 'marcus@limitlesshold.com', role: 'Analyst', status: 'active', last_active: iso(now - 4 * DAY), initials: 'ML' }
+        ];
+        return cur.map((m, idx) => Object.assign({}, m, {
+          role: idx === 0 ? 'Owner' : (m.role === 'Owner' || m.role === 'Viewer' ? 'Admin' : m.role)
+        }));
+      })(),
       syncConfig: mut('syncConfig.' + fix.project.id, null) || {
         positions: 'weekly', backlinks: 'weekly', audit: 'monthly', keywords: 'monthly', ads: '12h', ai: 'weekly'
       },
@@ -1053,6 +1064,46 @@ window.FuseAPI = (function () {
         if (q.budgetEnforce != null) setMut('budgetEnforce', q.budgetEnforce);
         return { ok: true };
       }
+      if (method === 'POST' && res === 'team') {
+        const cur = mut('team', null) || [
+          { id: 'u1', name: 'Founder', email: 'founder@limitlesshold.com', role: 'Owner', status: 'active', last_active: new Date().toISOString().slice(0, 10), initials: 'FO' },
+          { id: 'u2', name: 'Priya Shah', email: 'priya@limitlesshold.com', role: 'Admin', status: 'active', last_active: new Date().toISOString().slice(0, 10), initials: 'PS' },
+          { id: 'u3', name: 'Marcus Lee', email: 'marcus@limitlesshold.com', role: 'Analyst', status: 'active', last_active: new Date().toISOString().slice(0, 10), initials: 'ML' }
+        ];
+        if (cur.some(x => x.name === q.username || x.email === q.email)) {
+          const err = new Error('Username or email already exists.');
+          err.detail = 'Username or email already exists.';
+          throw err;
+        }
+        const id = 'u' + Date.now().toString(36);
+        let r = q.role || 'Analyst';
+        if (r !== 'Admin' && r !== 'Analyst') r = 'Analyst';
+        cur.push({
+          id, name: q.username || q.email, email: q.email, role: r,
+          status: 'active', last_active: new Date().toISOString().slice(0, 10),
+          initials: (q.username || q.email).slice(0, 2).toUpperCase()
+        });
+        setMut('team', cur);
+        return { ok: true, id };
+      }
+      if (method === 'DELETE' && res === 'team' && seg[3]) {
+        if (String(seg[3]) === 'u1' || String(seg[3]) === '1') {
+          const err = new Error('Cannot delete the Owner account.');
+          err.detail = 'Cannot delete the Owner account.';
+          throw err;
+        }
+        const cur = mut('team', null) || [
+          { id: 'u1', name: 'Founder', email: 'founder@limitlesshold.com', role: 'Owner', status: 'active', last_active: new Date().toISOString().slice(0, 10), initials: 'FO' },
+          { id: 'u2', name: 'Priya Shah', email: 'priya@limitlesshold.com', role: 'Admin', status: 'active', last_active: new Date().toISOString().slice(0, 10), initials: 'PS' },
+          { id: 'u3', name: 'Marcus Lee', email: 'marcus@limitlesshold.com', role: 'Analyst', status: 'active', last_active: new Date().toISOString().slice(0, 10), initials: 'ML' }
+        ];
+        const filtered = cur.filter(x => String(x.id) !== String(seg[3]));
+        setMut('team', filtered);
+        return { ok: true };
+      }
+      if (method === 'DELETE' && res === 'data') {
+        return { ok: true };
+      }
     }
 
     if (method === 'GET' && seg[0] === 'tasks' && seg[1]) {
@@ -1088,6 +1139,11 @@ window.FuseAPI = (function () {
     await latency();
     return route('PUT', path, body);
   }
+  async function del(path, body) {
+    if (config.baseUrl) return http('DELETE', path, null, body);
+    await latency();
+    return route('DELETE', path, body);
+  }
 
-  return { config, get, post, put };
+  return { config, get, post, put, del };
 })();

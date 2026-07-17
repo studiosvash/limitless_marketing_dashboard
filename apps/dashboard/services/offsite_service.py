@@ -150,11 +150,19 @@ def build_offsite_response(site_id: str, curr_start, curr_end, prev_start, prev_
             "keyEvents": max(0, round(share * 0.04)),
         })
 
+    from apps.dashboard.services.settings_service import build_settings_response
+    settings_data = build_settings_response(site_id)
+    plat_conn = settings_data.get("platformConnectors", {})
+    li_conn = bool(plat_conn.get("linkedin", False))
+    reddit_conn = bool(plat_conn.get("reddit", False))
+    yt_conn = bool(plat_conn.get("youtube", False))
+    x_conn = bool(plat_conn.get("x", False))
+
     social = [
-        {"platform": "LinkedIn", "source": "linkedin.com", "channel": "Social", "connected": True, "impressions": round(soc_sessions * 12), "sessions": round(soc_sessions * 0.45), "engagedRate": 0.684, "engagementRate": 68.4, "keyEvents": round(totals["keyEvents"] * 0.06), "revenue": round(totals["keyEvents"] * 0.06 * 45)},
-        {"platform": "Reddit", "source": "reddit.com", "channel": "Social", "connected": True, "impressions": round(soc_sessions * 8), "sessions": round(soc_sessions * 0.30), "engagedRate": 0.721, "engagementRate": 72.1, "keyEvents": round(totals["keyEvents"] * 0.03), "revenue": round(totals["keyEvents"] * 0.03 * 45)},
-        {"platform": "YouTube", "source": "youtube.com", "channel": "Video", "connected": True, "impressions": round(soc_sessions * 5), "sessions": round(soc_sessions * 0.15), "engagedRate": 0.810, "engagementRate": 81.0, "keyEvents": round(totals["keyEvents"] * 0.01), "revenue": round(totals["keyEvents"] * 0.01 * 45)},
-        {"platform": "X / Twitter", "source": "t.co", "channel": "Social", "connected": True, "impressions": round(soc_sessions * 4), "sessions": round(soc_sessions * 0.10), "engagedRate": 0.552, "engagementRate": 55.2, "keyEvents": 0, "revenue": 0},
+        {"platform": "LinkedIn", "source": "linkedin.com", "channel": "Social", "connected": li_conn, "impressions": round(soc_sessions * 12) if li_conn else None, "sessions": round(soc_sessions * 0.45), "engagedRate": 0.684, "engagementRate": 68.4, "keyEvents": round(totals["keyEvents"] * 0.06), "revenue": round(totals["keyEvents"] * 0.06 * 45)},
+        {"platform": "Reddit", "source": "reddit.com", "channel": "Social", "connected": reddit_conn, "impressions": round(soc_sessions * 8) if reddit_conn else None, "sessions": round(soc_sessions * 0.30), "engagedRate": 0.721, "engagementRate": 72.1, "keyEvents": round(totals["keyEvents"] * 0.03), "revenue": round(totals["keyEvents"] * 0.03 * 45)},
+        {"platform": "YouTube", "source": "youtube.com", "channel": "Video", "connected": yt_conn, "impressions": round(soc_sessions * 5) if yt_conn else None, "sessions": round(soc_sessions * 0.15), "engagedRate": 0.810, "engagementRate": 81.0, "keyEvents": round(totals["keyEvents"] * 0.01), "revenue": round(totals["keyEvents"] * 0.01 * 45)},
+        {"platform": "X / Twitter", "source": "t.co", "channel": "Social", "connected": x_conn, "impressions": round(soc_sessions * 4) if x_conn else None, "sessions": round(soc_sessions * 0.10), "engagedRate": 0.552, "engagementRate": 55.2, "keyEvents": 0, "revenue": 0},
     ]
 
     return {
@@ -166,8 +174,8 @@ def build_offsite_response(site_id: str, curr_start, curr_end, prev_start, prev_
         "social": social,
         "landingPages": landing_pages,
         "connectors": {
-            "linkedin": True, "reddit": True, "youtube": True,
-            "x": True, "facebook": False, "instagram": False,
+            "linkedin": li_conn, "reddit": reddit_conn, "youtube": yt_conn,
+            "x": x_conn, "facebook": bool(plat_conn.get("facebook", False)), "instagram": bool(plat_conn.get("instagram", False)),
         },
         "syncMeta": {"state": "ready", "lastUpdated": totals.get("engagementRate", 0)},
     }

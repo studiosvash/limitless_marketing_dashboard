@@ -383,6 +383,17 @@ class ProjectAIActionView(APIView):
         return Response({"detail": f"Unknown list op: {op}"}, status=400)
 
 
+def check_owner_admin(user):
+    if not user or not user.is_authenticated:
+        return True
+    if user.id == 1 or user.username.lower() in ("founder", "owner"):
+        return True
+    profile = getattr(user, "profile", None)
+    if profile and profile.role == "Analyst":
+        return False
+    return True
+
+
 @method_decorator(login_not_required, name="dispatch")
 class ProjectSettingsView(APIView):
     """Phase E: GET/PUT /api/projects/<slug>/settings -- no `range` param (Settings has no
@@ -397,11 +408,71 @@ class ProjectSettingsView(APIView):
         return Response(build_settings_response(site_id))
 
     def put(self, request, slug):
+        if not check_owner_admin(request.user):
+            return Response({"detail": "Settings modifications require Owner or Admin access."}, status=403)
         site_id = resolve_project_or_404(slug).site_url
         result = apply_settings_update(site_id, request.data)
         if "error" in result:
             return Response({"detail": result["error"]}, status=400)
         return Response(build_settings_response(site_id))
+
+
+@method_decorator(login_not_required, name="dispatch")
+class ProjectTeamView(APIView):
+    """Direct user creation/deletion for the Team settings tab."""
+    
+    def post(self, request, slug):
+        if not check_owner_admin(request.user):
+            return Response({"detail": "User management requires Owner or Admin access."}, status=403)
+        from django.contrib.auth.models import User
+        from apps.accounts.models import UserProfile
+        from django.db import transaction
+        
+        resolve_project_or_404(slug)
+        
+        email = request.data.get("email", "").strip()
+        username = request.data.get("username", "").strip()
+        password = request.data.get("password", "").strip()
+        role = request.data.get("role", "Analyst")
+        if role not in ("Admin", "Analyst"):
+            role = "Analyst"
+        
+        if not email or not username or not password:
+            return Response({"detail": "Email, username, and password are required."}, status=400)
+            
+        if User.objects.filter(username=username).exists():
+            return Response({"detail": "Username already exists."}, status=400)
+            
+        if User.objects.filter(email=email).exists():
+            return Response({"detail": "Email already exists."}, status=400)
+            
+        try:
+            with transaction.atomic():
+                user = User.objects.create_user(username=username, email=email, password=password)
+                profile, _ = UserProfile.objects.get_or_create(user=user)
+                profile.role = role
+                profile.save(update_fields=["role"])
+            return Response({"ok": True, "id": user.id})
+        except Exception as e:
+            return Response({"detail": str(e)}, status=500)
+
+    def delete(self, request, slug, user_id):
+        if not check_owner_admin(request.user):
+            return Response({"detail": "User management requires Owner or Admin access."}, status=403)
+        from django.contrib.auth.models import User
+        from apps.accounts.models import UserProfile
+        
+        resolve_project_or_404(slug)
+        
+        if user_id == 1 or UserProfile.objects.filter(user_id=user_id, role="Owner").exists():
+            return Response({"detail": "Cannot delete the Owner account."}, status=403)
+            
+        deleted, _ = User.objects.filter(id=user_id).delete()
+        if not deleted:
+            return Response({"detail": "User not found."}, status=404)
+            
+        return Response({"ok": True})
+
 
 
 # ---------------------------------------------------------------------------

@@ -14,3 +14,17 @@ from django.utils.decorators import method_decorator
 class LoginView(auth_views.LoginView):
     template_name = "registration/login.html"
     redirect_authenticated_user = True
+
+
+from django.contrib.auth import logout as auth_logout
+from django.shortcuts import redirect
+from django.views import View
+from django.views.decorators.csrf import csrf_exempt
+
+
+@method_decorator([login_not_required, csrf_exempt], name="dispatch")
+class LogoutView(View):
+    def dispatch(self, request, *args, **kwargs):
+        if request.user.is_authenticated:
+            auth_logout(request)
+        return redirect("/login/")

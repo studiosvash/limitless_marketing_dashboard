@@ -68,16 +68,31 @@ _SPA_HTML_PATH = Path(settings.BASE_DIR) / "static" / "spa" / "index.html"
 def spa_index(request):
     html = _SPA_HTML_PATH.read_text(encoding="utf-8")
     token = request.user.auth_token.key
+    u = request.user
+    role = (getattr(u, "profile", None) and u.profile.role) or "Analyst"
+    if u.id == 1 or u.username.lower() in ("founder", "owner"):
+        role = "Owner"
+    elif role in ("Owner", "Viewer"):
+        role = "Admin"
+    initials = u.username[:2].upper() if u.username else "U"
+    user_info = {
+        "id": u.id,
+        "username": u.username,
+        "email": u.email or "",
+        "initials": initials,
+        "role": role,
+    }
     bootstrap = (
         "<script>"
         "(function(){"
         f"var authToken={json.dumps(token)};"
+        f"var userInfo={json.dumps(user_info)};"
         "var real;"
         "Object.defineProperty(window,'FuseAPI',{"
         "configurable:true,"
         "get:function(){return real;},"
         "set:function(v){"
-        "if(v&&v.config){v.config.baseUrl='/';v.config.authToken=authToken;}"
+        "if(v&&v.config){v.config.baseUrl='/';v.config.authToken=authToken;v.config.user=userInfo;}"
         "real=v;"
         "}"
         "});"

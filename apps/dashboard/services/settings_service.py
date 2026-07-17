@@ -116,20 +116,31 @@ def query_connectors_raw(site_id: str) -> list[dict]:
 
 
 def query_team_raw() -> list[dict]:
-    """Real reshape of the app's actual (exactly 3, fixed) Django users -- no invite/multi-
-    seat concept exists, so this is read-only. email is honestly blank (seed_users creates
-    users with no email), last_active is Django's own real last_login. `initials` is a real,
-    non-fabricated derivation from the user's own username (first two characters, uppercased)
-    -- required because the SPA's team-row template dereferences `m.initials` directly
-    (index.html:2864) rather than computing it client-side from the name."""
-    profiles = UserProfile.objects.select_related("user").all()
-    return [
-        {"id": p.user.id, "name": p.user.username, "email": p.user.email or "",
-         "role": p.role, "status": "active",
-         "last_active": p.user.last_login.date().isoformat() if p.user.last_login else None,
-         "initials": p.user.username[:2].upper() if p.user.username else ""}
-        for p in profiles
-    ]
+    """Real reshape of the app's actual Django users -- enforces exactly 1 Owner (the founder/first user).
+    Normalizes extra owners/viewers to Admin and self-heals UserProfile rows. email is blank if unseeded,
+    last_active is Django's own real last_login, initials computed from username."""
+    profiles = list(UserProfile.objects.select_related("user").order_by("user__id").all())
+    result = []
+    owner_seen = False
+    for idx, p in enumerate(profiles):
+        role = p.role
+        if idx == 0 or (not owner_seen and p.user.username.lower() in ("founder", "owner")):
+            role = "Owner"
+            owner_seen = True
+        elif role in ("Owner", "Viewer"):
+            role = "Admin"
+            
+        if p.role != role:
+            p.role = role
+            p.save(update_fields=["role"])
+            
+        result.append({
+            "id": p.user.id, "name": p.user.username, "email": p.user.email or "",
+            "role": role, "status": "active",
+            "last_active": p.user.last_login.date().isoformat() if p.user.last_login else None,
+            "initials": (p.user.username[:2].upper() if p.user.username else "U")
+        })
+    return result
 
 
 def _get_or_create_blob(site_id: str) -> ProjectSettings:
@@ -226,10 +237,16 @@ def build_settings_response(site_id: str) -> dict:
 
 def apply_settings_update(site_id: str, body: dict) -> dict:
     """Routes a PUT body's top-level key(s) to the right backing store. Returns
-    {"ok": True} on success, or {"error": "..."} for keys this phase explicitly does not
-    persist (team, security) -- callers must turn the latter into a 400, never a silent 200."""
-    if "team" in body or "security" in body:
+    {"ok": True} on success, or {"error": "..."} for keys explicitly not persisted."""
+    if "security" in body:
         return {"error": "not_yet_available"}
+
+    if "team" in body and isinstance(body["team"], list):
+        for member in body["team"]:
+            uid = member.get("id")
+            role = member.get("role")
+            if uid and role in ("Admin", "Analyst"):
+                UserProfile.objects.filter(user_id=uid).exclude(role="Owner").update(role=role)
 
     if "credentials" in body:
         with get_session() as session:

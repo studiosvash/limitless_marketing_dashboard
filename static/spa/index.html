@@ -85,7 +85,9 @@
           <span style="margin-left: auto; font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 4px; background: #fee2e2; color: #b91c1c;">{{ unackedCount }}</span>
         </sc-if>
       </div>
-      <div style="{{ navStyle.settings }}" style-hover="background:#f8fafc" onClick="{{ h.navSettings }}"><span style="{{ dotStyle.settings }}"></span> Settings</div>
+      <sc-if value="{{ canManageSettings }}" hint-placeholder-val="{{ true }}">
+        <div style="{{ navStyle.settings }}" style-hover="background:#f8fafc" onClick="{{ h.navSettings }}"><span style="{{ dotStyle.settings }}"></span> Settings</div>
+      </sc-if>
     </nav>
 
     <div style="padding: 12px; border-top: 1px solid #f1f5f9;">
@@ -96,11 +98,14 @@
         </span>
       </div>
       <div style="display: flex; align-items: center; gap: 10px; padding: 6px 8px;">
-        <div style="width: 32px; height: 32px; border-radius: 9999px; background: #e2e8f0; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; color: #64748b;">FO</div>
+        <div style="width: 32px; height: 32px; border-radius: 9999px; background: #e2e8f0; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; color: #64748b;">{{ userInitials }}</div>
         <div style="font-size: 12px; min-width: 0;">
-          <div style="font-weight: 500; color: #334155;">founder</div>
-          <div style="color: #94a3b8;">Internal</div>
+          <div style="font-weight: 500; color: #334155;">{{ userName }}</div>
+          <div style="color: #94a3b8;">{{ userRole }}</div>
         </div>
+        <span onClick="{{ h.logout }}" role="button" title="Log out of FuseHealth" aria-label="Log out" style="margin-left: auto; display: flex; align-items: center; justify-content: center; width: 30px; height: 30px; border-radius: 6px; color: #64748b; cursor: pointer; transition: all 0.15s ease;" style-hover="background:#fee2e2;color:#dc2626">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+        </span>
       </div>
     </div>
   </aside>
@@ -310,7 +315,7 @@
                   <h3 style="{{ sec.titleStyle }}">{{ sec.title }}</h3>
                   <sc-for list="{{ sec.items }}" as="it" hint-placeholder-count="1">
                     <div style="display: flex; gap: 8px; font-size: 13px; color: #475569; margin-top: 4px;">
-                      <span style="{{ sec.dotStyle }}"></span><span>{{ it }}</span>
+                      <span style="{{ sec.dotStyle }}"></span><span dangerouslySetInnerHTML="{{ it.obj }}"></span>
                     </div>
                   </sc-for>
                 </div>
@@ -1172,7 +1177,7 @@
                 <h2 style="font-size: 15px; font-weight: 600; margin: 0;">LinkedIn</h2>
                 <p style="font-size: 11px; color: #94a3b8; margin: 2px 0 0;">{{ off.li.subtitle }}</p>
               </div>
-              <span style="{{ off.li.badgeStyle }}">{{ off.li.badgeLabel }}</span>
+              <span onClick="{{ h.goConnections }}" style="{{ off.li.badgeStyle }}" title="Click to open Settings -> Connections">{{ off.li.badgeLabel }}</span>
             </div>
             <div style="padding: 18px 20px; display: grid; grid-template-columns: 1fr 1fr; gap: 18px 16px;">
               <div><div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8;">Impressions</div><div style="font-size: 22px; font-weight: 700; color: #0f172a; margin-top: 4px;">{{ off.li.impressions }}</div><div style="font-size:11px;color:#cbd5e1;margin-top:2px;">{{ off.li.imprCaption }}</div></div>
@@ -1209,7 +1214,7 @@
                   </td>
                   <td style="padding: 12px 10px; text-align: right;">
                     <sc-if value="{{ r.connected }}" hint-placeholder-val="{{ true }}"><span style="font-weight: 600; color: #0f172a;">{{ r.imprFmt }}</span></sc-if>
-                    <sc-if value="{{ r.notConnected }}" hint-placeholder-val="{{ false }}"><span style="font-size: 11px; color: #cbd5e1; font-style: italic;">connector needed</span></sc-if>
+                    <sc-if value="{{ r.notConnected }}" hint-placeholder-val="{{ false }}"><span onClick="{{ h.goConnections }}" style="font-size: 11px; color: #4f46e5; font-style: italic; cursor: pointer; text-decoration: underline;" title="Go to Settings -> Connections to set up API">connector needed</span></sc-if>
                   </td>
                   <td style="padding: 12px 10px; text-align: right; font-weight: 600; color: #0f172a;">{{ r.sessFmt }}</td>
                   <td style="padding: 12px 10px; text-align: right; color: #475569;">{{ r.engFmt }}</td>
@@ -2920,20 +2925,31 @@
         <sc-if value="{{ st.team }}" hint-placeholder-val="{{ false }}">
         <div style="display: flex; flex-direction: column; gap: 22px;">
           <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); padding: 24px;">
-            <h2 style="font-size: 15px; font-weight: 600; margin: 0 0 4px;">Invite a teammate</h2>
-            <p style="font-size: 12px; color: #64748b; margin: 0 0 16px;">They'll get an email invite. Role can be changed any time.</p>
-            <div style="display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap;">
-              <div style="flex: 1; min-width: 220px;">
+            <h2 style="font-size: 15px; font-weight: 600; margin: 0 0 2px;">Add a teammate</h2>
+            <p style="font-size: 12px; color: #64748b; margin: 0 0 16px;">Create a login directly — no email invitation needed. Password is stored securely and never exposed.</p>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px;">
+              <div>
                 <label style="display: block; font-size: 12px; font-weight: 600; color: #334155; margin-bottom: 6px;">Email address</label>
-                <input value="{{ st.inviteEmail }}" onInput="{{ h.inviteEmail }}" placeholder="name@company.com" style="width: 100%; box-sizing: border-box; padding: 9px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-family: inherit; font-size: 13px; color: #334155; outline: none;">
+                <input value="{{ st.inviteEmail }}" onInput="{{ h.inviteEmail }}" placeholder="name@company.com" autocomplete="off" style="width: 100%; box-sizing: border-box; padding: 9px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-family: inherit; font-size: 13px; color: #334155; outline: none;">
+              </div>
+              <div>
+                <label style="display: block; font-size: 12px; font-weight: 600; color: #334155; margin-bottom: 6px;">Username</label>
+                <input value="{{ st.inviteUsername }}" onInput="{{ h.inviteUsername }}" placeholder="jsmith" autocomplete="off" style="width: 100%; box-sizing: border-box; padding: 9px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-family: inherit; font-size: 13px; color: #334155; outline: none;">
+              </div>
+              <div>
+                <label style="display: block; font-size: 12px; font-weight: 600; color: #334155; margin-bottom: 6px;">Password</label>
+                <input type="password" value="{{ st.invitePassword }}" onInput="{{ h.invitePassword }}" placeholder="Min. 8 characters" autocomplete="new-password" style="width: 100%; box-sizing: border-box; padding: 9px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-family: inherit; font-size: 13px; color: #334155; outline: none;">
               </div>
               <div>
                 <label style="display: block; font-size: 12px; font-weight: 600; color: #334155; margin-bottom: 6px;">Role</label>
-                <select value="{{ st.inviteRole }}" onChange="{{ h.inviteRole }}" style="padding: 9px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 13px; color: #334155; background: white; outline: none;">
-                  <sc-for list="{{ st.roleOptions }}" as="o" hint-placeholder-count="4"><option value="{{ o.value }}">{{ o.label }}</option></sc-for>
+                <select value="{{ st.inviteRole }}" onChange="{{ h.inviteRole }}" style="width: 100%; padding: 9px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 13px; color: #334155; background: white; outline: none;">
+                  <sc-for list="{{ st.inviteRoleOptions }}" as="o" hint-placeholder-count="2"><option value="{{ o.value }}">{{ o.label }}</option></sc-for>
                 </select>
               </div>
-              <div onClick="{{ h.sendInvite }}" style="padding: 9px 18px; background: #4f46e5; color: white; font-size: 13px; font-weight: 600; border-radius: 8px; cursor: pointer;" style-hover="background:#4338ca">Send invite</div>
+            </div>
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <div onClick="{{ h.createUser }}" style="padding: 9px 20px; background: #4f46e5; color: white; font-size: 13px; font-weight: 600; border-radius: 8px; cursor: pointer;" style-hover="background:#4338ca">Create user</div>
+              <sc-if value="{{ st.createUserError }}" hint-placeholder-val="{{ false }}"><span style="font-size: 12px; color: #b91c1c;">{{ st.createUserError }}</span></sc-if>
             </div>
           </div>
 
@@ -2947,12 +2963,16 @@
                   <div style="font-size: 12px; color: #94a3b8;">{{ m.lastLabel }}</div>
                 </div>
                 <sc-if value="{{ m.isOwner }}" hint-placeholder-val="{{ false }}"><span style="font-size: 13px; font-weight: 600; color: #4338ca; background: #eef2ff; border: 1px solid #c7d2fe; padding: 5px 12px; border-radius: 8px;">Owner</span></sc-if>
-                <sc-if value="{{ m.isInvited }}" hint-placeholder-val="{{ false }}"><span style="font-size: 11px; font-weight: 600; color: #b45309; background: #fef3c7; padding: 3px 9px; border-radius: 9999px;">Invited</span></sc-if>
                 <select value="{{ m.role }}" onChange="{{ m.setRole }}" disabled="{{ m.isOwner }}" style="padding: 6px 10px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 12.5px; color: #334155; background: white; outline: none;">
                   <sc-for list="{{ m.roleOptions }}" as="o" hint-placeholder-count="4"><option value="{{ o.value }}">{{ o.label }}</option></sc-for>
                 </select>
-                <sc-if value="{{ m.isOwner }}" hint-placeholder-val="{{ false }}"><span style="width: 20px;"></span></sc-if>
-                <sc-if value="{{ m.isInvited }}" hint-placeholder-val="{{ false }}"><span onClick="{{ m.remove }}" style="color: #cbd5e1; cursor: pointer; display: inline-flex;" style-hover="color:#ef4444"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg></span></sc-if>
+                <sc-if value="{{ m.canDelete }}" hint-placeholder-val="{{ false }}">
+                  <button onClick="{{ m.remove }}" title="Delete user" style="display: inline-flex; align-items: center; gap: 5px; padding: 6px 10px; background: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; color: #dc2626; font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap;">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/></svg>
+                    Delete
+                  </button>
+                </sc-if>
+                <sc-if value="{{ m.isOwner }}" hint-placeholder-val="{{ false }}"><span style="width: 68px; display: inline-block;"></span></sc-if>
               </div>
             </sc-for>
           </div>
@@ -2960,10 +2980,9 @@
           <div style="border-radius: 12px; background: #fbfcfe; border: 1px solid #e2e8f0; padding: 18px 24px;">
             <div style="font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8; margin-bottom: 12px;">What each role can do</div>
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px 24px; font-size: 12.5px; color: #475569;">
-              <div><b style="color: #0f172a;">Owner</b> — full access, billing, delete workspace</div>
-              <div><b style="color: #0f172a;">Admin</b> — manage projects, connections, team</div>
+              <div><b style="color: #0f172a;">Owner</b> — full access, billing, delete workspace (only 1)</div>
+              <div><b style="color: #0f172a;">Admin</b> — manage projects, connections, team (owner-level access)</div>
               <div><b style="color: #0f172a;">Analyst</b> — run syncs, edit keywords &amp; alerts</div>
-              <div><b style="color: #0f172a;">Viewer</b> — read-only dashboards &amp; exports</div>
             </div>
           </div>
         </div>
@@ -3655,7 +3674,7 @@ class Component extends DCLogic {
             next.prefs = Object.assign({}, data.prefs);
             next.prefsFor = pid;
           }
-          if (tab === 'settings' && s.setFor !== pid) {
+          if (tab === 'settings' && (force || s.setFor !== pid)) {
             next.wsDraft = Object.assign({}, data.workspace);
             next.notifDraft = Object.assign({}, data.notifications);
             next.aiDraft = Object.assign({}, data.aiConfig);
@@ -4188,13 +4207,33 @@ class Component extends DCLogic {
     this.putSettings({ budgetEnforce: v }, v ? 'Soft cap enabled' : 'Soft cap disabled');
   }
   setInviteRole(r) { this.setState({ inviteRole: r }); }
-  sendInvite() {
+  createUser() {
     const email = (this.state.inviteEmail || '').trim();
-    if (!email || email.indexOf('@') < 0) { this.notify('Enter a valid email'); return; }
-    const team = (this.state.teamDraft || []).slice();
-    team.push({ id: 'u' + Date.now().toString(36), name: email, email, role: this.state.inviteRole, status: 'invited', last_active: null, initials: email.slice(0, 2).toUpperCase() });
-    this.setState({ teamDraft: team, inviteEmail: '' });
-    this.putSettings({ team }, 'Invite sent to ' + email);
+    const username = (this.state.inviteUsername || '').trim();
+    const password = (this.state.invitePassword || '').trim();
+    const role = this.state.inviteRole || 'Analyst';
+    if (!email || email.indexOf('@') < 0) { this.setState({ createUserError: 'Enter a valid email address.' }); return; }
+    if (!username) { this.setState({ createUserError: 'Username is required.' }); return; }
+    if (password.length < 8) { this.setState({ createUserError: 'Password must be at least 8 characters.' }); return; }
+    this.setState({ createUserError: null });
+    const pid = this.state.projectId;
+    window.FuseAPI.post('/api/projects/' + pid + '/team', { email, username, password, role })
+      .then(() => {
+        if (!this._alive) return;
+        this.setState({ inviteEmail: '', inviteUsername: '', invitePassword: '', createUserError: null });
+        this.notify('User "' + username + '" created successfully.');
+        // Invalidate settings cache and team draft to reload team list
+        this.setState(s => {
+          const cache = {};
+          Object.keys(s.cache).forEach(k => { if (k.indexOf(pid + ':settings') !== 0) cache[k] = s.cache[k]; });
+          return { cache, teamDraft: null, setFor: null };
+        });
+        this.fetchTab('settings', pid, this.state.range, true);
+      })
+      .catch(err => {
+        const msg = (err && (err.detail || err.message)) || 'Could not create user. Please try again.';
+        this.setState({ createUserError: msg });
+      });
   }
   changeRole(id, role) {
     const team = (this.state.teamDraft || []).map(m => m.id === id ? Object.assign({}, m, { role }) : m);
@@ -4202,9 +4241,23 @@ class Component extends DCLogic {
     this.putSettings({ team }, 'Role updated');
   }
   removeMember(id) {
-    const team = (this.state.teamDraft || []).filter(m => m.id !== id);
-    this.setState({ teamDraft: team });
-    this.putSettings({ team }, 'Member removed');
+    if (!window.confirm('Are you sure you want to permanently delete this user? This cannot be undone.')) return;
+    const pid = this.state.projectId;
+    window.FuseAPI.del('/api/projects/' + pid + '/team/' + id)
+      .then(() => {
+        if (!this._alive) return;
+        this.notify('User deleted.');
+        this.setState(s => {
+          const cache = {};
+          Object.keys(s.cache).forEach(k => { if (k.indexOf(pid + ':settings') !== 0) cache[k] = s.cache[k]; });
+          return { cache, teamDraft: null, setFor: null };
+        });
+        this.fetchTab('settings', pid, this.state.range, true);
+      })
+      .catch(err => {
+        const msg = (err && (err.detail || err.message)) || 'Could not delete user.';
+        this.notify(msg);
+      });
   }
   toggle2fa() {
     const sec = Object.assign({}, this.state.secDraft, { twofa: !this.state.secDraft.twofa });
@@ -4484,11 +4537,13 @@ class Component extends DCLogic {
     const unacked = alertsData ? alertsData.feed.filter(f => !f.acknowledged && f.severity !== 'info').length : 0;
 
     const h = {
+      logout: () => { try { localStorage.clear(); sessionStorage.clear(); } catch (e) {} window.location.href = '/logout/'; },
       navOverview: () => this.go('overview'), navSeo: () => this.go('seo'),
       navKeywords: () => this.go('keywords'), navPositioning: () => this.go('positioning'),
       navBacklinks: () => this.go('backlinks'), navOffsite: () => this.go('offsite'), navPages: () => this.go('pages'), navAi: () => this.go('ai'),
       navAds: () => this.go('ads'), navCampaigns: () => this.go('campaigns'), navTerms: () => this.go('terms'), navAttribution: () => this.go('attribution'),
-      navAlerts: () => this.go('alerts'), navSettings: () => this.go('settings'),
+      navAlerts: () => this.go('alerts'), navSettings: () => { if (this.state.userRole !== 'Analyst') this.go('settings'); else this.notify('Settings require Owner or Admin access.'); },
+      goConnections: () => { if (this.state.userRole === 'Analyst') { this.notify('Connecting social platforms requires Owner or Admin access.'); } else { this.setState({ tab: 'settings', settingsSub: 'connections' }); this.pushNav({ tab: 'settings', settingsSub: 'connections' }); } },
       cmpSearch: e => this.setState({ cmpSearch: e.target.value }),
       exportCampaigns: () => { const d = s.cache[this.key(s.tab)]; if (d) this.downloadCsv(project.domain + '-campaigns.csv', [['campaign', 'name'], ['platform', 'platform'], ['type', 'type'], ['status', 'status'], ['budget_daily', 'budget_daily'], ['spend', 'spend'], ['impressions', 'impressions'], ['clicks', 'clicks'], ['ctr', 'ctr'], ['cpc', 'cpc'], ['conversions', 'conversions'], ['cpa', 'cpa'], ['roas', 'roas'], ['lost_is_budget', 'lost_is_budget']], d.campaigns); },
       exportTerms: () => { const d = s.cache[this.key(s.tab)]; if (d) this.downloadCsv(project.domain + '-search-terms.csv', [['term', 'term'], ['matched_keyword', 'matchedKeyword'], ['match_type', 'matchType'], ['campaign', 'campaign'], ['impressions', 'impressions'], ['clicks', 'clicks'], ['cost', 'cost'], ['conversions', 'conversions'], ['status', 'status']], d.searchTerms); },
@@ -4581,8 +4636,10 @@ class Component extends DCLogic {
       transferOwner: () => this.notify('Ownership transfer requires email confirmation'),
       deleteWorkspace: () => this.notify('Type the workspace name to confirm deletion'),
       inviteEmail: e => this.setState({ inviteEmail: e.target.value }),
+      inviteUsername: e => this.setState({ inviteUsername: e.target.value }),
+      invitePassword: e => this.setState({ invitePassword: e.target.value }),
       inviteRole: e => this.setState({ inviteRole: e.target.value }),
-      sendInvite: () => this.sendInvite(),
+      createUser: () => this.createUser(),
       syncCfgSet: mod => e => this.editSyncCfg(mod, e.target.value),
       capSet: e => this.setBudgetCap(e.target.value),
       enforceToggle: () => this.toggleEnforce(),
@@ -4618,7 +4675,10 @@ class Component extends DCLogic {
       blToggleGap: () => this.setState(st => ({ gapOnly: !st.gapOnly }))
     };
 
+    const uCfg = (window.FuseAPI && window.FuseAPI.config && window.FuseAPI.config.user) || { username: 'founder', initials: 'FO', role: 'Internal' };
+    const canManageSettings = uCfg.role !== 'Analyst';
     const vals = {
+      userInitials: uCfg.initials, userName: uCfg.username, userRole: uCfg.role, canManageSettings,
       brandName: project.name || 'FuseHealth',
       projectDomain: project.domain || '',
       h,
@@ -4863,7 +4923,7 @@ class Component extends DCLogic {
         ].filter(x => x.items && x.items.length).map(x => {
           const m = x.kind === 'win' ? ['#d1fae5', 'rgba(236,253,245,0.5)', '#047857', '#34d399'] : x.kind === 'critical' ? ['#fee2e2', 'rgba(254,242,242,0.5)', '#b91c1c', '#f87171'] : ['#e2e8f0', 'rgba(248,250,252,0.6)', '#64748b', '#94a3b8'];
           return {
-            title: x.title, items: x.items,
+            title: x.title, items: x.items.map(htmlString => ({ obj: { __html: htmlString } })),
             boxStyle: { borderRadius: '8px', border: '1px solid ' + m[0], background: m[1], padding: '12px' },
             titleStyle: { fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: m[2], margin: '0 0 4px' },
             dotStyle: { marginTop: '6px', width: '4px', height: '4px', borderRadius: '9999px', background: m[3], flexShrink: 0 }
@@ -5222,16 +5282,16 @@ class Component extends DCLogic {
       const li = data.social.find(x => x.platform === 'LinkedIn') || { impressions: 0, sessions: 0, keyEvents: 0, revenue: 0 };
       const liConnected = !!(data.connectors && data.connectors.linkedin);
       off.li = {
-        impressions: this.fmt(li.impressions || 0), sessions: this.fmt(li.sessions),
-        ctr: li.impressions ? +(li.sessions / li.impressions * 100).toFixed(1) + '%' : '—',
+        impressions: liConnected ? this.fmt(li.impressions || 0) : '—', sessions: this.fmt(li.sessions),
+        ctr: liConnected && li.impressions ? +(li.sessions / li.impressions * 100).toFixed(1) + '%' : '—',
         keyEvents: this.fmt(Math.round(li.keyEvents)), revenue: this.money(li.revenue),
         connected: liConnected,
         badgeLabel: liConnected ? 'Connected' : 'Not connected',
         badgeStyle: liConnected
           ? { marginLeft: 'auto', fontSize: '10px', fontWeight: 600, color: '#059669', background: '#ecfdf5', padding: '3px 8px', borderRadius: '9999px' }
-          : { marginLeft: 'auto', fontSize: '10px', fontWeight: 600, color: '#64748b', background: '#f1f5f9', padding: '3px 8px', borderRadius: '9999px' },
-        subtitle: liConnected ? 'Connector live · impressions + click-throughs' : 'Connector not set up yet',
-        imprCaption: liConnected ? 'from LinkedIn API' : 'not connected'
+          : { marginLeft: 'auto', fontSize: '10px', fontWeight: 600, color: '#4f46e5', background: '#eef2ff', padding: '3px 8px', borderRadius: '9999px', cursor: 'pointer', textDecoration: 'underline' },
+        subtitle: liConnected ? 'Connector live · impressions + click-throughs' : 'Connector not set up yet (click badge to connect in Settings)',
+        imprCaption: liConnected ? 'from LinkedIn API' : 'connector needed'
       };
 
       /* social table */
@@ -5239,7 +5299,7 @@ class Component extends DCLogic {
       off.social = data.social.map(r => ({
         platform: r.platform, source: r.source, channel: r.channel,
         connected: r.connected, notConnected: !r.connected,
-        imprFmt: r.impressions != null ? this.fmt(r.impressions) : '—',
+        imprFmt: r.connected && r.impressions != null ? this.fmt(r.impressions) : '—',
         sessFmt: this.fmt(r.sessions), engFmt: Math.round(r.engagedRate * 100) + '%',
         keyFmt: this.fmt(Math.round(r.keyEvents)), revFmt: this.money(r.revenue),
         badge: r.platform.slice(0, 1),
@@ -6507,6 +6567,11 @@ class Component extends DCLogic {
 
     /* ============ SETTINGS ============ */
     if (tab === 'settings') {
+      if (!vals.canManageSettings) {
+        setTimeout(() => this.go('overview'), 0);
+        vals.showSettings = false;
+        return vals;
+      }
       vals.showSettings = true;
       const u = data.usage;
       const prefs = s.prefs || data.prefs;
@@ -6564,7 +6629,8 @@ class Component extends DCLogic {
         ['instagram', 'Instagram', 'Meta Graph API — reach & engagement'],
         ['meta_ads', 'Meta Ads', 'Meta Marketing API — paid campaign metrics']
       ];
-      const roleOptions = ['Owner', 'Admin', 'Analyst', 'Viewer'].map(r => ({ value: r, label: r }));
+      const roleOptions = ['Owner', 'Admin', 'Analyst'].map(r => ({ value: r, label: r }));
+      const inviteRoleOptions = ['Admin', 'Analyst'].map(r => ({ value: r, label: r }));
       const routeOptions = [['none', 'Don\u2019t notify'], ['email', 'Email immediately'], ['digest', 'Weekly digest'], ['slack', 'Slack']].map(x => ({ value: x[0], label: x[1] }));
       const q = data.budget.quotas;
       const bar = (used, limit, color) => ({ pct: Math.min(100, Math.round((used / limit) * 100)), style: { height: '100%', borderRadius: '9999px', background: color, width: Math.min(100, Math.round((used / limit) * 100)) + '%' } });
@@ -6592,16 +6658,21 @@ class Component extends DCLogic {
         toggleDigest: toggle(!!prefs.weekly_digest),
 
         /* ---- team ---- */
-        teamRows: team.map(m => ({
-          name: m.name, email: m.email, initials: m.initials,
-          isInvited: m.status === 'invited', role: m.role,
-          roleOptions, isOwner: m.role === 'Owner',
-          lastLabel: m.status === 'invited' ? 'Invite pending' : 'Active ' + (m.last_active || ''),
-          avatarStyle: { width: '36px', height: '36px', borderRadius: '9999px', background: m.status === 'invited' ? '#f1f5f9' : '#e0e7ff', color: m.status === 'invited' ? '#94a3b8' : '#4338ca', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '13px', fontWeight: 600, flexShrink: 0 },
-          setRole: e => this.changeRole(m.id, e.target.value),
-          remove: () => this.removeMember(m.id)
-        })),
-        inviteEmail: s.inviteEmail, inviteRole: s.inviteRole, roleOptions,
+        teamRows: team.map((m, idx) => {
+          const isOwner = m.role === 'Owner' || idx === 0;
+          return {
+            name: m.name, email: m.email, initials: m.initials,
+            isInvited: m.status === 'invited', role: isOwner ? 'Owner' : m.role,
+            roleOptions: isOwner ? roleOptions : inviteRoleOptions, isOwner: isOwner,
+            canDelete: !isOwner,
+            lastLabel: m.status === 'invited' ? 'Invite pending' : 'Active ' + (m.last_active || ''),
+            avatarStyle: { width: '36px', height: '36px', borderRadius: '9999px', background: m.status === 'invited' ? '#f1f5f9' : '#e0e7ff', color: m.status === 'invited' ? '#94a3b8' : '#4338ca', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '13px', fontWeight: 600, flexShrink: 0 },
+            setRole: e => this.changeRole(m.id, e.target.value),
+            remove: () => this.removeMember(m.id)
+          };
+        }),
+        inviteEmail: s.inviteEmail, inviteUsername: s.inviteUsername, invitePassword: s.invitePassword,
+        inviteRole: s.inviteRole || 'Analyst', inviteRoleOptions, roleOptions, createUserError: s.createUserError || null,
 
         /* ---- connections ---- */
         // Final-review finding: every connector card was hardcoded green with a static

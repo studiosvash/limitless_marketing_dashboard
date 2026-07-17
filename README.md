@@ -26,7 +26,7 @@ presents it as decision-focused pages (opportunities, anomalies, health scores) 
 # 1. Create and activate a virtual environment
 python -m venv .venv
 # Windows (PowerShell):
-.venv\Scripts\Activate.ps1
+.venv\Scripts\Activate
 # macOS/Linux:
 source .venv/bin/activate
 
