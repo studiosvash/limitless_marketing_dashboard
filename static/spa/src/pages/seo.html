@@ -1,0 +1,62 @@
+<sc-if value="{{ showSeo }}" hint-placeholder-val="{{ false }}">
+      <div data-screen-label="SEO Performance" style="display: flex; flex-direction: column; gap: 24px;">
+        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px;">
+          <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; padding: 16px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);"><p style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: #94a3b8; margin: 0;">Low-CTR opportunities</p><p style="font-size: 24px; font-weight: 600; margin: 4px 0 0; color: #4f46e5;">{{ seo.lowCtrCount }}</p><p style="font-size: 12px; color: #94a3b8; margin: 4px 0 0;">Seen often, rarely clicked</p></div>
+          <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; padding: 16px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);"><p style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: #94a3b8; margin: 0;">Traffic anomalies</p><p style="font-size: 24px; font-weight: 600; margin: 4px 0 0; color: #d97706;">{{ seo.anomalyCount }}</p><p style="font-size: 12px; color: #94a3b8; margin: 4px 0 0;">Unusual click/impression days</p></div>
+          <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; padding: 16px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);"><p style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: #94a3b8; margin: 0;">Critical issues</p><p style="font-size: 24px; font-weight: 600; margin: 4px 0 0; color: #dc2626;">{{ seo.criticalCount }}</p><p style="font-size: 12px; color: #94a3b8; margin: 4px 0 0;">404s &amp; blocking problems</p></div>
+          <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; padding: 16px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);"><p style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: #94a3b8; margin: 0;">Quick-win keywords</p><p style="font-size: 24px; font-weight: 600; margin: 4px 0 0; color: #059669;">{{ seo.quickWins }}</p><p style="font-size: 12px; color: #94a3b8; margin: 4px 0 0;"><a href="#keywords" style="color: #4f46e5; text-decoration: none;">View in Keywords →</a></p></div>
+        </div>
+
+        <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
+          <div style="padding: 16px 20px; border-bottom: 1px solid #f1f5f9;"><h2 style="font-size: 15px; font-weight: 600; margin: 0;">Pages seen but not clicked</h2><p style="font-size: 12px; color: #94a3b8; margin: 4px 0 0;">≥100 impressions but under 2% CTR. Rewriting the title tag &amp; meta description is the fastest win.</p></div>
+          <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+            <thead><tr style="text-align: left; color: #94a3b8; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;"><th style="font-weight: 500; padding: 10px 20px;">Page</th><th style="font-weight: 500; padding: 10px 20px; text-align: right;">Impressions</th><th style="font-weight: 500; padding: 10px 20px; text-align: right;">Clicks</th><th style="font-weight: 500; padding: 10px 20px; text-align: right;">CTR</th><th style="font-weight: 500; padding: 10px 20px; text-align: right;">Avg Pos</th></tr></thead>
+            <tbody>
+              <sc-for list="{{ seo.lowCtrRows }}" as="r" hint-placeholder-count="3">
+                <tr style="border-top: 1px solid #f1f5f9;">
+                  <td style="padding: 12px 20px; font-family: monospace; font-size: 12px;"><a href="https://{{ projectDomain }}{{ r.url }}" target="_blank" rel="noopener" title="Open live page" style="color: #475569; text-decoration: none;" style-hover="color:#4f46e5;text-decoration:underline">{{ r.url }}</a></td>
+                  <td style="padding: 12px 20px; text-align: right; font-weight: 500; color: #334155;">{{ r.imprFmt }}</td>
+                  <td style="padding: 12px 20px; text-align: right; color: #475569;">{{ r.clicks }}</td>
+                  <td style="padding: 12px 20px; text-align: right; color: #d97706; font-weight: 500;">{{ r.ctrFmt }}</td>
+                  <td style="padding: 12px 20px; text-align: right; color: #64748b;">{{ r.avgPos }}</td>
+                </tr>
+              </sc-for>
+            </tbody>
+          </table>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px;">
+          <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
+            <div style="padding: 16px 20px; border-bottom: 1px solid #f1f5f9;"><h2 style="font-size: 15px; font-weight: 600; margin: 0;">Performance by Country</h2></div>
+            <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+              <thead><tr style="text-align: left; color: #94a3b8; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;"><th style="font-weight: 500; padding: 10px 20px;">Country</th><th style="font-weight: 500; padding: 10px 20px; text-align: right;">Clicks</th><th style="font-weight: 500; padding: 10px 20px; text-align: right;">CTR</th></tr></thead>
+              <tbody>
+                <sc-for list="{{ seo.countries }}" as="c" hint-placeholder-count="3">
+                  <tr style="border-top: 1px solid #f1f5f9;">
+                    <td style="padding: 12px 20px; font-weight: 500; color: #334155;">{{ c.country }}</td>
+                    <td style="padding: 12px 20px; text-align: right; color: #475569;">{{ c.clicksFmt }}</td>
+                    <td style="padding: 12px 20px; text-align: right; color: #475569;">{{ c.ctrFmt }}</td>
+                  </tr>
+                </sc-for>
+              </tbody>
+            </table>
+          </div>
+          <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
+            <div style="padding: 16px 20px; border-bottom: 1px solid #f1f5f9; display: flex; align-items: center; justify-content: space-between;"><h2 style="font-size: 15px; font-weight: 600; margin: 0;">Recent Anomalies</h2><a href="#alerts" style="font-size: 12px; color: #4f46e5; text-decoration: none; font-weight: 500;">All alerts →</a></div>
+            <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+              <thead><tr style="text-align: left; color: #94a3b8; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;"><th style="font-weight: 500; padding: 10px 20px;">Metric</th><th style="font-weight: 500; padding: 10px 20px;">Severity</th><th style="font-weight: 500; padding: 10px 20px;">Date</th><th style="font-weight: 500; padding: 10px 20px; text-align: right;">Deviation</th></tr></thead>
+              <tbody>
+                <sc-for list="{{ seo.anomalies }}" as="a" hint-placeholder-count="2">
+                  <tr style="border-top: 1px solid #f1f5f9;">
+                    <td style="padding: 12px 20px; font-weight: 500; color: #334155;">{{ a.metric }}</td>
+                    <td style="padding: 12px 20px;"><span style="{{ a.sevStyle }}">{{ a.severity }}</span></td>
+                    <td style="padding: 12px 20px; color: #64748b; font-size: 12px;">{{ a.date }}</td>
+                    <td style="padding: 12px 20px; text-align: right; font-weight: 500;"><span style="{{ a.devStyle }}">{{ a.deviation }}</span></td>
+                  </tr>
+                </sc-for>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      </sc-if>

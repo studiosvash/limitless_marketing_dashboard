@@ -1,0 +1,650 @@
+<sc-if value="{{ showAi }}" hint-placeholder-val="{{ false }}">
+      <div data-screen-label="AI Optimization" style="display: flex; flex-direction: column; gap: 20px;">
+
+        <!-- ===== FIRST-RUN WIZARD ===== -->
+        <sc-if value="{{ aiv.showWizard }}" hint-placeholder-val="{{ false }}">
+          <div style="max-width: 760px; margin: 24px auto 0; width: 100%; display: flex; flex-direction: column; gap: 16px;">
+            <div style="text-align: center;">
+              <h1 style="font-size: 22px; font-weight: 700; margin: 0;">Set up AI Optimization</h1>
+              <p style="font-size: 13px; color: #64748b; margin: 8px 0 0;">Tell us who to track and which prompts to watch — we'll check ChatGPT, Claude, Gemini &amp; Perplexity weekly and monitor AI Overviews mentions.</p>
+            </div>
+            <div style="display: flex; justify-content: center; gap: 8px;">
+              <sc-for list="{{ aiv.wizSteps }}" as="st" hint-placeholder-count="3"><div style="{{ st.style }}">{{ st.label }}</div></sc-for>
+            </div>
+
+            <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); padding: 24px;">
+              <!-- step 1: brand -->
+              <sc-if value="{{ aiv.wizShow1 }}" hint-placeholder-val="{{ true }}">
+                <div style="display: flex; flex-direction: column; gap: 14px;">
+                  <div>
+                    <label style="font-size: 12px; font-weight: 600; color: #334155; display: block; margin-bottom: 6px;">Brand name</label>
+                    <input value="{{ aiv.wizBrand }}" onChange="{{ aiv.wizBrandSet }}" style="{{ aiv.inputStyle }}" />
+                  </div>
+                  <div>
+                    <label style="font-size: 12px; font-weight: 600; color: #334155; display: block; margin-bottom: 6px;">Brand aliases <span style="font-weight: 400; color: #94a3b8;">— comma-separated; nicknames and spellings AI answers might use</span></label>
+                    <input value="{{ aiv.wizAliases }}" onChange="{{ aiv.wizAliasesSet }}" style="{{ aiv.inputStyle }}" />
+                  </div>
+                  <p style="font-size: 12px; color: #94a3b8; margin: 0;">Your domain <b>{{ aiv.domain }}</b> and these aliases become the brand entities we search for in AI answers.</p>
+                </div>
+              </sc-if>
+              <!-- step 2: competitors -->
+              <sc-if value="{{ aiv.wizShow2 }}" hint-placeholder-val="{{ false }}">
+                <div style="display: flex; flex-direction: column; gap: 14px;">
+                  <label style="font-size: 12px; font-weight: 600; color: #334155; margin: 0;">Competitor domains to compare against</label>
+                  <div style="display: flex; flex-wrap: wrap; gap: 8px;">
+                    <sc-for list="{{ aiv.wizComps }}" as="c" hint-placeholder-count="3">
+                      <span style="display: inline-flex; align-items: center; gap: 8px; padding: 6px 8px 6px 12px; font-size: 12.5px; font-weight: 600; color: #334155; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 999px;">{{ c.domain }}<span onClick="{{ c.remove }}" style="cursor: pointer; color: #94a3b8; font-weight: 700;" style-hover="color:#dc2626">×</span></span>
+                    </sc-for>
+                  </div>
+                  <div style="display: flex; gap: 8px;">
+                    <input value="{{ aiv.wizCompInput }}" onChange="{{ aiv.wizCompSet }}" onKeyDown="{{ aiv.wizCompKey }}" placeholder="competitor.com" style="{{ aiv.inputStyle }}" />
+                    <div onClick="{{ aiv.wizCompAdd }}" style="cursor: pointer; padding: 9px 18px; font-size: 13px; font-weight: 600; color: #334155; border: 1px solid #cbd5e1; border-radius: 8px; background: white; white-space: nowrap;" style-hover="background:#f8fafc">Add</div>
+                  </div>
+                  <p style="font-size: 12px; color: #94a3b8; margin: 0;">{{ aiv.wizCompNote }}</p>
+                </div>
+              </sc-if>
+              <!-- step 3: starter prompts -->
+              <sc-if value="{{ aiv.wizShow3 }}" hint-placeholder-val="{{ false }}">
+                <div style="display: flex; flex-direction: column; gap: 14px;">
+                  <label style="font-size: 12px; font-weight: 600; color: #334155; margin: 0;">Suggested from your tracked keywords — tap to include</label>
+                  <div style="display: flex; flex-direction: column; gap: 8px; max-height: 300px; overflow-y: auto;">
+                    <sc-for list="{{ aiv.wizSugs }}" as="g" hint-placeholder-count="6">
+                      <div onClick="{{ g.toggle }}" style="{{ g.rowStyle }}">
+                        <span style="{{ g.checkStyle }}"><sc-if value="{{ g.checked }}" hint-placeholder-val="{{ true }}">✓</sc-if></span>
+                        <span style="font-size: 13px; color: #334155; flex: 1;">{{ g.text }}</span>
+                        <span style="{{ g.catStyle }}">{{ g.catLabel }}</span>
+                        <span style="font-size: 11px; color: #94a3b8; width: 60px; text-align: right;">{{ g.vol }} /mo</span>
+                      </div>
+                    </sc-for>
+                  </div>
+                  <div>
+                    <label style="font-size: 12px; font-weight: 600; color: #334155; display: block; margin-bottom: 6px;">Your own prompts <span style="font-weight: 400; color: #94a3b8;">— one per line, up to 500 characters each</span></label>
+                    <textarea value="{{ aiv.wizCustom }}" onChange="{{ aiv.wizCustomSet }}" rows="3" placeholder="e.g. What's the most trusted mobile IV therapy in Austin?" style="padding: 9px 12px; font-size: 13px; border: 1px solid #cbd5e1; border-radius: 8px; background: white; color: #0f172a; width: 100%; resize: vertical; font-family: inherit;"></textarea>
+                  </div>
+                </div>
+              </sc-if>
+            </div>
+
+            <div style="display: flex; align-items: center; justify-content: space-between;">
+              <div>
+                <sc-if value="{{ aiv.wizBackShown }}" hint-placeholder-val="{{ false }}">
+                  <div onClick="{{ aiv.wizBack }}" style="cursor: pointer; padding: 9px 18px; font-size: 13px; font-weight: 600; color: #64748b;" style-hover="color:#0f172a">← Back</div>
+                </sc-if>
+              </div>
+              <div style="display: flex; align-items: center; gap: 14px;">
+                <sc-if value="{{ aiv.wizShow3 }}" hint-placeholder-val="{{ false }}">
+                  <span style="font-size: 12px; color: #94a3b8;">{{ aiv.wizWeekly }}</span>
+                  <div onClick="{{ aiv.wizFinish }}" style="cursor: pointer; padding: 10px 22px; font-size: 13px; font-weight: 600; color: white; background: #4f46e5; border-radius: 8px;" style-hover="background:#4338ca">{{ aiv.wizFinishLabel }}</div>
+                </sc-if>
+                <sc-if value="{{ aiv.wizShow1 }}" hint-placeholder-val="{{ true }}">
+                  <div onClick="{{ aiv.wizNext }}" style="cursor: pointer; padding: 10px 22px; font-size: 13px; font-weight: 600; color: white; background: #4f46e5; border-radius: 8px;" style-hover="background:#4338ca">Continue →</div>
+                </sc-if>
+                <sc-if value="{{ aiv.wizShow2 }}" hint-placeholder-val="{{ false }}">
+                  <div onClick="{{ aiv.wizNext }}" style="cursor: pointer; padding: 10px 22px; font-size: 13px; font-weight: 600; color: white; background: #4f46e5; border-radius: 8px;" style-hover="background:#4338ca">Continue →</div>
+                </sc-if>
+              </div>
+            </div>
+          </div>
+        </sc-if>
+
+        <!-- ===== MAIN ===== -->
+        <sc-if value="{{ aiv.showMain }}" hint-placeholder-val="{{ false }}">
+
+          <!-- header -->
+          <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap;">
+            <div>
+              <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+                <h1 style="font-size: 20px; font-weight: 700; margin: 0;">AI Optimization</h1>
+                <span style="font-size: 12px; color: #64748b; background: #f1f5f9; border-radius: 6px; padding: 3px 10px;">{{ aiv.domain }}</span>
+                <span style="{{ aiv.budgetStyle }}">{{ aiv.budgetLabel }}</span>
+              </div>
+              <p style="font-size: 12px; color: #94a3b8; margin: 6px 0 0;">{{ aiv.nextRunLabel }} · DataForSEO AI Optimization API</p>
+            </div>
+            <sc-if value="{{ aiv.hasPrompts }}" hint-placeholder-val="{{ true }}">
+              <div onClick="{{ aiv.runAll }}" style="{{ aiv.runAllStyle }}" style-hover="background:#fee2e2">{{ aiv.runAllLabel }}</div>
+            </sc-if>
+          </div>
+
+          <!-- sub-tabs -->
+          <div style="display: flex; gap: 2px; border-bottom: 1px solid #e2e8f0;">
+            <sc-for list="{{ aiv.subTabs }}" as="t" hint-placeholder-count="5">
+              <div onClick="{{ t.click }}" style="{{ t.style }}" style-hover="color:#0f172a">{{ t.label }}</div>
+            </sc-for>
+          </div>
+
+          <!-- ===== AI VISIBILITY ===== -->
+          <sc-if value="{{ aiv.showVisibility }}" hint-placeholder-val="{{ true }}">
+            <!-- tracked targets -->
+            <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); padding: 16px 20px; display: flex; align-items: center; gap: 20px; flex-wrap: wrap;">
+              <div style="display: flex; flex-direction: column; gap: 4px; min-width: 140px;">
+                <span style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8;">Tracked brand</span>
+                <span style="font-size: 14px; font-weight: 700; color: #0f172a;">{{ aiv.tgBrand }}</span>
+              </div>
+              <div style="display: flex; flex-direction: column; gap: 6px; flex: 1; min-width: 200px;">
+                <span style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8;">Aliases</span>
+                <div style="display: flex; flex-wrap: wrap; gap: 6px;">
+                  <sc-for list="{{ aiv.tgAliases }}" as="a" hint-placeholder-count="2"><span style="font-size: 12px; font-weight: 500; color: #334155; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 999px; padding: 3px 10px;">{{ a }}</span></sc-for>
+                </div>
+              </div>
+              <div style="display: flex; flex-direction: column; gap: 6px; flex: 1.4; min-width: 260px;">
+                <span style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8;">Competitors</span>
+                <div style="display: flex; flex-wrap: wrap; gap: 6px;">
+                  <sc-for list="{{ aiv.tgComps }}" as="c" hint-placeholder-count="3"><span style="font-size: 12px; font-weight: 500; color: #b45309; background: #fffbeb; border: 1px solid #fde68a; border-radius: 999px; padding: 3px 10px;">{{ c }}</span></sc-for>
+                </div>
+              </div>
+              <div onClick="{{ aiv.tgEdit }}" style="cursor: pointer; padding: 7px 14px; font-size: 12.5px; font-weight: 600; color: #334155; border: 1px solid #cbd5e1; border-radius: 8px; background: white; flex-shrink: 0;" style-hover="background:#f8fafc">Edit targets</div>
+            </div>
+
+            <div style="display: grid; grid-template-columns: 1.4fr 1fr; gap: 16px;">
+              <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); padding: 22px 24px;">
+                <div style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: #94a3b8;">AI Share of Voice <span style="text-transform: none; letter-spacing: 0; font-weight: 500;">· AI Overviews + ChatGPT</span></div>
+                <div style="display: flex; align-items: baseline; gap: 10px; margin-top: 6px;">
+                  <span style="font-size: 40px; font-weight: 800; color: #0f172a; line-height: 1;">{{ aiv.sovPct }}</span>
+                  <span style="{{ aiv.sovDeltaStyle }}">{{ aiv.sovDelta }}</span>
+                </div>
+                <p style="font-size: 12px; color: #94a3b8; margin: 8px 0 0;">Your share of brand mentions in AI answers across your competitive set · LLM Mentions API</p>
+                <div style="display: flex; flex-direction: column; gap: 10px; margin-top: 18px;">
+                  <sc-for list="{{ aiv.sovRows }}" as="r" hint-placeholder-count="4">
+                    <div style="display: flex; align-items: center; gap: 12px;">
+                      <span style="font-size: 11px; font-weight: 700; color: #94a3b8; width: 22px;">{{ r.rank }}</span>
+                      <span style="{{ r.nameStyle }}">{{ r.domain }} <sc-if value="{{ r.youChip }}" hint-placeholder-val="{{ false }}"><span style="font-size: 10px; font-weight: 700; background: #eef2ff; color: #4338ca; padding: 1px 7px; border-radius: 4px; margin-left: 6px;">You</span></sc-if></span>
+                      <div style="width: 180px; height: 8px; background: #f1f5f9; border-radius: 4px; overflow: hidden; flex-shrink: 0;"><div style="{{ r.barStyle }}"></div></div>
+                      <span style="font-size: 13px; font-weight: 700; color: #0f172a; width: 52px; text-align: right;">{{ r.sovFmt }}</span>
+                      <span style="font-size: 11px; color: #94a3b8; width: 92px; text-align: right;">{{ r.mentionsFmt }}</span>
+                    </div>
+                  </sc-for>
+                </div>
+              </div>
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                <sc-for list="{{ aiv.kpis }}" as="k" hint-placeholder-count="4">
+                  <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); padding: 16px 18px; display: flex; flex-direction: column; justify-content: center;">
+                    <div style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8;">{{ k.label }}</div>
+                    <div style="font-size: 26px; font-weight: 800; color: #0f172a; margin-top: 6px; line-height: 1.1;">{{ k.value }}</div>
+                    <div style="font-size: 11px; color: #94a3b8; margin-top: 4px;">{{ k.sub }}</div>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+
+            <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); padding: 20px 24px;">
+              <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
+                <h2 style="font-size: 15px; font-weight: 600; margin: 0;">Brand Mentions by Platform <span style="font-size: 11px; font-weight: 500; color: #94a3b8;">weekly · last 12 weeks · LLM Mentions covers these two platforms</span></h2>
+                <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                  <sc-for list="{{ aiv.platToggles }}" as="p" hint-placeholder-count="2">
+                    <div onClick="{{ p.click }}" style="{{ p.style }}"><span style="{{ p.dot }}"></span>{{ p.label }}</div>
+                  </sc-for>
+                </div>
+              </div>
+              <svg viewBox="0 0 600 200" style="width: 100%; height: 200px; margin-top: 14px;">
+                <line x1="5" y1="190" x2="595" y2="190" stroke="#e2e8f0" stroke-width="1"></line>
+                <line x1="5" y1="100" x2="595" y2="100" stroke="#f1f5f9" stroke-width="1"></line>
+                <line x1="5" y1="15" x2="595" y2="15" stroke="#f1f5f9" stroke-width="1"></line>
+                <sc-for list="{{ aiv.trendLines }}" as="l" hint-placeholder-count="2">
+                  <polyline points="{{ l.pts }}" fill="none" stroke="{{ l.color }}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"></polyline>
+                </sc-for>
+              </svg>
+              <div style="display: flex; justify-content: space-between; font-size: 11px; color: #94a3b8; margin-top: 4px;"><span>{{ aiv.trendFrom }}</span><span>{{ aiv.trendTo }}</span></div>
+            </div>
+
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+              <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
+                <div style="padding: 14px 20px; border-bottom: 1px solid #f1f5f9;"><h2 style="font-size: 14px; font-weight: 600; margin: 0;">Your Most-Cited Pages</h2></div>
+                <div style="display: grid; grid-template-columns: 1fr 70px 90px; gap: 8px; padding: 8px 20px; font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8; border-bottom: 1px solid #f8fafc;">
+                  <span>Page</span><span style="text-align: right;">Mentions</span><span style="text-align: right;">AI Impr.</span>
+                </div>
+                <sc-for list="{{ aiv.topPages }}" as="p" hint-placeholder-count="6">
+                  <div style="display: grid; grid-template-columns: 1fr 70px 90px; gap: 8px; align-items: center; padding: 11px 20px; border-top: 1px solid #f8fafc;">
+                    <div style="min-width: 0;">
+                      <div style="font-size: 13px; font-weight: 500; color: #334155; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">{{ p.url }}</div>
+                      <div style="font-size: 11px; color: #94a3b8; margin-top: 2px;">{{ p.platforms }}</div>
+                    </div>
+                    <span style="font-size: 13px; font-weight: 700; color: #0f172a; text-align: right;">{{ p.mentions }}</span>
+                    <span style="font-size: 13px; color: #64748b; text-align: right;">{{ p.imprFmt }}</span>
+                  </div>
+                </sc-for>
+              </div>
+              <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
+                <div style="padding: 14px 20px; border-bottom: 1px solid #f1f5f9;"><h2 style="font-size: 14px; font-weight: 600; margin: 0;">Domains Dominating AI Answers <span style="font-size: 11px; font-weight: 500; color: #94a3b8;">in your space</span></h2></div>
+                <div style="display: flex; flex-direction: column;">
+                  <sc-for list="{{ aiv.topDomains }}" as="d" hint-placeholder-count="8">
+                    <div style="display: flex; align-items: center; gap: 10px; padding: 9px 20px; border-top: 1px solid #f8fafc;">
+                      <span style="font-size: 11px; font-weight: 700; color: #94a3b8; width: 18px;">{{ d.rank }}</span>
+                      <span style="{{ d.nameStyle }}">{{ d.domain }}</span>
+                      <sc-if value="{{ d.tagLabel }}" hint-placeholder-val="{{ false }}"><span style="{{ d.tagStyle }}">{{ d.tagLabel }}</span></sc-if>
+                      <div style="width: 110px; height: 7px; background: #f1f5f9; border-radius: 4px; overflow: hidden; flex-shrink: 0;"><div style="{{ d.barStyle }}"></div></div>
+                      <span style="font-size: 12.5px; font-weight: 700; color: #0f172a; width: 46px; text-align: right;">{{ d.shareFmt }}</span>
+                    </div>
+                  </sc-for>
+                </div>
+              </div>
+            </div>
+          </sc-if>
+
+          <!-- ===== PROMPTS ===== -->
+          <sc-if value="{{ aiv.showPrompts }}" hint-placeholder-val="{{ false }}">
+            <!-- prompt explorer -->
+            <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); padding: 18px 20px;">
+              <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px;">
+                <h2 style="font-size: 14px; font-weight: 600; margin: 0;">Prompt Explorer <span style="font-size: 11px; font-weight: 500; color: #94a3b8;">seed a topic, get prompt ideas people ask AI</span></h2>
+                <sc-if value="{{ aiv.hasExp }}" hint-placeholder-val="{{ false }}">
+                  <span onClick="{{ aiv.expClear }}" style="font-size: 12px; color: #64748b; cursor: pointer;" style-hover="color:#0f172a">Clear results ×</span>
+                </sc-if>
+              </div>
+              <div style="display: flex; gap: 8px;">
+                <input value="{{ aiv.expQ }}" onChange="{{ aiv.expSet }}" onKeyDown="{{ aiv.expKey }}" placeholder="e.g. mobile iv therapy, vitamin drip" style="{{ aiv.inputStyle }}" />
+                <div onClick="{{ aiv.expRun }}" style="{{ aiv.expBtnStyle }}" style-hover="background:#4338ca">{{ aiv.expLabel }}</div>
+              </div>
+              <sc-if value="{{ aiv.hasExp }}" hint-placeholder-val="{{ false }}">
+                <div style="display: flex; align-items: center; justify-content: space-between; margin: 14px 0 8px; position: relative;">
+                  <span style="font-size: 12px; color: #94a3b8;">{{ aiv.expMeta }}</span>
+                  <div style="display: flex; align-items: center; gap: 10px;">
+                    <span style="font-size: 12px; color: #64748b;">{{ aiv.expSelCount }} selected</span>
+                    <div onClick="{{ aiv.expAddToggle }}" style="{{ aiv.expAddBtnStyle }}">Add to tracking ▾</div>
+                  </div>
+                  <sc-if value="{{ aiv.expAddOpen }}" hint-placeholder-val="{{ false }}">
+                    <div style="position: absolute; right: 0; top: 40px; z-index: 20; background: white; border: 1px solid #e2e8f0; border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,0.12); padding: 8px; min-width: 220px;">
+                      <p style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8; margin: 4px 8px 6px;">Add to list</p>
+                      <sc-for list="{{ aiv.expLists }}" as="l" hint-placeholder-count="2">
+                        <div onClick="{{ l.onAdd }}" style="padding: 8px 10px; font-size: 13px; color: #334155; border-radius: 7px; cursor: pointer;" style-hover="background:#f8fafc">{{ l.name }}</div>
+                      </sc-for>
+                      <div style="border-top: 1px solid #f1f5f9; margin-top: 6px; padding-top: 8px;">
+                        <p style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8; margin: 0 8px 6px;">New list</p>
+                        <div style="display: flex; gap: 6px; padding: 0 4px 4px;">
+                          <input value="{{ aiv.expNewName }}" onChange="{{ aiv.expNewSet }}" onKeyDown="{{ aiv.expNewKey }}" placeholder="List name" style="padding: 7px 10px; font-size: 12.5px; border: 1px solid #cbd5e1; border-radius: 7px; background: white; color: #0f172a; flex: 1; min-width: 0;" />
+                          <div onClick="{{ aiv.expNewCreate }}" style="cursor: pointer; padding: 7px 12px; font-size: 12px; font-weight: 600; color: white; background: #4f46e5; border-radius: 7px; white-space: nowrap;" style-hover="background:#4338ca">Create + add</div>
+                        </div>
+                      </div>
+                    </div>
+                  </sc-if>
+                </div>
+                <div style="display: flex; flex-direction: column; max-height: 320px; overflow-y: auto; border-top: 1px solid #f1f5f9;">
+                  <sc-for list="{{ aiv.expRows }}" as="r" hint-placeholder-count="8">
+                    <div onClick="{{ r.toggle }}" style="display: flex; align-items: center; gap: 10px; padding: 9px 6px; border-bottom: 1px solid #f8fafc; cursor: pointer; background: {{ r.rowBg }};">
+                      <span style="{{ r.checkStyle }}"><sc-if value="{{ r.checked }}" hint-placeholder-val="{{ false }}">✓</sc-if></span>
+                      <span style="font-size: 13px; color: #334155; flex: 1;">{{ r.text }}</span>
+                      <sc-if value="{{ r.tracked }}" hint-placeholder-val="{{ false }}"><span style="font-size: 10px; font-weight: 700; background: #f1f5f9; color: #64748b; padding: 1px 7px; border-radius: 4px;">Tracked</span></sc-if>
+                      <span style="{{ r.catStyle }}">{{ r.catLabel }}</span>
+                      <span style="font-size: 11px; color: #94a3b8; width: 66px; text-align: right;">{{ r.volFmt }} /mo</span>
+                    </div>
+                  </sc-for>
+                </div>
+              </sc-if>
+            </div>
+
+            <!-- toolbar: lists + actions -->
+            <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;">
+              <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
+                <sc-for list="{{ aiv.listChips }}" as="l" hint-placeholder-count="3">
+                  <div onClick="{{ l.click }}" style="{{ l.style }}">{{ l.label }}</div>
+                </sc-for>
+                <div onClick="{{ aiv.listsToggle }}" style="padding: 5px 12px; font-size: 12px; font-weight: 500; border-radius: 999px; cursor: pointer; color: #64748b; border: 1px dashed #cbd5e1;" style-hover="color:#0f172a">Manage lists</div>
+              </div>
+              <div style="display: flex; gap: 10px; align-items: center;">
+                <sc-if value="{{ aiv.runListShown }}" hint-placeholder-val="{{ false }}">
+                  <div onClick="{{ aiv.runList }}" style="{{ aiv.runListStyle }}" style-hover="background:#fee2e2">{{ aiv.runListLabel }}</div>
+                </sc-if>
+                <div onClick="{{ aiv.composerShow }}" style="display: inline-flex; align-items: center; gap: 8px; cursor: pointer; padding: 8px 16px; font-size: 13px; font-weight: 600; color: white; background: #4f46e5; border-radius: 8px;" style-hover="background:#4338ca">+ Add prompts</div>
+              </div>
+            </div>
+
+            <!-- manage lists panel -->
+            <sc-if value="{{ aiv.listsOpen }}" hint-placeholder-val="{{ false }}">
+              <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); padding: 16px 20px; display: flex; flex-direction: column; gap: 10px;">
+                <sc-for list="{{ aiv.manageRows }}" as="m" hint-placeholder-count="2">
+                  <div style="display: flex; align-items: center; gap: 12px;">
+                    <input value="{{ m.name }}" onBlur="{{ m.rename }}" style="padding: 7px 10px; font-size: 13px; border: 1px solid #e2e8f0; border-radius: 7px; background: white; color: #0f172a; flex: 1; max-width: 320px;" />
+                    <span style="font-size: 12px; color: #94a3b8; flex: 1;">{{ m.count }}</span>
+                    <sc-if value="{{ m.canDel }}" hint-placeholder-val="{{ false }}">
+                      <span onClick="{{ m.del }}" style="font-size: 12px; color: #dc2626; cursor: pointer; font-weight: 500;" style-hover="opacity:0.7">Delete</span>
+                    </sc-if>
+                  </div>
+                </sc-for>
+                <div style="display: flex; gap: 8px; border-top: 1px solid #f1f5f9; padding-top: 12px;">
+                  <input value="{{ aiv.newPlName }}" onChange="{{ aiv.newPlSet }}" onKeyDown="{{ aiv.newPlKey }}" placeholder="New list name" style="padding: 7px 10px; font-size: 13px; border: 1px solid #cbd5e1; border-radius: 7px; background: white; color: #0f172a; flex: 1; max-width: 320px;" />
+                  <div onClick="{{ aiv.newPlCreate }}" style="cursor: pointer; padding: 7px 14px; font-size: 12.5px; font-weight: 600; color: #334155; border: 1px solid #cbd5e1; border-radius: 7px; background: white;" style-hover="background:#f8fafc">Create list</div>
+                </div>
+              </div>
+            </sc-if>
+
+            <!-- prompt matrix -->
+            <sc-if value="{{ aiv.noPrompts }}" hint-placeholder-val="{{ false }}">
+              <div style="border-radius: 12px; background: white; border: 1px dashed #cbd5e1; padding: 44px 20px; text-align: center;">
+                <p style="font-size: 14px; font-weight: 600; color: #334155; margin: 0;">No prompts tracked yet</p>
+                <p style="font-size: 13px; color: #94a3b8; margin: 6px 0 0;">Add prompts above, or seed the Prompt Explorer with a topic to get ideas.</p>
+              </div>
+            </sc-if>
+            <sc-if value="{{ aiv.promptEmptyFiltered }}" hint-placeholder-val="{{ false }}">
+              <div style="border-radius: 12px; background: white; border: 1px dashed #cbd5e1; padding: 28px 20px; text-align: center;">
+                <p style="font-size: 13px; color: #94a3b8; margin: 0;">This list is empty — add prompts to it with “+ Add prompts”.</p>
+              </div>
+            </sc-if>
+            <sc-if value="{{ aiv.hasPrompts }}" hint-placeholder-val="{{ true }}">
+              <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
+                <div style="padding: 14px 20px; border-bottom: 1px solid #f1f5f9; display: flex; align-items: center; justify-content: space-between;">
+                  <h2 style="font-size: 14px; font-weight: 600; margin: 0;">Tracked Prompts × LLMs</h2>
+                  <span style="font-size: 11px; color: #94a3b8;">LLM Responses API · click a row for answers &amp; actions</span>
+                </div>
+                <div style="display: grid; grid-template-columns: {{ aiv.promptGridCols }}; gap: 8px; padding: 9px 20px; font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8; border-bottom: 1px solid #f8fafc;">
+                  <span>Prompt</span>
+                  <sc-for list="{{ aiv.platNames }}" as="n" hint-placeholder-count="4"><span style="text-align: center;">{{ n }}</span></sc-for>
+                </div>
+                <sc-for list="{{ aiv.promptRows }}" as="pr" hint-placeholder-count="6">
+                  <div style="border-top: 1px solid #f8fafc;">
+                    <div onClick="{{ pr.toggle }}" style="display: grid; grid-template-columns: {{ aiv.promptGridCols }}; gap: 8px; align-items: center; padding: 12px 20px; cursor: pointer;" style-hover="background:#f8fafc">
+                      <div style="display: flex; align-items: center; gap: 8px; min-width: 0;">
+                        <span style="{{ pr.chev }}">›</span>
+                        <div style="min-width: 0;">
+                          <div style="font-size: 13px; font-weight: 500; color: #334155; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">{{ pr.text }}</div>
+                          <div style="font-size: 11px; color: #94a3b8; margin-top: 2px;">{{ pr.meta }}</div>
+                        </div>
+                      </div>
+                      <sc-for list="{{ pr.cells }}" as="c" hint-placeholder-count="4"><div style="text-align: center;"><span style="{{ c.style }}">{{ c.label }}</span></div></sc-for>
+                    </div>
+                    <sc-if value="{{ pr.open }}" hint-placeholder-val="{{ false }}">
+                      <div style="padding: 4px 20px 16px 48px; display: flex; flex-direction: column; gap: 8px; background: #fcfcfd;">
+                        <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;">
+                          <span style="font-size: 12px; font-weight: 600; color: #64748b;">{{ pr.coverage }}</span>
+                          <div style="display: flex; gap: 8px; align-items: center;">
+                            <div onClick="{{ pr.run }}" style="{{ pr.runStyle }}" style-hover="background:#fee2e2">{{ pr.runLabel }}</div>
+                            <div onClick="{{ pr.inspect }}" style="cursor: pointer; padding: 7px 14px; font-size: 12.5px; font-weight: 600; color: #4f46e5; border: 1px solid #c7d2fe; border-radius: 8px; background: #f5f7ff;" style-hover="background:#eef2ff">Inspect answer</div>
+                            <div onClick="{{ pr.cfgOpen }}" style="cursor: pointer; padding: 7px 14px; font-size: 12.5px; font-weight: 600; color: #334155; border: 1px solid #cbd5e1; border-radius: 8px; background: white;" style-hover="background:#f8fafc">Settings</div>
+                            <span onClick="{{ pr.remove }}" style="font-size: 12px; color: #94a3b8; cursor: pointer; padding: 0 4px;" style-hover="color:#dc2626">Remove</span>
+                          </div>
+                        </div>
+                        <sc-for list="{{ pr.details }}" as="d" hint-placeholder-count="4">
+                          <div style="display: flex; align-items: flex-start; gap: 10px; padding: 9px 12px; border: 1px solid #f1f5f9; border-radius: 8px; background: white;">
+                            <span style="{{ d.dot }}"></span>
+                            <div style="flex: 1; min-width: 0;">
+                              <span style="font-size: 12px; font-weight: 700; color: #334155;">{{ d.name }}</span>
+                              <p style="font-size: 12.5px; color: #64748b; margin: 4px 0 0; line-height: 1.5;">{{ d.snippet }}</p>
+                            </div>
+                          </div>
+                        </sc-for>
+                      </div>
+                    </sc-if>
+                  </div>
+                </sc-for>
+              </div>
+            </sc-if>
+          </sc-if>
+
+          <!-- ===== AI KEYWORDS ===== -->
+          <sc-if value="{{ aiv.showAikw }}" hint-placeholder-val="{{ false }}">
+            <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px;">
+              <sc-for list="{{ aiv.kwKpis }}" as="k" hint-placeholder-count="3">
+                <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); padding: 18px 20px;">
+                  <div style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8;">{{ k.label }}</div>
+                  <div style="font-size: 28px; font-weight: 800; color: #0f172a; margin-top: 6px;">{{ k.value }}</div>
+                  <div style="font-size: 11px; color: #94a3b8; margin-top: 4px;">{{ k.sub }}</div>
+                </div>
+              </sc-for>
+            </div>
+            <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
+              <div style="padding: 14px 20px; border-bottom: 1px solid #f1f5f9; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;">
+                <h2 style="font-size: 14px; font-weight: 600; margin: 0;">How People Ask AI <span style="font-size: 11px; font-weight: 500; color: #94a3b8;">AI Keyword Data API · est. prompt volume vs. Google volume</span></h2>
+                <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                  <sc-for list="{{ aiv.kwSegs }}" as="sg" hint-placeholder-count="4">
+                    <div onClick="{{ sg.click }}" style="{{ sg.style }}">{{ sg.label }}</div>
+                  </sc-for>
+                  <input value="{{ aiv.kwQ }}" onChange="{{ aiv.kwQSet }}" placeholder="Filter keywords…" style="padding: 6px 12px; font-size: 12.5px; border: 1px solid #cbd5e1; border-radius: 999px; background: white; color: #0f172a; width: 170px;" />
+                </div>
+              </div>
+              <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 20px; background: {{ aiv.kwToolbarBg }}; border-bottom: 1px solid #f1f5f9; position: relative;">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                  <sc-if value="{{ aiv.kwAnySel }}" hint-placeholder-val="{{ false }}">
+                    <span style="font-size: 12px; font-weight: 600; color: #4338ca;">{{ aiv.kwSelCount }}</span>
+                    <span onClick="{{ aiv.kwClearSel }}" style="font-size: 12px; color: #64748b; cursor: pointer;" style-hover="color:#0f172a">Clear</span>
+                  </sc-if>
+                  <span style="font-size: 12px; color: #94a3b8;">{{ aiv.kwCount }}</span>
+                </div>
+                <div style="display: flex; align-items: center; gap: 8px;">
+                  <div onClick="{{ aiv.kwExport }}" style="display: inline-flex; align-items: center; gap: 6px; cursor: pointer; padding: 7px 14px; font-size: 12.5px; font-weight: 600; color: #334155; border: 1px solid #cbd5e1; border-radius: 8px; background: white;" style-hover="background:#f8fafc">{{ aiv.kwExportLabel }}</div>
+                  <div onClick="{{ aiv.kwAddToggle }}" style="{{ aiv.kwAddBtnStyle }}">Track as prompts ▾</div>
+                </div>
+                <sc-if value="{{ aiv.kwAddOpen }}" hint-placeholder-val="{{ false }}">
+                  <div style="position: absolute; right: 20px; top: 44px; z-index: 20; background: white; border: 1px solid #e2e8f0; border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,0.12); padding: 8px; min-width: 240px;">
+                    <p style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8; margin: 4px 8px 6px;">Add as prompts to list</p>
+                    <sc-for list="{{ aiv.kwLists }}" as="l" hint-placeholder-count="2">
+                      <div onClick="{{ l.onAdd }}" style="padding: 8px 10px; font-size: 13px; color: #334155; border-radius: 7px; cursor: pointer;" style-hover="background:#f8fafc">{{ l.name }}</div>
+                    </sc-for>
+                    <div style="border-top: 1px solid #f1f5f9; margin-top: 6px; padding-top: 8px;">
+                      <p style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8; margin: 0 8px 6px;">New list</p>
+                      <div style="display: flex; gap: 6px; padding: 0 4px 4px;">
+                        <input value="{{ aiv.kwNewName }}" onChange="{{ aiv.kwNewSet }}" onKeyDown="{{ aiv.kwNewKey }}" placeholder="List name" style="padding: 7px 10px; font-size: 12.5px; border: 1px solid #cbd5e1; border-radius: 7px; background: white; color: #0f172a; flex: 1; min-width: 0;" />
+                        <div onClick="{{ aiv.kwNewCreate }}" style="cursor: pointer; padding: 7px 12px; font-size: 12px; font-weight: 600; color: white; background: #4f46e5; border-radius: 7px; white-space: nowrap;" style-hover="background:#4338ca">Create + add</div>
+                      </div>
+                    </div>
+                  </div>
+                </sc-if>
+              </div>
+              <div style="display: grid; grid-template-columns: 28px 1.6fr 90px 70px 90px 80px 70px 90px 80px; gap: 8px; padding: 9px 20px; font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8; border-bottom: 1px solid #f8fafc; align-items: center;">
+                <span onClick="{{ aiv.kwToggleAll }}" style="{{ aiv.kwAllCheckStyle }}"><sc-if value="{{ aiv.kwAllChecked }}" hint-placeholder-val="{{ false }}">✓</sc-if></span>
+                <span>Keyword</span><span style="text-align: right;">AI Volume</span><span style="text-align: center;">Trend</span><span style="text-align: right;">Google Vol.</span><span style="text-align: right;">AI / Google</span><span style="text-align: center;">Intent</span><span style="text-align: right;">Your Mentions</span><span></span>
+              </div>
+              <sc-if value="{{ aiv.kwNoRows }}" hint-placeholder-val="{{ false }}">
+                <div style="padding: 28px 20px; text-align: center;"><p style="font-size: 13px; color: #94a3b8; margin: 0;">No keywords match this filter.</p></div>
+              </sc-if>
+              <sc-for list="{{ aiv.kwRows }}" as="r" hint-placeholder-count="10">
+                <div style="display: grid; grid-template-columns: 28px 1.6fr 90px 70px 90px 80px 70px 90px 80px; gap: 8px; align-items: center; padding: 11px 20px; border-top: 1px solid #f8fafc; background: {{ r.rowBg }};">
+                  <span onClick="{{ r.toggleSel }}" style="{{ r.checkStyle }}"><sc-if value="{{ r.checked }}" hint-placeholder-val="{{ false }}">✓</sc-if></span>
+                  <div onClick="{{ r.toggleSel }}" style="display: flex; align-items: center; gap: 8px; min-width: 0; cursor: pointer;">
+                    <span style="font-size: 13px; font-weight: 500; color: #334155; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">{{ r.kw }}</span>
+                    <sc-if value="{{ r.gap }}" hint-placeholder-val="{{ false }}"><span style="font-size: 10px; font-weight: 700; background: #fee2e2; color: #b91c1c; padding: 1px 7px; border-radius: 4px; flex-shrink: 0;">Gap</span></sc-if>
+                  </div>
+                  <span style="font-size: 13px; font-weight: 700; color: #0f172a; text-align: right;">{{ r.aiVolFmt }}</span>
+                  <div style="display: flex; justify-content: center;"><svg width="46" height="16" viewBox="0 0 46 16"><polyline points="{{ r.spark }}" fill="none" stroke="{{ r.sparkColor }}" stroke-width="1.5"></polyline></svg></div>
+                  <span style="font-size: 13px; color: #64748b; text-align: right;">{{ r.gVolFmt }}</span>
+                  <span style="{{ r.ratioStyle }}">{{ r.ratioLabel }}</span>
+                  <div style="text-align: center;"><span style="{{ r.intentStyle }}">{{ r.intentLabel }}</span></div>
+                  <span style="{{ r.mentionsStyle }}">{{ r.mentions }}</span>
+                  <span onClick="{{ r.track }}" style="font-size: 12px; color: #4f46e5; font-weight: 500; cursor: pointer; text-align: right;" style-hover="opacity:0.7">Inspect</span>
+                </div>
+              </sc-for>
+            </div>
+          </sc-if>
+
+          <!-- ===== ANSWER INSPECTOR ===== -->
+          <sc-if value="{{ aiv.showInspector }}" hint-placeholder-val="{{ false }}">
+            <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); padding: 18px 20px;">
+              <h2 style="font-size: 14px; font-weight: 600; margin: 0 0 10px;">Ask anything <span style="font-size: 11px; font-weight: 500; color: #94a3b8;">runs a live ChatGPT search scrape · saved to History (last 50 kept)</span></h2>
+              <div style="display: flex; gap: 8px;">
+                <input value="{{ aiv.inspQ }}" onChange="{{ aiv.inspQSet }}" onKeyDown="{{ aiv.inspQKey }}" placeholder="e.g. What's the best mobile IV therapy service?" style="{{ aiv.inputStyle }}" />
+                <div onClick="{{ aiv.inspRun }}" style="{{ aiv.inspRunStyle }}" style-hover="background:#fee2e2">{{ aiv.inspRunLabel }}</div>
+              </div>
+            </div>
+            <sc-if value="{{ aiv.inspHasEntry }}" hint-placeholder-val="{{ true }}">
+              <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+                <span style="{{ aiv.inspVerdictStyle }}">{{ aiv.inspVerdict }}</span>
+                <span style="font-size: 12px; color: #94a3b8;">{{ aiv.inspMeta }}</span>
+              </div>
+              <div style="display: grid; grid-template-columns: 1.7fr 1fr; gap: 16px; align-items: start;">
+                <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
+                  <div style="padding: 14px 20px; border-bottom: 1px solid #f1f5f9;">
+                    <h2 style="font-size: 14px; font-weight: 600; margin: 0;">“{{ aiv.inspPrompt }}”</h2>
+                  </div>
+                  <div style="padding: 16px 8px; display: flex; flex-direction: column; gap: 12px;">
+                    <sc-for list="{{ aiv.inspParas }}" as="p" hint-placeholder-count="3">
+                      <p style="{{ p.style }}">{{ p.text }}</p>
+                    </sc-for>
+                  </div>
+                </div>
+                <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
+                  <div style="padding: 14px 20px; border-bottom: 1px solid #f1f5f9;"><h2 style="font-size: 14px; font-weight: 600; margin: 0;">Citations</h2></div>
+                  <sc-for list="{{ aiv.inspCites }}" as="c" hint-placeholder-count="4">
+                    <div style="{{ c.rowStyle }}">
+                      <span style="font-size: 11px; font-weight: 700; color: #94a3b8; flex-shrink: 0; margin-top: 2px;">{{ c.n }}</span>
+                      <div style="min-width: 0;">
+                        <div style="{{ c.titleStyle }}">{{ c.title }} <sc-if value="{{ c.youChip }}" hint-placeholder-val="{{ false }}"><span style="font-size: 10px; font-weight: 700; background: #4f46e5; color: white; padding: 1px 7px; border-radius: 4px; margin-left: 4px;">You</span></sc-if></div>
+                        <div style="font-size: 11px; color: #94a3b8; margin-top: 2px;">{{ c.domain }}</div>
+                      </div>
+                    </div>
+                  </sc-for>
+                  <div style="padding: 12px 20px; border-top: 1px solid #f1f5f9; font-size: 11px; color: #94a3b8;">LLM Scraper API · force_web_search + expand_citations · answers vary by location and session</div>
+                </div>
+              </div>
+            </sc-if>
+          </sc-if>
+
+          <!-- ===== HISTORY ===== -->
+          <sc-if value="{{ aiv.showHistory }}" hint-placeholder-val="{{ false }}">
+            <sc-if value="{{ aiv.histEmpty }}" hint-placeholder-val="{{ false }}">
+              <div style="border-radius: 12px; background: white; border: 1px dashed #cbd5e1; padding: 44px 20px; text-align: center;">
+                <p style="font-size: 14px; font-weight: 600; color: #334155; margin: 0;">No inspections yet</p>
+                <p style="font-size: 13px; color: #94a3b8; margin: 6px 0 0;">Run one from the Answer Inspector or the “Inspect answer” button on any tracked prompt.</p>
+              </div>
+            </sc-if>
+            <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
+              <div style="padding: 14px 20px; border-bottom: 1px solid #f1f5f9; display: flex; align-items: center; justify-content: space-between;">
+                <h2 style="font-size: 14px; font-weight: 600; margin: 0;">Inspection History</h2>
+                <span style="font-size: 11px; color: #94a3b8;">last 50 kept · click a row to reopen it in the Inspector</span>
+              </div>
+              <div style="display: grid; grid-template-columns: 90px 1fr 110px 60px 70px; gap: 8px; padding: 9px 20px; font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8; border-bottom: 1px solid #f8fafc;">
+                <span>Date</span><span>Question</span><span style="text-align: center;">Verdict</span><span style="text-align: right;">Pos.</span><span style="text-align: right;">Cost</span>
+              </div>
+              <sc-for list="{{ aiv.histRows }}" as="r" hint-placeholder-count="6">
+                <div onClick="{{ r.open }}" style="display: grid; grid-template-columns: 90px 1fr 110px 60px 70px; gap: 8px; align-items: center; padding: 11px 20px; border-top: 1px solid #f8fafc; cursor: pointer;" style-hover="background:#f8fafc">
+                  <span style="font-size: 12px; color: #94a3b8;">{{ r.date }}</span>
+                  <span style="font-size: 13px; font-weight: 500; color: #334155; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">{{ r.question }}</span>
+                  <div style="text-align: center;"><span style="{{ r.verdictStyle }}">{{ r.verdictLabel }}</span></div>
+                  <span style="font-size: 13px; font-weight: 600; color: #0f172a; text-align: right;">{{ r.pos }}</span>
+                  <span style="font-size: 12px; color: #64748b; text-align: right;">{{ r.costFmt }}</span>
+                </div>
+              </sc-for>
+            </div>
+          </sc-if>
+
+          <!-- ===== EDIT TARGETS MODAL ===== -->
+          <sc-if value="{{ aiv.tgOpen }}" hint-placeholder-val="{{ false }}">
+            <div style="position: fixed; inset: 0; background: rgba(15,23,42,0.4); z-index: 60; display: flex; align-items: center; justify-content: center; padding: 24px;">
+              <div style="background: white; border-radius: 14px; box-shadow: 0 20px 60px rgba(0,0,0,0.25); width: 100%; max-width: 560px; padding: 24px; display: flex; flex-direction: column; gap: 14px;">
+                <div style="display: flex; align-items: center; justify-content: space-between;">
+                  <h2 style="font-size: 16px; font-weight: 700; margin: 0;">Tracked targets</h2>
+                  <span onClick="{{ aiv.tgClose }}" style="cursor: pointer; color: #94a3b8; font-size: 18px; font-weight: 700;" style-hover="color:#0f172a">×</span>
+                </div>
+                <div>
+                  <label style="font-size: 12px; font-weight: 600; color: #334155; display: block; margin-bottom: 6px;">Brand name</label>
+                  <input value="{{ aiv.wizBrand }}" onChange="{{ aiv.wizBrandSet }}" style="{{ aiv.inputStyle }}" />
+                </div>
+                <div>
+                  <label style="font-size: 12px; font-weight: 600; color: #334155; display: block; margin-bottom: 6px;">Aliases <span style="font-weight: 400; color: #94a3b8;">— comma-separated</span></label>
+                  <input value="{{ aiv.wizAliases }}" onChange="{{ aiv.wizAliasesSet }}" style="{{ aiv.inputStyle }}" />
+                </div>
+                <div>
+                  <label style="font-size: 12px; font-weight: 600; color: #334155; display: block; margin-bottom: 6px;">Competitors</label>
+                  <div style="display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px;">
+                    <sc-for list="{{ aiv.wizComps }}" as="c" hint-placeholder-count="3">
+                      <span style="display: inline-flex; align-items: center; gap: 8px; padding: 5px 8px 5px 12px; font-size: 12.5px; font-weight: 600; color: #334155; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 999px;">{{ c.domain }}<span onClick="{{ c.remove }}" style="cursor: pointer; color: #94a3b8; font-weight: 700;" style-hover="color:#dc2626">×</span></span>
+                    </sc-for>
+                  </div>
+                  <div style="display: flex; gap: 8px;">
+                    <input value="{{ aiv.wizCompInput }}" onChange="{{ aiv.wizCompSet }}" onKeyDown="{{ aiv.wizCompKey }}" placeholder="competitor.com" style="{{ aiv.inputStyle }}" />
+                    <div onClick="{{ aiv.wizCompAdd }}" style="cursor: pointer; padding: 9px 16px; font-size: 13px; font-weight: 600; color: #334155; border: 1px solid #cbd5e1; border-radius: 8px; background: white;" style-hover="background:#f8fafc">Add</div>
+                  </div>
+                  <p style="font-size: 11px; color: #94a3b8; margin: 6px 0 0;">{{ aiv.wizCompNote }}</p>
+                </div>
+                <div style="display: flex; justify-content: flex-end; gap: 10px; border-top: 1px solid #f1f5f9; padding-top: 14px;">
+                  <div onClick="{{ aiv.tgClose }}" style="cursor: pointer; padding: 9px 16px; font-size: 13px; font-weight: 600; color: #64748b;" style-hover="color:#0f172a">Cancel</div>
+                  <div onClick="{{ aiv.tgSave }}" style="cursor: pointer; padding: 9px 20px; font-size: 13px; font-weight: 600; color: white; background: #4f46e5; border-radius: 8px;" style-hover="background:#4338ca">Save targets</div>
+                </div>
+              </div>
+            </div>
+          </sc-if>
+
+          <!-- ===== COMPOSER MODAL ===== -->
+          <sc-if value="{{ aiv.composerOpen }}" hint-placeholder-val="{{ false }}">
+            <div style="position: fixed; inset: 0; background: rgba(15,23,42,0.4); z-index: 60; display: flex; align-items: center; justify-content: center; padding: 24px;">
+              <div style="background: white; border-radius: 14px; box-shadow: 0 20px 60px rgba(0,0,0,0.25); width: 100%; max-width: 620px; padding: 24px; display: flex; flex-direction: column; gap: 14px;">
+                <div style="display: flex; align-items: center; justify-content: space-between;">
+                  <h2 style="font-size: 16px; font-weight: 700; margin: 0;">Add prompts</h2>
+                  <span onClick="{{ aiv.composerHide }}" style="cursor: pointer; color: #94a3b8; font-size: 18px; font-weight: 700;" style-hover="color:#0f172a">×</span>
+                </div>
+                <div>
+                  <label style="font-size: 12px; font-weight: 600; color: #334155; display: block; margin-bottom: 6px;">Prompts <span style="font-weight: 400; color: #94a3b8;">— one per line, up to 500 characters each</span></label>
+                  <textarea value="{{ aiv.compText }}" onChange="{{ aiv.compTextSet }}" rows="5" placeholder="What's the best mobile IV therapy in Austin?&#10;Is IV vitamin therapy worth it?" style="padding: 10px 12px; font-size: 13px; border: 1px solid #cbd5e1; border-radius: 8px; background: white; color: #0f172a; width: 100%; resize: vertical; font-family: inherit;"></textarea>
+                </div>
+                <div>
+                  <p style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8; margin: 0 0 6px;">Suggestions from your keywords — click to insert</p>
+                  <div style="display: flex; flex-direction: column; gap: 4px;">
+                    <sc-for list="{{ aiv.compSugs }}" as="g" hint-placeholder-count="4">
+                      <div onClick="{{ g.add }}" style="font-size: 12.5px; color: #4f46e5; cursor: pointer; padding: 4px 6px; border-radius: 6px;" style-hover="background:#f5f7ff">+ {{ g.text }}</div>
+                    </sc-for>
+                  </div>
+                </div>
+                <div style="display: flex; align-items: center; justify-content: space-between; border-top: 1px solid #f1f5f9; padding-top: 14px;">
+                  <div style="display: flex; align-items: center; gap: 8px;">
+                    <span style="font-size: 12px; color: #64748b;">Add to list</span>
+                    <select value="{{ aiv.compList }}" onChange="{{ aiv.compListSet }}" style="padding: 7px 10px; font-size: 13px; border: 1px solid #cbd5e1; border-radius: 7px; background: white; color: #0f172a;">
+                      <sc-for list="{{ aiv.compListOptions }}" as="o" hint-placeholder-count="2"><option value="{{ o.value }}">{{ o.label }}</option></sc-for>
+                    </select>
+                  </div>
+                  <div onClick="{{ aiv.compAdd }}" style="{{ aiv.compAddStyle }}" style-hover="background:#4338ca">{{ aiv.compAddLabel }}</div>
+                </div>
+              </div>
+            </div>
+          </sc-if>
+
+          <!-- ===== PROMPT SETTINGS MODAL ===== -->
+          <sc-if value="{{ aiv.cfg.open }}" hint-placeholder-val="{{ false }}">
+            <div style="position: fixed; inset: 0; background: rgba(15,23,42,0.4); z-index: 60; display: flex; align-items: center; justify-content: center; padding: 24px;">
+              <div style="background: white; border-radius: 14px; box-shadow: 0 20px 60px rgba(0,0,0,0.25); width: 100%; max-width: 560px; padding: 24px; display: flex; flex-direction: column; gap: 16px;">
+                <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;">
+                  <div>
+                    <h2 style="font-size: 16px; font-weight: 700; margin: 0;">Prompt settings</h2>
+                    <p style="font-size: 12.5px; color: #64748b; margin: 4px 0 0;">“{{ aiv.cfg.text }}”</p>
+                  </div>
+                  <span onClick="{{ aiv.cfg.close }}" style="cursor: pointer; color: #94a3b8; font-size: 18px; font-weight: 700;" style-hover="color:#0f172a">×</span>
+                </div>
+                <div>
+                  <label style="font-size: 12px; font-weight: 600; color: #334155; display: block; margin-bottom: 8px;">Run on these models</label>
+                  <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                    <sc-for list="{{ aiv.cfg.models }}" as="m" hint-placeholder-count="4">
+                      <div onClick="{{ m.toggle }}" style="{{ m.style }}"><span style="{{ m.dot }}"></span>{{ m.name }}</div>
+                    </sc-for>
+                  </div>
+                </div>
+                <div style="display: flex; align-items: center; gap: 12px;">
+                  <div onClick="{{ aiv.cfg.webToggle }}" style="{{ aiv.cfg.webTrack }}"><div style="{{ aiv.cfg.webKnob }}"></div></div>
+                  <div>
+                    <div style="font-size: 13px; font-weight: 600; color: #334155;">Web search</div>
+                    <div style="font-size: 11.5px; color: #94a3b8;">{{ aiv.cfg.webNote }}</div>
+                  </div>
+                </div>
+                <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px;">
+                  <div>
+                    <label style="font-size: 12px; font-weight: 600; color: #334155; display: block; margin-bottom: 6px;">Country</label>
+                    <input value="{{ aiv.cfg.country }}" onChange="{{ aiv.cfg.countrySet }}" style="{{ aiv.inputStyle }}" />
+                  </div>
+                  <div>
+                    <label style="font-size: 12px; font-weight: 600; color: #334155; display: block; margin-bottom: 6px;">City <span style="font-weight: 400; color: #94a3b8;">optional</span></label>
+                    <input value="{{ aiv.cfg.city }}" onChange="{{ aiv.cfg.citySet }}" placeholder="e.g. Austin" style="{{ aiv.inputStyle }}" />
+                  </div>
+                  <div>
+                    <label style="font-size: 12px; font-weight: 600; color: #334155; display: block; margin-bottom: 6px;">Cadence</label>
+                    <select value="{{ aiv.cfg.cadence }}" onChange="{{ aiv.cfg.cadenceSet }}" style="{{ aiv.inputStyle }}">
+                      <option value="daily">Daily</option>
+                      <option value="weekly">Weekly</option>
+                      <option value="manual">Manual only</option>
+                    </select>
+                  </div>
+                </div>
+                <div>
+                  <label style="font-size: 12px; font-weight: 600; color: #334155; display: block; margin-bottom: 6px;">List</label>
+                  <select value="{{ aiv.cfg.listId }}" onChange="{{ aiv.cfg.listSet }}" style="{{ aiv.inputStyle }}">
+                    <sc-for list="{{ aiv.cfg.listOptions }}" as="o" hint-placeholder-count="2"><option value="{{ o.value }}">{{ o.label }}</option></sc-for>
+                  </select>
+                </div>
+                <div style="display: flex; align-items: center; justify-content: space-between; border-top: 1px solid #f1f5f9; padding-top: 14px;">
+                  <span style="font-size: 12px; color: #94a3b8;">{{ aiv.cfg.costNote }}</span>
+                  <div style="display: flex; gap: 10px;">
+                    <div onClick="{{ aiv.cfg.close }}" style="cursor: pointer; padding: 9px 16px; font-size: 13px; font-weight: 600; color: #64748b;" style-hover="color:#0f172a">Cancel</div>
+                    <div onClick="{{ aiv.cfg.save }}" style="cursor: pointer; padding: 9px 20px; font-size: 13px; font-weight: 600; color: white; background: #4f46e5; border-radius: 8px;" style-hover="background:#4338ca">Save settings</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </sc-if>
+
+        </sc-if>
+
+      </div>
+      </sc-if>

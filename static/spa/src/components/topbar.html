@@ -1,0 +1,57 @@
+<header style="height: 64px; flex-shrink: 0; background: rgba(255,255,255,0.85); backdrop-filter: blur(20px); border-bottom: 1px solid #e2e8f0; display: flex; align-items: center; gap: 16px; padding: 0 24px; z-index: 5;">
+      <div>
+        <h1 style="font-size: 17px; font-weight: 600; letter-spacing: -0.01em; margin: 0; line-height: 1;">{{ title }}</h1>
+        <p style="font-size: 12px; color: #94a3b8; margin: 4px 0 0;">{{ subtitle }}</p>
+      </div>
+
+      <div style="margin-left: auto; display: flex; align-items: center; gap: 12px;">
+        <div style="position: relative;">
+          <select value="{{ projectId }}" onChange="{{ h.setProject }}" aria-label="Select site" style="appearance: none; cursor: pointer; font-size: 14px; border-radius: 8px; border: 1px solid #e2e8f0; background: white; padding: 6px 28px 6px 32px; color: #334155; font-weight: 500;">
+            <sc-for list="{{ projects }}" as="p" hint-placeholder-count="1">
+              <option value="{{ p.id }}">{{ p.domain }}</option>
+            </sc-for>
+          </select>
+          <svg style="position: absolute; left: 10px; top: 50%; transform: translateY(-50%); pointer-events: none; color: #6366f1;" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path><path stroke-linecap="round" stroke-linejoin="round" d="M3.6 9h16.8M3.6 15h16.8M12 3a15 15 0 010 18"></path></svg>
+        </div>
+
+        <div style="position: relative;">
+          <div onClick="{{ h.toggleAddSite }}" title="Add a site" aria-label="Add a site" style="display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 8px; border: 1px solid #e2e8f0; background: white; color: #4f46e5; cursor: pointer;" style-hover="background:#f8fafc">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m-8-8h16"></path></svg>
+          </div>
+          <sc-if value="{{ addSiteOpen }}" hint-placeholder-val="{{ false }}">
+            <div style="position: absolute; top: 40px; right: 0; z-index: 30; width: 280px; background: white; border: 1px solid #e2e8f0; border-radius: 10px; box-shadow: 0 16px 40px rgba(15,23,42,0.18); padding: 14px;">
+              <div style="font-size: 13px; font-weight: 600; color: #0f172a; margin-bottom: 10px;">Add a site</div>
+              <label style="font-size: 11px; font-weight: 600; color: #64748b; display: block; margin-bottom: 4px;">Domain</label>
+              <input value="{{ addSiteDomain }}" onChange="{{ h.addSiteDomainSet }}" onKeyDown="{{ h.addSiteKeyDown }}" autoFocus="{{ true }}" aria-label="Domain" placeholder="e.g. example.com" style="width: 100%; box-sizing: border-box; padding: 8px 10px; font-size: 13px; border: 1px solid #cbd5e1; border-radius: 7px; margin-bottom: 8px; outline: none;" />
+              <label style="font-size: 11px; font-weight: 600; color: #64748b; display: block; margin-bottom: 4px;">Display name (optional)</label>
+              <input value="{{ addSiteName }}" onChange="{{ h.addSiteNameSet }}" onKeyDown="{{ h.addSiteKeyDown }}" aria-label="Display name" placeholder="e.g. Example Co." style="width: 100%; box-sizing: border-box; padding: 8px 10px; font-size: 13px; border: 1px solid #cbd5e1; border-radius: 7px; margin-bottom: 10px; outline: none;" />
+              <sc-if value="{{ addSiteError }}" hint-placeholder-val="{{ false }}">
+                <div style="font-size: 12px; color: #dc2626; margin-bottom: 8px;">{{ addSiteError }}</div>
+              </sc-if>
+              <div style="display: flex; gap: 8px; justify-content: flex-end;">
+                <div onClick="{{ h.toggleAddSite }}" style="padding: 7px 12px; font-size: 13px; font-weight: 500; color: #64748b; border-radius: 7px; cursor: pointer;" style-hover="background:#f8fafc">Cancel</div>
+                <div onClick="{{ h.addSiteSubmit }}" style="padding: 7px 14px; font-size: 13px; font-weight: 600; color: white; background: #4f46e5; border-radius: 7px; cursor: pointer;" style-hover="background:#4338ca">Add site</div>
+              </div>
+            </div>
+          </sc-if>
+        </div>
+
+        <div style="display: flex; align-items: center; font-size: 13px; border-radius: 8px; border: 1px solid #e2e8f0; background: white; overflow: hidden;">
+          <div style="{{ rangeStyle.d7 }}" onClick="{{ h.range7 }}">7d</div>
+          <div style="{{ rangeStyle.d30 }}" onClick="{{ h.range30 }}">30d</div>
+          <div style="{{ rangeStyle.d90 }}" onClick="{{ h.range90 }}">90d</div>
+        </div>
+
+        <sc-if value="{{ hasPageRefresh }}">
+          <div onClick="{{ h.refreshPage }}" style="{{ refreshPageBtnStyle }}" style-hover="box-shadow:0 3px 8px rgba(16,185,129,0.3)">
+            <svg style="{{ refreshPageIconStyle }}" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+            {{ refreshPageLabel }}
+          </div>
+        </sc-if>
+
+        <div onClick="{{ h.refreshAll }}" style="{{ refreshBtnStyle }}" style-hover="box-shadow:0 3px 8px rgba(79,70,229,0.3)">
+          <svg style="{{ refreshIconStyle }}" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+          {{ refreshLabel }}
+        </div>
+      </div>
+    </header>

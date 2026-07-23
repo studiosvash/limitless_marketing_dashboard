@@ -1,0 +1,804 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="/static/spa/vendor/support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    body { margin: 0; }
+    ::-webkit-scrollbar { width: 10px; height: 10px; }
+    ::-webkit-scrollbar-thumb { background: #e2e8f0; border-radius: 8px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    @keyframes fusePulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+    @keyframes fuseSpin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+    /* keyboard focus ring — overrides inline outline:none, only shows for keyboard users */
+    :focus-visible { outline: 2px solid #4f46e5 !important; outline-offset: 2px; border-radius: 4px; }
+    input:focus-visible, select:focus-visible, textarea:focus-visible { outline-offset: 0; }
+    :focus:not(:focus-visible) { outline: none; }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; }
+    }
+  </style>
+  <script src="/static/spa/app/fixtures.js"></script>
+  <script src="/static/spa/app/api.js"></script>
+</helmet>
+
+<div style="font-family: 'Inter', system-ui, sans-serif; background: #f8fafc; color: #0f172a; height: 100vh; display: flex; -webkit-font-smoothing: antialiased;">
+
+  <!-- #include "components/accept_invite_modal.html" -->
+
+  <!-- ============================ SIDEBAR ============================ -->
+  <!-- #include "components/sidebar.html" -->
+
+  <!-- ============================ MAIN ============================ -->
+  <div style="flex: 1; min-width: 0; display: flex; flex-direction: column;">
+
+    <!-- TOPBAR -->
+    <!-- #include "components/topbar.html" -->
+
+    <!-- CONTENT -->
+    <main style="flex: 1; overflow-y: auto; padding: 24px;">
+
+      <!-- sync progress banner -->
+      <sc-if value="{{ syncing }}" hint-placeholder-val="{{ false }}">
+        <div style="border-radius: 12px; background: white; border: 1px solid #c7d2fe; box-shadow: 0 1px 2px rgba(0,0,0,0.05); padding: 14px 18px; display: flex; align-items: center; gap: 14px; margin-bottom: 20px;">
+          <div style="flex: 1; min-width: 0;">
+            <div style="display: flex; align-items: baseline; gap: 10px; font-size: 13px;">
+              <span style="font-weight: 600; color: #4338ca;">Syncing {{ syncScopeLabel }} for {{ projectDomain }}</span>
+              <span style="color: #64748b;">{{ syncStep }}</span>
+              <span style="margin-left: auto; color: #94a3b8; font-size: 12px;">{{ syncPctText }} · est. cost {{ syncCostText }}</span>
+            </div>
+            <div style="height: 6px; background: #f1f5f9; border-radius: 9999px; margin-top: 8px; overflow: hidden;">
+              <div style="height: 100%; background: #4f46e5; border-radius: 9999px; transition: width 0.4s ease; width: {{ syncPct }}%;"></div>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- error state -->
+      <sc-if value="{{ hasError }}" hint-placeholder-val="{{ false }}">
+        <div style="border-radius: 12px; border: 1px solid #fecaca; background: #fef2f2; padding: 20px; display: flex; align-items: center; gap: 16px;">
+          <div>
+            <div style="font-weight: 600; color: #991b1b;">Couldn't load this view</div>
+            <div style="font-size: 13px; color: #b91c1c; margin-top: 2px;">{{ errorText }}</div>
+          </div>
+          <div onClick="{{ h.retry }}" style="margin-left: auto; cursor: pointer; padding: 8px 16px; font-size: 13px; font-weight: 600; color: #b91c1c; border: 1px solid #fca5a5; border-radius: 8px; background: white;">Retry</div>
+        </div>
+      </sc-if>
+
+      <!-- loading skeleton -->
+      <sc-if value="{{ loading }}" hint-placeholder-val="{{ true }}">
+        <div style="display: flex; flex-direction: column; gap: 20px;">
+          <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px;">
+            <div style="height: 92px; background: #e9eef5; border-radius: 12px; animation: fusePulse 1.3s ease-in-out infinite;"></div>
+            <div style="height: 92px; background: #e9eef5; border-radius: 12px; animation: fusePulse 1.3s ease-in-out 0.1s infinite;"></div>
+            <div style="height: 92px; background: #e9eef5; border-radius: 12px; animation: fusePulse 1.3s ease-in-out 0.2s infinite;"></div>
+            <div style="height: 92px; background: #e9eef5; border-radius: 12px; animation: fusePulse 1.3s ease-in-out 0.3s infinite;"></div>
+          </div>
+          <div style="height: 260px; background: #e9eef5; border-radius: 12px; animation: fusePulse 1.3s ease-in-out 0.15s infinite;"></div>
+          <div style="height: 220px; background: #e9eef5; border-radius: 12px; animation: fusePulse 1.3s ease-in-out 0.3s infinite;"></div>
+        </div>
+      </sc-if>
+
+      <!-- ============ OVERVIEW ============ -->
+      <!-- #include "pages/overview.html" -->
+
+      <!-- ============ SEO PERFORMANCE ============ -->
+      <!-- #include "pages/seo.html" -->
+
+      <!-- ============ KEYWORDS ============ -->
+      <!-- #include "pages/keywords.html" -->
+
+      <!-- ============ POSITION TRACKING ============ -->
+      <!-- #include "pages/positioning.html" -->
+
+      <!-- ============ BACKLINKS ============ -->
+      <!-- #include "pages/backlinks.html" -->
+
+      <!-- ============ OFF-SITE SEO ============ -->
+      <sc-if value="{{ showOffsite }}" hint-placeholder-val="{{ false }}">
+      <div data-screen-label="Off-site SEO" style="display: flex; flex-direction: column; gap: 20px;">
+
+        <sc-if value="{{ off.setup }}" hint-placeholder-val="{{ false }}">
+        <div style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 56px 32px; text-align: center; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+          <div style="font-size: 15px; font-weight: 600; color: #0f172a; margin-bottom: 6px;">No Off-site Analytics Data Synced Yet</div>
+          <div style="font-size: 13px; color: #64748b; max-width: 420px; margin: 0 auto 20px;">We haven't synced off-site GA4 / social traffic sessions for this domain into the database yet. Click below to fetch current data right now.</div>
+          <div onClick="{{ h.refreshPage }}" style="display: inline-flex; align-items: center; gap: 8px; border-radius: 8px; background: #10b981; color: white; font-size: 14px; font-weight: 600; padding: 10px 20px; cursor: pointer; box-shadow: 0 1px 2px rgba(0,0,0,0.05);" style-hover="background:#059669">⚡ Fetch Off-site Data Now</div>
+        </div>
+        </sc-if>
+        <sc-if value="{{ !off.setup }}" hint-placeholder-val="{{ true }}">
+
+        <!-- source banner -->
+        <div style="display: flex; align-items: center; gap: 18px; flex-wrap: wrap; border-radius: 10px; background: white; border: 1px solid #e2e8f0; padding: 10px 16px; font-size: 12px; color: #64748b;">
+          <span style="display: inline-flex; align-items: center; gap: 7px; font-weight: 600; color: #334155;">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#4f46e5" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4h16v16H4z"/><path stroke-linecap="round" stroke-linejoin="round" d="M4 9h16M9 9v11"/></svg>
+            GA4 Data API · off-site organic
+          </span>
+          <span>Off-site = sessions attributed to <b style="color:#475569;">Referral</b> + <b style="color:#475569;">Organic Social/Video</b> — the click-throughs your links, PR &amp; social earn.</span>
+          <span style="margin-left: auto; display: inline-flex; align-items: center; gap: 6px;">
+            <span style="width:6px;height:6px;border-radius:9999px;background:#10b981;"></span> {{ off.cadence }}<sc-if value="{{ !off.tokensEmpty }}" hint-placeholder-val="{{ true }}"> · {{ off.tokens }}</sc-if>
+          </span>
+        </div>
+
+        <!-- KPIs -->
+        <div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px;">
+          <sc-for list="{{ off.kpis }}" as="k" hint-placeholder-count="5">
+            <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; padding: 16px 18px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+              <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: #94a3b8; font-weight: 500;">{{ k.label }}</div>
+              <div style="display: flex; align-items: baseline; gap: 8px; margin-top: 8px;">
+                <span style="font-size: 24px; font-weight: 600; color: #0f172a; line-height: 1;">{{ k.value }}</span>
+                <sc-if value="{{ k.hasChip }}" hint-placeholder-val="{{ false }}"><span style="{{ k.chipStyle }}">{{ k.chipLabel }}</span></sc-if>
+              </div>
+              <div style="font-size: 12px; color: #94a3b8; margin-top: 6px;">{{ k.note }}</div>
+            </div>
+          </sc-for>
+        </div>
+
+        <!-- trend -->
+        <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); padding: 18px 20px;">
+          <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;">
+            <div>
+              <h2 style="font-size: 15px; font-weight: 600; margin: 0;">Off-site organic sessions</h2>
+              <p style="font-size: 12px; color: #94a3b8; margin: 3px 0 0;">Referral + organic social/video · {{ off.rangeLabel }}</p>
+            </div>
+            <div style="display: flex; align-items: center; gap: 16px; font-size: 12px; color: #64748b;">
+              <span style="display:inline-flex;align-items:center;gap:6px;"><span style="width:10px;height:3px;border-radius:2px;background:#4f46e5;"></span> Sessions</span>
+              <span style="display:inline-flex;align-items:center;gap:6px;"><span style="width:10px;height:3px;border-radius:2px;background:#10b981;"></span> Engaged</span>
+            </div>
+          </div>
+          <svg viewBox="0 0 600 220" preserveAspectRatio="none" style="width: 100%; height: 200px; margin-top: 10px; display: block;">
+            <defs><linearGradient id="offGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#4f46e5" stop-opacity="0.16"/><stop offset="100%" stop-color="#4f46e5" stop-opacity="0"/></linearGradient></defs>
+            <path d="{{ off.area }}" fill="url(#offGrad)"></path>
+            <polyline points="{{ off.sessPts }}" fill="none" stroke="#4f46e5" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"></polyline>
+            <polyline points="{{ off.engPts }}" fill="none" stroke="#10b981" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"></polyline>
+          </svg>
+          <div style="display: flex; justify-content: space-between; font-size: 11px; color: #cbd5e1; margin-top: 2px;"><span>{{ off.trendStart }}</span><span>{{ off.trendEnd }}</span></div>
+        </div>
+
+        <!-- channel mix + LinkedIn spotlight -->
+        <div style="display: grid; grid-template-columns: 1.15fr 0.85fr; gap: 16px;">
+          <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); padding: 18px 20px;">
+            <h2 style="font-size: 15px; font-weight: 600; margin: 0 0 2px;">Channel mix</h2>
+            <p style="font-size: 12px; color: #94a3b8; margin: 0 0 16px;">All sessions by GA4 default channel group — off-site channels highlighted</p>
+            <div style="display: flex; flex-direction: column; gap: 12px;">
+              <sc-for list="{{ off.channels }}" as="c" hint-placeholder-count="6">
+                <div style="display: flex; align-items: center; gap: 12px;">
+                  <div style="width: 128px; flex-shrink: 0; display: flex; align-items: center; gap: 8px; font-size: 13px; color: {{ c.labelColor }}; font-weight: {{ c.labelWeight }};">
+                    <span style="{{ c.dotStyle }}"></span>{{ c.channel }}
+                  </div>
+                  <div style="flex: 1; height: 10px; background: #f1f5f9; border-radius: 9999px; overflow: hidden;"><div style="{{ c.barStyle }}"></div></div>
+                  <div style="width: 84px; text-align: right; font-size: 13px; font-weight: 600; color: #0f172a;">{{ c.sessFmt }}</div>
+                  <div style="width: 42px; text-align: right; font-size: 12px; color: #94a3b8;">{{ c.pctLabel }}</div>
+                </div>
+              </sc-for>
+            </div>
+            <div style="margin-top: 16px; padding-top: 14px; border-top: 1px solid #f1f5f9; display: flex; gap: 24px; font-size: 12px; color: #64748b;">
+              <div><span style="font-size: 18px; font-weight: 700; color: #4f46e5;">{{ off.offShareLabel }}</span><div style="margin-top:2px;">of all sessions are off-site</div></div>
+              <div><span style="font-size: 18px; font-weight: 700; color: #0f172a;">{{ off.offKeyEvents }}</span><div style="margin-top:2px;">key events from off-site</div></div>
+            </div>
+          </div>
+
+          <!-- LinkedIn spotlight -->
+          <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden; display: flex; flex-direction: column;">
+            <div style="padding: 16px 20px; display: flex; align-items: center; gap: 10px; border-bottom: 1px solid #f1f5f9;">
+              <span style="width: 30px; height: 30px; border-radius: 7px; background: #0a66c2; display: flex; align-items: center; justify-content: center; color: white; font-weight: 700; font-size: 15px; font-family: Georgia, serif;">in</span>
+              <div>
+                <h2 style="font-size: 15px; font-weight: 600; margin: 0;">LinkedIn</h2>
+                <p style="font-size: 11px; color: #94a3b8; margin: 2px 0 0;">{{ off.li.subtitle }}</p>
+              </div>
+              <span onClick="{{ h.goConnections }}" style="{{ off.li.badgeStyle }}" title="Click to open Settings -> Connections">{{ off.li.badgeLabel }}</span>
+            </div>
+            <div style="padding: 18px 20px; display: grid; grid-template-columns: 1fr 1fr; gap: 18px 16px;">
+              <div><div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8;">Impressions</div><div style="font-size: 22px; font-weight: 700; color: #0f172a; margin-top: 4px;">{{ off.li.impressions }}</div><div style="font-size:11px;color:#cbd5e1;margin-top:2px;">{{ off.li.imprCaption }}</div></div>
+              <div><div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8;">Click-throughs</div><div style="font-size: 22px; font-weight: 700; color: #0f172a; margin-top: 4px;">{{ off.li.sessions }}</div><div style="font-size:11px;color:#cbd5e1;margin-top:2px;">GA4 sessions</div></div>
+              <div><div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8;">CTR</div><div style="font-size: 22px; font-weight: 700; color: #0a66c2; margin-top: 4px;">{{ off.li.ctr }}</div><div style="font-size:11px;color:#cbd5e1;margin-top:2px;">impr → session</div></div>
+              <div><div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8;">Key events</div><div style="font-size: 22px; font-weight: 700; color: #0f172a; margin-top: 4px;">{{ off.li.keyEvents }}</div><div style="font-size:11px;color:#cbd5e1;margin-top:2px;">{{ off.li.revenue }} revenue</div></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- social platform breakdown -->
+        <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
+          <div style="padding: 16px 20px; border-bottom: 1px solid #f1f5f9; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;">
+            <div><h2 style="font-size: 15px; font-weight: 600; margin: 0;">Social &amp; video platforms</h2><p style="font-size: 12px; color: #94a3b8; margin: 3px 0 0;">Organic social/video sessions by source · impressions need each platform's connector</p></div>
+            <span onClick="{{ h.exportSocial }}" style="font-size: 12px; color: #4f46e5; font-weight: 500; cursor: pointer;" style-hover="opacity:0.7">Export CSV</span>
+          </div>
+          <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+            <thead><tr style="text-align: left; color: #94a3b8; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; background: #f8fafc; border-bottom: 1px solid #f1f5f9;">
+              <th style="font-weight: 500; padding: 10px 20px;">Platform</th>
+              <th style="font-weight: 500; padding: 10px; text-align: right;">Impressions</th>
+              <th style="font-weight: 500; padding: 10px; text-align: right;">Sessions</th>
+              <th style="font-weight: 500; padding: 10px; text-align: right;">Engagement</th>
+              <th style="font-weight: 500; padding: 10px; text-align: right;">Key events</th>
+              <th style="font-weight: 500; padding: 10px 20px; text-align: right;">Revenue</th>
+            </tr></thead>
+            <tbody>
+              <sc-for list="{{ off.social }}" as="r" hint-placeholder-count="6">
+                <tr style="border-bottom: 1px solid #f8fafc;" style-hover="background:#fcfcfd">
+                  <td style="padding: 12px 20px;">
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                      <span style="{{ r.badgeStyle }}">{{ r.badge }}</span>
+                      <div><div style="font-weight: 500; color: #334155;">{{ r.platform }}</div><div style="font-size: 12px; color: #94a3b8;">{{ r.channel }} · {{ r.source }}</div></div>
+                    </div>
+                  </td>
+                  <td style="padding: 12px 10px; text-align: right;">
+                    <sc-if value="{{ r.connected }}" hint-placeholder-val="{{ true }}"><span style="font-weight: 600; color: #0f172a;">{{ r.imprFmt }}</span></sc-if>
+                    <sc-if value="{{ r.notConnected }}" hint-placeholder-val="{{ false }}"><span onClick="{{ h.goConnections }}" style="font-size: 11px; color: #4f46e5; font-style: italic; cursor: pointer; text-decoration: underline;" title="Go to Settings -> Connections to set up API">connector needed</span></sc-if>
+                  </td>
+                  <td style="padding: 12px 10px; text-align: right; font-weight: 600; color: #0f172a;">{{ r.sessFmt }}</td>
+                  <td style="padding: 12px 10px; text-align: right; color: #475569;">{{ r.engFmt }}</td>
+                  <td style="padding: 12px 10px; text-align: right; color: #475569;">{{ r.keyFmt }}</td>
+                  <td style="padding: 12px 20px; text-align: right; color: #475569;">{{ r.revFmt }}</td>
+                </tr>
+              </sc-for>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- top referring domains -->
+        <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
+          <div style="padding: 16px 20px; border-bottom: 1px solid #f1f5f9; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;">
+            <div><h2 style="font-size: 15px; font-weight: 600; margin: 0;">Top referring domains</h2><p style="font-size: 12px; color: #94a3b8; margin: 3px 0 0;">Sites sending you referral traffic — your off-site links paying off</p></div>
+            <span onClick="{{ h.exportReferrers }}" style="font-size: 12px; color: #4f46e5; font-weight: 500; cursor: pointer;" style-hover="opacity:0.7">Export CSV</span>
+          </div>
+          <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+            <thead><tr style="text-align: left; color: #94a3b8; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; background: #f8fafc; border-bottom: 1px solid #f1f5f9;">
+              <th style="font-weight: 500; padding: 10px 20px;">Domain</th>
+              <th style="font-weight: 500; padding: 10px; text-align: right;">DR</th>
+              <th onClick="{{ off.sort.sessions }}" style="font-weight: 500; padding: 10px; text-align: right; cursor: pointer;">Sessions{{ off.arrow.sessions }}</th>
+              <th style="font-weight: 500; padding: 10px; text-align: right;">Engagement</th>
+              <th onClick="{{ off.sort.keyEvents }}" style="font-weight: 500; padding: 10px; text-align: right; cursor: pointer;">Key events{{ off.arrow.keyEvents }}</th>
+              <th onClick="{{ off.sort.revenue }}" style="font-weight: 500; padding: 10px; text-align: right; cursor: pointer;">Revenue{{ off.arrow.revenue }}</th>
+              <th style="font-weight: 500; padding: 10px 20px; text-align: right;"></th>
+            </tr></thead>
+            <tbody>
+              <sc-for list="{{ off.referrers }}" as="r" hint-placeholder-count="8">
+                <tr style="border-bottom: 1px solid #f8fafc;" style-hover="background:#fcfcfd">
+                  <td style="padding: 12px 20px;">
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                      <span style="font-weight: 500; color: #334155;">{{ r.domain }}</span>
+                      <sc-if value="{{ r.tracked }}" hint-placeholder-val="{{ false }}"><span style="font-size: 10px; font-weight: 600; color: #4338ca; background: #eef2ff; padding: 1px 6px; border-radius: 4px;">Tracked link</span></sc-if>
+                    </div>
+                  </td>
+                  <td style="padding: 12px 10px; text-align: right;"><span style="{{ r.rankStyle }}">{{ r.rank }}</span></td>
+                  <td style="padding: 12px 10px; text-align: right; font-weight: 600; color: #0f172a;">{{ r.sessFmt }}</td>
+                  <td style="padding: 12px 10px; text-align: right; color: #475569;">{{ r.engFmt }}</td>
+                  <td style="padding: 12px 10px; text-align: right; color: #475569;">{{ r.keyFmt }}</td>
+                  <td style="padding: 12px 10px; text-align: right; color: #475569;">{{ r.revFmt }}</td>
+                  <td style="padding: 12px 20px; text-align: right; white-space: nowrap;">
+                    <sc-if value="{{ r.canTrack }}" hint-placeholder-val="{{ true }}"><span onClick="{{ r.onTrack }}" style="font-size: 12px; color: #4f46e5; font-weight: 500; cursor: pointer; margin-right: 12px;" style-hover="opacity:0.7">Track</span></sc-if>
+                    <a href="{{ r.href }}" target="_blank" rel="noopener" style="display: inline-flex; color: #94a3b8;" style-hover="color:#4f46e5"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6M15 3h6v6M10 14L21 3"/></svg></a>
+                  </td>
+                </tr>
+              </sc-for>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- landing pages -->
+        <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
+          <div style="padding: 16px 20px; border-bottom: 1px solid #f1f5f9;"><h2 style="font-size: 15px; font-weight: 600; margin: 0;">Where off-site traffic lands</h2><p style="font-size: 12px; color: #94a3b8; margin: 3px 0 0;">Pages that referral &amp; social visitors enter on</p></div>
+          <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+            <thead><tr style="text-align: left; color: #94a3b8; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; background: #f8fafc; border-bottom: 1px solid #f1f5f9;">
+              <th style="font-weight: 500; padding: 10px 20px;">Landing page</th>
+              <th style="font-weight: 500; padding: 10px;">Top source</th>
+              <th style="font-weight: 500; padding: 10px; text-align: right;">Sessions</th>
+              <th style="font-weight: 500; padding: 10px; text-align: right;">Engagement</th>
+              <th style="font-weight: 500; padding: 10px 20px; text-align: right;">Key events</th>
+            </tr></thead>
+            <tbody>
+              <sc-for list="{{ off.landing }}" as="r" hint-placeholder-count="7">
+                <tr style="border-bottom: 1px solid #f8fafc;" style-hover="background:#fcfcfd">
+                  <td style="padding: 12px 20px; font-weight: 500;"><a href="https://{{ projectDomain }}{{ r.url }}" target="_blank" rel="noopener" title="Open live page" style="color: #334155; text-decoration: none;" style-hover="color:#4f46e5;text-decoration:underline">{{ r.url }}</a></td>
+                  <td style="padding: 12px 10px; color: #64748b;">{{ r.topSource }}</td>
+                  <td style="padding: 12px 10px; text-align: right; font-weight: 600; color: #0f172a;">{{ r.sessFmt }}</td>
+                  <td style="padding: 12px 10px; text-align: right; color: #475569;">{{ r.engFmt }}</td>
+                  <td style="padding: 12px 20px; text-align: right; color: #475569;">{{ r.keyFmt }}</td>
+                </tr>
+              </sc-for>
+            </tbody>
+          </table>
+        </div>
+        </sc-if>
+      </div>
+      </sc-if>
+
+      <!-- ============ SITE AUDIT ============ -->
+      <!-- #include "pages/pages.html" -->
+
+      <!-- ============ AI OPTIMIZATION ============ -->
+      <!-- #include "pages/site_audit.html" -->
+
+      <!-- ============ ADS: PAID OVERVIEW ============ -->
+      <!-- #include "pages/ads.html" -->
+
+      <!-- ============ ADS: CAMPAIGNS ============ -->
+      <sc-if value="{{ showCampaigns }}" hint-placeholder-val="{{ false }}">
+      <div data-screen-label="Campaigns" style="display: flex; flex-direction: column; gap: 20px;">
+        <sc-if value="{{ cmp.setup }}" hint-placeholder-val="{{ false }}">
+        <div style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 56px 32px; text-align: center; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+          <div style="font-size: 15px; font-weight: 600; color: #0f172a; margin-bottom: 6px;">No Campaigns Synced Yet</div>
+          <div style="font-size: 13px; color: #64748b; max-width: 420px; margin: 0 auto 20px;">We haven't synced Google Ads or Meta Ads campaigns for this domain into the database yet. Click below to fetch current campaigns right now.</div>
+          <div onClick="{{ h.refreshPage }}" style="display: inline-flex; align-items: center; gap: 8px; border-radius: 8px; background: #10b981; color: white; font-size: 14px; font-weight: 600; padding: 10px 20px; cursor: pointer; box-shadow: 0 1px 2px rgba(0,0,0,0.05);" style-hover="background:#059669">⚡ Fetch Campaigns Now</div>
+        </div>
+        </sc-if>
+        <sc-if value="{{ !cmp.setup }}" hint-placeholder-val="{{ true }}">
+        <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
+          <div style="padding: 14px 20px; border-bottom: 1px solid #f1f5f9; display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+            <div style="flex: 1; min-width: 220px;"><h2 style="font-size: 15px; font-weight: 600; margin: 0;">Campaigns</h2><p style="font-size: 12px; color: #94a3b8; margin: 4px 0 0;">{{ cmp.count }} · metrics aggregated {{ adsWindow }} · pause, resume, and edit budgets inline — changes write back to Google Ads / Meta</p></div>
+            <input value="{{ cmp.search }}" onInput="{{ h.cmpSearch }}" placeholder="Filter by name…" aria-label="Filter campaigns by name" style="font-size: 13px; border: 1px solid #e2e8f0; border-radius: 8px; padding: 7px 12px; width: 170px; outline: none;" style-focus="border-color:#a5b4fc">
+            <div style="display: flex; gap: 4px; background: #f1f5f9; padding: 4px; border-radius: 8px;">
+              <sc-for list="{{ cmp.filters }}" as="f" hint-placeholder-count="4"><span onClick="{{ f.click }}" role="button" style="{{ f.style }}">{{ f.label }}</span></sc-for>
+            </div>
+            <span onClick="{{ h.exportCampaigns }}" role="button" aria-label="Export campaigns as CSV" style="display: inline-flex; align-items: center; gap: 7px; padding: 0 12px; height: 30px; border: 1px solid #e2e8f0; border-radius: 8px; cursor: pointer; font-size: 12.5px; color: #334155; background: white;" style-hover="border-color:#cbd5e1"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"></path></svg>CSV</span>
+          </div>
+          <table style="width: 100%; border-collapse: collapse; font-size: 13.5px;">
+            <thead><tr style="text-align: left; color: #94a3b8; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;">
+              <th style="font-weight: 500; padding: 12px 10px 12px 20px;"><span title="Toggle to pause or enable — writes back via CampaignService.mutate on save" style="border-bottom: 1px dotted #cbd5e1; cursor: help;">Status</span></th>
+              <th style="font-weight: 500; padding: 12px 10px;">Campaign</th>
+              <th style="font-weight: 500; padding: 12px 10px;"><span title="Daily budget — click a value to edit inline; writes back via CampaignBudgetService.mutate" style="border-bottom: 1px dotted #cbd5e1; cursor: help;">Budget/day</span></th>
+              <th onClick="{{ sortCmp.spend }}" style="font-weight: 500; padding: 12px 10px; text-align: right; cursor: pointer;"><span title="Cost — Google Ads API metrics.cost_micros, summed over the selected date range. Click to sort." style="border-bottom: 1px dotted #cbd5e1;">Spend</span>{{ cmpArrow.spend }}</th>
+              <th onClick="{{ sortCmp.clicks }}" style="font-weight: 500; padding: 12px 10px; text-align: right; cursor: pointer;"><span title="metrics.clicks over the selected date range. Click to sort." style="border-bottom: 1px dotted #cbd5e1;">Clicks</span>{{ cmpArrow.clicks }}</th>
+              <th onClick="{{ sortCmp.ctr }}" style="font-weight: 500; padding: 12px 10px; text-align: right; cursor: pointer;"><span title="Click-through rate — clicks ÷ impressions. Click to sort." style="border-bottom: 1px dotted #cbd5e1;">CTR</span>{{ cmpArrow.ctr }}</th>
+              <th onClick="{{ sortCmp.cpc }}" style="font-weight: 500; padding: 12px 10px; text-align: right; cursor: pointer;"><span title="Average cost per click — spend ÷ clicks. Click to sort." style="border-bottom: 1px dotted #cbd5e1;">CPC</span>{{ cmpArrow.cpc }}</th>
+              <th onClick="{{ sortCmp.conversions }}" style="font-weight: 500; padding: 12px 10px; text-align: right; cursor: pointer;"><span title="metrics.conversions — Google Ads attribution; GA4 counts differ (see Attribution tab). Click to sort." style="border-bottom: 1px dotted #cbd5e1;">Conv.</span>{{ cmpArrow.conversions }}</th>
+              <th onClick="{{ sortCmp.cpa }}" style="font-weight: 500; padding: 12px 10px; text-align: right; cursor: pointer;"><span title="Cost per acquisition — spend ÷ conversions. Click to sort." style="border-bottom: 1px dotted #cbd5e1;">CPA</span>{{ cmpArrow.cpa }}</th>
+              <th onClick="{{ sortCmp.roas }}" style="font-weight: 500; padding: 12px 10px; text-align: right; cursor: pointer;"><span title="Return on ad spend — conversion value ÷ spend. Click to sort." style="border-bottom: 1px dotted #cbd5e1;">ROAS</span>{{ cmpArrow.roas }}</th>
+              <th style="font-weight: 500; padding: 12px 10px; text-align: right;"><span title="Search impression share lost to budget (search_budget_lost_impression_share) — high values mean the daily cap is limiting reach" style="border-bottom: 1px dotted #cbd5e1; cursor: help;">Lost IS</span></th>
+              <th style="padding: 12px 20px 12px 10px;"></th>
+            </tr></thead>
+            <tbody>
+              <sc-if value="{{ cmp.empty }}" hint-placeholder-val="{{ false }}">
+                <tr><td colSpan="12" style="padding: 40px 20px; text-align: center; color: #94a3b8; font-size: 13px;">No campaigns match this filter.</td></tr>
+              </sc-if>
+              <sc-if value="{{ cmp.notEmpty }}" hint-placeholder-val="{{ true }}">
+                <tr style="background: #f8fafc; font-weight: 600; font-size: 12.5px; color: #334155;">
+                  <td style="padding: 9px 10px 9px 20px; border-top: 1px solid #e2e8f0;">Total</td>
+                  <td style="padding: 9px 10px; border-top: 1px solid #e2e8f0;">{{ cmp.totLabel }}</td>
+                  <td style="padding: 9px 10px; border-top: 1px solid #e2e8f0; white-space: nowrap;">{{ cmp.totBudget }}</td>
+                  <td style="padding: 9px 10px; text-align: right; border-top: 1px solid #e2e8f0; font-weight: 700;">{{ cmp.totSpend }}</td>
+                  <td style="padding: 9px 10px; text-align: right; border-top: 1px solid #e2e8f0;">{{ cmp.totClicks }}</td>
+                  <td style="padding: 9px 10px; text-align: right; border-top: 1px solid #e2e8f0;">{{ cmp.totCtr }}</td>
+                  <td style="padding: 9px 10px; text-align: right; border-top: 1px solid #e2e8f0;">{{ cmp.totCpc }}</td>
+                  <td style="padding: 9px 10px; text-align: right; border-top: 1px solid #e2e8f0; color: #059669;">{{ cmp.totConv }}</td>
+                  <td style="padding: 9px 10px; text-align: right; border-top: 1px solid #e2e8f0;">{{ cmp.totCpa }}</td>
+                  <td style="padding: 9px 10px; text-align: right; border-top: 1px solid #e2e8f0;">{{ cmp.totRoas }}</td>
+                  <td style="border-top: 1px solid #e2e8f0;"></td>
+                  <td style="border-top: 1px solid #e2e8f0;"></td>
+                </tr>
+              </sc-if>
+              <sc-for list="{{ cmp.rows }}" as="r" hint-placeholder-count="5">
+                <tr style="border-top: 1px solid #f1f5f9;" style-hover="background:#f8fafc">
+                  <td style="padding: 12px 10px 12px 20px;">
+                    <span style="display: inline-flex; align-items: center; gap: 8px;">
+                      <span onClick="{{ r.onToggle }}" role="switch" aria-label="{{ r.toggleAria }}" style="{{ r.track }}"><span style="{{ r.knob }}"></span></span>
+                      <span style="{{ r.statusTextStyle }}">{{ r.statusLabel }}</span>
+                    </span>
+                  </td>
+                  <td style="padding: 12px 10px;">
+                    <div style="font-weight: 500; color: {{ r.nameColor }};">{{ r.name }}</div>
+                    <div style="display: flex; align-items: center; gap: 6px; margin-top: 3px;"><span style="{{ r.platformStyle }}">{{ r.platform }}</span><span style="font-size: 11px; color: #94a3b8;">{{ r.typeLabel }}</span></div>
+                  </td>
+                  <td style="padding: 12px 10px;">
+                    <sc-if value="{{ r.editing }}" hint-placeholder-val="{{ false }}">
+                      <input value="{{ r.budgetVal }}" onInput="{{ r.onBudgetInput }}" onKeyDown="{{ r.onBudgetKey }}" onBlur="{{ r.onBudgetBlur }}" autoFocus="{{ true }}" aria-label="Daily budget in dollars" style="width: 62px; font-size: 13px; border: 1px solid #a5b4fc; border-radius: 6px; padding: 5px 8px; outline: none;">
+                    </sc-if>
+                    <sc-if value="{{ r.notEditing }}" hint-placeholder-val="{{ true }}">
+                      <span onClick="{{ r.onBudgetClick }}" role="button" title="Edit daily budget" style="display: inline-flex; align-items: center; gap: 6px; cursor: pointer; font-weight: 500; color: #334155; border-bottom: 1px dashed #cbd5e1; padding-bottom: 1px;" style-hover="color:#4f46e5">{{ r.budgetFmt }}<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="2"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"></path></svg></span>
+                    </sc-if>
+                  </td>
+                  <td style="padding: 12px 10px; text-align: right; font-weight: 600; color: #334155;">{{ r.spendFmt }}</td>
+                  <td style="padding: 12px 10px; text-align: right; color: #475569;">{{ r.clicksFmt }}</td>
+                  <td style="padding: 12px 10px; text-align: right; color: #475569;">{{ r.ctrFmt }}</td>
+                  <td style="padding: 12px 10px; text-align: right; color: #475569;">{{ r.cpcFmt }}</td>
+                  <td style="padding: 12px 10px; text-align: right; font-weight: 600; color: #059669;">{{ r.convFmt }}</td>
+                  <td style="padding: 12px 10px; text-align: right; color: #475569;">{{ r.cpaFmt }}</td>
+                  <td style="padding: 12px 10px; text-align: right;"><span style="{{ r.roasStyle }}">{{ r.roasFmt }}</span></td>
+                  <td style="padding: 12px 10px; text-align: right;"><span style="{{ r.isStyle }}">{{ r.isLabel }}</span></td>
+                  <td style="padding: 6px 14px 6px 4px; text-align: right;"><span onClick="{{ r.onOpen }}" role="button" aria-label="{{ r.openAria }}" style="{{ r.chevStyle }}"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"></path></svg></span></td>
+                </tr>
+                <sc-if value="{{ r.open }}" hint-placeholder-val="{{ false }}">
+                  <tr>
+                    <td colSpan="12" style="padding: 0; background: #f8fafc; border-top: 1px solid #f1f5f9;">
+                      <div style="padding: 12px 20px 16px;">
+                        <div style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: #94a3b8; margin-bottom: 8px;">{{ r.groupsLabel }}</div>
+                        <div style="display: flex; flex-direction: column; gap: 6px;">
+                          <sc-for list="{{ r.adGroups }}" as="g" hint-placeholder-count="2">
+                            <div style="display: grid; grid-template-columns: 2fr 1fr 1fr 1fr 1fr; gap: 10px; align-items: center; font-size: 12.5px; background: white; border: 1px solid #e2e8f0; border-radius: 8px; padding: 8px 12px;">
+                              <span style="font-weight: 500; color: #334155;">{{ g.name }}</span>
+                              <span style="text-align: right; color: #475569;">{{ g.spendFmt }}</span>
+                              <span style="text-align: right; color: #475569;">{{ g.clicksFmt }}</span>
+                              <span style="text-align: right; color: #475569;">{{ g.convFmt }}</span>
+                              <span style="text-align: right; font-weight: 600; color: #334155;">{{ g.cpaFmt }}</span>
+                            </div>
+                          </sc-for>
+                        </div>
+                        <sc-if value="{{ r.hasTerms }}" hint-placeholder-val="{{ false }}">
+                          <span onClick="{{ r.onViewTerms }}" role="button" style="display: inline-flex; align-items: center; gap: 6px; margin-top: 12px; font-size: 12px; font-weight: 600; color: #4f46e5; cursor: pointer;" style-hover="opacity:0.75">View search terms for this campaign →</span>
+                        </sc-if>
+                      </div>
+                    </td>
+                  </tr>
+                </sc-if>
+              </sc-for>
+            </tbody>
+          </table>
+        </div>
+
+        <div style="display: flex; align-items: center; gap: 18px; flex-wrap: wrap; border-radius: 10px; background: white; border: 1px solid #e2e8f0; padding: 10px 16px; font-size: 12px; color: #64748b;">
+          <span style="display: inline-flex; align-items: center; gap: 7px; font-weight: 600; color: #334155;"><span style="{{ adsSync.dotStyle }}"></span>{{ adsSync.cadence }}</span>
+          <span>Source <b style="color: #334155; font-weight: 600; font-family: monospace; font-size: 11.5px;">GoogleAdsService.searchStream</b> (campaign + ad_group GAQL) · status &amp; budget edits via <b style="color: #334155; font-weight: 600; font-family: monospace; font-size: 11.5px;">CampaignService</b> apply immediately</span>
+          <span style="margin-left: auto;">Last pull <b style="color: #334155; font-weight: 600;">{{ adsSync.last }}</b></span>
+          <span>Next <b style="color: #334155; font-weight: 600;">{{ adsSync.next }}</b></span>
+        </div>
+        </sc-if>
+      </div>
+      </sc-if>
+
+      <!-- ============ ADS: SEARCH TERMS ============ -->
+      <sc-if value="{{ showTerms }}" hint-placeholder-val="{{ false }}">
+      <div data-screen-label="Search Terms" style="display: flex; flex-direction: column; gap: 20px;">
+        <sc-if value="{{ trm.setup }}" hint-placeholder-val="{{ false }}">
+        <div style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 56px 32px; text-align: center; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+          <div style="font-size: 15px; font-weight: 600; color: #0f172a; margin-bottom: 6px;">No Search Terms Synced Yet</div>
+          <div style="font-size: 13px; color: #64748b; max-width: 420px; margin: 0 auto 20px;">We haven't synced Google Ads search terms for this domain into the database yet. Click below to fetch current search terms right now.</div>
+          <div onClick="{{ h.refreshPage }}" style="display: inline-flex; align-items: center; gap: 8px; border-radius: 8px; background: #10b981; color: white; font-size: 14px; font-weight: 600; padding: 10px 20px; cursor: pointer; box-shadow: 0 1px 2px rgba(0,0,0,0.05);" style-hover="background:#059669">⚡ Fetch Search Terms Now</div>
+        </div>
+        </sc-if>
+        <sc-if value="{{ !trm.setup }}" hint-placeholder-val="{{ true }}">
+        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px;">
+          <sc-for list="{{ trm.kpis }}" as="k" hint-placeholder-count="4">
+            <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; padding: 16px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+              <div style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: #64748b; margin-bottom: 4px;">{{ k.label }}</div>
+              <div style="{{ k.valueStyle }}">{{ k.value }}</div>
+              <div style="font-size: 11px; color: #94a3b8; margin-top: 2px;">{{ k.note }}</div>
+            </div>
+          </sc-for>
+        </div>
+
+        <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
+          <div style="padding: 14px 20px 12px; border-bottom: 1px solid #f1f5f9; display: flex; flex-direction: column; gap: 12px;">
+            <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap;">
+              <div><h2 style="font-size: 15px; font-weight: 600; margin: 0;">Search terms report</h2><p style="font-size: 12px; color: #94a3b8; margin: 4px 0 0;">Real queries that triggered your ads · aggregated {{ adsWindow }} — add negatives to cut waste, or track winners as organic keywords</p></div>
+              <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                <sc-if value="{{ trm.scoped }}" hint-placeholder-val="{{ false }}">
+                  <span onClick="{{ trm.clearScope }}" role="button" aria-label="Clear campaign filter" title="Clear campaign filter" style="display: inline-flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 600; color: #4338ca; background: #eef2ff; border: 1px solid #c7d2fe; padding: 5px 10px; border-radius: 7px; cursor: pointer;" style-hover="background:#e0e7ff">{{ trm.scopeLabel }} <span style="font-weight: 700;">✕</span></span>
+                </sc-if>
+                <div style="display: flex; gap: 4px; background: #f1f5f9; padding: 4px; border-radius: 8px;">
+                  <sc-for list="{{ trm.filters }}" as="f" hint-placeholder-count="4"><span onClick="{{ f.click }}" role="button" style="{{ f.style }}">{{ f.label }}</span></sc-for>
+                </div>
+                <span onClick="{{ h.exportTerms }}" role="button" aria-label="Export search terms as CSV" title="Download the report as CSV" style="display: inline-flex; align-items: center; gap: 7px; padding: 0 12px; height: 30px; border: 1px solid #e2e8f0; border-radius: 8px; cursor: pointer; font-size: 12.5px; color: #334155; background: white;" style-hover="border-color:#cbd5e1"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"></path></svg>CSV</span>
+              </div>
+            </div>
+            <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+              <div style="position: relative;">
+                <svg style="position: absolute; left: 10px; top: 8px; color: #94a3b8;" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.3-4.3"></path></svg>
+                <input value="{{ trm.search }}" onInput="{{ trm.onSearch }}" placeholder="Search terms or matched keywords…" aria-label="Search within search terms" style="font-size: 13px; border: 1px solid #e2e8f0; border-radius: 8px; padding: 7px 12px 7px 32px; width: 240px; outline: none;" style-focus="border-color:#a5b4fc">
+              </div>
+              <select value="{{ trm.match }}" onChange="{{ trm.onMatch }}" aria-label="Filter by match type" title="Match type of the keyword that triggered the ad" style="font-size: 12.5px; border: 1px solid #e2e8f0; border-radius: 8px; padding: 7px 10px; color: #334155; background: white; outline: none; cursor: pointer;">
+                <option value="all">All match types</option>
+                <option value="broad">Broad match</option>
+                <option value="phrase">Phrase match</option>
+                <option value="exact">Exact match</option>
+              </select>
+              <span style="margin-left: auto; font-size: 12px; color: #94a3b8;">{{ trm.countLine }}</span>
+            </div>
+          </div>
+          <sc-if value="{{ trm.hasSel }}" hint-placeholder-val="{{ false }}">
+            <div style="display: flex; align-items: center; gap: 10px; padding: 10px 20px; background: #eef2ff; border-bottom: 1px solid #c7d2fe; font-size: 13px; flex-wrap: wrap;">
+              <span style="font-weight: 700; color: #3730a3;">{{ trm.selCount }} selected</span>
+              <span onClick="{{ trm.bulkNeg }}" role="button" title="Adds each selected term as a phrase-match negative to its own campaign" style="display: inline-flex; align-items: center; font-size: 12px; font-weight: 600; color: #b91c1c; border: 1px solid #fecaca; background: white; padding: 5px 11px; border-radius: 7px; cursor: pointer;" style-hover="background:#fef2f2">− Add as phrase negatives</span>
+              <span onClick="{{ trm.bulkTrack }}" role="button" title="Adds each selected term to organic keyword tracking" style="display: inline-flex; align-items: center; font-size: 12px; font-weight: 600; color: #4338ca; border: 1px solid #c7d2fe; background: white; padding: 5px 11px; border-radius: 7px; cursor: pointer;" style-hover="opacity:0.8">+ Track as organic keywords</span>
+              <span onClick="{{ trm.clearSel }}" role="button" style="margin-left: auto; font-size: 12px; color: #64748b; cursor: pointer;" style-hover="color:#0f172a">Clear selection</span>
+            </div>
+          </sc-if>
+          <sc-if value="{{ trm.empty }}" hint-placeholder-val="{{ false }}">
+            <div style="padding: 44px 20px; text-align: center;"><div style="font-size: 15px; font-weight: 600; color: #334155;">Nothing here</div><div style="font-size: 13px; color: #94a3b8; margin-top: 4px;">No search terms match this filter.</div></div>
+          </sc-if>
+          <table style="width: 100%; border-collapse: collapse; font-size: 13.5px;">
+            <thead><tr style="text-align: left; color: #94a3b8; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;">
+              <th style="width: 36px; padding: 12px 0 12px 20px;"><span onClick="{{ trm.toggleAll }}" role="checkbox" aria-checked="{{ trm.allChecked }}" aria-label="Select all actionable terms on this page" title="Select all actionable terms on this page" style="cursor: pointer; display: inline-flex;"><span style="{{ trm.allCheckStyle }}"><sc-if value="{{ trm.allChecked }}" hint-placeholder-val="{{ false }}"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3.5"><path d="M20 6 9 17l-5-5"></path></svg></sc-if></span></span></th>
+              <th style="font-weight: 500; padding: 12px 10px;"><span title="The actual query a user typed into Google before clicking your ad (search_term_view.search_term)" style="border-bottom: 1px dotted #cbd5e1; cursor: help;">Search term</span></th>
+              <th style="font-weight: 500; padding: 12px 10px;"><span title="The keyword in your account that matched this query, and how loosely it matched (exact / phrase / broad)" style="border-bottom: 1px dotted #cbd5e1; cursor: help;">Matched keyword</span></th>
+              <th style="font-weight: 500; padding: 12px 10px;">Campaign</th>
+              <th onClick="{{ sortTrm.impressions }}" style="font-weight: 500; padding: 12px 10px; text-align: right; cursor: pointer;"><span title="Impressions — Google Ads API metrics.impressions, summed over the selected date range. Click to sort." style="border-bottom: 1px dotted #cbd5e1;">Impr.</span>{{ trmArrow.impressions }}</th>
+              <th onClick="{{ sortTrm.clicks }}" style="font-weight: 500; padding: 12px 10px; text-align: right; cursor: pointer;"><span title="metrics.clicks over the selected date range. Click to sort." style="border-bottom: 1px dotted #cbd5e1;">Clicks</span>{{ trmArrow.clicks }}</th>
+              <th onClick="{{ sortTrm.cost }}" style="font-weight: 500; padding: 12px 10px; text-align: right; cursor: pointer;"><span title="Cost — metrics.cost_micros ÷ 1,000,000. Click to sort." style="border-bottom: 1px dotted #cbd5e1;">Cost</span>{{ trmArrow.cost }}</th>
+              <th onClick="{{ sortTrm.conversions }}" style="font-weight: 500; padding: 12px 10px; text-align: right; cursor: pointer;"><span title="metrics.conversions — Google Ads attribution (differs from GA4). Click to sort." style="border-bottom: 1px dotted #cbd5e1;">Conv.</span>{{ trmArrow.conversions }}</th>
+              <th onClick="{{ sortTrm.cpa }}" style="font-weight: 500; padding: 12px 10px; text-align: right; cursor: pointer;"><span title="Cost per acquisition — cost ÷ conversions. Click to sort." style="border-bottom: 1px dotted #cbd5e1;">CPA</span>{{ trmArrow.cpa }}</th>
+              <th style="font-weight: 500; padding: 12px 10px;"><span title="Derived after each sync: converting (has conversions), no conversions (wasted clicks), or already managed (negative added / tracked as keyword)" style="border-bottom: 1px dotted #cbd5e1; cursor: help;">Status</span></th>
+              <th style="font-weight: 500; padding: 12px 20px 12px 10px; text-align: right;">Actions</th>
+            </tr></thead>
+            <tbody>
+              <sc-if value="{{ trm.notEmpty }}" hint-placeholder-val="{{ true }}">
+                <tr style="background: #f8fafc; font-weight: 600; font-size: 12.5px; color: #334155;">
+                  <td style="padding: 9px 0 9px 20px; border-top: 1px solid #e2e8f0;"></td>
+                  <td style="padding: 9px 10px; border-top: 1px solid #e2e8f0;">Total · {{ trm.totLabel }}</td>
+                  <td style="border-top: 1px solid #e2e8f0;"></td>
+                  <td style="border-top: 1px solid #e2e8f0;"></td>
+                  <td style="padding: 9px 10px; text-align: right; border-top: 1px solid #e2e8f0;">{{ trm.totImpr }}</td>
+                  <td style="padding: 9px 10px; text-align: right; border-top: 1px solid #e2e8f0;">{{ trm.totClicks }}</td>
+                  <td style="padding: 9px 10px; text-align: right; border-top: 1px solid #e2e8f0; font-weight: 700;">{{ trm.totCost }}</td>
+                  <td style="padding: 9px 10px; text-align: right; border-top: 1px solid #e2e8f0; color: #059669;">{{ trm.totConv }}</td>
+                  <td style="padding: 9px 10px; text-align: right; border-top: 1px solid #e2e8f0;">{{ trm.totCpa }}</td>
+                  <td style="border-top: 1px solid #e2e8f0;"></td>
+                  <td style="border-top: 1px solid #e2e8f0;"></td>
+                </tr>
+              </sc-if>
+              <sc-for list="{{ trm.rows }}" as="r" hint-placeholder-count="6">
+                <tr style="border-top: 1px solid #f1f5f9;" style-hover="background:#f8fafc">
+                  <td style="padding: 10px 0 10px 20px;">
+                    <sc-if value="{{ r.canSel }}" hint-placeholder-val="{{ true }}">
+                      <span onClick="{{ r.onSel }}" role="checkbox" aria-checked="{{ r.checked }}" aria-label="{{ r.selAria }}" style="cursor: pointer; display: inline-flex;"><span style="{{ r.checkStyle }}"><sc-if value="{{ r.checked }}" hint-placeholder-val="{{ false }}"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3.5"><path d="M20 6 9 17l-5-5"></path></svg></sc-if></span></span>
+                    </sc-if>
+                  </td>
+                  <td style="padding: 10px;"><div style="display: flex; align-items: center; gap: 8px;"><span style="font-weight: 500; color: #334155;">{{ r.term }}</span><span title="{{ r.matchTitle }}" style="{{ r.matchStyle }}">{{ r.matchLabel }}</span></div></td>
+                  <td style="padding: 10px; color: #64748b;">{{ r.matched }}</td>
+                  <td style="padding: 10px; font-size: 12.5px;"><span onClick="{{ r.onCampaign }}" role="button" title="Open this campaign" style="color: #4f46e5; font-weight: 500; cursor: pointer;" style-hover="opacity:0.75">{{ r.campaign }}</span></td>
+                  <td style="padding: 10px; text-align: right; color: #475569;">{{ r.imprFmt }}</td>
+                  <td style="padding: 10px; text-align: right; color: #475569;">{{ r.clicksFmt }}</td>
+                  <td style="padding: 10px; text-align: right; font-weight: 600; color: #334155;">{{ r.costFmt }}</td>
+                  <td style="padding: 10px; text-align: right; font-weight: 600; color: #059669;">{{ r.convFmt }}</td>
+                  <td style="padding: 10px; text-align: right; color: #475569;">{{ r.cpaFmt }}</td>
+                  <td style="padding: 10px;"><span style="{{ r.statusStyle }}">{{ r.statusLabel }}</span></td>
+                  <td style="padding: 8px 20px 8px 10px; text-align: right;">
+                    <sc-if value="{{ r.actionable }}" hint-placeholder-val="{{ false }}">
+                      <span style="display: inline-flex; gap: 6px; position: relative;">
+                        <span onClick="{{ r.onNegMenu }}" role="button" aria-haspopup="true" aria-expanded="{{ r.negOpen }}" aria-label="{{ r.negAria }}" title="Choose a negative match type" style="display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600; color: #b91c1c; border: 1px solid #fecaca; background: white; padding: 5px 10px; border-radius: 7px; cursor: pointer; white-space: nowrap;" style-hover="background:#fef2f2">− Negative <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m6 9 6 6 6-6"></path></svg></span>
+                        <sc-if value="{{ r.negOpen }}" hint-placeholder-val="{{ false }}">
+                          <div style="position: absolute; top: 34px; right: 0; z-index: 60; background: white; border: 1px solid #e2e8f0; border-radius: 10px; box-shadow: 0 12px 32px rgba(15,23,42,0.16); padding: 6px; width: 268px; text-align: left;">
+                            <div style="font-size: 11px; font-weight: 600; color: #94a3b8; padding: 6px 8px 4px;">Add negative to {{ r.campaign }}</div>
+                            <div onClick="{{ r.negPhrase }}" role="button" style="padding: 8px; border-radius: 6px; font-size: 12px; color: #334155; cursor: pointer; line-height: 1.45;" style-hover="background:#f8fafc"><b>"{{ r.term }}"</b> — phrase match<br><span style="color: #94a3b8;">blocks any query containing this phrase (recommended)</span></div>
+                            <div onClick="{{ r.negExact }}" role="button" style="padding: 8px; border-radius: 6px; font-size: 12px; color: #334155; cursor: pointer; line-height: 1.45;" style-hover="background:#f8fafc"><b>[{{ r.term }}]</b> — exact match<br><span style="color: #94a3b8;">blocks only this exact query</span></div>
+                            <div onClick="{{ r.negBroad }}" role="button" style="padding: 8px; border-radius: 6px; font-size: 12px; color: #334155; cursor: pointer; line-height: 1.45;" style-hover="background:#f8fafc"><b>{{ r.term }}</b> — broad match<br><span style="color: #94a3b8;">blocks all word-order variants</span></div>
+                          </div>
+                        </sc-if>
+                        <span onClick="{{ r.onTrack }}" role="button" aria-label="{{ r.trackAria }}" title="Start tracking this query as an organic keyword (weekly SERP checks)" style="display: inline-flex; align-items: center; font-size: 12px; font-weight: 600; color: #4338ca; border: 1px solid #c7d2fe; background: white; padding: 5px 10px; border-radius: 7px; cursor: pointer; white-space: nowrap;" style-hover="background:#eef2ff">+ Track</span>
+                      </span>
+                    </sc-if>
+                  </td>
+                </tr>
+              </sc-for>
+            </tbody>
+          </table>
+          <div style="display: flex; align-items: center; gap: 10px; padding: 10px 20px; border-top: 1px solid #f1f5f9; font-size: 12.5px; color: #64748b;">
+            <span>Rows per page</span>
+            <select value="{{ trm.per }}" onChange="{{ trm.onPer }}" aria-label="Rows per page" style="font-size: 12.5px; border: 1px solid #e2e8f0; border-radius: 7px; padding: 4px 8px; color: #334155; background: white; outline: none; cursor: pointer;">
+              <option value="10">10</option>
+              <option value="25">25</option>
+              <option value="50">50</option>
+            </select>
+            <span style="margin-left: auto;">Page {{ trm.pageLabel }}</span>
+            <span onClick="{{ trm.prevPage }}" role="button" aria-label="Previous page" style="{{ trm.prevStyle }}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m15 18-6-6 6-6"></path></svg></span>
+            <span onClick="{{ trm.nextPage }}" role="button" aria-label="Next page" style="{{ trm.nextStyle }}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 18 6-6-6-6"></path></svg></span>
+          </div>
+        </div>
+
+        <div style="display: flex; align-items: center; gap: 18px; flex-wrap: wrap; border-radius: 10px; background: white; border: 1px solid #e2e8f0; padding: 10px 16px; font-size: 12px; color: #64748b;">
+          <span style="display: inline-flex; align-items: center; gap: 7px; font-weight: 600; color: #334155;"><span style="{{ adsSync.dotStyle }}"></span>{{ adsSync.cadence }}</span>
+          <span>Source <b style="color: #334155; font-weight: 600; font-family: monospace; font-size: 11.5px;">search_term_view</b> via GAQL · negatives written back through <b style="color: #334155; font-weight: 600; font-family: monospace; font-size: 11.5px;">CampaignCriterionService</b></span>
+          <span style="margin-left: auto;">Last pull <b style="color: #334155; font-weight: 600;">{{ adsSync.last }}</b></span>
+          <span>Next <b style="color: #334155; font-weight: 600;">{{ adsSync.next }}</b></span>
+        </div>
+        </sc-if>
+      </div>
+      </sc-if>
+
+      <!-- ============ ADS: ATTRIBUTION ============ -->
+      <sc-if value="{{ showAttribution }}" hint-placeholder-val="{{ false }}">
+      <div data-screen-label="Attribution" style="display: flex; flex-direction: column; gap: 20px;">
+        <sc-if value="{{ att.setup }}" hint-placeholder-val="{{ false }}">
+        <div style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 56px 32px; text-align: center; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+          <div style="font-size: 15px; font-weight: 600; color: #0f172a; margin-bottom: 6px;">No Attribution Data Synced Yet</div>
+          <div style="font-size: 13px; color: #64748b; max-width: 420px; margin: 0 auto 20px;">We haven't synced cross-channel attribution metrics for this domain into the database yet. Click below to fetch current attribution right now.</div>
+          <div onClick="{{ h.refreshPage }}" style="display: inline-flex; align-items: center; gap: 8px; border-radius: 8px; background: #10b981; color: white; font-size: 14px; font-weight: 600; padding: 10px 20px; cursor: pointer; box-shadow: 0 1px 2px rgba(0,0,0,0.05);" style-hover="background:#059669">⚡ Fetch Attribution Now</div>
+        </div>
+        </sc-if>
+        <sc-if value="{{ !att.setup }}" hint-placeholder-val="{{ true }}">
+        <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
+          <div style="padding: 16px 20px; border-bottom: 1px solid #f1f5f9; display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;">
+            <div><h2 style="font-size: 15px; font-weight: 600; margin: 0;">Google Ads vs. GA4</h2><p style="font-size: 12px; color: #94a3b8; margin: 4px 0 0; max-width: 620px;">The two columns will never match: Google Ads credits its own last click (and view-through), GA4 uses data-driven attribution across all channels. Gaps beyond ±25% are flagged — they usually mean tracking issues, not performance changes.</p></div>
+            <div style="display: flex; gap: 20px; font-size: 12px;">
+              <span style="display: inline-flex; align-items: center; gap: 6px; color: #64748b;"><span style="width: 10px; height: 6px; border-radius: 3px; background: #4f46e5;"></span>Google Ads: <b style="color: #0f172a; font-weight: 700;">{{ att.totals.ads }}</b></span>
+              <span style="display: inline-flex; align-items: center; gap: 6px; color: #64748b;"><span style="width: 10px; height: 6px; border-radius: 3px; background: #10b981;"></span>GA4: <b style="color: #0f172a; font-weight: 700;">{{ att.totals.ga4 }}</b></span>
+              <span style="color: #64748b;">Overall gap <b style="color: #0f172a; font-weight: 700;">{{ att.totals.gap }}</b></span>
+            </div>
+          </div>
+          <table style="width: 100%; border-collapse: collapse; font-size: 13.5px;">
+            <thead><tr style="text-align: left; color: #94a3b8; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;">
+              <th style="font-weight: 500; padding: 12px 10px 12px 20px;">Campaign</th>
+              <th style="font-weight: 500; padding: 12px 10px; width: 32%;">Conversions — Ads vs. GA4</th>
+              <th style="font-weight: 500; padding: 12px 10px; text-align: right;">Gap</th>
+              <th style="font-weight: 500; padding: 12px 10px; text-align: right;">Ads conv. value</th>
+              <th style="font-weight: 500; padding: 12px 20px 12px 10px; text-align: right;">GA4 revenue</th>
+            </tr></thead>
+            <tbody>
+              <sc-for list="{{ att.rows }}" as="r" hint-placeholder-count="4">
+                <tr style="border-top: 1px solid #f1f5f9;" style-hover="background:#f8fafc">
+                  <td style="padding: 12px 10px 12px 20px;"><div><span onClick="{{ r.onCampaign }}" role="button" title="Open this campaign" style="font-weight: 500; color: #334155; cursor: pointer; border-bottom: 1px dashed #cbd5e1; padding-bottom: 1px;" style-hover="color:#4f46e5">{{ r.name }}</span></div><div style="margin-top: 4px;"><span style="{{ r.platformStyle }}">{{ r.platform }}</span></div></td>
+                  <td style="padding: 12px 10px;">
+                    <div style="display: grid; grid-template-columns: 28px 1fr; gap: 6px 10px; align-items: center;">
+                      <span style="font-size: 12px; font-weight: 600; color: #4f46e5; text-align: right;">{{ r.ads }}</span>
+                      <div style="background: #f1f5f9; border-radius: 9999px; height: 6px;"><div style="{{ r.adsBar }}"></div></div>
+                      <span style="font-size: 12px; font-weight: 600; color: #059669; text-align: right;">{{ r.ga4 }}</span>
+                      <div style="background: #f1f5f9; border-radius: 9999px; height: 6px;"><div style="{{ r.ga4Bar }}"></div></div>
+                    </div>
+                  </td>
+                  <td style="padding: 12px 10px; text-align: right;"><span style="{{ r.gapStyle }}">{{ r.gapLabel }}</span></td>
+                  <td style="padding: 12px 10px; text-align: right; color: #475569;">{{ r.adsVal }}</td>
+                  <td style="padding: 12px 20px 12px 10px; text-align: right; color: #475569;">{{ r.ga4Val }}</td>
+                </tr>
+              </sc-for>
+            </tbody>
+          </table>
+        </div>
+
+        <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
+          <div style="padding: 16px 20px; border-bottom: 1px solid #f1f5f9;"><h2 style="font-size: 15px; font-weight: 600; margin: 0;">Post-click quality by landing page</h2><p style="font-size: 12px; color: #94a3b8; margin: 4px 0 0;">GA4 · sessions from paid campaigns — low engagement here means the click was fine but the page isn't converting</p></div>
+          <table style="width: 100%; border-collapse: collapse; font-size: 13.5px;">
+            <thead><tr style="text-align: left; color: #94a3b8; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;">
+              <th style="font-weight: 500; padding: 12px 10px 12px 20px;">Landing page</th>
+              <th style="font-weight: 500; padding: 12px 10px;">Campaign</th>
+              <th style="font-weight: 500; padding: 12px 10px; text-align: right;">Sessions</th>
+              <th style="font-weight: 500; padding: 12px 10px; width: 20%;">Engaged rate</th>
+              <th style="font-weight: 500; padding: 12px 10px; text-align: right;">Key events</th>
+              <th style="font-weight: 500; padding: 12px 20px 12px 10px; text-align: right;">Revenue</th>
+            </tr></thead>
+            <tbody>
+              <sc-for list="{{ att.pages }}" as="r" hint-placeholder-count="5">
+                <tr style="border-top: 1px solid #f1f5f9;" style-hover="background:#f8fafc">
+                  <td style="padding: 11px 10px 11px 20px; font-family: monospace; font-size: 12.5px;"><a href="https://{{ projectDomain }}{{ r.url }}" target="_blank" rel="noopener" title="Open live page" style="color: #334155; text-decoration: none;" style-hover="color:#4f46e5;text-decoration:underline">{{ r.url }}</a></td>
+                  <td style="padding: 11px 10px; color: #64748b; font-size: 12.5px;">{{ r.campaign }}</td>
+                  <td style="padding: 11px 10px; text-align: right; color: #475569;">{{ r.sessions }}</td>
+                  <td style="padding: 11px 10px;"><div style="display: flex; align-items: center; gap: 8px;"><div style="flex: 1; background: #f1f5f9; border-radius: 9999px; height: 5px;"><div style="{{ r.erBar }}"></div></div><span style="font-size: 12px; font-weight: 600; color: #334155; width: 34px; text-align: right;">{{ r.erLabel }}</span></div></td>
+                  <td style="padding: 11px 10px; text-align: right; font-weight: 600; color: #059669;">{{ r.keyEvents }}</td>
+                  <td style="padding: 11px 20px 11px 10px; text-align: right; color: #475569;">{{ r.revenue }}</td>
+                </tr>
+              </sc-for>
+            </tbody>
+          </table>
+        </div>
+
+        <div style="display: flex; align-items: center; gap: 18px; flex-wrap: wrap; border-radius: 10px; background: white; border: 1px solid #e2e8f0; padding: 10px 16px; font-size: 12px; color: #64748b;">
+          <span style="display: inline-flex; align-items: center; gap: 7px; font-weight: 600; color: #334155;"><span style="{{ adsSync.dotStyle }}"></span>{{ adsSync.cadence }}</span>
+          <span>Last pull <b style="color: #334155; font-weight: 600;">{{ adsSync.last }}</b></span>
+          <span>Next pull <b style="color: #334155; font-weight: 600;">{{ adsSync.next }}</b></span>
+          <span style="margin-left: auto;">Google Ads API {{ adsSync.quota }}</span>
+          <span>GA4 {{ adsSync.ga4 }}</span>
+        </div>
+        </sc-if>
+      </div>
+      </sc-if>
+
+      <!-- ============ ALERTS ============ -->
+      <!-- #include "pages/alerts.html" -->
+
+      <!-- ============ SETTINGS ============ -->
+      <!-- #include "pages/settings.html" -->
+
+    </main>
+  </div>
+
+  <!-- keyword lists modal -->
+  <sc-if value="{{ showLists }}" hint-placeholder-val="{{ false }}">
+    <div style="position: fixed; inset: 0; z-index: 85; display: flex; align-items: center; justify-content: center;">
+      <div onClick="{{ h.toggleLists }}" style="position: absolute; inset: 0; background: rgba(15,23,42,0.35);"></div>
+      <div style="position: relative; width: 560px; max-width: 92vw; max-height: 82vh; background: white; border-radius: 14px; box-shadow: 0 24px 60px rgba(15,23,42,0.28); display: flex; flex-direction: column; overflow: hidden;">
+        <div style="padding: 18px 22px; border-bottom: 1px solid #f1f5f9; display: flex; align-items: center; justify-content: space-between;">
+          <div>
+            <h2 style="font-size: 16px; font-weight: 700; margin: 0;">Keyword lists</h2>
+            <p style="font-size: 12px; color: #94a3b8; margin: 3px 0 0;">{{ listsCount }} list(s) · saved from Keyword Explorer</p>
+          </div>
+          <span onClick="{{ h.toggleLists }}" style="color: #94a3b8; cursor: pointer; display: inline-flex;" style-hover="color:#0f172a"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg></span>
+        </div>
+        <div style="padding: 16px 22px; overflow-y: auto;">
+          <sc-if value="{{ noLists }}" hint-placeholder-val="{{ false }}">
+            <div style="padding: 32px; text-align: center; color: #94a3b8; font-size: 13px;">No keyword lists yet. Select keywords and use <b>Send keywords → Keyword list</b> to create one.</div>
+          </sc-if>
+          <sc-for list="{{ allLists }}" as="l" hint-placeholder-count="2">
+            <div style="border: 1px solid #e2e8f0; border-radius: 10px; padding: 14px 16px; margin-bottom: 12px;">
+              <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px;">
+                <div style="display: flex; align-items: center; gap: 9px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#0891b2" stroke-width="2"><path d="M4 5a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/></svg><span style="font-size: 14px; font-weight: 600; color: #0f172a;">{{ l.name }}</span><span style="font-size: 11px; color: #94a3b8;">{{ l.count }} keyword(s)</span></div>
+                <div style="display: flex; align-items: center; gap: 12px;">
+                  <span onClick="{{ l.onSendPt }}" style="font-size: 12px; font-weight: 600; color: #4f46e5; cursor: pointer;" style-hover="opacity:0.75">Send to tracking</span>
+                  <span onClick="{{ l.onDelete }}" title="Delete list" style="color: #cbd5e1; cursor: pointer; display: inline-flex;" style-hover="color:#ef4444"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg></span>
+                </div>
+              </div>
+              <sc-if value="{{ l.empty }}" hint-placeholder-val="{{ false }}"><div style="font-size: 12px; color: #cbd5e1;">Empty list</div></sc-if>
+              <div style="display: flex; flex-wrap: wrap; gap: 6px;">
+                <sc-for list="{{ l.keywords }}" as="k" hint-placeholder-count="3">
+                  <span style="display: inline-flex; align-items: center; gap: 6px; padding: 4px 6px 4px 10px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; font-size: 12px; color: #334155;">{{ k.kw }}<span onClick="{{ k.onRemove }}" title="Remove" style="color: #cbd5e1; cursor: pointer; display: inline-flex;" style-hover="color:#ef4444"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 6 6 18M6 6l12 12"/></svg></span></span>
+                </sc-for>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <!-- page detail drawer -->
+  <sc-if value="{{ pd.show }}" hint-placeholder-val="{{ false }}">
+    <div style="position: fixed; inset: 0; z-index: 80;">
+      <div onClick="{{ h.auCloseDrawer }}" style="position: absolute; inset: 0; background: rgba(15,23,42,0.3);"></div>
+      <div style="position: absolute; top: 0; right: 0; bottom: 0; width: 440px; max-width: 92vw; background: white; box-shadow: -20px 0 50px rgba(15,23,42,0.2); display: flex; flex-direction: column; overflow: hidden;">
+        <div style="padding: 18px 22px; border-bottom: 1px solid #f1f5f9; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;">
+          <div>
+            <div style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: #94a3b8; margin-bottom: 5px;">Page details</div>
+            <div style="font-family: monospace; font-size: 13px; font-weight: 600; color: #0f172a; word-break: break-all;">{{ pd.url }}</div>
+          </div>
+          <span onClick="{{ h.auCloseDrawer }}" style="color: #94a3b8; cursor: pointer; display: inline-flex; flex-shrink: 0;" style-hover="color:#0f172a"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg></span>
+        </div>
+        <div style="padding: 18px 22px; overflow-y: auto; display: flex; flex-direction: column; gap: 18px;">
+          <div style="display: flex; align-items: center; gap: 10px;">
+            <span style="{{ pd.scoreStyle }}">{{ pd.score }}</span>
+            <span style="font-size: 12px; color: #64748b;">page score</span>
+            <span style="{{ pd.statusStyle }}">{{ pd.status }}</span>
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px;">
+            <sc-for list="{{ pd.stats }}" as="st2" hint-placeholder-count="6">
+              <div style="border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px 12px;">
+                <div style="font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8;">{{ st2.label }}</div>
+                <div style="font-size: 16px; font-weight: 700; color: #0f172a; margin-top: 3px;">{{ st2.value }}</div>
+              </div>
+            </sc-for>
+          </div>
+          <sc-if value="{{ pd.hasCwv }}" hint-placeholder-val="{{ false }}">
+            <div>
+              <div style="font-size: 12px; font-weight: 600; color: #334155; margin-bottom: 8px;">Core Web Vitals</div>
+              <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px;">
+                <sc-for list="{{ pd.cwv }}" as="v" hint-placeholder-count="3">
+                  <div style="border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px 12px;">
+                    <div style="display: flex; align-items: center; justify-content: space-between;"><span style="font-size: 11px; font-weight: 700; color: #64748b;">{{ v.name }}</span><span style="{{ v.dot }}"></span></div>
+                    <div style="font-size: 15px; font-weight: 700; color: #0f172a; margin-top: 3px;">{{ v.value }}</div>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+          </sc-if>
+          <div>
+            <div style="font-size: 12px; font-weight: 600; color: #334155; margin-bottom: 8px;">Issues on this page ({{ pd.checkCount }})</div>
+            <sc-if value="{{ pd.noChecks }}" hint-placeholder-val="{{ false }}"><div style="font-size: 13px; color: #94a3b8; padding: 10px 0;">No failed checks — this page is healthy.</div></sc-if>
+            <div style="display: flex; flex-direction: column;">
+              <sc-for list="{{ pd.checks }}" as="c" hint-placeholder-count="4">
+                <div onClick="{{ c.click }}" style="display: flex; align-items: center; gap: 10px; padding: 10px 4px; border-top: 1px solid #f8fafc; cursor: pointer; border-radius: 6px;" style-hover="background:#f8fafc">
+                  <span style="{{ c.dot }}"></span>
+                  <span style="font-size: 13px; font-weight: 500; color: #334155; flex: 1;">{{ c.title }}</span>
+                  <span style="{{ c.sevStyle }}">{{ c.sev }}</span>
+                  <span style="color: #cbd5e1; font-size: 16px;">›</span>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <!-- toast -->
+  <sc-if value="{{ toast }}" hint-placeholder-val="{{ false }}">
+    <div style="position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); z-index: 90; background: #0f172a; color: white; padding: 12px 20px; border-radius: 10px; font-size: 13px; font-weight: 500; box-shadow: 0 12px 32px rgba(15,23,42,0.28); display: flex; align-items: center; gap: 10px;">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#4ade80" stroke-width="2.5"><path d="M20 6 9 17l-5-5"/></svg>{{ toast }}
+    </div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{
+  &quot;$preview&quot;: { &quot;width&quot;: 1440, &quot;height&quot;: 900 },
+  &quot;apiBaseUrl&quot;: { &quot;editor&quot;: &quot;text&quot;, &quot;default&quot;: &quot;&quot;, &quot;tsType&quot;: &quot;string&quot;, &quot;section&quot;: &quot;Backend&quot;, &quot;description&quot;: &quot;Django API base URL. Empty = demo fixture mode.&quot; },
+  &quot;demoLatency&quot;: { &quot;editor&quot;: &quot;boolean&quot;, &quot;default&quot;: true, &quot;tsType&quot;: &quot;boolean&quot;, &quot;section&quot;: &quot;Backend&quot;, &quot;description&quot;: &quot;Simulate network latency in fixture mode.&quot; },
+  &quot;defaultRange&quot;: { &quot;editor&quot;: &quot;enum&quot;, &quot;options&quot;: [&quot;7d&quot;, &quot;30d&quot;, &quot;90d&quot;], &quot;default&quot;: &quot;30d&quot;, &quot;tsType&quot;: &quot;string&quot;, &quot;section&quot;: &quot;Behavior&quot; }
+}">
+class Component extends DCLogic {
+  /* #include "js/app.js" */
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,365 @@
+<sc-if value="{{ showPages }}" hint-placeholder-val="{{ false }}">
+      <div data-screen-label="Site Audit" style="display: flex; flex-direction: column; gap: 20px;">
+
+        <!-- ===== SETUP PENDING (no crawl/checks-catalog data yet) ===== -->
+        <sc-if value="{{ au.setup }}" hint-placeholder-val="{{ false }}">
+        <div style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 56px 32px; text-align: center; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+          <div style="font-size: 15px; font-weight: 600; color: #0f172a; margin-bottom: 6px;">No Site Audit Data Synced Yet</div>
+          <div style="font-size: 13px; color: #64748b; max-width: 420px; margin: 0 auto 20px;">We haven't crawled or synced site health data for this domain into the database yet. Click below to fetch current audit data right now.</div>
+          <div onClick="{{ h.refreshPage }}" style="display: inline-flex; align-items: center; gap: 8px; border-radius: 8px; background: #10b981; color: white; font-size: 14px; font-weight: 600; padding: 10px 20px; cursor: pointer; box-shadow: 0 1px 2px rgba(0,0,0,0.05);" style-hover="background:#059669">⚡ Fetch Site Audit Now</div>
+        </div>
+        </sc-if>
+
+        <!-- ===== LIVE SITE AUDIT UI ===== -->
+        <sc-if value="{{ !au.setup }}" hint-placeholder-val="{{ true }}">
+
+        <!-- header -->
+        <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap;">
+          <div>
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <h1 style="font-size: 20px; font-weight: 700; margin: 0;">Site Audit</h1>
+              <span style="font-size: 12px; color: #64748b; background: #f1f5f9; border-radius: 6px; padding: 3px 10px;">{{ au.domain }}</span>
+            </div>
+            <p style="font-size: 12px; color: #94a3b8; margin: 6px 0 0;">Last crawl {{ au.crawlDate }} · {{ au.pagesCrawled }} pages crawled in {{ au.crawlDuration }} · {{ au.userAgent }}</p>
+          </div>
+          <div onClick="{{ h.syncAudit }}" style="cursor: pointer; padding: 8px 16px; font-size: 13px; font-weight: 600; color: #334155; border: 1px solid #cbd5e1; border-radius: 8px; background: white;" style-hover="background:#f8fafc">Re-crawl now</div>
+        </div>
+
+        <!-- sub-tabs -->
+        <div style="display: flex; gap: 2px; border-bottom: 1px solid #e2e8f0;">
+          <sc-for list="{{ au.subTabs }}" as="t" hint-placeholder-count="3">
+            <div onClick="{{ t.click }}" style="{{ t.style }}" style-hover="color:#0f172a">{{ t.label }}</div>
+          </sc-for>
+        </div>
+
+        <!-- ===== OVERVIEW ===== -->
+        <sc-if value="{{ au.showOverview }}" hint-placeholder-val="{{ true }}">
+          <div style="display: grid; grid-template-columns: 1fr 1.2fr 1fr; gap: 16px;">
+            <!-- health gauge -->
+            <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); padding: 20px; display: flex; flex-direction: column; align-items: center; gap: 10px;">
+              <div style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: #94a3b8; align-self: flex-start;">Site Health</div>
+              <div style="{{ au.gaugeOuter }}">
+                <div style="width: 112px; height: 112px; border-radius: 50%; background: white; display: flex; flex-direction: column; align-items: center; justify-content: center;">
+                  <div style="{{ au.gaugeNum }}">{{ au.score }}</div>
+                  <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: #94a3b8;">/ 100</div>
+                </div>
+              </div>
+              <div style="{{ au.scoreWordStyle }}">{{ au.scoreWord }}</div>
+            </div>
+            <!-- crawled pages breakdown -->
+            <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); padding: 20px;">
+              <div style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: #94a3b8;">Crawled Pages</div>
+              <div style="font-size: 26px; font-weight: 800; color: #0f172a; margin: 8px 0 12px;">{{ au.pagesCrawled }}</div>
+              <div style="display: flex; height: 10px; border-radius: 5px; overflow: hidden; margin-bottom: 14px;">
+                <sc-for list="{{ au.barSegs }}" as="b" hint-placeholder-count="4"><div style="{{ b.style }}"></div></sc-for>
+              </div>
+              <div style="display: flex; flex-direction: column; gap: 7px;">
+                <sc-for list="{{ au.breakRows }}" as="b" hint-placeholder-count="5">
+                  <div onClick="{{ b.click }}" style="display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: #475569; cursor: pointer;" style-hover="color:#0f172a">
+                    <span style="{{ b.dot }}"></span><span style="flex: 1;">{{ b.label }}</span><span style="font-weight: 600; color: #0f172a;">{{ b.count }}</span>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+            <!-- issue totals -->
+            <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); padding: 20px; display: flex; flex-direction: column;">
+              <div style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: #94a3b8; margin-bottom: 12px;">Issues Found</div>
+              <div style="display: flex; flex-direction: column; gap: 10px; flex: 1;">
+                <sc-for list="{{ au.sevTotals }}" as="v" hint-placeholder-count="3">
+                  <div onClick="{{ v.click }}" style="{{ v.style }}" style-hover="filter:brightness(0.97)">
+                    <span style="font-size: 13px; font-weight: 600;">{{ v.label }}</span>
+                    <span style="font-size: 20px; font-weight: 800;">{{ v.count }}</span>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+          </div>
+
+          <!-- thematic reports -->
+          <div>
+            <h2 style="font-size: 15px; font-weight: 600; margin: 0 0 12px;">Thematic Reports</h2>
+            <div style="display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px;">
+              <sc-for list="{{ au.cats }}" as="c" hint-placeholder-count="6">
+                <div onClick="{{ c.click }}" style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); padding: 16px 14px; cursor: pointer;" style-hover="box-shadow:0 4px 12px rgba(0,0,0,0.08)">
+                  <div style="{{ c.scoreStyle }}">{{ c.score }}<span style="font-size: 12px; font-weight: 500; color: #94a3b8;">%</span></div>
+                  <div style="font-size: 12.5px; font-weight: 600; color: #334155; margin-top: 6px;">{{ c.name }}</div>
+                  <div style="font-size: 11px; color: #94a3b8; margin-top: 3px;">{{ c.issueLine }}</div>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+
+          <!-- core web vitals -->
+          <div>
+            <h2 style="font-size: 15px; font-weight: 600; margin: 0 0 12px;">Core Web Vitals <span style="font-size: 11px; font-weight: 500; color: #94a3b8;">Lighthouse · p75 across crawled pages</span></h2>
+            <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px;">
+              <sc-for list="{{ au.vitals }}" as="v" hint-placeholder-count="3">
+                <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); padding: 18px 20px;">
+                  <div style="display: flex; align-items: baseline; justify-content: space-between;">
+                    <div><span style="font-size: 13px; font-weight: 600; color: #334155;">{{ v.name }}</span><span style="font-size: 11px; color: #94a3b8;"> {{ v.desc }}</span></div>
+                    <span style="{{ v.badge }}">{{ v.verdict }}</span>
+                  </div>
+                  <div style="{{ v.numStyle }}">{{ v.p75 }}<span style="font-size: 13px; font-weight: 500; color: #94a3b8;"> {{ v.unit }}</span></div>
+                  <div style="display: flex; height: 8px; border-radius: 4px; overflow: hidden; margin-top: 12px;">
+                    <sc-for list="{{ v.segs }}" as="sg" hint-placeholder-count="3"><div style="{{ sg.style }}"></div></sc-for>
+                  </div>
+                  <div style="display: flex; justify-content: space-between; font-size: 10.5px; color: #94a3b8; margin-top: 6px;"><span>{{ v.goodLbl }}</span><span>{{ v.midLbl }}</span><span>{{ v.poorLbl }}</span></div>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+
+          <!-- domain checks + top issues -->
+          <div style="display: grid; grid-template-columns: 1fr 1.6fr; gap: 16px;">
+            <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
+              <div style="padding: 14px 20px; border-bottom: 1px solid #f1f5f9;"><h2 style="font-size: 14px; font-weight: 600; margin: 0;">Domain Checks</h2></div>
+              <sc-for list="{{ au.domChecks }}" as="d" hint-placeholder-count="5">
+                <div style="display: flex; align-items: center; gap: 10px; padding: 11px 20px; border-top: 1px solid #f8fafc;">
+                  <span style="{{ d.icon }}">{{ d.mark }}</span>
+                  <span style="font-size: 13px; font-weight: 500; color: #334155; flex: 1;">{{ d.label }}</span>
+                  <span style="font-size: 12px; color: #94a3b8;">{{ d.detail }}</span>
+                </div>
+              </sc-for>
+            </div>
+            <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
+              <div style="padding: 14px 20px; border-bottom: 1px solid #f1f5f9; display: flex; align-items: center; justify-content: space-between;">
+                <h2 style="font-size: 14px; font-weight: 600; margin: 0;">Top Issues</h2>
+                <span onClick="{{ h.auGoIssues }}" style="font-size: 12px; color: #4f46e5; font-weight: 500; cursor: pointer;" style-hover="opacity:0.7">View all issues →</span>
+              </div>
+              <sc-for list="{{ au.topIssues }}" as="i" hint-placeholder-count="5">
+                <div onClick="{{ i.click }}" style="display: flex; align-items: center; gap: 12px; padding: 12px 20px; border-top: 1px solid #f8fafc; cursor: pointer;" style-hover="background:#f8fafc">
+                  <span style="{{ i.dot }}"></span>
+                  <span style="font-size: 13px; font-weight: 500; color: #334155; flex: 1;">{{ i.title }}</span>
+                  <span style="font-size: 11px; color: #94a3b8;">{{ i.category }}</span>
+                  <span style="{{ i.countStyle }}">{{ i.count }}</span>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+        </sc-if>
+
+        <!-- ===== ISSUES ===== -->
+        <sc-if value="{{ au.showIssues }}" hint-placeholder-val="{{ false }}">
+          <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+            <div style="display: inline-flex; background: #f1f5f9; border-radius: 8px; padding: 3px; gap: 2px;">
+              <sc-for list="{{ au.sevFilters }}" as="f" hint-placeholder-count="5"><div onClick="{{ f.click }}" style="{{ f.style }}">{{ f.label }}</div></sc-for>
+            </div>
+            <div style="display: inline-flex; gap: 6px; flex-wrap: wrap;">
+              <sc-for list="{{ au.catFilters }}" as="f" hint-placeholder-count="6"><div onClick="{{ f.click }}" style="{{ f.style }}" style-hover="border-color:#cbd5e1">{{ f.label }}</div></sc-for>
+            </div>
+            <input value="{{ au.search }}" onInput="{{ h.auSearch }}" aria-label="Search audit checks" placeholder="Search checks…" style="margin-left: auto; width: 190px; padding: 7px 12px; font-size: 13px; border: 1px solid #e2e8f0; border-radius: 8px; outline: none; color: #0f172a;" />
+          </div>
+          <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
+            <sc-if value="{{ au.noIssues }}" hint-placeholder-val="{{ false }}"><div style="padding: 40px; text-align: center; color: #94a3b8; font-size: 13px;">No checks match the current filters.</div></sc-if>
+            <sc-for list="{{ au.issueRows }}" as="i" hint-placeholder-count="8">
+              <div style="border-top: 1px solid #f1f5f9;">
+                <div onClick="{{ i.toggle }}" style="{{ i.rowStyle }}" style-hover="background:#f8fafc">
+                  <span style="{{ i.dot }}"></span>
+                  <span style="font-size: 13.5px; font-weight: 600; color: #0f172a; flex: 1;">{{ i.title }}</span>
+                  <span style="font-size: 11px; color: #64748b; background: #f1f5f9; border-radius: 4px; padding: 2px 8px;">{{ i.category }}</span>
+                  <span style="{{ i.countStyle }}">{{ i.countLabel }}</span>
+                  <span style="{{ i.chev }}">›</span>
+                </div>
+                <sc-if value="{{ i.open }}" hint-placeholder-val="{{ false }}">
+                  <div style="padding: 0 20px 18px 42px; display: flex; flex-direction: column; gap: 12px;">
+                    <div style="border-radius: 8px; background: #f8fafc; border: 1px solid #e2e8f0; padding: 12px 14px; font-size: 13px; color: #475569;"><b style="color: #0f172a;">How to fix:</b> {{ i.howToFix }}</div>
+                    <sc-if value="{{ i.hasPages }}" hint-placeholder-val="{{ true }}">
+                      <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
+                        <thead><tr style="text-align: left; color: #94a3b8; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;"><th style="font-weight: 500; padding: 6px 0;">Affected page</th><th style="font-weight: 500; padding: 6px 12px; text-align: center;">Page score</th><th style="font-weight: 500; padding: 6px 0; text-align: right;">Status</th></tr></thead>
+                        <tbody>
+                          <sc-for list="{{ i.pages }}" as="pg" hint-placeholder-count="3">
+                            <tr style="border-top: 1px solid #f1f5f9;">
+                              <td style="padding: 7px 0; font-family: monospace; font-size: 12px; color: #475569;">{{ pg.url }}</td>
+                              <td style="padding: 7px 12px; text-align: center;"><span style="{{ pg.scoreStyle }}">{{ pg.score }}</span></td>
+                              <td style="padding: 7px 0; text-align: right; color: #64748b; font-size: 12px;">{{ pg.status }}</td>
+                            </tr>
+                          </sc-for>
+                        </tbody>
+                      </table>
+                      <sc-if value="{{ i.more }}" hint-placeholder-val="{{ false }}"><div style="font-size: 12px; color: #94a3b8;">{{ i.moreLabel }}</div></sc-if>
+                    </sc-if>
+                    <div style="display: flex; gap: 14px;">
+                      <span onClick="{{ i.exportPages }}" style="font-size: 12px; font-weight: 600; color: #4f46e5; cursor: pointer;" style-hover="opacity:0.7">Export affected pages</span>
+                      <span onClick="{{ i.hide }}" style="font-size: 12px; font-weight: 600; color: #94a3b8; cursor: pointer;" style-hover="color:#dc2626">{{ i.hideLabel }}</span>
+                    </div>
+                  </div>
+                </sc-if>
+              </div>
+            </sc-for>
+          </div>
+        </sc-if>
+
+        <!-- ===== CRAWLED PAGES ===== -->
+        <sc-if value="{{ au.showCrawled }}" hint-placeholder-val="{{ false }}">
+          <div style="display: flex; align-items: center; gap: 12px;">
+            <div style="display: inline-flex; background: #f1f5f9; border-radius: 8px; padding: 3px; gap: 2px;">
+              <div onClick="{{ h.auViewTable }}" style="{{ au.tableTabStyle }}">Pages table</div>
+              <div onClick="{{ h.auViewTree }}" style="{{ au.treeTabStyle }}">Site structure</div>
+            </div>
+            <input value="{{ au.pgSearch }}" onInput="{{ h.auPgSearch }}" aria-label="Filter pages by URL" placeholder="Filter by URL…" style="margin-left: auto; width: 190px; padding: 7px 12px; font-size: 13px; border: 1px solid #e2e8f0; border-radius: 8px; outline: none; color: #0f172a;" />
+            <span onClick="{{ h.exportPages }}" style="font-size: 12px; color: #4f46e5; font-weight: 500; cursor: pointer;" style-hover="opacity:0.7">Export CSV</span>
+          </div>
+          <sc-if value="{{ au.showTable }}" hint-placeholder-val="{{ true }}">
+            <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
+              <table style="width: 100%; border-collapse: collapse; font-size: 13.5px;">
+                <thead>
+                  <tr style="text-align: left; color: #94a3b8; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; background: #f8fafc; border-bottom: 1px solid #f1f5f9;">
+                    <th style="font-weight: 500; padding: 12px 20px;">Page</th>
+                    <th onClick="{{ auSort.score }}" style="font-weight: 500; padding: 12px; text-align: center; cursor: pointer;">Score{{ auArrow.score }}</th>
+                    <th style="font-weight: 500; padding: 12px; text-align: center;">Status</th>
+                    <th onClick="{{ auSort.issues }}" style="font-weight: 500; padding: 12px; text-align: center; cursor: pointer;">Issues{{ auArrow.issues }}</th>
+                    <th onClick="{{ auSort.depth }}" style="font-weight: 500; padding: 12px; text-align: center; cursor: pointer;">Depth{{ auArrow.depth }}</th>
+                    <th onClick="{{ auSort.inLinks }}" style="font-weight: 500; padding: 12px; text-align: right; cursor: pointer;">In-links{{ auArrow.inLinks }}</th>
+                    <th onClick="{{ auSort.loadTimeMs }}" style="font-weight: 500; padding: 12px 20px; text-align: right; cursor: pointer;">Load time{{ auArrow.loadTimeMs }}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <sc-for list="{{ au.pageRows }}" as="r" hint-placeholder-count="10">
+                    <tr onClick="{{ r.open }}" style="border-top: 1px solid #f1f5f9; cursor: pointer;" style-hover="background:#f8fafc">
+                      <td style="padding: 10px 20px; font-family: monospace; font-size: 12px; color: #4f46e5; font-weight: 600;">{{ r.url }}</td>
+                      <td style="padding: 10px; text-align: center;"><span style="{{ r.scoreStyle }}">{{ r.score }}</span></td>
+                      <td style="padding: 10px; text-align: center;"><span style="{{ r.statusStyle }}">{{ r.status }}</span></td>
+                      <td style="padding: 10px; text-align: center; font-size: 12px;">{{ r.issuesLabel }}</td>
+                      <td style="padding: 10px; text-align: center; color: #64748b;">{{ r.depth }}</td>
+                      <td style="padding: 10px; text-align: right; color: #64748b;">{{ r.inLinks }}</td>
+                      <td style="padding: 10px 20px; text-align: right;"><span style="{{ r.loadStyle }}">{{ r.loadLabel }}</span></td>
+                    </tr>
+                  </sc-for>
+                </tbody>
+              </table>
+              <div style="padding: 10px 20px; border-top: 1px solid #f1f5f9; font-size: 12px; color: #94a3b8;">{{ au.pageRowCount }}</div>
+            </div>
+          </sc-if>
+          <sc-if value="{{ au.showTree }}" hint-placeholder-val="{{ false }}">
+            <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
+              <div style="display: grid; grid-template-columns: 1fr 90px 90px 200px; gap: 12px; padding: 12px 20px; background: #f8fafc; border-bottom: 1px solid #f1f5f9; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: #94a3b8; font-weight: 500;">
+                <span>Folder</span><span style="text-align: center;">Pages</span><span style="text-align: center;">Avg score</span><span style="text-align: right;">Issues (E / W / N)</span>
+              </div>
+              <sc-for list="{{ au.treeRows }}" as="t" hint-placeholder-count="6">
+                <div style="display: grid; grid-template-columns: 1fr 90px 90px 200px; gap: 12px; padding: 12px 20px; border-top: 1px solid #f8fafc; align-items: center;" style-hover="background:#f8fafc">
+                  <span style="font-family: monospace; font-size: 12.5px; color: #334155; font-weight: 600;">{{ t.folder }}</span>
+                  <span style="text-align: center; color: #64748b; font-size: 13px;">{{ t.pages }}</span>
+                  <span style="text-align: center;"><span style="{{ t.scoreStyle }}">{{ t.avgScore }}</span></span>
+                  <span style="text-align: right; font-size: 12px;"><span style="color: #dc2626; font-weight: 600;">{{ t.errors }}</span><span style="color: #cbd5e1;"> / </span><span style="color: #d97706; font-weight: 600;">{{ t.warnings }}</span><span style="color: #cbd5e1;"> / </span><span style="color: #2563eb; font-weight: 600;">{{ t.notices }}</span></span>
+                </div>
+              </sc-for>
+            </div>
+          </sc-if>
+        </sc-if>
+
+        <!-- ===== STATISTICS ===== -->
+        <sc-if value="{{ au.showStats }}" hint-placeholder-val="{{ false }}">
+          <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px;">
+            <sc-for list="{{ au.statKpis }}" as="k" hint-placeholder-count="4">
+              <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); padding: 16px 20px;">
+                <div style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: #94a3b8;">{{ k.label }}</div>
+                <div style="font-size: 24px; font-weight: 800; color: #0f172a; margin-top: 8px;">{{ k.value }}</div>
+                <div style="font-size: 11px; color: #94a3b8; margin-top: 2px;">{{ k.sub }}</div>
+              </div>
+            </sc-for>
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+            <sc-for list="{{ au.statCharts }}" as="c" hint-placeholder-count="4">
+              <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); padding: 18px 20px;">
+                <h2 style="font-size: 14px; font-weight: 600; margin: 0 0 14px;">{{ c.title }}</h2>
+                <div style="display: flex; flex-direction: column; gap: 10px;">
+                  <sc-for list="{{ c.rows }}" as="r" hint-placeholder-count="4">
+                    <div>
+                      <div style="display: flex; align-items: center; justify-content: space-between; font-size: 12.5px; margin-bottom: 4px;">
+                        <span style="color: #475569; display: flex; align-items: center; gap: 8px;"><span style="{{ r.dot }}"></span>{{ r.label }}</span>
+                        <span style="font-weight: 700; color: #0f172a;">{{ r.count }} <span style="font-weight: 500; color: #94a3b8;">({{ r.pct }})</span></span>
+                      </div>
+                      <div style="height: 8px; border-radius: 4px; background: #f1f5f9; overflow: hidden;"><div style="{{ r.bar }}"></div></div>
+                    </div>
+                  </sc-for>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+        </sc-if>
+
+        <!-- ===== COMPARE CRAWLS ===== -->
+        <sc-if value="{{ au.showCompare }}" hint-placeholder-val="{{ false }}">
+          <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+            <span style="font-size: 13px; color: #64748b;">Compare</span>
+            <select onChange="{{ h.auCmpA }}" value="{{ au.cmpA }}" aria-label="Compare snapshot A" style="padding: 7px 10px; font-size: 13px; border: 1px solid #e2e8f0; border-radius: 8px; background: white; color: #0f172a; outline: none;">
+              <sc-for list="{{ au.cmpOptions }}" as="o" hint-placeholder-count="3"><option value="{{ o.value }}">{{ o.label }}</option></sc-for>
+            </select>
+            <span style="font-size: 13px; color: #64748b;">vs</span>
+            <select onChange="{{ h.auCmpB }}" value="{{ au.cmpB }}" aria-label="Compare snapshot B" style="padding: 7px 10px; font-size: 13px; border: 1px solid #e2e8f0; border-radius: 8px; background: white; color: #0f172a; outline: none;">
+              <sc-for list="{{ au.cmpOptions2 }}" as="o" hint-placeholder-count="3"><option value="{{ o.value }}">{{ o.label }}</option></sc-for>
+            </select>
+            <div style="display: inline-flex; background: #f1f5f9; border-radius: 8px; padding: 3px; gap: 2px; margin-left: auto;">
+              <sc-for list="{{ au.cmpFilters }}" as="f" hint-placeholder-count="3"><div onClick="{{ f.click }}" style="{{ f.style }}">{{ f.label }}</div></sc-for>
+            </div>
+          </div>
+          <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px;">
+            <sc-for list="{{ au.cmpKpis }}" as="k" hint-placeholder-count="4">
+              <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); padding: 16px 20px;">
+                <div style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: #94a3b8;">{{ k.label }}</div>
+                <div style="display: flex; align-items: baseline; gap: 10px; margin-top: 8px;">
+                  <span style="font-size: 24px; font-weight: 800; color: #0f172a;">{{ k.now }}</span>
+                  <span style="{{ k.deltaStyle }}">{{ k.delta }}</span>
+                </div>
+                <div style="font-size: 11px; color: #94a3b8; margin-top: 2px;">was {{ k.was }}</div>
+              </div>
+            </sc-for>
+          </div>
+          <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
+            <div style="display: grid; grid-template-columns: 1fr 110px 90px 90px 110px; gap: 12px; padding: 12px 20px; background: #f8fafc; border-bottom: 1px solid #f1f5f9; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: #94a3b8; font-weight: 500;">
+              <span>Check</span><span>Category</span><span style="text-align: center;">{{ au.cmpALabel }}</span><span style="text-align: center;">{{ au.cmpBLabel }}</span><span style="text-align: right;">Change</span>
+            </div>
+            <sc-if value="{{ au.cmpEmpty }}" hint-placeholder-val="{{ false }}"><div style="padding: 36px; text-align: center; color: #94a3b8; font-size: 13px;">No checks changed between these two crawls.</div></sc-if>
+            <sc-for list="{{ au.cmpRows }}" as="r" hint-placeholder-count="8">
+              <div style="display: grid; grid-template-columns: 1fr 110px 90px 90px 110px; gap: 12px; padding: 12px 20px; border-top: 1px solid #f8fafc; align-items: center;" style-hover="background:#f8fafc">
+                <span style="display: flex; align-items: center; gap: 10px;"><span style="{{ r.dot }}"></span><span style="font-size: 13px; font-weight: 600; color: #0f172a;">{{ r.title }}</span></span>
+                <span style="font-size: 11.5px; color: #64748b;">{{ r.category }}</span>
+                <span style="text-align: center; font-size: 13px; color: #64748b;">{{ r.a }}</span>
+                <span style="text-align: center; font-size: 13px; font-weight: 700; color: #0f172a;">{{ r.b }}</span>
+                <span style="text-align: right;"><span style="{{ r.deltaStyle }}">{{ r.delta }}</span></span>
+              </div>
+            </sc-for>
+          </div>
+        </sc-if>
+
+        <!-- ===== PROGRESS ===== -->
+        <sc-if value="{{ au.showProgress }}" hint-placeholder-val="{{ false }}">
+          <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); padding: 20px;">
+            <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 16px;">
+              <h2 style="font-size: 15px; font-weight: 600; margin: 0;">Audit history <span style="font-size: 11px; font-weight: 500; color: #94a3b8;">8 weekly crawls</span></h2>
+              <div style="display: inline-flex; gap: 6px; flex-wrap: wrap;">
+                <sc-for list="{{ au.progToggles }}" as="t" hint-placeholder-count="5">
+                  <div onClick="{{ t.click }}" style="{{ t.style }}" style-hover="border-color:#cbd5e1"><span style="{{ t.dot }}"></span>{{ t.label }}</div>
+                </sc-for>
+              </div>
+            </div>
+            <svg viewBox="0 0 600 200" preserveAspectRatio="none" style="width: 100%; height: 220px; display: block;">
+              <sc-for list="{{ au.progLines }}" as="l" hint-placeholder-count="2">
+                <polyline points="{{ l.pts }}" fill="none" stroke="{{ l.color }}" stroke-width="2.5"></polyline>
+              </sc-for>
+            </svg>
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 8px;">
+              <span style="font-size: 11px; color: #94a3b8;">{{ au.progFrom }}</span>
+              <span style="font-size: 11px; color: #94a3b8;">{{ au.progTo }}</span>
+            </div>
+          </div>
+          <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
+            <div style="display: grid; grid-template-columns: 1fr 90px 90px 90px 90px 110px; gap: 12px; padding: 12px 20px; background: #f8fafc; border-bottom: 1px solid #f1f5f9; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: #94a3b8; font-weight: 500;">
+              <span>Crawl</span><span style="text-align: center;">Health</span><span style="text-align: center;">Errors</span><span style="text-align: center;">Warnings</span><span style="text-align: center;">Notices</span><span style="text-align: right;">Pages crawled</span>
+            </div>
+            <sc-for list="{{ au.progRows }}" as="r" hint-placeholder-count="8">
+              <div style="display: grid; grid-template-columns: 1fr 90px 90px 90px 90px 110px; gap: 12px; padding: 11px 20px; border-top: 1px solid #f8fafc; align-items: center; font-size: 13px;" style-hover="background:#f8fafc">
+                <span style="color: #334155; font-weight: 500;">{{ r.date }}<sc-if value="{{ r.latest }}" hint-placeholder-val="{{ false }}"><span style="font-size: 10px; font-weight: 700; color: #4f46e5; background: #eef2ff; border-radius: 4px; padding: 1px 6px; margin-left: 8px;">LATEST</span></sc-if></span>
+                <span style="text-align: center;"><span style="{{ r.scoreStyle }}">{{ r.score }}</span></span>
+                <span style="text-align: center; color: #dc2626; font-weight: 600;">{{ r.errors }}</span>
+                <span style="text-align: center; color: #d97706; font-weight: 600;">{{ r.warnings }}</span>
+                <span style="text-align: center; color: #2563eb; font-weight: 600;">{{ r.notices }}</span>
+                <span style="text-align: right; color: #64748b;">{{ r.pages }}</span>
+              </div>
+            </sc-for>
+          </div>
+        </sc-if>
+
+        </sc-if>
+      </div>
+      </sc-if>

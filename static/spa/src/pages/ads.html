@@ -1,0 +1,93 @@
+<sc-if value="{{ showAds }}" hint-placeholder-val="{{ false }}">
+      <div data-screen-label="Paid Overview" style="display: flex; flex-direction: column; gap: 20px;">
+
+        <sc-if value="{{ ads.setup }}" hint-placeholder-val="{{ false }}">
+        <div style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 56px 32px; text-align: center; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+          <div style="font-size: 15px; font-weight: 600; color: #0f172a; margin-bottom: 6px;">No Paid Ads Data Synced Yet</div>
+          <div style="font-size: 13px; color: #64748b; max-width: 420px; margin: 0 auto 20px;">We haven't synced Google Ads or Meta Ads campaign metrics for this domain into the database yet. Click below to fetch current ads data right now.</div>
+          <div onClick="{{ h.refreshPage }}" style="display: inline-flex; align-items: center; gap: 8px; border-radius: 8px; background: #10b981; color: white; font-size: 14px; font-weight: 600; padding: 10px 20px; cursor: pointer; box-shadow: 0 1px 2px rgba(0,0,0,0.05);" style-hover="background:#059669">⚡ Fetch Ads Data Now</div>
+        </div>
+        </sc-if>
+        <sc-if value="{{ !ads.setup }}" hint-placeholder-val="{{ true }}">
+
+        <div style="display: flex; align-items: center; gap: 18px; flex-wrap: wrap; border-radius: 10px; background: white; border: 1px solid #e2e8f0; padding: 10px 16px; font-size: 12px; color: #64748b;">
+          <span style="display: inline-flex; align-items: center; gap: 7px; font-weight: 600; color: #334155;"><span style="{{ adsSync.dotStyle }}"></span>{{ adsSync.cadence }}</span>
+          <span>Last pull <b style="color: #334155; font-weight: 600;">{{ adsSync.last }}</b></span>
+          <span>Next pull <b style="color: #334155; font-weight: 600;">{{ adsSync.next }}</b></span>
+          <span style="margin-left: auto;">Google Ads API {{ adsSync.quota }}</span>
+          <span>GA4 {{ adsSync.ga4 }}</span>
+          <span style="font-weight: 600; color: #059669;">$0.00 API cost</span>
+        </div>
+
+        <div style="display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px;">
+          <sc-for list="{{ ads.kpis }}" as="k" hint-placeholder-count="6">
+            <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; padding: 14px 16px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+              <div style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: #64748b;">{{ k.label }}</div>
+              <div style="display: flex; align-items: baseline; gap: 8px; margin-top: 6px;">
+                <span style="font-size: 21px; font-weight: 700; color: #0f172a;">{{ k.value }}</span>
+                <span style="{{ k.chipStyle }}">{{ k.chipLabel }}</span>
+              </div>
+              <div style="font-size: 11px; color: #94a3b8; margin-top: 3px;">{{ k.note }}</div>
+            </div>
+          </sc-for>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 3fr 2fr; gap: 16px; align-items: start;">
+          <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); padding: 16px 20px;">
+            <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;">
+              <div><h2 style="font-size: 15px; font-weight: 600; margin: 0;">Spend &amp; conversions</h2><p style="font-size: 12px; color: #94a3b8; margin: 4px 0 0;">Daily, all campaigns · {{ ads.trendRangeLabel }}</p></div>
+              <div style="display: flex; gap: 14px; font-size: 12px; color: #64748b;">
+                <span style="display: inline-flex; align-items: center; gap: 6px;"><span style="width: 10px; height: 3px; border-radius: 2px; background: #c7d2fe;"></span>Spend</span>
+                <span style="display: inline-flex; align-items: center; gap: 6px;"><span style="width: 10px; height: 3px; border-radius: 2px; background: #4f46e5;"></span>Conversions</span>
+                <span style="display: inline-flex; align-items: center; gap: 6px;"><span style="width: 10px; height: 3px; border-radius: 2px; background: #10b981;"></span>GA4 key events</span>
+              </div>
+            </div>
+            <svg viewBox="0 0 600 220" preserveAspectRatio="none" style="width: 100%; height: 230px; display: block; margin-top: 10px;">
+              <path d="{{ ads.spendArea }}" fill="#eef2ff"></path>
+              <polyline points="{{ ads.spendPts }}" fill="none" stroke="#c7d2fe" stroke-width="2"></polyline>
+              <polyline points="{{ ads.ga4Pts }}" fill="none" stroke="#10b981" stroke-width="2" stroke-dasharray="5 4"></polyline>
+              <polyline points="{{ ads.convPts }}" fill="none" stroke="#4f46e5" stroke-width="2.5"></polyline>
+            </svg>
+            <div style="display: flex; justify-content: space-between; font-size: 11px; color: #94a3b8; margin-top: 6px;"><span>{{ ads.trendStart }}</span><span>{{ ads.trendEnd }}</span></div>
+          </div>
+
+          <div style="display: flex; flex-direction: column; gap: 16px;">
+            <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); padding: 16px 20px;">
+              <div style="display: flex; align-items: center; justify-content: space-between;">
+                <h2 style="font-size: 15px; font-weight: 600; margin: 0;">Budget pacing</h2>
+                <span style="{{ ads.pacing.statusStyle }}">{{ ads.pacing.statusLabel }}</span>
+              </div>
+              <div style="display: flex; align-items: baseline; gap: 8px; margin-top: 12px;"><span style="font-size: 24px; font-weight: 700; color: #0f172a;">{{ ads.pacing.mtd }}</span><span style="font-size: 12px; color: #94a3b8;">of {{ ads.pacing.budget }} · {{ ads.pacing.dayLabel }}</span></div>
+              <div style="height: 8px; background: #f1f5f9; border-radius: 9999px; margin-top: 10px; overflow: hidden;"><div style="{{ ads.pacing.barStyle }}"></div></div>
+              <div style="font-size: 12px; color: #64748b; margin-top: 8px;">Projected end of month: <b style="color: #0f172a; font-weight: 600;">{{ ads.pacing.projected }}</b></div>
+              <div style="display: flex; flex-direction: column; gap: 10px; margin-top: 14px; border-top: 1px solid #f1f5f9; padding-top: 12px;">
+                <sc-for list="{{ ads.pacing.channels }}" as="c" hint-placeholder-count="2">
+                  <div>
+                    <div style="display: flex; justify-content: space-between; font-size: 12px;"><span style="color: #334155; font-weight: 500;">{{ c.platform }}</span><span style="color: #64748b;">{{ c.mtdFmt }} / {{ c.budgetFmt }}</span></div>
+                    <div style="height: 5px; background: #f1f5f9; border-radius: 9999px; margin-top: 4px; overflow: hidden;"><div style="{{ c.barStyle }}"></div></div>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+
+            <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
+              <div style="padding: 14px 20px 10px;"><h2 style="font-size: 15px; font-weight: 600; margin: 0;">Needs attention</h2></div>
+              <sc-if value="{{ ads.attEmpty }}" hint-placeholder-val="{{ false }}">
+                <div style="padding: 8px 20px 18px; font-size: 13px; color: #94a3b8;">All clear — nothing flagged this period.</div>
+              </sc-if>
+              <sc-for list="{{ ads.attention }}" as="a" hint-placeholder-count="2">
+                <div onClick="{{ a.go }}" role="button" style="display: flex; align-items: center; gap: 12px; padding: 12px 20px; border-top: 1px solid #f1f5f9; cursor: pointer;" style-hover="background:#f8fafc">
+                  <span style="{{ a.sevStyle }}">{{ a.sevLabel }}</span>
+                  <div style="flex: 1; min-width: 0;">
+                    <div style="font-size: 13px; font-weight: 600; color: #0f172a;">{{ a.title }}</div>
+                    <div style="font-size: 12px; color: #64748b; margin-top: 2px;">{{ a.detail }}</div>
+                  </div>
+                  <span style="font-size: 12px; font-weight: 600; color: #4f46e5; white-space: nowrap;">{{ a.action }} →</span>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+        </div>
+        </sc-if>
+      </div>
+      </sc-if>

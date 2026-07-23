@@ -1,0 +1,51 @@
+<sc-if value="{{ showAlerts }}" hint-placeholder-val="{{ false }}">
+      <div data-screen-label="Alerts" style="display: flex; flex-direction: column; gap: 24px;">
+        <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
+          <div style="padding: 16px 20px; border-bottom: 1px solid #f1f5f9; display: flex; align-items: center; justify-content: space-between;">
+            <div><h2 style="font-size: 15px; font-weight: 600; margin: 0;">Alert Feed</h2><p style="font-size: 12px; color: #94a3b8; margin: 4px 0 0;">Regenerated after every sync — rankings, backlinks, technical, anomalies</p></div>
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <sc-if value="{{ al.hasUnacked }}" hint-placeholder-val="{{ false }}">
+                <span onClick="{{ h.ackAll }}" role="button" style="font-size: 12px; font-weight: 500; color: #475569; border: 1px solid #cbd5e1; border-radius: 6px; padding: 5px 12px; cursor: pointer; background: white;" style-hover="background:#f8fafc">Acknowledge all</span>
+              </sc-if>
+              <div style="display: flex; gap: 4px; background: #f1f5f9; padding: 4px; border-radius: 8px;">
+                <sc-for list="{{ al.filters }}" as="f" hint-placeholder-count="4">
+                  <span onClick="{{ f.click }}" style="{{ f.style }}">{{ f.label }}</span>
+                </sc-for>
+              </div>
+            </div>
+          </div>
+
+          <sc-if value="{{ al.empty }}" hint-placeholder-val="{{ false }}">
+            <div style="padding: 48px 20px; text-align: center;">
+              <div style="font-size: 15px; font-weight: 600; color: #334155;">Nothing here</div>
+              <div style="font-size: 13px; color: #94a3b8; margin-top: 4px;">No alerts match this filter.</div>
+            </div>
+          </sc-if>
+
+          <sc-for list="{{ al.rows }}" as="r" hint-placeholder-count="5">
+            <div style="{{ r.rowStyle }}">
+              <span style="{{ r.sevStyle }}">{{ r.sevLabel }}</span>
+              <div style="flex: 1; min-width: 0;">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                  <span style="font-weight: 600; font-size: 14px; color: #0f172a;">{{ r.title }}</span>
+                  <span style="font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8; background: #f1f5f9; padding: 1px 6px; border-radius: 4px;">{{ r.kindLabel }}</span>
+                </div>
+                <div style="font-size: 13px; color: #64748b; margin-top: 2px;">{{ r.detail }}</div>
+              </div>
+              <span style="font-size: 12px; color: #94a3b8; flex-shrink: 0;">{{ r.date }}</span>
+              <sc-if value="{{ r.showAck }}" hint-placeholder-val="{{ false }}">
+                <span onClick="{{ r.ack }}" style="flex-shrink: 0; cursor: pointer; padding: 4px 12px; font-size: 12px; font-weight: 500; color: #475569; border: 1px solid #cbd5e1; border-radius: 6px;" style-hover="background:#f8fafc">Acknowledge</span>
+              </sc-if>
+              <sc-if value="{{ r.acknowledged }}" hint-placeholder-val="{{ false }}">
+                <span style="flex-shrink: 0; font-size: 12px; color: #94a3b8;">✓ Acknowledged</span>
+              </sc-if>
+            </div>
+          </sc-for>
+        </div>
+
+        <div style="border-radius: 8px; border: 1px solid #e2e8f0; background: white; padding: 14px 18px; display: flex; align-items: center; gap: 10px; font-size: 13px; color: #64748b;">
+          <span style="font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; background: #f1f5f9; color: #64748b; padding: 2px 6px; border-radius: 4px;">Later</span>
+          Rule-driven alert builder (custom thresholds per metric) is planned — this feed stays the default.
+        </div>
+      </div>
+      </sc-if>

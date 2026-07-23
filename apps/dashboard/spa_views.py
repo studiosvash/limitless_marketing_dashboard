@@ -61,12 +61,26 @@ from django.conf import settings
 from django.contrib.auth.decorators import login_required
 from django.http import HttpResponse
 
-_SPA_HTML_PATH = Path(settings.BASE_DIR) / "static" / "spa" / "index.html"
+import re
 
+_SPA_SRC_HTML_PATH = Path(settings.BASE_DIR) / "static" / "spa" / "src" / "index.html"
+
+def resolve_includes(path: Path) -> str:
+    content = path.read_text(encoding="utf-8")
+    
+    def replacer(match):
+        include_path = match.group(1) or match.group(2)
+        target_file = _SPA_SRC_HTML_PATH.parent / include_path
+        if target_file.exists():
+            return resolve_includes(target_file)
+        return f"<!-- INCLUDE ERROR: {include_path} not found -->"
+        
+    pattern = re.compile(r'<!--\s*#include\s+"([^"]+)"\s*-->|/\*\s*#include\s+"([^"]+)"\s*\*/')
+    return pattern.sub(replacer, content)
 
 @login_required
 def spa_index(request):
-    html = _SPA_HTML_PATH.read_text(encoding="utf-8")
+    html = resolve_includes(_SPA_SRC_HTML_PATH)
     token = request.user.auth_token.key
     u = request.user
     role = (getattr(u, "profile", None) and u.profile.role) or "Analyst"

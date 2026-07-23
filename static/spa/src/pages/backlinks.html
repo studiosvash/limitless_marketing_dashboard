@@ -1,0 +1,280 @@
+<sc-if value="{{ showBacklinks }}" hint-placeholder-val="{{ false }}">
+      <div data-screen-label="Backlinks" style="display: flex; flex-direction: column; gap: 18px;">
+
+        <!-- ===== SETUP PENDING (no DataForSEO Backlinks connector yet) ===== -->
+        <sc-if value="{{ bl.setup }}" hint-placeholder-val="{{ false }}">
+        <div style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 56px 32px; text-align: center; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+          <div style="font-size: 15px; font-weight: 600; color: #0f172a; margin-bottom: 6px;">No Backlinks Data Synced Yet</div>
+          <div style="font-size: 13px; color: #64748b; max-width: 420px; margin: 0 auto 20px;">We haven't synced backlink metrics for this domain into the database yet. Click below to fetch current backlink data right now.</div>
+          <div onClick="{{ h.refreshPage }}" style="display: inline-flex; align-items: center; gap: 8px; border-radius: 8px; background: #10b981; color: white; font-size: 14px; font-weight: 600; padding: 10px 20px; cursor: pointer; box-shadow: 0 1px 2px rgba(0,0,0,0.05);" style-hover="background:#059669">⚡ Fetch Backlinks Now</div>
+        </div>
+        </sc-if>
+
+        <!-- ===== LIVE BACKLINKS UI ===== -->
+        <sc-if value="{{ !bl.setup }}" hint-placeholder-val="{{ true }}">
+
+        <!-- source line -->
+        <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;">
+          <div style="font-size: 12px; color: #94a3b8;">Database: <b style="color:#475569;">DataForSEO Backlinks</b> · Last updated {{ bl.lastUpdated }} · Refreshes weekly</div>
+          <span onClick="{{ h.exportBacklinks }}" style="font-size: 12px; color: #4f46e5; font-weight: 500; cursor: pointer;" style-hover="opacity:0.7">Export CSV</span>
+        </div>
+
+        <!-- sub-tabs -->
+        <div style="display: flex; align-items: center; gap: 2px; border-bottom: 1px solid #e2e8f0;">
+          <sc-for list="{{ bl.tabs }}" as="t" hint-placeholder-count="5">
+            <span onClick="{{ t.click }}" style="{{ t.style }}" style-hover="color:#4338ca">{{ t.label }}</span>
+          </sc-for>
+        </div>
+
+        <!-- ===== OVERVIEW ===== -->
+        <sc-if value="{{ bl.isOverview }}" hint-placeholder-val="{{ true }}">
+        <div style="display: flex; flex-direction: column; gap: 16px;">
+          <div style="display: grid; grid-template-columns: 1.3fr 1fr 1fr 1fr 1fr; gap: 12px;">
+            <div style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 18px; display: flex; align-items: center; gap: 16px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+              <svg width="72" height="72" viewBox="0 0 72 72">
+                <circle cx="36" cy="36" r="30" fill="none" stroke="#eef2ff" stroke-width="8"></circle>
+                <circle cx="36" cy="36" r="30" fill="none" stroke="{{ bl.asColor }}" stroke-width="8" stroke-linecap="round" stroke-dasharray="{{ bl.asDash }}" transform="rotate(-90 36 36)"></circle>
+              </svg>
+              <div>
+                <div style="font-size: 11px; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600;">Authority Score</div>
+                <div style="font-size: 30px; font-weight: 700; line-height: 1.1;">{{ bl.as }}</div>
+                <div style="font-size: 12px; color: #059669; font-weight: 500;">▲ {{ bl.asDelta }} vs last month</div>
+              </div>
+            </div>
+            <div style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 18px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+              <div style="font-size: 11px; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; margin-bottom: 8px;">Referring Domains</div>
+              <div style="font-size: 26px; font-weight: 700;">{{ bl.refDomainsFmt }}</div>
+              <div style="font-size: 12px; color: #059669; font-weight: 500; margin-top: 4px;">▲ {{ bl.newRdMonth }} new this month</div>
+            </div>
+            <div style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 18px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+              <div style="font-size: 11px; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; margin-bottom: 8px;">Backlinks</div>
+              <div style="font-size: 26px; font-weight: 700;">{{ bl.backlinksFmt }}</div>
+              <div style="font-size: 12px; color: #64748b; margin-top: 4px;">{{ bl.dofollowPct }}% dofollow</div>
+            </div>
+            <div style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 18px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+              <div style="font-size: 11px; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; margin-bottom: 8px;">Broken Backlinks</div>
+              <div style="font-size: 26px; font-weight: 700; color: #dc2626;">{{ bl.brokenFmt }}</div>
+              <div style="font-size: 12px; color: #64748b; margin-top: 4px;">worth reclaiming</div>
+            </div>
+            <div style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 18px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+              <div style="font-size: 11px; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; margin-bottom: 8px;">Spam Score</div>
+              <div style="font-size: 26px; font-weight: 700; color: {{ bl.spamColor }};">{{ bl.spamScore }}%</div>
+              <div style="font-size: 12px; color: #64748b; margin-top: 4px;">of referring domains</div>
+            </div>
+          </div>
+
+          <div style="display: grid; grid-template-columns: 1.6fr 1fr; gap: 12px;">
+            <div style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 18px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+              <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px;">
+                <div style="font-size: 14px; font-weight: 600;">New &amp; Lost Referring Domains</div>
+                <div style="display: flex; gap: 14px; font-size: 12px; color: #64748b;"><span style="display:inline-flex;align-items:center;gap:5px;"><span style="width:9px;height:9px;border-radius:2px;background:#22c55e;"></span>New</span><span style="display:inline-flex;align-items:center;gap:5px;"><span style="width:9px;height:9px;border-radius:2px;background:#ef4444;"></span>Lost</span></div>
+              </div>
+              <svg width="100%" height="180" viewBox="0 0 640 180" preserveAspectRatio="none">
+                <line x1="0" y1="90" x2="640" y2="90" stroke="#e2e8f0" stroke-width="1"></line>
+                <sc-for list="{{ bl.chartBars }}" as="b" hint-placeholder-count="12">
+                  <rect x="{{ b.x }}" y="{{ b.newY }}" width="{{ b.w }}" height="{{ b.newH }}" fill="#22c55e" rx="1"></rect>
+                  <rect x="{{ b.x }}" y="90" width="{{ b.w }}" height="{{ b.lostH }}" fill="#ef4444" rx="1"></rect>
+                </sc-for>
+              </svg>
+              <div style="display: flex; justify-content: space-between; font-size: 10px; color: #cbd5e1; margin-top: 6px;">
+                <sc-for list="{{ bl.chartLabels }}" as="l" hint-placeholder-count="6"><span>{{ l }}</span></sc-for>
+              </div>
+            </div>
+            <div style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 18px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+              <div style="font-size: 14px; font-weight: 600; margin-bottom: 14px;">Backlink Types</div>
+              <div style="display: flex; align-items: center; gap: 18px;">
+                <svg width="120" height="120" viewBox="0 0 42 42">
+                  <circle cx="21" cy="21" r="15.9" fill="none" stroke="#f1f5f9" stroke-width="5"></circle>
+                  <sc-for list="{{ bl.typeArcs }}" as="a" hint-placeholder-count="4">
+                    <circle cx="21" cy="21" r="15.9" fill="none" stroke="{{ a.color }}" stroke-width="5" stroke-dasharray="{{ a.dash }}" stroke-dashoffset="{{ a.offset }}" transform="rotate(-90 21 21)"></circle>
+                  </sc-for>
+                  <text x="21" y="20" text-anchor="middle" style="font-size:5px;font-weight:700;fill:#0f172a;">{{ bl.backlinksShort }}</text>
+                  <text x="21" y="25" text-anchor="middle" style="font-size:2.6px;fill:#94a3b8;">links</text>
+                </svg>
+                <div style="flex: 1; display: flex; flex-direction: column; gap: 9px;">
+                  <sc-for list="{{ bl.typeLegend }}" as="t" hint-placeholder-count="4">
+                    <div style="display: flex; align-items: center; justify-content: space-between; font-size: 12px;"><span style="display:inline-flex;align-items:center;gap:7px;color:#475569;"><span style="width:9px;height:9px;border-radius:2px;background:{{ t.color }};"></span>{{ t.label }}</span><span style="color:#94a3b8;">{{ t.pct }}%</span></div>
+                  </sc-for>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+            <div style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 18px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+              <div style="font-size: 14px; font-weight: 600; margin-bottom: 16px;">Referring Domains by Authority Score</div>
+              <div style="display: flex; flex-direction: column; gap: 11px;">
+                <sc-for list="{{ bl.asBuckets }}" as="b" hint-placeholder-count="5">
+                  <div style="display: flex; align-items: center; gap: 12px; font-size: 12px;">
+                    <span style="width: 52px; color: #64748b;">{{ b.label }}</span>
+                    <div style="flex: 1; height: 18px; background: #f1f5f9; border-radius: 4px; overflow: hidden;"><div style="width: {{ b.pct }}%; height: 100%; background: {{ b.color }}; border-radius: 4px;"></div></div>
+                    <span style="width: 48px; text-align: right; color: #334155; font-weight: 500;">{{ b.countFmt }}</span>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+            <div style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 18px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+              <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px;">
+                <div style="font-size: 14px; font-weight: 600;">Top Anchors</div>
+                <span onClick="{{ h.blGoAnchors }}" style="font-size: 12px; color: #4f46e5; cursor: pointer;" style-hover="opacity:0.7">View all →</span>
+              </div>
+              <div style="display: flex; flex-direction: column; gap: 11px;">
+                <sc-for list="{{ bl.topAnchors }}" as="a" hint-placeholder-count="6">
+                  <div style="display: flex; align-items: center; gap: 12px; font-size: 12px;">
+                    <span style="width: 120px; color: #334155; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">{{ a.anchor }}</span>
+                    <div style="flex: 1; height: 16px; background: #f1f5f9; border-radius: 4px; overflow: hidden;"><div style="width: {{ a.pct }}%; height: 100%; background: #6366f1; border-radius: 4px;"></div></div>
+                    <span style="width: 42px; text-align: right; color: #94a3b8;">{{ a.pct }}%</span>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+          </div>
+
+          <div style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+            <div style="display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; border-bottom: 1px solid #f1f5f9;">
+              <div style="font-size: 14px; font-weight: 600;">Top Referring Domains</div>
+              <span onClick="{{ h.blGoRefDomains }}" style="font-size: 12px; color: #4f46e5; cursor: pointer;" style-hover="opacity:0.7">View all {{ bl.refDomainsFmt }} →</span>
+            </div>
+            <div style="display: grid; grid-template-columns: 1.6fr 80px 100px 110px 90px 110px; padding: 10px 18px; background: #f8fafc; border-bottom: 1px solid #f1f5f9; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8; font-weight: 600;">
+              <span>Domain</span><span style="text-align:right;">AS</span><span style="text-align:right;">Backlinks</span><span style="text-align:right;">Links to us</span><span style="text-align:center;">Follow</span><span style="text-align:right;">First seen</span>
+            </div>
+            <sc-for list="{{ bl.topRefDomains }}" as="d" hint-placeholder-count="8">
+              <div style="display: grid; grid-template-columns: 1.6fr 80px 100px 110px 90px 110px; align-items: center; padding: 12px 18px; border-bottom: 1px solid #f8fafc;" style-hover="background:#f8fafc">
+                <span style="display:inline-flex;align-items:center;gap:9px;"><span style="font-size:14px;">{{ d.flag }}</span><a href="https://{{ d.domain }}" target="_blank" rel="noopener" style="color:#4f46e5;font-size:14px;text-decoration:none;" style-hover="text-decoration:underline">{{ d.domain }}</a></span>
+                <span style="text-align:right;"><span style="{{ d.asStyle }}">{{ d.as }}</span></span>
+                <span style="text-align:right;font-size:13px;color:#334155;">{{ d.backlinksFmt }}</span>
+                <span style="text-align:right;font-size:13px;color:#334155;">{{ d.linksToUs }}</span>
+                <span style="text-align:center;"><span style="font-size:11px;font-weight:500;color:{{ d.followColor }};">{{ d.follow }}</span></span>
+                <span style="text-align:right;font-size:12px;color:#94a3b8;">{{ d.firstSeen }}</span>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+        </sc-if>
+
+        <!-- ===== BACKLINKS TABLE ===== -->
+        <sc-if value="{{ bl.isLinks }}" hint-placeholder-val="{{ false }}">
+        <div style="display: flex; flex-direction: column; gap: 14px;">
+          <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+            <div style="display: flex; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden; font-size: 13px;">
+              <sc-for list="{{ bl.statusFilters }}" as="f" hint-placeholder-count="4">
+                <span onClick="{{ f.click }}" style="{{ f.style }}">{{ f.label }}</span>
+              </sc-for>
+            </div>
+            <div style="display: flex; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden; font-size: 13px;">
+              <sc-for list="{{ bl.followFilters }}" as="f" hint-placeholder-count="3">
+                <span onClick="{{ f.click }}" style="{{ f.style }}">{{ f.label }}</span>
+              </sc-for>
+            </div>
+            <span style="margin-left: auto; font-size: 13px; color: #64748b;">Showing <b style="color:#0f172a;">{{ bl.rowCount }}</b> of {{ bl.backlinksFmt }} backlinks</span>
+          </div>
+          <div style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+            <div style="display: grid; grid-template-columns: 1.7fr 1.1fr 60px 60px 96px 100px; padding: 10px 18px; background: #f8fafc; border-bottom: 1px solid #f1f5f9; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8; font-weight: 600;">
+              <span>Source page</span><span>Anchor &amp; target</span><span style="text-align:right;">Page AS</span><span style="text-align:right;">Spam</span><span style="text-align:center;">Type</span><span style="text-align:right;">First seen</span>
+            </div>
+            <div style="max-height: 620px; overflow-y: auto;">
+              <sc-for list="{{ bl.rows }}" as="r" hint-placeholder-count="16">
+                <div style="display: grid; grid-template-columns: 1.7fr 1.1fr 60px 60px 96px 100px; align-items: center; padding: 12px 18px; border-bottom: 1px solid #f8fafc;" style-hover="background:#f8fafc">
+                  <div style="min-width: 0;">
+                    <div style="display:flex;align-items:center;gap:8px;">
+                      <span style="font-size:13px;">{{ r.flag }}</span>
+                      <span style="font-size:13px;color:#0f172a;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ r.pageTitle }}</span>
+                      <sc-for list="{{ r.badges }}" as="bd" hint-placeholder-count="1"><span style="font-size:10px;font-weight:600;padding:1px 6px;border-radius:4px;color:{{ bd.color }};background:{{ bd.bg }};flex-shrink:0;">{{ bd.label }}</span></sc-for>
+                    </div>
+                    <div style="font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px;"><a href="https://{{ r.urlFrom }}" target="_blank" rel="noopener" title="Open source page" style="color: #94a3b8; text-decoration: none;" style-hover="color:#4f46e5;text-decoration:underline">{{ r.urlFrom }}</a></div>
+                  </div>
+                  <div style="min-width: 0;">
+                    <div style="font-size:13px;color:#4f46e5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ r.anchor }}</div>
+                    <div style="font-size:12px;color:#94a3b8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px;">→ {{ r.urlTo }}</div>
+                  </div>
+                  <span style="text-align:right;"><span style="{{ r.asStyle }}">{{ r.domainRank }}</span></span>
+                  <span style="text-align:right;font-size:13px;color:{{ r.spamColor }};">{{ r.spam }}%</span>
+                  <span style="text-align:center;"><span style="font-size:11px;font-weight:500;color:{{ r.followColor }};">{{ r.follow }}</span></span>
+                  <span style="text-align:right;font-size:12px;color:#94a3b8;">{{ r.firstSeen }}</span>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+        </div>
+        </sc-if>
+
+        <!-- ===== REFERRING DOMAINS ===== -->
+        <sc-if value="{{ bl.isRefDom }}" hint-placeholder-val="{{ false }}">
+        <div style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+          <div style="padding: 14px 18px; border-bottom: 1px solid #f1f5f9; font-size: 14px; font-weight: 600;">All Referring Domains <span style="color:#94a3b8;font-weight:400;">({{ bl.refDomainsFmt }})</span></div>
+          <div style="display: grid; grid-template-columns: 1.6fr 80px 100px 110px 130px 90px 110px; padding: 10px 18px; background: #f8fafc; border-bottom: 1px solid #f1f5f9; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8; font-weight: 600;">
+            <span>Domain</span><span style="text-align:right;">AS</span><span style="text-align:right;">Backlinks</span><span style="text-align:right;">Links to us</span><span>Category</span><span style="text-align:center;">Follow</span><span style="text-align:right;">First seen</span>
+          </div>
+          <div style="max-height: 640px; overflow-y: auto;">
+            <sc-for list="{{ bl.allRefDomains }}" as="d" hint-placeholder-count="16">
+              <div style="display: grid; grid-template-columns: 1.6fr 80px 100px 110px 130px 90px 110px; align-items: center; padding: 12px 18px; border-bottom: 1px solid #f8fafc;" style-hover="background:#f8fafc">
+                <span style="display:inline-flex;align-items:center;gap:9px;min-width:0;"><span style="font-size:14px;">{{ d.flag }}</span><a href="https://{{ d.domain }}" target="_blank" rel="noopener" style="color:#4f46e5;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-decoration:none;" style-hover="text-decoration:underline">{{ d.domain }}</a><sc-if value="{{ d.isNew }}" hint-placeholder-val="{{ false }}"><span style="font-size:10px;font-weight:600;padding:1px 6px;border-radius:4px;color:#059669;background:#ecfdf5;">NEW</span></sc-if></span>
+                <span style="text-align:right;"><span style="{{ d.asStyle }}">{{ d.as }}</span></span>
+                <span style="text-align:right;font-size:13px;color:#334155;">{{ d.backlinksFmt }}</span>
+                <span style="text-align:right;font-size:13px;color:#334155;">{{ d.linksToUs }}</span>
+                <span style="font-size:12px;color:#64748b;">{{ d.category }}</span>
+                <span style="text-align:center;"><span style="font-size:11px;font-weight:500;color:{{ d.followColor }};">{{ d.follow }}</span></span>
+                <span style="text-align:right;font-size:12px;color:#94a3b8;">{{ d.firstSeen }}</span>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+        </sc-if>
+
+        <!-- ===== ANCHORS ===== -->
+        <sc-if value="{{ bl.isAnchors }}" hint-placeholder-val="{{ false }}">
+        <div style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+          <div style="padding: 14px 18px; border-bottom: 1px solid #f1f5f9; font-size: 14px; font-weight: 600;">Anchor Text Distribution</div>
+          <div style="display: grid; grid-template-columns: 1.8fr 110px 120px 120px 200px; padding: 10px 18px; background: #f8fafc; border-bottom: 1px solid #f1f5f9; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8; font-weight: 600;">
+            <span>Anchor</span><span>Type</span><span style="text-align:right;">Backlinks</span><span style="text-align:right;padding-right:16px;">Ref. domains</span><span>Dofollow share</span>
+          </div>
+          <div style="max-height: 640px; overflow-y: auto;">
+            <sc-for list="{{ bl.allAnchors }}" as="a" hint-placeholder-count="16">
+              <div style="display: grid; grid-template-columns: 1.8fr 110px 120px 120px 200px; align-items: center; padding: 12px 18px; border-bottom: 1px solid #f8fafc;" style-hover="background:#f8fafc">
+                <span style="font-size:14px;color:#334155;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ a.anchor }}</span>
+                <span><span style="font-size:11px;font-weight:500;padding:2px 8px;border-radius:5px;color:{{ a.typeColor }};background:{{ a.typeBg }};">{{ a.type }}</span></span>
+                <span style="text-align:right;font-size:13px;color:#334155;">{{ a.backlinksFmt }}</span>
+                <span style="text-align:right;font-size:13px;color:#334155;">{{ a.refDomainsFmt }}</span>
+                <div style="display:flex;align-items:center;gap:10px;"><div style="flex:1;height:14px;background:#f1f5f9;border-radius:4px;overflow:hidden;"><div style="width:{{ a.dofollowPct }}%;height:100%;background:#22c55e;"></div></div><span style="font-size:12px;color:#94a3b8;width:34px;">{{ a.dofollowPct }}%</span></div>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+        </sc-if>
+
+        <!-- ===== LINK GAP ===== -->
+        <sc-if value="{{ bl.isGap }}" hint-placeholder-val="{{ false }}">
+        <div style="display: flex; flex-direction: column; gap: 14px;">
+          <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;">
+            <div style="font-size: 13px; color: #64748b;">Domains linking to competitors — find gaps in your backlink profile.</div>
+            <span onClick="{{ h.blToggleGap }}" style="display:inline-flex;align-items:center;gap:8px;padding:8px 14px;border:1px solid {{ bl.gapBtnBorder }};background:{{ bl.gapBtnBg }};color:{{ bl.gapBtnColor }};font-size:13px;font-weight:500;border-radius:8px;cursor:pointer;"><span style="width:14px;height:14px;border-radius:4px;border:1.5px solid {{ bl.gapBtnColor }};display:flex;align-items:center;justify-content:center;"><sc-if value="{{ bl.gapOnly }}" hint-placeholder-val="{{ false }}"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="{{ bl.gapBtnColor }}" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg></sc-if></span>Best opportunities only</span>
+          </div>
+          <div style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+            <div style="display: grid; grid-template-columns: 1.7fr 70px repeat(5, 1fr) 110px; padding: 10px 18px; background: #f8fafc; border-bottom: 1px solid #f1f5f9; font-size: 11px; letter-spacing: 0.03em; color: #94a3b8; font-weight: 600;">
+              <span style="text-transform:uppercase;">Referring domain</span><span style="text-align:right;text-transform:uppercase;">AS</span>
+              <sc-for list="{{ bl.gapCols }}" as="c" hint-placeholder-count="5"><span style="text-align:center;color:{{ c.color }};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="{{ c.name }}">{{ c.name }}</span></sc-for>
+              <span style="text-align:center;text-transform:uppercase;">Opportunity</span>
+            </div>
+            <div style="max-height: 600px; overflow-y: auto;">
+              <sc-for list="{{ bl.gapRows }}" as="r" hint-placeholder-count="14">
+                <div style="display: grid; grid-template-columns: 1.7fr 70px repeat(5, 1fr) 110px; align-items: center; padding: 12px 18px; border-bottom: 1px solid #f8fafc;" style-hover="background:#f8fafc">
+                  <span style="display:inline-flex;align-items:center;gap:9px;min-width:0;"><span style="font-size:14px;">{{ r.flag }}</span><a href="https://{{ r.domain }}" target="_blank" rel="noopener" style="color:#4f46e5;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-decoration:none;" style-hover="text-decoration:underline">{{ r.domain }}</a></span>
+                  <span style="text-align:right;"><span style="{{ r.asStyle }}">{{ r.as }}</span></span>
+                  <sc-for list="{{ r.cells }}" as="c" hint-placeholder-count="5">
+                    <span style="text-align:center;display:flex;justify-content:center;">
+                      <sc-if value="{{ c.linked }}" hint-placeholder-val="{{ false }}"><span style="color:{{ c.color }};"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 6 9 17l-5-5"/></svg></span></sc-if>
+                      <sc-if value="{{ c.missing }}" hint-placeholder-val="{{ false }}"><span style="color:#e2e8f0;">—</span></sc-if>
+                    </span>
+                  </sc-for>
+                  <span style="text-align:center;"><span style="font-size:11px;font-weight:600;padding:2px 9px;border-radius:5px;color:{{ r.oppColor }};background:{{ r.oppBg }};">{{ r.opp }}</span></span>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+        </div>
+        </sc-if>
+
+        </sc-if>
+
+      </div>
+      </sc-if>

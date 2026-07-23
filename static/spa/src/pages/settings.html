@@ -1,0 +1,632 @@
+<sc-if value="{{ showSettings }}" hint-placeholder-val="{{ false }}">
+      <div data-screen-label="Settings" style="max-width: 880px;">
+
+        <!-- sub-tab bar -->
+        <div style="display: flex; align-items: center; border-bottom: 1px solid #e2e8f0; margin-bottom: 26px; overflow-x: auto;">
+          <sc-for list="{{ st.subTabs }}" as="t" hint-placeholder-count="8">
+            <div onClick="{{ t.click }}" style="{{ t.style }}" style-hover="color:#0f172a"><span>{{ t.label }}</span><sc-if value="{{ t.badge }}" hint-placeholder-val="{{ false }}"><span style="{{ t.badgeStyle }}">{{ t.badge }}</span></sc-if></div>
+          </sc-for>
+        </div>
+
+        <!-- ========== GENERAL ========== -->
+        <sc-if value="{{ st.gen }}" hint-placeholder-val="{{ true }}">
+        <div style="display: flex; flex-direction: column; gap: 22px;">
+
+          <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); padding: 24px;">
+            <h2 style="font-size: 15px; font-weight: 600; margin: 0 0 16px;">Active project</h2>
+            <div style="display: flex; align-items: center; gap: 8px; padding: 12px; background: #eef2ff; border: 1px solid #c7d2fe; border-radius: 8px;">
+              <div style="width: 12px; height: 12px; border-radius: 9999px; background: #4f46e5;"></div>
+              <span style="font-size: 14px; font-weight: 500; color: #0f172a;">{{ st.domain }}</span>
+              <span style="font-size: 12px; color: #64748b;">· {{ st.vertical }}</span>
+              <span style="font-size: 12px; color: #64748b; margin-left: auto;">{{ st.projectIdLabel }}</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 8px; margin-top: 12px; flex-wrap: wrap;">
+              <span style="font-size: 12px; color: #94a3b8;">Competitors tracked:</span>
+              <sc-for list="{{ st.competitors }}" as="c" hint-placeholder-count="3">
+                <span style="font-size: 12px; color: #334155; background: #f1f5f9; border: 1px solid #e2e8f0; padding: 2px 8px; border-radius: 4px;">{{ c }}</span>
+              </sc-for>
+            </div>
+          </div>
+
+          <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); padding: 24px;">
+            <h2 style="font-size: 15px; font-weight: 600; margin: 0 0 18px;">Workspace</h2>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+              <div>
+                <label style="display: block; font-size: 12px; font-weight: 600; color: #334155; margin-bottom: 6px;">Workspace name</label>
+                <input value="{{ st.ws.name }}" onInput="{{ h.wsName }}" style="width: 100%; box-sizing: border-box; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-family: inherit; font-size: 13px; color: #334155; outline: none;">
+              </div>
+              <div>
+                <label style="display: block; font-size: 12px; font-weight: 600; color: #334155; margin-bottom: 6px;">Owner email</label>
+                <input value="{{ st.ws.owner_email }}" onInput="{{ h.wsOwner }}" style="width: 100%; box-sizing: border-box; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-family: inherit; font-size: 13px; color: #334155; outline: none;">
+              </div>
+              <div>
+                <label style="display: block; font-size: 12px; font-weight: 600; color: #334155; margin-bottom: 6px;">Timezone</label>
+                <select value="{{ st.ws.timezone }}" onChange="{{ h.wsTz }}" style="width: 100%; box-sizing: border-box; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 13px; color: #334155; background: white; outline: none;">
+                  <option value="America/Chicago">Central — America/Chicago</option>
+                  <option value="America/New_York">Eastern — America/New_York</option>
+                  <option value="America/Denver">Mountain — America/Denver</option>
+                  <option value="America/Los_Angeles">Pacific — America/Los_Angeles</option>
+                  <option value="Europe/London">GMT — Europe/London</option>
+                </select>
+              </div>
+              <div>
+                <label style="display: block; font-size: 12px; font-weight: 600; color: #334155; margin-bottom: 6px;">Week starts on</label>
+                <select value="{{ st.ws.week_start }}" onChange="{{ h.wsWeek }}" style="width: 100%; box-sizing: border-box; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 13px; color: #334155; background: white; outline: none;">
+                  <option value="Monday">Monday</option>
+                  <option value="Sunday">Sunday</option>
+                </select>
+              </div>
+            </div>
+            <div style="margin-top: 18px;">
+              <div onClick="{{ h.saveWs }}" style="display: inline-flex; padding: 8px 16px; background: #4f46e5; color: white; font-size: 13px; font-weight: 600; border-radius: 8px; cursor: pointer;" style-hover="background:#4338ca">{{ st.savedWs }}</div>
+            </div>
+          </div>
+
+          <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); padding: 24px;">
+            <h2 style="font-size: 15px; font-weight: 600; margin: 0 0 4px;">Site credentials — <span style="color: #64748b; font-weight: 400;">{{ st.domain }}</span></h2>
+            <p style="font-size: 12px; color: #64748b; margin: 0 0 20px;">These tell each connector where to pull data. A wrong GSC property causes a 403 error.</p>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+              <div>
+                <label style="display: block; font-size: 12px; font-weight: 600; color: #334155; margin-bottom: 6px;">GSC Property <span style="color: #94a3b8; font-weight: 400;">Google Search Console</span></label>
+                <input value="{{ st.gsc }}" onChange="{{ h.credGsc }}" style="width: 100%; box-sizing: border-box; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-family: monospace; font-size: 13px; color: #334155; outline: none;">
+              </div>
+              <div>
+                <label style="display: block; font-size: 12px; font-weight: 600; color: #334155; margin-bottom: 6px;">GA4 Property ID <span style="color: #94a3b8; font-weight: 400;">Google Analytics 4</span></label>
+                <input value="{{ st.ga4 }}" onChange="{{ h.credGa4 }}" style="width: 100%; box-sizing: border-box; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-family: monospace; font-size: 13px; color: #334155; outline: none;">
+              </div>
+            </div>
+            <div style="margin-top: 16px;">
+              <div onClick="{{ h.saveCreds }}" style="display: inline-flex; padding: 8px 16px; background: #4f46e5; color: white; font-size: 13px; font-weight: 600; border-radius: 8px; cursor: pointer;" style-hover="background:#4338ca">{{ st.credsSaveLabel }}</div>
+            </div>
+          </div>
+
+          <div style="border-radius: 12px; background: #fff; border: 1px solid #fecaca; box-shadow: 0 1px 2px rgba(0,0,0,0.05); padding: 24px;">
+            <h2 style="font-size: 15px; font-weight: 600; margin: 0 0 4px; color: #b91c1c;">Danger zone</h2>
+            <p style="font-size: 12px; color: #64748b; margin: 0 0 8px;">Irreversible actions affecting the entire workspace.</p>
+            <div style="display: flex; align-items: center; justify-content: space-between; padding: 14px 0; border-top: 1px solid #fee2e2;">
+              <div><div style="font-size: 14px; font-weight: 600; color: #0f172a;">Transfer ownership</div><div style="font-size: 12px; color: #94a3b8;">Move owner rights to another workspace member.</div></div>
+              <div onClick="{{ h.transferOwner }}" style="padding: 7px 14px; border: 1px solid #fca5a5; color: #b91c1c; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; background: white;" style-hover="background:#fef2f2">Transfer</div>
+            </div>
+            <div style="display: flex; align-items: center; justify-content: space-between; padding: 14px 0; border-top: 1px solid #fee2e2;">
+              <div><div style="font-size: 14px; font-weight: 600; color: #0f172a;">Clear synced data</div><div style="font-size: 12px; color: #94a3b8;">Permanently deletes all historical tracked metrics, audit logs, and fetched analytics for this project.</div></div>
+              <div onClick="{{ h.clearData }}" style="padding: 7px 14px; background: #dc2626; color: white; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer;" style-hover="background:#b91c1c">Clear data</div>
+            </div>
+            <div style="display: flex; align-items: center; justify-content: space-between; padding: 14px 0; border-top: 1px solid #fee2e2;">
+              <div><div style="font-size: 14px; font-weight: 600; color: #0f172a;">Delete workspace</div><div style="font-size: 12px; color: #94a3b8;">Permanently removes all projects, history and connections.</div></div>
+              <div onClick="{{ h.deleteWorkspace }}" style="padding: 7px 14px; background: #dc2626; color: white; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer;" style-hover="background:#b91c1c">Delete</div>
+            </div>
+          </div>
+        </div>
+        </sc-if>
+
+        <!-- ========== TEAM & ACCESS ========== -->
+        <sc-if value="{{ st.team }}" hint-placeholder-val="{{ false }}">
+        <div style="display: flex; flex-direction: column; gap: 22px;">
+          <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); padding: 24px;">
+            <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 16px; flex-wrap: wrap;">
+              <div>
+                <h2 style="font-size: 15px; font-weight: 600; margin: 0 0 4px;">Add a teammate</h2>
+                <p style="font-size: 12px; color: #64748b; margin: 0;">Invite by email with secure link, or create credentials directly.</p>
+              </div>
+              <div style="display: flex; gap: 4px; background: #f1f5f9; padding: 4px; border-radius: 8px;">
+                <div onClick="{{ h.setInviteModeEmail }}" style="{{ st.inviteModeEmailStyle }}" role="button">Invite via Email</div>
+                <div onClick="{{ h.setInviteModeDirect }}" style="{{ st.inviteModeDirectStyle }}" role="button">Direct Create</div>
+              </div>
+            </div>
+
+            <!-- MODE 1: Invite via Email -->
+            <sc-if value="{{ st.isEmailMode }}" hint-placeholder-val="{{ true }}">
+              <div style="display: grid; grid-template-columns: 1fr 200px; gap: 12px; margin-bottom: 14px;">
+                <div>
+                  <label style="display: block; font-size: 12px; font-weight: 600; color: #334155; margin-bottom: 6px;">Email address</label>
+                  <input value="{{ st.inviteEmail }}" onInput="{{ h.inviteEmail }}" placeholder="colleague@company.com" autocomplete="off" style="width: 100%; box-sizing: border-box; padding: 9px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-family: inherit; font-size: 13px; color: #334155; outline: none;" />
+                </div>
+                <div>
+                  <label style="display: block; font-size: 12px; font-weight: 600; color: #334155; margin-bottom: 6px;">Role</label>
+                  <select value="{{ st.inviteRole }}" onChange="{{ h.inviteRole }}" style="width: 100%; padding: 9px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 13px; color: #334155; background: white; outline: none;">
+                    <sc-for list="{{ st.inviteRoleOptions }}" as="o" hint-placeholder-count="2"><option value="{{ o.value }}">{{ o.label }}</option></sc-for>
+                  </select>
+                </div>
+              </div>
+              <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+                <div onClick="{{ h.sendInvite }}" style="padding: 9px 20px; background: #4f46e5; color: white; font-size: 13px; font-weight: 600; border-radius: 8px; cursor: pointer;" style-hover="background:#4338ca">Send invitation</div>
+                <sc-if value="{{ st.inviteStatusMsg }}" hint-placeholder-val="{{ false }}"><span style="font-size: 12.5px; color: #059669; font-weight: 500;">{{ st.inviteStatusMsg }}</span></sc-if>
+                <sc-if value="{{ st.inviteErrorMsg }}" hint-placeholder-val="{{ false }}"><span style="font-size: 12.5px; color: #dc2626; font-weight: 500;">{{ st.inviteErrorMsg }}</span></sc-if>
+              </div>
+            </sc-if>
+
+            <!-- MODE 2: Direct Create -->
+            <sc-if value="{{ st.isDirectMode }}" hint-placeholder-val="{{ false }}">
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px;">
+                <div>
+                  <label style="display: block; font-size: 12px; font-weight: 600; color: #334155; margin-bottom: 6px;">Email address</label>
+                  <input value="{{ st.inviteEmail }}" onInput="{{ h.inviteEmail }}" placeholder="name@company.com" autocomplete="off" style="width: 100%; box-sizing: border-box; padding: 9px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-family: inherit; font-size: 13px; color: #334155; outline: none;" />
+                </div>
+                <div>
+                  <label style="display: block; font-size: 12px; font-weight: 600; color: #334155; margin-bottom: 6px;">Username</label>
+                  <input value="{{ st.inviteUsername }}" onInput="{{ h.inviteUsername }}" placeholder="jsmith" autocomplete="off" style="width: 100%; box-sizing: border-box; padding: 9px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-family: inherit; font-size: 13px; color: #334155; outline: none;" />
+                </div>
+                <div>
+                  <label style="display: block; font-size: 12px; font-weight: 600; color: #334155; margin-bottom: 6px;">Password</label>
+                  <input type="password" value="{{ st.invitePassword }}" onInput="{{ h.invitePassword }}" placeholder="Min. 8 characters" autocomplete="new-password" style="width: 100%; box-sizing: border-box; padding: 9px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-family: inherit; font-size: 13px; color: #334155; outline: none;" />
+                </div>
+                <div>
+                  <label style="display: block; font-size: 12px; font-weight: 600; color: #334155; margin-bottom: 6px;">Role</label>
+                  <select value="{{ st.inviteRole }}" onChange="{{ h.inviteRole }}" style="width: 100%; padding: 9px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 13px; color: #334155; background: white; outline: none;">
+                    <sc-for list="{{ st.inviteRoleOptions }}" as="o" hint-placeholder-count="2"><option value="{{ o.value }}">{{ o.label }}</option></sc-for>
+                  </select>
+                </div>
+              </div>
+              <div style="display: flex; align-items: center; gap: 10px;">
+                <div onClick="{{ h.createUser }}" style="padding: 9px 20px; background: #4f46e5; color: white; font-size: 13px; font-weight: 600; border-radius: 8px; cursor: pointer;" style-hover="background:#4338ca">Create user</div>
+                <sc-if value="{{ st.createUserError }}" hint-placeholder-val="{{ false }}"><span style="font-size: 12px; color: #b91c1c;">{{ st.createUserError }}</span></sc-if>
+              </div>
+            </sc-if>
+          </div>
+
+          <!-- PENDING INVITATIONS -->
+          <sc-if value="{{ st.hasInvitations }}" hint-placeholder-val="{{ false }}">
+            <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
+              <div style="padding: 16px 24px; border-bottom: 1px solid #f1f5f9; display: flex; align-items: center; justify-content: space-between;">
+                <h2 style="font-size: 15px; font-weight: 600; margin: 0;">Pending invitations</h2>
+                <span style="font-size: 12px; color: #94a3b8;">Users awaiting acceptance</span>
+              </div>
+              <sc-for list="{{ st.invitationRows }}" as="inv" hint-placeholder-count="2">
+                <div style="display: flex; align-items: center; gap: 14px; padding: 14px 24px; border-top: 1px solid #f8fafc;">
+                  <div style="width: 36px; height: 36px; border-radius: 9999px; background: #f1f5f9; color: #64748b; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 600;">@</div>
+                  <div style="min-width: 0; flex: 1;">
+                    <div style="font-size: 14px; font-weight: 600; color: #0f172a;">{{ inv.email }}</div>
+                    <div style="font-size: 12px; color: #94a3b8;">Invited as {{ inv.role }} by {{ inv.invitedBy }} · {{ inv.expiresAtLabel }}</div>
+                  </div>
+                  <button onClick="{{ inv.resend }}" title="Resend email link" style="display: inline-flex; align-items: center; gap: 5px; padding: 6px 12px; background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; color: #334155; font-size: 12px; font-weight: 600; cursor: pointer;">Resend link</button>
+                  <button onClick="{{ inv.revoke }}" title="Revoke invitation" style="display: inline-flex; align-items: center; gap: 5px; padding: 6px 12px; background: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; color: #dc2626; font-size: 12px; font-weight: 600; cursor: pointer;">Revoke</button>
+                </div>
+              </sc-for>
+            </div>
+          </sc-if>
+
+          <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
+            <div style="padding: 16px 24px; border-bottom: 1px solid #f1f5f9;"><h2 style="font-size: 15px; font-weight: 600; margin: 0;">Members &amp; roles</h2></div>
+            <sc-for list="{{ st.teamRows }}" as="m" hint-placeholder-count="4">
+              <div style="display: flex; align-items: center; gap: 14px; padding: 14px 24px; border-top: 1px solid #f8fafc;">
+                <div style="{{ m.avatarStyle }}">{{ m.initials }}</div>
+                <div style="min-width: 0; flex: 1;">
+                  <div style="font-size: 14px; font-weight: 600; color: #0f172a;">{{ m.name }}</div>
+                  <div style="font-size: 12px; color: #94a3b8;">{{ m.lastLabel }}</div>
+                </div>
+                <sc-if value="{{ m.isOwner }}" hint-placeholder-val="{{ false }}"><span style="font-size: 13px; font-weight: 600; color: #4338ca; background: #eef2ff; border: 1px solid #c7d2fe; padding: 5px 12px; border-radius: 8px;">Owner</span></sc-if>
+                <select value="{{ m.role }}" onChange="{{ m.setRole }}" disabled="{{ m.isOwner }}" style="padding: 6px 10px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 12.5px; color: #334155; background: white; outline: none;">
+                  <sc-for list="{{ m.roleOptions }}" as="o" hint-placeholder-count="4"><option value="{{ o.value }}">{{ o.label }}</option></sc-for>
+                </select>
+                <sc-if value="{{ m.canDelete }}" hint-placeholder-val="{{ false }}">
+                  <button onClick="{{ m.remove }}" title="Delete user" style="display: inline-flex; align-items: center; gap: 5px; padding: 6px 10px; background: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; color: #dc2626; font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap;">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/></svg>
+                    Delete
+                  </button>
+                </sc-if>
+                <sc-if value="{{ m.isOwner }}" hint-placeholder-val="{{ false }}"><span style="width: 68px; display: inline-block;"></span></sc-if>
+              </div>
+            </sc-for>
+          </div>
+
+          <div style="border-radius: 12px; background: #fbfcfe; border: 1px solid #e2e8f0; padding: 18px 24px;">
+            <div style="font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8; margin-bottom: 12px;">What each role can do</div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px 24px; font-size: 12.5px; color: #475569;">
+              <div><b style="color: #0f172a;">Owner</b> — full access, billing, delete workspace (only 1)</div>
+              <div><b style="color: #0f172a;">Admin</b> — manage projects, connections, team (owner-level access)</div>
+              <div><b style="color: #0f172a;">Analyst</b> — run syncs, edit keywords &amp; alerts</div>
+            </div>
+          </div>
+        </div>
+        </sc-if>
+
+        <!-- ========== CONNECTIONS ========== -->
+        <sc-if value="{{ st.conn }}" hint-placeholder-val="{{ false }}">
+        <div style="display: flex; flex-direction: column; gap: 22px;">
+
+          <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
+            <div style="padding: 16px 24px; border-bottom: 1px solid #f1f5f9;">
+              <h2 style="font-size: 15px; font-weight: 600; margin: 0;">Google Authorization</h2>
+              <p style="font-size: 12px; color: #94a3b8; margin: 4px 0 0;">Manage your Google Search Console and Google Analytics 4 connections.</p>
+            </div>
+            <div style="padding: 24px;">
+              <p style="font-size: 13px; color: #475569; margin: 0 0 12px 0;">
+                Google Search Console and GA4 are required for the dashboard to pull SEO and traffic data. 
+                If a newly added site is not pulling data, ensure the authorized Google Account has access to that property.
+              </p>
+              <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 14px; font-size: 12px; color: #334155;">
+                To authorize a different Google account or refresh tokens, run the following command in your terminal from the project root:<br>
+                <code style="display: block; background: #0f172a; color: #f8fafc; padding: 8px 12px; border-radius: 6px; margin-top: 8px; font-family: monospace;">python pipeline/utils/auth.py --generate-token</code>
+              </div>
+            </div>
+          </div>
+
+          <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
+            <div style="padding: 16px 24px; border-bottom: 1px solid #f1f5f9;"><h2 style="font-size: 15px; font-weight: 600; margin: 0;">Data pipeline</h2><p style="font-size: 12px; color: #94a3b8; margin: 4px 0 0;">Core sources that feed every dashboard. {{ st.healthLabel }}</p></div>
+            <div style="padding: 24px;">
+              <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px;">
+                <sc-for list="{{ st.dataConnectors }}" as="c" hint-placeholder-count="5">
+                  <div style="{{ c.cardStyle }}">
+                    <div style="font-weight: 600; font-size: 14px; color: #0f172a; display: flex; align-items: center; gap: 8px;"><span style="{{ c.dotStyle }}"></span>{{ c.name }}</div>
+                    <div style="font-size: 12px; color: #64748b; margin-top: 5px;">Last synced: {{ c.last }}</div>
+                    <div style="{{ c.recordsStyle }}">{{ c.records }}</div>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+          </div>
+
+          <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
+            <div style="padding: 16px 24px; border-bottom: 1px solid #f1f5f9;"><h2 style="font-size: 15px; font-weight: 600; margin: 0;">Social &amp; platform connectors</h2><p style="font-size: 12px; color: #94a3b8; margin: 4px 0 0;">Optional. Adds on-platform impressions &amp; CTR to Off-site SEO — GA4 only sees the click-through.</p></div>
+            <sc-for list="{{ st.platRows }}" as="p" hint-placeholder-count="6">
+              <div style="display: flex; align-items: center; gap: 14px; padding: 15px 24px; border-top: 1px solid #f8fafc;">
+                <div style="min-width: 0; flex: 1;">
+                  <div style="display: flex; align-items: center; gap: 9px;"><span style="font-size: 14px; font-weight: 600; color: #0f172a;">{{ p.name }}</span><span style="{{ p.statusStyle }}">{{ p.statusLabel }}</span></div>
+                  <div style="font-size: 12px; color: #94a3b8; margin-top: 3px;">{{ p.desc }}</div>
+                </div>
+                <div onClick="{{ p.toggle }}" style="{{ p.actionStyle }}" style-hover="opacity:0.85">{{ p.actionLabel }}</div>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+        </sc-if>
+
+        <!-- ========== AUTOMATION ========== -->
+        <sc-if value="{{ st.auto }}" hint-placeholder-val="{{ false }}">
+        <div style="display: flex; flex-direction: column; gap: 22px;">
+          <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); padding: 24px;">
+            <div style="display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 4px;">
+              <h2 style="font-size: 15px; font-weight: 600; margin: 0;">Sync schedule</h2>
+              <span style="font-size: 12px; color: #94a3b8;">Backend cron · changes apply to the next run</span>
+            </div>
+            <p style="font-size: 12px; color: #64748b; margin: 0 0 18px;">Next scheduled sync: <span style="font-weight: 600; color: #334155;">{{ st.nextRun }}</span> · Last run: <span style="font-weight: 600; color: #334155;">{{ st.lastRun }}</span></p>
+            <div style="display: flex; flex-direction: column;">
+              <sc-for list="{{ st.syncRows }}" as="m" hint-placeholder-count="6">
+                <div style="display: flex; align-items: center; gap: 14px; padding: 13px 0; border-top: 1px solid #f1f5f9;">
+                  <div style="min-width: 0; flex: 1;">
+                    <div style="font-size: 13.5px; font-weight: 600; color: #0f172a;">{{ m.label }}</div>
+                    <div style="font-size: 12px; color: #94a3b8;">{{ m.desc }}</div>
+                  </div>
+                  <sc-if value="{{ m.canSync }}" hint-placeholder-val="{{ false }}"><span onClick="{{ m.run }}" style="font-size: 12px; font-weight: 600; color: #4f46e5; cursor: pointer;" style-hover="opacity:0.7">Sync now</span></sc-if>
+                  <select value="{{ m.value }}" onChange="{{ m.onChange }}" style="padding: 7px 11px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 12.5px; color: #334155; background: white; outline: none; min-width: 140px;">
+                    <sc-for list="{{ m.options }}" as="o" hint-placeholder-count="4"><option value="{{ o.value }}">{{ o.label }}</option></sc-for>
+                  </select>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+
+          <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); padding: 24px;">
+            <div style="display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 4px;">
+              <h2 style="font-size: 15px; font-weight: 600; margin: 0;">Site audit crawl</h2>
+              <span style="font-size: 12px; color: #94a3b8;">DataForSEO OnPage · applies to next crawl</span>
+            </div>
+            <p style="font-size: 12px; color: #64748b; margin: 0 0 20px;">Larger crawls cost more (~$0.00125/page). JS rendering doubles the per-page cost.</p>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+              <div>
+                <label style="display: block; font-size: 12px; font-weight: 600; color: #334155; margin-bottom: 6px;">Page limit</label>
+                <select onChange="{{ h.crawlMax }}" value="{{ st.crawlMax }}" style="width: 100%; box-sizing: border-box; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 13px; color: #334155; background: white; outline: none;">
+                  <option value="100">100 pages</option>
+                  <option value="500">500 pages</option>
+                  <option value="1000">1,000 pages</option>
+                  <option value="5000">5,000 pages</option>
+                </select>
+              </div>
+              <div>
+                <label style="display: block; font-size: 12px; font-weight: 600; color: #334155; margin-bottom: 6px;">Crawl frequency</label>
+                <select onChange="{{ h.crawlFreq }}" value="{{ st.crawlFreq }}" style="width: 100%; box-sizing: border-box; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 13px; color: #334155; background: white; outline: none;">
+                  <option value="weekly">Weekly</option>
+                  <option value="biweekly">Every 2 weeks</option>
+                  <option value="monthly">Monthly</option>
+                  <option value="manual">Manual only</option>
+                </select>
+              </div>
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 12px; margin-top: 16px;">
+              <div style="display: flex; align-items: center; gap: 12px;">
+                <div onClick="{{ h.crawlJs }}" style="{{ st.jsToggle.track }}"><div style="{{ st.jsToggle.knob }}"></div></div>
+                <span style="font-size: 13px; color: #334155;">Render JavaScript <span style="font-size: 12px; color: #94a3b8;">— needed for client-side content, doubles cost</span></span>
+              </div>
+              <div style="display: flex; align-items: center; gap: 12px;">
+                <div onClick="{{ h.crawlRobots }}" style="{{ st.robotsToggle.track }}"><div style="{{ st.robotsToggle.knob }}"></div></div>
+                <span style="font-size: 13px; color: #334155;">Respect robots.txt <span style="font-size: 12px; color: #94a3b8;">— skip disallowed paths during crawl</span></span>
+              </div>
+            </div>
+            <div style="margin-top: 16px;">
+              <label style="display: block; font-size: 12px; font-weight: 600; color: #334155; margin-bottom: 6px;">Excluded paths <span style="color: #94a3b8; font-weight: 400;">one per line</span></label>
+              <textarea onChange="{{ h.crawlExcl }}" value="{{ st.crawlExcl }}" rows="3" style="width: 100%; box-sizing: border-box; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-family: monospace; font-size: 13px; color: #334155; outline: none; resize: vertical;"></textarea>
+            </div>
+            <div style="display: flex; align-items: center; gap: 12px; margin-top: 16px;">
+              <div onClick="{{ h.saveCrawl }}" style="display: inline-flex; padding: 8px 16px; background: #4f46e5; color: white; font-size: 13px; font-weight: 600; border-radius: 8px; cursor: pointer;" style-hover="background:#4338ca">{{ st.crawlSaveLabel }}</div>
+              <span onClick="{{ h.syncAudit }}" style="font-size: 13px; font-weight: 600; color: #4f46e5; cursor: pointer;" style-hover="opacity:0.7">Re-crawl now</span>
+            </div>
+          </div>
+        </div>
+        </sc-if>
+
+        <!-- ========== USAGE & BUDGET ========== -->
+        <sc-if value="{{ st.bud }}" hint-placeholder-val="{{ false }}">
+        <div style="display: flex; flex-direction: column; gap: 22px;">
+          <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); padding: 24px;">
+            <h2 style="font-size: 15px; font-weight: 600; margin: 0 0 4px;">DataForSEO budget</h2>
+            <p style="font-size: 12px; color: #64748b; margin: 0 0 16px;">Scheduled crons always run. The soft cap only blocks manual on-demand syncs.</p>
+            <div style="border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px;">
+              <div style="display: flex; align-items: baseline; justify-content: space-between; font-size: 13px;">
+                <span style="color: #64748b;">Spend this month</span>
+                <span><span style="font-weight: 700; color: #0f172a;">{{ st.mtd }}</span><span style="color: #94a3b8;"> · projected {{ st.projected }}</span></span>
+              </div>
+              <div style="height: 8px; background: #f1f5f9; border-radius: 9999px; margin-top: 10px; overflow: hidden;">
+                <div style="{{ st.capBar }}"></div>
+              </div>
+              <sc-if value="{{ st.overCap }}" hint-placeholder-val="{{ false }}"><div style="font-size: 12px; color: #b45309; margin-top: 8px;">Projected spend exceeds your cap — manual syncs will be blocked.</div></sc-if>
+            </div>
+            <div style="display: flex; align-items: center; gap: 20px; margin-top: 18px; flex-wrap: wrap;">
+              <div>
+                <label style="display: block; font-size: 12px; font-weight: 600; color: #334155; margin-bottom: 6px;">Monthly soft cap (USD)</label>
+                <div style="display: flex; align-items: center; gap: 6px;"><span style="font-size: 14px; color: #94a3b8;">$</span><input value="{{ st.budgetCap }}" onInput="{{ h.capSet }}" type="number" min="5" style="width: 100px; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 13px; color: #334155; outline: none;"><span style="font-size: 12px; color: #10b981; font-weight: 600;">{{ st.savedBudget }}</span></div>
+              </div>
+              <div style="display: flex; align-items: center; gap: 12px; padding-top: 22px;">
+                <div onClick="{{ h.enforceToggle }}" style="{{ st.enforceToggle.track }}"><div style="{{ st.enforceToggle.knob }}"></div></div>
+                <span style="font-size: 13px; color: #334155;">Enforce cap on manual syncs</span>
+              </div>
+            </div>
+          </div>
+
+          <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); padding: 24px;">
+            <h2 style="font-size: 15px; font-weight: 600; margin: 0 0 16px;">Free-API quotas <span style="font-size: 12px; color: #94a3b8; font-weight: 400;">— GA4, Google Ads &amp; GSC cost $0 but are rate-limited</span></h2>
+            <div style="display: flex; flex-direction: column; gap: 16px;">
+              <div>
+                <div style="display: flex; justify-content: space-between; font-size: 12.5px; color: #475569; margin-bottom: 6px;"><span style="font-weight: 600;">GA4 Data API tokens</span><span style="color: #94a3b8;">{{ st.quotaGa4Label }}</span></div>
+                <div style="height: 7px; background: #f1f5f9; border-radius: 9999px; overflow: hidden;"><div style="{{ st.quotaGa4.style }}"></div></div>
+              </div>
+              <div>
+                <div style="display: flex; justify-content: space-between; font-size: 12.5px; color: #475569; margin-bottom: 6px;"><span style="font-weight: 600;">Google Ads API ops</span><span style="color: #94a3b8;">{{ st.quotaAdsLabel }}</span></div>
+                <div style="height: 7px; background: #f1f5f9; border-radius: 9999px; overflow: hidden;"><div style="{{ st.quotaAds.style }}"></div></div>
+              </div>
+              <div>
+                <div style="display: flex; justify-content: space-between; font-size: 12.5px; color: #475569; margin-bottom: 6px;"><span style="font-weight: 600;">Search Console queries</span><span style="color: #94a3b8;">{{ st.quotaGscLabel }}</span></div>
+                <div style="height: 7px; background: #f1f5f9; border-radius: 9999px; overflow: hidden;"><div style="{{ st.quotaGsc.style }}"></div></div>
+              </div>
+            </div>
+          </div>
+
+          <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); padding: 24px;">
+            <h2 style="font-size: 15px; font-weight: 600; margin: 0 0 12px;">Cost by module</h2>
+            <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
+              <thead><tr style="text-align: left; color: #94a3b8; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;"><th style="font-weight: 500; padding: 8px 0;">Module</th><th style="font-weight: 500; padding: 8px 0;">Cadence</th><th style="font-weight: 500; padding: 8px 0; text-align: right;">Est. / month</th><th style="font-weight: 500; padding: 8px 0; text-align: right;"></th></tr></thead>
+              <tbody>
+                <sc-for list="{{ st.usageRows }}" as="u" hint-placeholder-count="5">
+                  <tr style="border-top: 1px solid #f1f5f9;">
+                    <td style="padding: 10px 0; color: #334155; font-weight: 500;">{{ u.module }}</td>
+                    <td style="padding: 10px 0; color: #64748b;">{{ u.cadence }}</td>
+                    <td style="padding: 10px 0; text-align: right; color: #475569;">{{ u.estFmt }}</td>
+                    <td style="padding: 10px 0; text-align: right;"><sc-if value="{{ u.canSync }}" hint-placeholder-val="{{ false }}"><span onClick="{{ u.run }}" style="cursor: pointer; font-size: 12px; font-weight: 500; color: #4f46e5;" style-hover="opacity:0.7">Sync now</span></sc-if></td>
+                  </tr>
+                </sc-for>
+              </tbody>
+            </table>
+          </div>
+        </div>
+        </sc-if>
+
+        <!-- ========== ALERTS & RULES ========== -->
+        <sc-if value="{{ st.alr }}" hint-placeholder-val="{{ false }}">
+        <div style="display: flex; flex-direction: column; gap: 22px;">
+          <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); padding: 24px;">
+            <div style="display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 4px;">
+              <h2 style="font-size: 15px; font-weight: 600; margin: 0;">Alert rules</h2>
+              <span style="font-size: 12px; color: #94a3b8;">Evaluated after every sync · saves automatically</span>
+            </div>
+            <p style="font-size: 12px; color: #64748b; margin: 0 0 16px;">Only enabled rules create entries in the Alerts feed.</p>
+            <div style="display: flex; flex-direction: column;">
+              <sc-for list="{{ st.ruleRows }}" as="r" hint-placeholder-count="4">
+                <div style="display: flex; align-items: center; gap: 14px; padding: 12px 0; border-top: 1px solid #f1f5f9;">
+                  <div onClick="{{ r.toggle }}" style="{{ r.track }}"><div style="{{ r.knob }}"></div></div>
+                  <span style="{{ r.labelStyle }}">{{ r.label }}</span>
+                  <input value="{{ r.threshold }}" onInput="{{ r.setThreshold }}" type="number" min="1" style="width: 70px; padding: 6px 10px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 13px; color: #334155; outline: none; text-align: right;" />
+                  <span style="font-size: 12px; color: #94a3b8; min-width: 64px;">{{ r.unit }}</span>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+
+          <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); padding: 24px;">
+            <h2 style="font-size: 15px; font-weight: 600; margin: 0 0 16px;">Notifications</h2>
+            <div style="display: flex; flex-direction: column; gap: 12px;">
+              <div style="display: flex; align-items: center; justify-content: space-between; padding: 12px; border: 1px solid #e2e8f0; border-radius: 8px;">
+                <div><div style="font-weight: 500; font-size: 14px; color: #0f172a;">Email notifications</div><div style="font-size: 12px; color: #64748b;">Send alerts as they're detected.</div></div>
+                <div onClick="{{ h.notifEmail }}" style="{{ st.notifEmailToggle.track }}"><div style="{{ st.notifEmailToggle.knob }}"></div></div>
+              </div>
+              <div style="display: flex; align-items: center; justify-content: space-between; padding: 12px; border: 1px solid #e2e8f0; border-radius: 8px;">
+                <div><div style="font-weight: 500; font-size: 14px; color: #0f172a;">Weekly digest</div><div style="font-size: 12px; color: #64748b;">Summary email after the weekly sync.</div></div>
+                <div onClick="{{ h.notifWeekly }}" style="{{ st.notifWeeklyToggle.track }}"><div style="{{ st.notifWeeklyToggle.knob }}"></div></div>
+              </div>
+              <div style="display: flex; align-items: center; justify-content: space-between; padding: 12px; border: 1px solid #e2e8f0; border-radius: 8px;">
+                <div><div style="font-weight: 500; font-size: 14px; color: #0f172a;">Slack</div><div style="font-size: 12px; color: #64748b;">Post alerts to a channel via webhook.</div></div>
+                <div onClick="{{ h.notifSlackOn }}" style="{{ st.notifSlackToggle.track }}"><div style="{{ st.notifSlackToggle.knob }}"></div></div>
+              </div>
+            </div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 18px;">
+              <div style="grid-column: span 2;">
+                <label style="display: block; font-size: 12px; font-weight: 600; color: #334155; margin-bottom: 6px;">Recipients <span style="color: #94a3b8; font-weight: 400;">comma-separated</span></label>
+                <input value="{{ st.notif.recipients }}" onInput="{{ h.notifRecipients }}" style="width: 100%; box-sizing: border-box; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-family: inherit; font-size: 13px; color: #334155; outline: none;">
+              </div>
+              <div style="grid-column: span 2;">
+                <label style="display: block; font-size: 12px; font-weight: 600; color: #334155; margin-bottom: 6px;">Slack webhook URL</label>
+                <input value="{{ st.notif.slack_webhook }}" onInput="{{ h.notifSlack }}" placeholder="https://hooks.slack.com/services/…" style="width: 100%; box-sizing: border-box; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-family: monospace; font-size: 12.5px; color: #334155; outline: none;">
+              </div>
+              <div>
+                <label style="display: block; font-size: 12px; font-weight: 600; color: #334155; margin-bottom: 6px;">Digest day</label>
+                <select value="{{ st.notif.digest_day }}" onChange="{{ h.notifDigestDay }}" style="width: 100%; box-sizing: border-box; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 13px; color: #334155; background: white; outline: none;">
+                  <option value="Monday">Monday</option><option value="Friday">Friday</option><option value="Sunday">Sunday</option>
+                </select>
+              </div>
+              <div style="display: flex; gap: 10px;">
+                <div style="flex: 1;">
+                  <label style="display: block; font-size: 12px; font-weight: 600; color: #334155; margin-bottom: 6px;">Quiet hours</label>
+                  <input value="{{ st.notif.quiet_start }}" onInput="{{ h.notifQuietStart }}" style="width: 100%; box-sizing: border-box; padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 13px; color: #334155; outline: none;">
+                </div>
+                <div style="flex: 1;">
+                  <label style="display: block; font-size: 12px; font-weight: 600; color: #334155; margin-bottom: 6px;">&nbsp;to</label>
+                  <input value="{{ st.notif.quiet_end }}" onInput="{{ h.notifQuietEnd }}" style="width: 100%; box-sizing: border-box; padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 13px; color: #334155; outline: none;">
+                </div>
+              </div>
+            </div>
+            <div style="margin-top: 18px;">
+              <div onClick="{{ h.saveNotif }}" style="display: inline-flex; padding: 8px 16px; background: #4f46e5; color: white; font-size: 13px; font-weight: 600; border-radius: 8px; cursor: pointer;" style-hover="background:#4338ca">{{ st.savedNotif }}</div>
+            </div>
+          </div>
+        </div>
+        </sc-if>
+
+        <!-- ========== AI SUMMARIES ========== -->
+        <sc-if value="{{ st.aiT }}" hint-placeholder-val="{{ false }}">
+        <div style="display: flex; flex-direction: column; gap: 22px;">
+          <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); padding: 24px;">
+            <h2 style="font-size: 15px; font-weight: 600; margin: 0 0 4px;">AI summaries</h2>
+            <p style="font-size: 12px; color: #64748b; margin: 0 0 18px;">A model writes the weekly "wins / critical / watch" narrative after each sync.</p>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+              <div>
+                <label style="display: block; font-size: 12px; font-weight: 600; color: #334155; margin-bottom: 6px;">Provider</label>
+                <select value="{{ st.ai.provider }}" onChange="{{ h.aiProvider }}" style="width: 100%; box-sizing: border-box; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 13px; color: #334155; background: white; outline: none;">
+                  <sc-for list="{{ st.providerOptions }}" as="o" hint-placeholder-count="2"><option value="{{ o.value }}">{{ o.label }}</option></sc-for>
+                </select>
+              </div>
+              <div>
+                <label style="display: block; font-size: 12px; font-weight: 600; color: #334155; margin-bottom: 6px;">Model</label>
+                <select value="{{ st.ai.model }}" onChange="{{ h.aiModel }}" style="width: 100%; box-sizing: border-box; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 13px; color: #334155; background: white; outline: none;">
+                  <sc-for list="{{ st.modelOptions }}" as="o" hint-placeholder-count="4"><option value="{{ o.value }}">{{ o.label }}</option></sc-for>
+                </select>
+              </div>
+              <div>
+                <label style="display: block; font-size: 12px; font-weight: 600; color: #334155; margin-bottom: 6px;">Tone</label>
+                <select value="{{ st.ai.tone }}" onChange="{{ h.aiTone }}" style="width: 100%; box-sizing: border-box; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 13px; color: #334155; background: white; outline: none;">
+                  <sc-for list="{{ st.toneOptions }}" as="o" hint-placeholder-count="3"><option value="{{ o.value }}">{{ o.label }}</option></sc-for>
+                </select>
+              </div>
+              <div>
+                <label style="display: block; font-size: 12px; font-weight: 600; color: #334155; margin-bottom: 6px;">Cadence</label>
+                <select value="{{ st.ai.cadence }}" onChange="{{ h.aiCadence }}" style="width: 100%; box-sizing: border-box; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 13px; color: #334155; background: white; outline: none;">
+                  <sc-for list="{{ st.aiCadenceOptions }}" as="o" hint-placeholder-count="3"><option value="{{ o.value }}">{{ o.label }}</option></sc-for>
+                </select>
+              </div>
+              <div>
+                <label style="display: block; font-size: 12px; font-weight: 600; color: #334155; margin-bottom: 6px;">Monthly cap (USD)</label>
+                <input value="{{ st.ai.monthly_cap }}" onInput="{{ h.aiCap }}" type="number" min="0" style="width: 100%; box-sizing: border-box; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 13px; color: #334155; outline: none;">
+              </div>
+            </div>
+            <div style="margin-top: 16px;">
+              <label style="display: block; font-size: 12px; font-weight: 600; color: #334155; margin-bottom: 6px;">Brand voice <span style="color: #94a3b8; font-weight: 400;">— steers how summaries are written</span></label>
+              <textarea value="{{ st.ai.brand_voice }}" onInput="{{ h.aiVoice }}" rows="3" style="width: 100%; box-sizing: border-box; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-family: inherit; font-size: 13px; color: #334155; outline: none; resize: vertical;"></textarea>
+            </div>
+            <div style="margin-top: 18px;">
+              <div onClick="{{ h.saveAi }}" style="display: inline-flex; padding: 8px 16px; background: #4f46e5; color: white; font-size: 13px; font-weight: 600; border-radius: 8px; cursor: pointer;" style-hover="background:#4338ca">{{ st.savedAi }}</div>
+            </div>
+          </div>
+        </div>
+        </sc-if>
+
+        <!-- ========== SECURITY & DATA ========== -->
+        <sc-if value="{{ st.sec }}" hint-placeholder-val="{{ false }}">
+        <div style="display: flex; flex-direction: column; gap: 22px;">
+          <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); padding: 24px;">
+            <h2 style="font-size: 15px; font-weight: 600; margin: 0 0 16px;">Authentication</h2>
+            <div style="display: flex; flex-direction: column; gap: 12px;">
+              <div style="display: flex; align-items: center; justify-content: space-between; padding: 12px; border: 1px solid #e2e8f0; border-radius: 8px;">
+                <div><div style="font-weight: 500; font-size: 14px; color: #0f172a;">Two-factor authentication</div><div style="font-size: 12px; color: #64748b;">Require a code at sign-in.</div></div>
+                <div onClick="{{ h.twofaToggle }}" style="{{ st.twofaToggle.track }}"><div style="{{ st.twofaToggle.knob }}"></div></div>
+              </div>
+              <div style="display: flex; align-items: center; justify-content: space-between; padding: 12px; border: 1px solid #e2e8f0; border-radius: 8px;">
+                <div><div style="font-weight: 500; font-size: 14px; color: #0f172a;">SSO (SAML)</div><div style="font-size: 12px; color: #64748b;">Sign in through your identity provider.</div></div>
+                <div onClick="{{ h.ssoToggle }}" style="{{ st.ssoToggle.track }}"><div style="{{ st.ssoToggle.knob }}"></div></div>
+              </div>
+            </div>
+          </div>
+
+          <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); padding: 24px;">
+            <h2 style="font-size: 15px; font-weight: 600; margin: 0 0 16px;">Change Password</h2>
+            <div style="display: flex; flex-direction: column; gap: 12px; max-width: 400px;">
+              <input type="password" value="{{ cpwOld }}" onInput="{{ h.cpwOldFn }}" placeholder="Current password" style="width: 100%; box-sizing: border-box; padding: 10px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-family: inherit; font-size: 13.5px; outline: none;">
+              <input type="password" value="{{ cpwNew }}" onInput="{{ h.cpwNewFn }}" placeholder="New password" style="width: 100%; box-sizing: border-box; padding: 10px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-family: inherit; font-size: 13.5px; outline: none;">
+              <input type="password" value="{{ cpwNew2 }}" onInput="{{ h.cpwNew2Fn }}" placeholder="Confirm new password" style="width: 100%; box-sizing: border-box; padding: 10px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-family: inherit; font-size: 13.5px; outline: none;">
+              <div style="display: flex; align-items: center; gap: 12px; margin-top: 4px;">
+                <span onClick="{{ h.cpwSave }}" style="padding: 10px 18px; background: #0f172a; color: white; font-size: 13px; font-weight: 600; border-radius: 8px; cursor: pointer;">{{ cpwBusy ? 'Saving...' : 'Update Password' }}</span>
+                <sc-if value="{{ cpwMsg }}" hint-placeholder-val="{{ false }}"><span style="font-size: 13px; font-weight: 500; color: {{ cpwErr ? '#dc2626' : '#059669' }};">{{ cpwMsg }}</span></sc-if>
+              </div>
+            </div>
+          </div>
+
+          <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
+            <div style="padding: 16px 24px; border-bottom: 1px solid #f1f5f9;"><h2 style="font-size: 15px; font-weight: 600; margin: 0;">Active sessions</h2></div>
+            <sc-for list="{{ st.sessions }}" as="x" hint-placeholder-count="2">
+              <div style="display: flex; align-items: center; gap: 14px; padding: 14px 24px; border-top: 1px solid #f8fafc;">
+                <div style="min-width: 0; flex: 1;">
+                  <div style="font-size: 13.5px; font-weight: 600; color: #0f172a;">{{ x.device }} <sc-if value="{{ x.current }}" hint-placeholder-val="{{ false }}"><span style="font-size: 10.5px; font-weight: 600; color: #059669; background: #ecfdf5; padding: 1px 7px; border-radius: 9999px; margin-left: 4px;">This device</span></sc-if></div>
+                  <div style="font-size: 12px; color: #94a3b8;">{{ x.meta }}</div>
+                </div>
+                <sc-if value="{{ x.current }}" hint-placeholder-val="{{ false }}"><span style="width: 8px;"></span></sc-if>
+                <sc-if value="{{ x.current }}" hint-placeholder-val="{{ true }}"><span onClick="{{ x.revoke }}" style="font-size: 12.5px; font-weight: 600; color: #dc2626; cursor: pointer;" style-hover="opacity:0.7">Revoke</span></sc-if>
+              </div>
+            </sc-for>
+          </div>
+
+          <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
+            <div style="padding: 16px 24px; border-bottom: 1px solid #f1f5f9;"><h2 style="font-size: 15px; font-weight: 600; margin: 0;">API tokens</h2><p style="font-size: 12px; color: #94a3b8; margin: 4px 0 0;">For read-only access to your dashboard data (Looker Studio, scripts).</p></div>
+            <sc-for list="{{ st.tokens }}" as="t" hint-placeholder-count="1">
+              <div style="display: flex; align-items: center; gap: 14px; padding: 14px 24px; border-top: 1px solid #f8fafc;">
+                <div style="min-width: 0; flex: 1;">
+                  <div style="font-size: 13.5px; font-weight: 600; color: #0f172a;">{{ t.name }} <span style="font-family: monospace; font-size: 12px; color: #94a3b8; margin-left: 4px;">{{ t.prefix }}</span></div>
+                  <div style="font-size: 12px; color: #94a3b8;">{{ t.meta }}</div>
+                </div>
+                <span onClick="{{ t.revoke }}" style="font-size: 12.5px; font-weight: 600; color: #dc2626; cursor: pointer;" style-hover="opacity:0.7">Revoke</span>
+              </div>
+            </sc-for>
+            <div style="display: flex; gap: 10px; padding: 16px 24px; border-top: 1px solid #f1f5f9;">
+              <input value="{{ st.newTokenName }}" onInput="{{ h.tokenName }}" placeholder="Token name" style="flex: 1; box-sizing: border-box; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-family: inherit; font-size: 13px; color: #334155; outline: none;">
+              <div onClick="{{ h.createToken }}" style="padding: 8px 16px; background: #0f172a; color: white; font-size: 13px; font-weight: 600; border-radius: 8px; cursor: pointer; white-space: nowrap;" style-hover="background:#1e293b">Create token</div>
+            </div>
+          </div>
+
+          <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); padding: 24px;">
+            <h2 style="font-size: 15px; font-weight: 600; margin: 0 0 16px;">Data &amp; privacy</h2>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+              <div>
+                <label style="display: block; font-size: 12px; font-weight: 600; color: #334155; margin-bottom: 6px;">Default export format</label>
+                <select value="{{ st.dp.export_format }}" onChange="{{ h.dataFormat }}" style="width: 100%; box-sizing: border-box; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 13px; color: #334155; background: white; outline: none;">
+                  <sc-for list="{{ st.formatOptions }}" as="o" hint-placeholder-count="3"><option value="{{ o.value }}">{{ o.label }}</option></sc-for>
+                </select>
+              </div>
+              <div>
+                <label style="display: block; font-size: 12px; font-weight: 600; color: #334155; margin-bottom: 6px;">Data retention</label>
+                <select value="{{ st.dp.retention }}" onChange="{{ h.dataRetention }}" style="width: 100%; box-sizing: border-box; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 13px; color: #334155; background: white; outline: none;">
+                  <sc-for list="{{ st.retentionOptions }}" as="o" hint-placeholder-count="4"><option value="{{ o.value }}">{{ o.label }}</option></sc-for>
+                </select>
+              </div>
+              <div>
+                <label style="display: block; font-size: 12px; font-weight: 600; color: #334155; margin-bottom: 6px;">Report timezone</label>
+                <select value="{{ st.dp.report_timezone }}" onChange="{{ h.dataTz }}" style="width: 100%; box-sizing: border-box; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 13px; color: #334155; background: white; outline: none;">
+                  <option value="America/Chicago">America/Chicago</option>
+                  <option value="America/New_York">America/New_York</option>
+                  <option value="America/Los_Angeles">America/Los_Angeles</option>
+                  <option value="Europe/London">Europe/London</option>
+                </select>
+              </div>
+              <div>
+                <label style="display: block; font-size: 12px; font-weight: 600; color: #334155; margin-bottom: 6px;">Number format</label>
+                <select value="{{ st.dp.number_format }}" onChange="{{ h.dataNum }}" style="width: 100%; box-sizing: border-box; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 13px; color: #334155; background: white; outline: none;">
+                  <option value="1,234.56">1,234.56</option>
+                  <option value="1.234,56">1.234,56</option>
+                </select>
+              </div>
+            </div>
+            <div style="display: flex; align-items: center; gap: 12px; margin-top: 18px;">
+              <div onClick="{{ h.saveData }}" style="display: inline-flex; padding: 8px 16px; background: #4f46e5; color: white; font-size: 13px; font-weight: 600; border-radius: 8px; cursor: pointer;" style-hover="background:#4338ca">{{ st.savedData }}</div>
+              <span onClick="{{ h.downloadAll }}" style="font-size: 13px; font-weight: 600; color: #4f46e5; cursor: pointer;" style-hover="opacity:0.7">Download all data</span>
+              <span onClick="{{ h.gdprDelete }}" style="font-size: 13px; font-weight: 600; color: #dc2626; cursor: pointer; margin-left: auto;" style-hover="opacity:0.7">Request data deletion</span>
+            </div>
+          </div>
+        </div>
+        </sc-if>
+
+      </div>
+      </sc-if>
