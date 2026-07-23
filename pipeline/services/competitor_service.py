@@ -113,6 +113,7 @@ def set_tracked_competitors(site_id: str, domains: list[str]) -> int:
                 TrackedCompetitor.__table__.insert(),
                 [{"site_id": site_id, "competitor_domain": d} for d in cleaned],
             )
+        session.commit()
     logger.info(f"[competitor_service] set {len(cleaned)} tracked competitors for {site_id!r}")
     return len(cleaned)
 

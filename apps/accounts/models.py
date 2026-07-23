@@ -43,6 +43,22 @@ class UserProfile(models.Model):
         return page_key in ROLE_PAGE_ACCESS.get(self.role, set())
 
 
+class UserInvitation(models.Model):
+    """Tracks email invitations sent by Owner. Expire 48 hours after creation."""
+    email = models.EmailField(db_index=True)
+    role = models.CharField(max_length=16, choices=Role.choices, default=Role.SEO)
+    invited_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="sent_invitations"
+    )
+    token = models.CharField(max_length=64, unique=True, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+    is_accepted = models.BooleanField(default=False)
+
+    def __str__(self) -> str:
+        return f"Invite to {self.email} as {self.role} ({'accepted' if self.is_accepted else 'pending'})"
+
+
 @receiver(post_save, sender=settings.AUTH_USER_MODEL)
 def ensure_profile(sender, instance, created, **kwargs):
     """Every user gets a profile. New users default to the most restrictive sensible role
@@ -58,3 +74,4 @@ def ensure_auth_token(sender, instance, created, **kwargs):
     (see apps.api.authentication.BearerTokenAuthentication). get_or_create is idempotent, so
     this is safe to run on every save, not just creation."""
     Token.objects.get_or_create(user=instance)
+

@@ -16,13 +16,91 @@ def build_positions_response(site_id: str, curr_start: date, curr_end: date,
     from apps.dashboard.services.shared_queries import (
         _get_ranking_distribution, _get_position_changes, _get_competitor_grid,
     )
+    from pipeline.services.saved_keyword_service import list_saved_keywords
 
     dist = _get_ranking_distribution(site_id, curr_start, curr_end)
     changes = _get_position_changes(site_id, curr_start, curr_end, prev_start, prev_end)
     grid = _get_competitor_grid(site_id)
+    saved_kws = list_saved_keywords(site_id)
 
+    intel = get_keyword_intelligence_raw(site_id, curr_start, curr_end, prev_start, prev_end, tracked_only=True)
+    intel_kws = intel.get("full_keywords", [])
+    ranked_map = {r["keyword"].lower(): r for r in intel_kws if r.get("keyword")}
+
+    # Merge saved keywords with synced rankings from keyword_rankings
+    merged_kws_raw = []
+    seen = set()
+
+    # First, bring in everything that has synced rankings
+    for r in intel_kws:
+        kw_text = (r.get("keyword") or "").strip()
+        if not kw_text:
+            continue
+        seen.add(kw_text.lower())
+        merged_kws_raw.append(r)
+
+    # Next, bring in any saved keyword that hasn't been synced to SERP rankings yet
+    for sk in saved_kws:
+        kw_text = (sk.get("keyword") or "").strip()
+        if not kw_text:
+            continue
+        if kw_text.lower() in seen:
+            # If already in seen, let's enrich missing volume/kd/cpc/intent if needed
+            for item in merged_kws_raw:
+                if (item.get("keyword") or "").lower() == kw_text.lower():
+                    if not item.get("search_volume") and sk.get("search_volume"):
+                        item["search_volume"] = sk.get("search_volume")
+                    if not item.get("keyword_difficulty") and sk.get("keyword_difficulty"):
+                        item["keyword_difficulty"] = sk.get("keyword_difficulty")
+                    if not item.get("cpc") and sk.get("cpc"):
+                        item["cpc"] = sk.get("cpc")
+                    if not item.get("intent") and sk.get("intent"):
+                        item["intent"] = sk.get("intent")
+            continue
+        seen.add(kw_text.lower())
+        merged_kws_raw.append({
+            "keyword": kw_text,
+            "position": None,
+            "prev_position": None,
+            "pos_change": None,
+            "clicks": 0,
+            "impressions": 0,
+            "ctr": 0.0,
+            "search_volume": sk.get("search_volume") or 0,
+            "keyword_difficulty": sk.get("keyword_difficulty") or 0,
+            "cpc": sk.get("cpc") or 0.0,
+            "intent": sk.get("intent") or "informational",
+            "url": "",
+            "action": "new",
+        })
+
+    movers_raw = [
+        r for r in merged_kws_raw
+        if r.get("pos_change") is not None and abs(r["pos_change"]) >= 2
+    ]
+    movers_raw.sort(key=lambda r: abs(r["pos_change"]), reverse=True)
+    movers = [to_api_keyword(r) for r in movers_raw[:8]]
+    rankings = [to_api_keyword(r) for r in merged_kws_raw]
+
+    domains = grid.get("competitors", [])
+    comp_rows_map = {row["keyword"].lower(): row for row in grid.get("rows", [])}
+    comp_rows = []
+    for r in merged_kws_raw:
+        kw = r["keyword"]
+        if kw.lower() in comp_rows_map:
+            row = comp_rows_map[kw.lower()]
+            comps = [
+                next((c["pos"] for c in row["cells"] if c["domain"] == dom), None)
+                for dom in domains
+            ]
+            comp_rows.append({"kw": kw, "you": row["you"]["pos"], "comps": comps})
+        else:
+            comp_rows.append({"kw": kw, "you": r.get("position"), "comps": [None] * len(domains)})
+    competitors = {"domains": domains, "rows": comp_rows}
+
+    total_tracked = max(dist["total"], len(merged_kws_raw))
     kpis = {
-        "tracked": dist["total"],
+        "tracked": total_tracked,
         "avg_pos": dist["avg_position"],
         "est_traffic": dist["total_clicks"],
         "impressions": dist["total_impressions"],
@@ -40,28 +118,12 @@ def build_positions_response(site_id: str, curr_start: date, curr_end: date,
         "lost": changes["lost_count"],
     }
 
-    domains = grid.get("competitors", [])
-    comp_rows = []
-    for row in grid.get("rows", []):
-        comps = [
-            next((c["pos"] for c in row["cells"] if c["domain"] == dom), None)
-            for dom in domains
-        ]
-        comp_rows.append({"kw": row["keyword"], "you": row["you"]["pos"], "comps": comps})
-    competitors = {"domains": domains, "rows": comp_rows}
-
-    intel = get_keyword_intelligence_raw(site_id, curr_start, curr_end, prev_start, prev_end)
-    movers_raw = [
-        r for r in intel["full_keywords"]
-        if r.get("pos_change") is not None and abs(r["pos_change"]) >= 2
-    ]
-    movers_raw.sort(key=lambda r: abs(r["pos_change"]), reverse=True)
-    movers = [to_api_keyword(r) for r in movers_raw[:8]]
-
     return {
         "kpis": kpis,
         "distribution": distribution,
         "movement": movement,
         "competitors": competitors,
         "movers": movers,
+        "rankings": rankings,
+        "keywords": rankings,
     }

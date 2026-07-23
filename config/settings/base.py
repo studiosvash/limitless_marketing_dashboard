@@ -125,6 +125,11 @@ REST_FRAMEWORK = {
 
 # --- Auth -------------------------------------------------------------------
 
+AUTHENTICATION_BACKENDS = [
+    "apps.accounts.backends.EmailOrUsernameModelBackend",
+    "django.contrib.auth.backends.ModelBackend",
+]
+
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
     {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator"},
@@ -195,3 +200,23 @@ LOGGING = {
         "level": "INFO",
     },
 }
+
+
+# --- Email & SMTP -----------------------------------------------------------
+
+EMAIL_BACKEND = env("EMAIL_BACKEND", "django.core.mail.backends.smtp.EmailBackend")
+EMAIL_HOST = env("EMAIL_HOST", "smtp.gmail.com")
+EMAIL_PORT = int(env("EMAIL_PORT", "587"))
+EMAIL_HOST_USER = env("EMAIL_HOST_USER", "")
+EMAIL_HOST_PASSWORD = env("EMAIL_HOST_PASSWORD", "")
+EMAIL_USE_TLS = str(env("EMAIL_USE_TLS", "True")).lower() in ("true", "1", "yes")
+EMAIL_USE_SSL = str(env("EMAIL_USE_SSL", "False")).lower() in ("true", "1", "yes")
+DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", "Limitless Dashboard <no-reply@fusehealth.com>")
+FRONTEND_URL = env("FRONTEND_URL", "http://localhost:8000")
+
+# If running locally with no SMTP user configured, gracefully fall back to console print
+# so dev doesn't crash with ConnectionRefused on localhost:25 when testing.
+if not EMAIL_HOST_USER and EMAIL_BACKEND == "django.core.mail.backends.smtp.EmailBackend":
+    EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
+
+

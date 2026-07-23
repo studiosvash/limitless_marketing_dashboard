@@ -268,6 +268,46 @@ class DataForSEOKeywordsConnector(BaseConnector):
         resp.raise_for_status()
         return resp.json()
 
+    @with_retry(max_retries=2, base_delay=3.0)
+    def _fetch_related_keywords(self, seed: str, location_name: str, limit: int) -> dict:
+        """Labs related_keywords/live call (searches related to graph). Takes a single string keyword."""
+        payload = [{
+            "keyword": (seed or "").lower().strip(),
+            "location_name": location_name,
+            "language_name": "English",
+            "include_serp_info": True,
+            "limit": max(1, min(limit, 500)),
+            "order_by": ["keyword_info.search_volume,desc"],
+        }]
+        resp = requests.post(
+            f"{DATAFORSEO_BASE}/dataforseo_labs/google/related_keywords/live",
+            auth=self.auth,
+            json=payload,
+            timeout=45,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    @with_retry(max_retries=2, base_delay=3.0)
+    def _fetch_keyword_suggestions(self, seeds: list[str], location_name: str, limit: int) -> dict:
+        """Labs keyword_suggestions/live call (long-tail suggestions)."""
+        payload = [{
+            "keywords": [s.lower() for s in seeds][:200],
+            "location_name": location_name,
+            "language_name": "English",
+            "include_serp_info": True,
+            "limit": max(1, min(limit, 1000)),
+            "order_by": ["keyword_info.search_volume,desc"],
+        }]
+        resp = requests.post(
+            f"{DATAFORSEO_BASE}/dataforseo_labs/google/keyword_suggestions/live",
+            auth=self.auth,
+            json=payload,
+            timeout=45,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
     @staticmethod
     def _parse_idea_item(item: dict) -> Optional[dict]:
         """Map one keyword_ideas item to the Explorer's row shape (before match/tracked).
@@ -306,6 +346,8 @@ class DataForSEOKeywordsConnector(BaseConnector):
              "rows": [{kw, volume, kd, cpc, intent, match, monthly, serpFeatures}], "error": str|None}
         """
         import re
+        import concurrent.futures
+
         cleaned, seen = [], set()
         for kw in seeds:
             k = (kw or "").strip()
@@ -320,29 +362,72 @@ class DataForSEOKeywordsConnector(BaseConnector):
             return {"status": "error", "location": location_name, "cost": 0, "rows": [],
                     "error": "DataForSEO credentials are not configured."}
 
-        try:
-            payload = self._fetch_keyword_ideas(cleaned, location_name, limit)
-        except Exception as exc:
-            self.logger.warning(f"[dataforseo_keywords] expand_keywords failed: {exc}")
-            return {"status": "error", "location": location_name, "cost": 0, "rows": [],
-                    "error": f"Couldn't fetch keyword ideas: {exc}"}
+        question_seeds = []
+        for s in cleaned[:2]:
+            for q in ["how", "what", "how much", "why", "can", "is", "where", "when", "does"]:
+                question_seeds.append(f"{q} {s}")
 
-        task = (payload.get("tasks") or [{}])[0]
-        result = (task.get("result") or [{}])[0]
-        items = result.get("items") or []
-        cost = payload.get("cost") or 0
+        ideas_payload, related_payload, questions_payload = {}, {}, {}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
+            f_ideas = pool.submit(self._fetch_keyword_ideas, cleaned, location_name, limit)
+            f_related = pool.submit(self._fetch_related_keywords, cleaned[0], location_name, min(limit, 50))
+            f_questions = pool.submit(self._fetch_keyword_suggestions, question_seeds[:20], location_name, min(limit, 50))
+
+            try:
+                ideas_payload = f_ideas.result()
+            except Exception as exc:
+                self.logger.warning(f"[dataforseo_keywords] expand_keywords ideas failed: {exc}")
+                return {"status": "error", "location": location_name, "cost": 0, "rows": [],
+                        "error": f"Couldn't fetch keyword ideas: {exc}"}
+
+            try:
+                related_payload = f_related.result()
+            except Exception as exc:
+                self.logger.warning(f"[dataforseo_keywords] expand_keywords related failed: {exc}")
+
+            try:
+                questions_payload = f_questions.result()
+            except Exception as exc:
+                self.logger.warning(f"[dataforseo_keywords] expand_keywords questions failed: {exc}")
+
+        total_cost = (ideas_payload.get("cost") or 0) + (related_payload.get("cost") or 0) + (questions_payload.get("cost") or 0)
 
         seed_phrases = [s.lower().strip() for s in cleaned]
         seed_token_sets = [set(re.findall(r"[a-z0-9]+", p)) for p in seed_phrases]
 
         rows = []
-        for item in items:
+        seen_kws = set()
+
+        # 1. Parse main keyword ideas (broad, phrase, exact, questions)
+        task_ideas = (ideas_payload.get("tasks") or [{}])[0]
+        for item in ((task_ideas.get("result") or [{}])[0].get("items") or []):
             row = self._parse_idea_item(item)
-            if row:
+            if row and row["kw"].lower() not in seen_kws:
+                seen_kws.add(row["kw"].lower())
                 row["match"] = self._classify_match(row["kw"], seed_phrases, seed_token_sets)
                 rows.append(row)
 
-        return {"status": "ok", "location": location_name, "cost": round(float(cost), 4),
+        # 2. Parse related keywords -> match: "related"
+        task_related = (related_payload.get("tasks") or [{}])[0]
+        for item in ((task_related.get("result") or [{}])[0].get("items") or []):
+            row = self._parse_idea_item(item)
+            if row and row["kw"].lower() not in seen_kws:
+                seen_kws.add(row["kw"].lower())
+                match_class = self._classify_match(row["kw"], seed_phrases, seed_token_sets)
+                row["match"] = "exact" if match_class == "exact" else ("questions" if match_class == "questions" else "related")
+                rows.append(row)
+
+        # 3. Parse question suggestions -> match: "questions"
+        task_questions = (questions_payload.get("tasks") or [{}])[0]
+        for item in ((task_questions.get("result") or [{}])[0].get("items") or []):
+            row = self._parse_idea_item(item)
+            if row and row["kw"].lower() not in seen_kws:
+                seen_kws.add(row["kw"].lower())
+                match_class = self._classify_match(row["kw"], seed_phrases, seed_token_sets)
+                row["match"] = "exact" if match_class == "exact" else "questions"
+                rows.append(row)
+
+        return {"status": "ok", "location": location_name, "cost": round(float(total_cost), 4),
                 "rows": rows, "error": None}
 
     def fetch(self, site_id: Optional[str] = None) -> list[dict]:

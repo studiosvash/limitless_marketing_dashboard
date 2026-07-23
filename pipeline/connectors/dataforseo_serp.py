@@ -166,7 +166,7 @@ class DataForSEOSERPConnector(BaseConnector):
             for task_id in pending:
                 try:
                     resp = requests.get(
-                        f"{DATAFORSEO_BASE}/serp/google/organic/task_get/{task_id}",
+                        f"{DATAFORSEO_BASE}/serp/google/organic/task_get/regular/{task_id}",
                         auth=self.auth,
                         timeout=20,
                     )

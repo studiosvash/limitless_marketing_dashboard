@@ -45,19 +45,21 @@ def _load_from_file(path: str) -> list[str]:
 
 
 def _load_from_db(site_id: str) -> list[str]:
-    """Keywords the admin explicitly tracks for this site (saved_keywords table)."""
+    """Keywords the admin explicitly tracks for this site (saved_keywords table), plus any
+    keywords currently in keyword_rankings (from GSC queries or past syncs)."""
     # Imported lazily: connectors import this module, and pulling in the DB layer at module
     # import time would risk a circular import.
     try:
         from sqlalchemy import select
 
-        from pipeline.db.schema import SavedKeyword
+        from pipeline.db.schema import SavedKeyword, KeywordRanking
         from pipeline.utils.db_connection import get_session
 
         with get_session() as session:
-            rows = session.execute(
+            saved_rows = session.execute(
                 select(SavedKeyword.keyword).where(SavedKeyword.site_id == site_id)
             ).scalars().all()
+            rows = list(saved_rows)
     except Exception as e:
         logger.error(f"[keywords] DB lookup failed for {site_id!r}: {e}", exc_info=True)
         return []

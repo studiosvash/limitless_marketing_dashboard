@@ -48,7 +48,10 @@ class ProjectsEndpointTests(APITestCase):
         resp = self.client_auth.get("/api/projects")
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(len(resp.json()), 1)
-        self.assertEqual(resp.json()[0]["id"], "fusehealth")
+        item = resp.json()[0]
+        self.assertEqual(item["id"], "fusehealth")
+        for key in ["tracked_keywords_count", "avg_position", "improved_count", "declined_count", "last_updated"]:
+            self.assertIn(key, item)
 
     def test_create_missing_domain_is_400(self):
         resp = self.client_auth.post("/api/projects", {"name": "No domain"}, format="json")

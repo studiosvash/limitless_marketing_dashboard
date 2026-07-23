@@ -50,3 +50,62 @@ def test_expand_keywords_empty_seeds_is_error():
     out = C().expand_keywords([], "United States")
     assert out["status"] == "error"
     assert out["rows"] == []
+
+
+def test_expand_keywords_fetches_and_classifies_related_and_questions_concurrently(monkeypatch):
+    c = C()
+    c.login = "test"
+    c.password = "secret"
+
+    def mock_ideas(seeds, loc, lim):
+        return {
+            "cost": 0.002,
+            "tasks": [{
+                "result": [{
+                    "items": [
+                        {"keyword": "event staffing agency", "keyword_info": {"search_volume": 1200}},
+                        {"keyword": "event staffing", "keyword_info": {"search_volume": 5000}}
+                    ]
+                }]
+            }]
+        }
+
+    def mock_related(seed, loc, lim):
+        return {
+            "cost": 0.001,
+            "tasks": [{
+                "result": [{
+                    "items": [
+                        {"keyword": "promo staff near me", "keyword_info": {"search_volume": 800}},
+                        {"keyword": "event staffing", "keyword_info": {"search_volume": 5000}}
+                    ]
+                }]
+            }]
+        }
+
+    def mock_questions(seeds, loc, lim):
+        return {
+            "cost": 0.001,
+            "tasks": [{
+                "result": [{
+                    "items": [
+                        {"keyword": "how much does event staffing cost", "keyword_info": {"search_volume": 150}}
+                    ]
+                }]
+            }]
+        }
+
+    monkeypatch.setattr(c, "_fetch_keyword_ideas", mock_ideas)
+    monkeypatch.setattr(c, "_fetch_related_keywords", mock_related)
+    monkeypatch.setattr(c, "_fetch_keyword_suggestions", mock_questions)
+
+    res = c.expand_keywords(["event staffing"], "United States")
+    assert res["status"] == "ok"
+    assert res["cost"] == 0.004
+
+    by_kw = {r["kw"]: r["match"] for r in res["rows"]}
+    assert by_kw["event staffing"] == "exact"
+    assert by_kw["event staffing agency"] == "phrase"
+    assert by_kw["promo staff near me"] == "related"
+    assert by_kw["how much does event staffing cost"] == "questions"
+

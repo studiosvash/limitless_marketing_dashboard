@@ -44,19 +44,39 @@ def _to_spa_row(old_row: dict, tracked: set[str]) -> dict:
     (kw/match/volume/kd/cpc/intent/tracked/monthly/serpFeatures)."""
     kw = old_row.get("keyword") or ""
     serp = old_row.get("serp_features") or ""
+    if isinstance(serp, str):
+        serp_features = [s.strip() for s in serp.split(",") if s.strip()]
+    elif isinstance(serp, list):
+        serp_features = serp
+    else:
+        serp_features = []
+    intent = old_row.get("intent") or "informational"
     return {
         "kw": kw,
-        # The old connector does an exact lookup of the entered keywords -- no algorithmic
-        # expansion -- so every row is honestly 'exact'. The SPA's phrase/broad/questions/
-        # related tabs stay empty until the DataForSEO Labs expansion connectors are built
-        # (explicitly future work, same status as the other blocked DataForSEO surfaces).
         "match": "exact",
         "volume": old_row.get("search_volume") or 0,
         "kd": old_row.get("keyword_difficulty") or 0,
         "cpc": old_row.get("cpc") or 0,
-        "intent": old_row.get("intent") or "Informational",
-        "serpFeatures": [s.strip() for s in serp.split(",") if s.strip()],
-        "monthly": [],  # per-month trend not returned by this lookup; SPA sparkline handles []
+        "intent": intent.lower(),
+        "serpFeatures": serp_features,
+        "monthly": old_row.get("monthly") or [],
+        "tracked": kw.lower() in tracked,
+    }
+
+
+def _enrich_expanded_row(row: dict, tracked: set[str]) -> dict:
+    """Enrich an expanded row from expand_keywords with the site's tracked status."""
+    kw = row.get("kw") or ""
+    intent = row.get("intent") or "informational"
+    return {
+        "kw": kw,
+        "match": row.get("match", "broad"),
+        "volume": row.get("volume") or 0,
+        "kd": row.get("kd") or 0,
+        "cpc": row.get("cpc") or 0,
+        "intent": intent.lower(),
+        "serpFeatures": row.get("serpFeatures") or [],
+        "monthly": row.get("monthly") or [],
         "tracked": kw.lower() in tracked,
     }
 
@@ -75,15 +95,47 @@ def run_keyword_research(site_id: str, keywords: list[str], location: str) -> di
 
     try:
         from pipeline.connectors.dataforseo_keywords import DataForSEOKeywordsConnector
-        result = DataForSEOKeywordsConnector().lookup_keywords(cleaned, location)
+        connector = DataForSEOKeywordsConnector()
+        result = connector.expand_keywords(cleaned, location, limit=100)
     except Exception as e:
-        logger.error(f"run_keyword_research error: {e}", exc_info=True)
-        return {"rows": [], "cost": 0, "location": location,
-                "error": "Keyword data source is unavailable (DataForSEO credentials needed)."}
+        logger.error(f"run_keyword_research expand error: {e}", exc_info=True)
+        result = {"status": "error", "rows": [], "cost": 0, "error": f"Keyword data source error: {e}"}
 
     tracked = _tracked_keywords(site_id)
-    rows = [_to_spa_row(r, tracked) for r in (result.get("rows") or [])]
-    return {"rows": rows, "cost": 0, "location": location, "status": result.get("status", "ok")}
+    rows = []
+
+    if result.get("status") == "ok" and (result.get("rows") is not None):
+        rows = [_enrich_expanded_row(r, tracked) for r in (result.get("rows") or [])]
+    else:
+        try:
+            fallback = connector.lookup_keywords(cleaned, location)
+            if fallback.get("status") == "ok":
+                rows = [_to_spa_row(r, tracked) for r in (fallback.get("rows") or [])]
+                return {"rows": rows, "cost": 0, "location": location, "status": "ok"}
+        except Exception as e:
+            logger.warning(f"Fallback exact lookup failed: {e}")
+
+    if rows or result.get("status") == "ok":
+        expanded_kws = {r["kw"].lower() for r in rows if r.get("kw")}
+        missing_seeds = [k for k in cleaned if k.lower() not in expanded_kws]
+        if missing_seeds:
+            try:
+                fallback = connector.lookup_keywords(missing_seeds, location)
+                for r in (fallback.get("rows") or []):
+                    kw_lower = (r.get("keyword") or "").lower()
+                    if kw_lower and kw_lower not in expanded_kws:
+                        rows.insert(0, _to_spa_row(r, tracked))
+                        expanded_kws.add(kw_lower)
+            except Exception as e:
+                logger.warning(f"Missing seeds exact lookup failed: {e}")
+
+    return {
+        "rows": rows,
+        "cost": result.get("cost", 0),
+        "location": location,
+        "status": result.get("status", "ok"),
+        **({"error": result.get("error")} if result.get("error") and not rows else {}),
+    }
 
 
 # ---------------------------------------------------------------------------

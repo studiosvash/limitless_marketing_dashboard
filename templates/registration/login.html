@@ -37,7 +37,7 @@
         <form method="post" action="{% url 'login' %}" class="mt-5 space-y-4">
           {% csrf_token %}
           <div>
-            <label for="id_username" class="block text-sm font-medium text-slate-600 mb-1">Username</label>
+            <label for="id_username" class="block text-sm font-medium text-slate-600 mb-1">Email or Username</label>
             <input id="id_username" name="username" type="text" autofocus required
                    class="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-200 focus:border-brand-600">
           </div>

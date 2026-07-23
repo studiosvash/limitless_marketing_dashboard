@@ -129,10 +129,12 @@ def add_site(site_url, site_name=None, gsc_property=None, ga4_property_id=None,
     site_url = (site_url or "").strip()
     if not site_url:
         raise ValueError("site_url is required")
+    bare_url = _bare_domain(site_url).lower()
     with get_session() as session:
-        existing = session.execute(select(Site).where(Site.site_url == site_url)).scalars().first()
-        if existing:
-            raise ValueError(f"Site already exists: {site_url}")
+        existing_sites = session.execute(select(Site)).scalars().all()
+        for s in existing_sites:
+            if _bare_domain(s.site_url).lower() == bare_url:
+                raise ValueError(f"Site already exists: {s.site_url}")
         name = site_name or _bare_domain(site_url) or site_url
         site = Site(
             site_url=site_url,

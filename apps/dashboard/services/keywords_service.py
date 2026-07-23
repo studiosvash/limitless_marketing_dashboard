@@ -37,15 +37,30 @@ def to_api_keyword(row: dict) -> dict:
 
 
 def get_keyword_intelligence_raw(site_id: str, curr_start: date, curr_end: date,
-                                  prev_start: date, prev_end: date) -> dict:
+                                  prev_start: date, prev_end: date, tracked_only: bool = False) -> dict:
     """Keyword health score and action buckets. Identical to the pre-extraction
     _get_keyword_intelligence, except all_keywords is now built from `merged` (carries
     prev_position/pos_change on every row) instead of `df` (current period only) — the old
     version silently omitted prevPos for any keyword outside the top-15-per-segment lists."""
     try:
+        tracked_lower = None
+        if tracked_only:
+            from pipeline.utils.keywords import load_tracked_keywords
+            tracked_kws = load_tracked_keywords(site_id)
+            if not tracked_kws:
+                return {
+                    "health_score": 0, "health_label": "No Data", "health_color": "#94a3b8",
+                    "total_tracked": 0, "total_volume": 0, "avg_position": 0, "total_clicks": 0,
+                    "intent_distribution": {"informational": 0, "commercial": 0, "transactional": 0, "navigational": 0},
+                    "kd_easy": 0, "kd_medium": 0, "kd_hard": 0,
+                    "quick_wins": [], "striking": [], "declining": [], "low_ctr": [],
+                    "all_keywords": [], "full_keywords": [],
+                }
+            tracked_lower = [k.lower() for k in tracked_kws]
+
         with get_session() as session:
             def get_kw_df(start, end):
-                rows = session.execute(
+                stmt = (
                     select(
                         KeywordRanking.keyword,
                         func.avg(KeywordRanking.position).label("position"),
@@ -58,8 +73,10 @@ def get_keyword_intelligence_raw(site_id: str, curr_start: date, curr_end: date,
                         func.max(KeywordRanking.url).label("url"),
                     )
                     .where(KeywordRanking.site_id == site_id, KeywordRanking.date >= start, KeywordRanking.date <= end)
-                    .group_by(KeywordRanking.keyword)
-                ).all()
+                )
+                if tracked_lower is not None:
+                    stmt = stmt.where(func.lower(KeywordRanking.keyword).in_(tracked_lower))
+                rows = session.execute(stmt.group_by(KeywordRanking.keyword)).all()
                 if not rows:
                     return pd.DataFrame()
                 df = pd.DataFrame([dict(r._mapping) for r in rows])
@@ -210,7 +227,7 @@ def build_keywords_response(site_id: str, curr_start: date, curr_end: date,
     """HANDOFF_SPEC.md `keywords` view shape — verified against the real fixture's
     keywordsView() in Limitless marketing dashboard2/app/api.js. See
     docs/superpowers/specs/2026-07-10-phaseB2-keywords-design.md for the field mapping."""
-    intel = get_keyword_intelligence_raw(site_id, curr_start, curr_end, prev_start, prev_end)
+    intel = get_keyword_intelligence_raw(site_id, curr_start, curr_end, prev_start, prev_end, tracked_only=True)
 
     return {
         "kpis": {

@@ -1,3 +1,4 @@
+import logging
 from datetime import date as date_cls
 
 from django.contrib.auth.decorators import login_not_required
@@ -7,6 +8,9 @@ from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from sqlalchemy import func, select, delete
+
+logger = logging.getLogger(__name__)
+
 
 from pipeline.services.site_service import add_site, list_sites
 from pipeline.utils.db_connection import get_session
@@ -106,15 +110,32 @@ class ProjectListCreateView(APIView):
         payload.is_valid(raise_exception=True)
         data = payload.validated_data
         site_url = data["domain"].strip()
-        new_id = add_site(
-            site_url=site_url,
-            site_name=data.get("name") or None,
-            vertical=data.get("vertical") or None,
-            location=data.get("location") or "United States",
-        )
+
+        try:
+            new_id = add_site(
+                site_url=site_url,
+                site_name=data.get("name") or None,
+                vertical=data.get("vertical") or None,
+                location=data.get("location") or "United States",
+            )
+        except ValueError as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
         with get_session() as session:
             site = session.get(Site, new_id)
             body = ProjectSerializer(site).data
+
+        # Verify Google Search Console connectivity immediately so the UI can warn
+        # the user if they added a site the connected Google Account doesn't own.
+        try:
+            from pipeline.connectors.gsc_property import resolve_gsc_property
+            resolve_gsc_property(site_url, site_url)
+            body["gsc_connected"] = True
+        except ValueError:
+            body["gsc_connected"] = False
+        except Exception:
+            # If the API fails for transient reasons, assume true to avoid false warnings
+            body["gsc_connected"] = True
 
         # Auto-kick off initial data sync so the new site populates without requiring
         # a manual Refresh click. Returns task_id so the SPA can start polling the
@@ -127,6 +148,14 @@ class ProjectListCreateView(APIView):
             body["sync_task_id"] = None
 
         return Response(body, status=status.HTTP_201_CREATED)
+
+
+class ProjectDetailView(APIView):
+    def delete(self, request, slug):
+        site = resolve_project_or_404(slug)
+        from pipeline.services.site_service import delete_site
+        delete_site(site.id, hard=True)
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 @method_decorator(login_not_required, name="dispatch")
@@ -209,12 +238,40 @@ class ProjectKeywordsView(APIView):
         return Response(build_keywords_response(site_id, curr_start, curr_end, prev_start, prev_end))
 
     def post(self, request, slug):
-        """Track a keyword found in the Keyword Explorer -- persists it to the site's saved
-        keyword list (SavedKeyword), reusing the old MVP's saved_keyword_service. The SPA posts
-        one keyword per call: {kw, volume, kd, cpc, intent}."""
+        """Track a keyword (or batch of keywords) found in the Keyword Explorer -- persists to the site's saved
+        keyword list (SavedKeyword), reusing saved_keyword_service. Supports either single {kw, volume, kd, cpc, intent}
+        or batch {keywords: [{kw, volume, kd, cpc, intent}, ...]} payloads."""
         from pipeline.services.saved_keyword_service import save_keywords
 
         site_id = resolve_project_or_404(slug).site_url
+        location = request.data.get("location") or "United States"
+
+        # Check for batch payload first
+        batch = request.data.get("keywords")
+        if isinstance(batch, list) and batch:
+            rows = []
+            first_kw = ""
+            for item in batch:
+                if not isinstance(item, dict):
+                    continue
+                k = (item.get("kw") or item.get("keyword") or "").strip()
+                if not k:
+                    continue
+                if not first_kw:
+                    first_kw = k
+                rows.append({
+                    "keyword": k,
+                    "search_volume": item.get("volume") if item.get("volume") is not None else item.get("search_volume"),
+                    "keyword_difficulty": item.get("kd") if item.get("kd") is not None else item.get("keyword_difficulty"),
+                    "cpc": item.get("cpc"),
+                    "intent": item.get("intent"),
+                })
+            if not rows:
+                return Response({"detail": "keywords list is empty or invalid"}, status=400)
+            saved = save_keywords(site_id, rows, location=location)
+            return Response({"ok": True, "saved": saved, "keyword": _tracked_keyword_body(first_kw, batch[0], "manual")})
+
+        # Single keyword payload
         kw = (request.data.get("kw") or "").strip()
         if not kw:
             return Response({"detail": "kw is required"}, status=400)
@@ -226,9 +283,48 @@ class ProjectKeywordsView(APIView):
             "cpc": request.data.get("cpc"),
             "intent": request.data.get("intent"),
         }
-        saved = save_keywords(site_id, [row], location=request.data.get("location") or "United States")
+        saved = save_keywords(site_id, [row], location=location)
         # HANDOFF_SPEC 1: track-keyword returns {ok, keyword} (keyword echoed in spec shape).
         return Response({"ok": True, "saved": saved, "keyword": _tracked_keyword_body(kw, request.data, "manual")})
+
+    def put(self, request, slug):
+        """Bulk replace all tracked keywords for the project."""
+        from pipeline.services.saved_keyword_service import save_keywords
+        from pipeline.utils.db_connection import get_session
+        from pipeline.db.schema import SavedKeyword
+        from sqlalchemy import delete
+        
+        site = resolve_project_or_404(slug)
+        site_id = site.site_url
+        location = request.data.get("location") or site.location or "United States"
+        batch = request.data.get("keywords")
+        print("INCOMING KEYWORDS BATCH:", batch)
+        
+        if not isinstance(batch, list):
+            return Response({"detail": "keywords list required"}, status=400)
+            
+        with get_session() as session:
+            session.execute(delete(SavedKeyword).where(SavedKeyword.site_id == site_id))
+            session.commit()
+            
+        if batch:
+            rows = []
+            for item in batch:
+                if not isinstance(item, dict):
+                    continue
+                k = (item.get("kw") or item.get("keyword") or "").strip()
+                if not k:
+                    continue
+                rows.append({
+                    "keyword": k,
+                    "search_volume": item.get("volume") if item.get("volume") is not None else item.get("search_volume"),
+                    "keyword_difficulty": item.get("kd") if item.get("kd") is not None else item.get("keyword_difficulty"),
+                    "cpc": item.get("cpc"),
+                    "intent": item.get("intent"),
+                })
+            save_keywords(site_id, rows, location)
+            
+        return Response({"ok": True, "count": len(batch)})
 
 
 @method_decorator(login_not_required, name="dispatch")
@@ -394,6 +490,16 @@ def check_owner_admin(user):
     return True
 
 
+def check_owner_only(user):
+    """Strict check: only Owner role (or user.id==1 / founder) can invite new users."""
+    if not user or not user.is_authenticated:
+        return True
+    if user.id == 1 or getattr(user, "username", "").lower() in ("founder", "owner"):
+        return True
+    profile = getattr(user, "profile", None)
+    return bool(profile and profile.role == "Owner")
+
+
 @method_decorator(login_not_required, name="dispatch")
 class ProjectSettingsView(APIView):
     """Phase E: GET/PUT /api/projects/<slug>/settings -- no `range` param (Settings has no
@@ -474,17 +580,301 @@ class ProjectTeamView(APIView):
         return Response({"ok": True})
 
 
+@method_decorator(login_not_required, name="dispatch")
+class ProjectInviteView(APIView):
+    """POST /invite to send secure email invitation (Owner only). GET lists pending invitations. DELETE revokes."""
+    
+    def get(self, request, slug):
+        from apps.accounts.models import UserInvitation
+        resolve_project_or_404(slug)
+        invites = UserInvitation.objects.filter(is_accepted=False).order_by("-created_at")
+        return Response([
+            {
+                "id": inv.id,
+                "email": inv.email,
+                "role": inv.role,
+                "invited_by": inv.invited_by.username if inv.invited_by else "Owner",
+                "created_at": inv.created_at.isoformat() if inv.created_at else None,
+                "expires_at": inv.expires_at.isoformat() if inv.expires_at else None,
+            }
+            for inv in invites
+        ])
+
+    def post(self, request, slug):
+        if not check_owner_only(request.user):
+            return Response({"detail": "Only the Owner can invite users via email."}, status=403)
+        from django.contrib.auth.models import User
+        from apps.accounts.models import UserInvitation
+        from django.core.mail import send_mail
+        from django.conf import settings
+        from django.utils import timezone
+        import datetime
+        import secrets
+
+        resolve_project_or_404(slug)
+
+        email = request.data.get("email", "").strip()
+        role = request.data.get("role", "Analyst")
+        if role not in ("Admin", "Analyst"):
+            role = "Analyst"
+
+        if not email or "@" not in email:
+            return Response({"detail": "Enter a valid email address."}, status=400)
+
+        if User.objects.filter(email__iexact=email).exists():
+            return Response({"detail": "A user with this email address already exists."}, status=400)
+
+        # Remove any previous unaccepted invitation for this email so we can send a fresh one
+        UserInvitation.objects.filter(email__iexact=email, is_accepted=False).delete()
+
+        temp_password = secrets.token_urlsafe(10)
+        username = email.split('@')[0]
+        if User.objects.filter(username=username).exists():
+            username = f"{username}_{secrets.token_hex(2)}"
+
+        invited_by_user = request.user if (request.user and request.user.is_authenticated) else User.objects.filter(id=1).first()
+        if not invited_by_user:
+            invited_by_user = User.objects.first()
+
+        from django.db import transaction
+        from apps.accounts.models import UserProfile
+        try:
+            with transaction.atomic():
+                user = User.objects.create_user(username=username, email=email, password=temp_password)
+                profile, _ = UserProfile.objects.get_or_create(user=user)
+                profile.role = role
+                profile.save(update_fields=["role"])
+        except Exception as e:
+            return Response({"detail": f"Failed to create user: {str(e)}"}, status=500)
+
+        frontend_url = getattr(settings, "FRONTEND_URL", "http://localhost:8000")
+        login_link = f"{frontend_url.rstrip('/')}/login/"
+
+        subject = f"Invitation to join Limitless Marketing Dashboard ({role})"
+        message = (
+            f"Hello,\n\n"
+            f"You have been invited by {invited_by_user.username if invited_by_user else 'Owner'} to join "
+            f"the Limitless Marketing Dashboard as an {role}.\n\n"
+            f"Your account has been created. Please log in using your email address and the temporary password below:\n\n"
+            f"Email: {email}\n"
+            f"Password: {temp_password}\n\n"
+            f"Login here: {login_link}\n\n"
+            f"Once logged in, you can change your password from the Settings page.\n\n"
+            f"Best regards,\nLimitless Team"
+        )
+        from_email = getattr(settings, "DEFAULT_FROM_EMAIL", "Limitless Dashboard <no-reply@fusehealth.com>")
+
+        try:
+            send_mail(subject, message, from_email, [email], fail_silently=False)
+            logger.info(f"Sent invitation email to {email}")
+        except Exception as e:
+            logger.warning(f"Could not deliver email via SMTP ({e}).")
+
+        return Response({"ok": True})
+
+    def delete(self, request, slug, invite_id):
+        if not check_owner_only(request.user):
+            return Response({"detail": "Only the Owner can revoke invitations."}, status=403)
+        from apps.accounts.models import UserInvitation
+        resolve_project_or_404(slug)
+        deleted, _ = UserInvitation.objects.filter(id=invite_id, is_accepted=False).delete()
+        if not deleted:
+            return Response({"detail": "Invitation not found or already accepted."}, status=404)
+        return Response({"ok": True})
+
+
+@method_decorator(login_not_required, name="dispatch")
+class ProjectInviteResendView(APIView):
+    """POST /invite/<id>/resend to resend email and extend validity by 48h (Owner only)."""
+
+    def post(self, request, slug, invite_id):
+        if not check_owner_only(request.user):
+            return Response({"detail": "Only the Owner can resend invitations."}, status=403)
+        from apps.accounts.models import UserInvitation
+        from django.core.mail import send_mail
+        from django.conf import settings
+        from django.utils import timezone
+        import datetime
+
+        resolve_project_or_404(slug)
+        invitation = UserInvitation.objects.filter(id=invite_id, is_accepted=False).first()
+        if not invitation:
+            return Response({"detail": "Invitation not found or already accepted."}, status=404)
+
+        invitation.expires_at = timezone.now() + datetime.timedelta(hours=48)
+        invitation.save(update_fields=["expires_at"])
+
+        frontend_url = getattr(settings, "FRONTEND_URL", "http://localhost:8000")
+        invite_link = f"{frontend_url.rstrip('/')}/#/accept-invite?token={invitation.token}"
+
+        subject = f"Reminder: Invitation to join Limitless Marketing Dashboard ({invitation.role})"
+        message = (
+            f"Hello,\n\n"
+            f"This is a reminder that you have been invited to join the Limitless Marketing Dashboard as an {invitation.role}.\n\n"
+            f"Please click the link below to set your username and secure password (valid for 48 hours):\n"
+            f"{invite_link}\n\n"
+            f"Best regards,\nLimitless Team"
+        )
+        from_email = getattr(settings, "DEFAULT_FROM_EMAIL", "Limitless Dashboard <no-reply@fusehealth.com>")
+
+        try:
+            send_mail(subject, message, from_email, [invitation.email], fail_silently=False)
+            logger.info(f"Resent invitation email to {invitation.email}: {invite_link}")
+        except Exception as e:
+            logger.warning(f"Could not deliver email via SMTP ({e}). Link: {invite_link}")
+
+        return Response({"ok": True, "link": invite_link})
+
+
+@method_decorator(login_not_required, name="dispatch")
+class AuthInviteStatusView(APIView):
+    """GET /api/auth/invite-status?token=XYZ to check if token is valid and return email/role."""
+    permission_classes = []
+    authentication_classes = []
+
+    def get(self, request):
+        from apps.accounts.models import UserInvitation
+        from django.utils import timezone
+        token = request.query_params.get("token", "").strip()
+        if not token:
+            return Response({"valid": False, "reason": "missing_token"}, status=400)
+
+        invitation = UserInvitation.objects.filter(token=token).first()
+        if not invitation:
+            return Response({"valid": False, "reason": "not_found"}, status=404)
+
+        if invitation.is_accepted:
+            return Response({"valid": False, "reason": "already_accepted"}, status=400)
+
+        if invitation.expires_at < timezone.now():
+            return Response({"valid": False, "reason": "expired"}, status=400)
+
+        return Response({
+            "valid": True,
+            "email": invitation.email,
+            "role": invitation.role,
+            "invited_by": invitation.invited_by.username if invitation.invited_by else "Owner"
+        })
+
+
+@method_decorator(login_not_required, name="dispatch")
+class AuthInviteAcceptView(APIView):
+    """POST /api/auth/accept-invite with {token, username, password} to activate user account."""
+    permission_classes = []
+    authentication_classes = []
+
+    def post(self, request):
+
+        from django.contrib.auth.models import User
+        from apps.accounts.models import UserInvitation, UserProfile
+        from django.utils import timezone
+        from django.db import transaction
+
+        token = request.data.get("token", "").strip()
+        username = request.data.get("username", "").strip()
+        password = request.data.get("password", "").strip()
+
+        if not token or not username or not password:
+            return Response({"detail": "Token, username, and password are required."}, status=400)
+
+        if len(password) < 8:
+            return Response({"detail": "Password must be at least 8 characters long."}, status=400)
+
+        invitation = UserInvitation.objects.filter(token=token).first()
+        if not invitation:
+            return Response({"detail": "Invitation link is invalid or not found."}, status=404)
+
+        if invitation.is_accepted:
+            return Response({"detail": "This invitation has already been accepted."}, status=400)
+
+        if invitation.expires_at < timezone.now():
+            return Response({"detail": "This invitation link has expired. Please ask the owner to resend it."}, status=400)
+
+        if User.objects.filter(username__iexact=username).exists():
+            return Response({"detail": "This username is already taken. Please choose another username."}, status=400)
+
+        if User.objects.filter(email__iexact=invitation.email).exists():
+            return Response({"detail": "A user account with this email address already exists."}, status=400)
+
+        try:
+            with transaction.atomic():
+                user = User.objects.create_user(
+                    username=username,
+                    email=invitation.email,
+                    password=password
+                )
+                user.is_active = True
+                user.save(update_fields=["is_active"])
+
+                profile, _ = UserProfile.objects.get_or_create(user=user)
+                profile.role = invitation.role
+                profile.save(update_fields=["role"])
+
+                invitation.is_accepted = True
+                invitation.save(update_fields=["is_accepted"])
+
+            return Response({
+                "ok": True,
+                "user_id": user.id,
+                "username": user.username,
+                "email": user.email,
+                "role": invitation.role
+            })
+        except Exception as e:
+            return Response({"detail": str(e)}, status=500)
+
+
+
 
 # ---------------------------------------------------------------------------
 # Refresh / Sync -- the database-first "Refresh" path: calls the connectors,
 # writes the DB, and the page then reads the fresh DB. (Engine already exists:
 # pipeline.services.sync_engine + apps.sync.models.RefreshRun.)
 # ---------------------------------------------------------------------------
+class ChangePasswordView(APIView):
+    """POST /api/auth/password to change the logged-in user's password."""
+    def post(self, request):
+        user = request.user
+        if not user or not user.is_authenticated:
+            return Response({"detail": "Not logged in."}, status=401)
+        old_pw = request.data.get("old_password", "")
+        new_pw = request.data.get("new_password", "")
+        if not user.check_password(old_pw):
+            return Response({"detail": "Incorrect current password."}, status=400)
+        if len(new_pw) < 8:
+            return Response({"detail": "New password must be at least 8 characters."}, status=400)
+        user.set_password(new_pw)
+        user.save()
+        from django.contrib.auth import update_session_auth_hash
+        update_session_auth_hash(request, user)
+        return Response({"ok": True})
+
+
 @method_decorator(login_not_required, name="dispatch")
 class ProjectSyncView(APIView):
     def post(self, request, slug):
         site_id = resolve_project_or_404(slug).site_url
         scope = request.data.get("scope", "all")
+        
+        if scope != "positions":
+            try:
+                from pipeline.connectors.gsc_property import resolve_gsc_property
+                resolve_gsc_property(site_id, site_id)
+            except ValueError:
+                return Response(
+                    {"detail": "Cannot fetch data: Search Console access is missing. Please connect the correct account in Settings."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+                
+            from pipeline.connectors.ga4 import GA4Connector
+            connector = GA4Connector()
+            _, prop_id = connector._resolve_site(site_id)
+            if not prop_id:
+                return Response(
+                    {"detail": "Cannot fetch data: Google Analytics 4 property is missing. Please connect the correct account in Settings."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
         return Response(start_sync_run(site_id, scope, user=request.user))
 
 

@@ -32,6 +32,65 @@
 
 <div style="font-family: 'Inter', system-ui, sans-serif; background: #f8fafc; color: #0f172a; height: 100vh; display: flex; -webkit-font-smoothing: antialiased;">
 
+  <sc-if value="{{ acceptInvite }}" hint-placeholder-val="{{ false }}">
+    <div style="position: fixed; inset: 0; z-index: 9999; background: rgba(15,23,42,0.75); backdrop-filter: blur(8px); display: flex; align-items: center; justify-content: center; padding: 20px;">
+      <div style="width: 100%; max-width: 460px; background: white; border-radius: 16px; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.35); border: 1px solid #e2e8f0; overflow: hidden; animation: fusePulse 0.3s ease-out;">
+        <div style="padding: 24px 28px; background: #0f172a; color: white; display: flex; align-items: center; gap: 14px;">
+          <div style="width: 44px; height: 44px; border-radius: 12px; background: #4f46e5; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 19px; flex-shrink: 0;">FH</div>
+          <div>
+            <h2 style="margin: 0; font-size: 18px; font-weight: 600;">Accept Invitation</h2>
+            <p style="margin: 4px 0 0; font-size: 13px; color: #94a3b8;">Join Limitless Marketing Dashboard</p>
+          </div>
+        </div>
+
+        <div style="padding: 28px;">
+          <sc-if value="{{ acceptInvite.error }}" hint-placeholder-val="{{ false }}">
+            <div style="padding: 16px; background: #fef2f2; border: 1px solid #fecaca; border-radius: 10px; color: #b91c1c; font-size: 13.5px; margin-bottom: 20px;">
+              <b style="display: block; margin-bottom: 4px;">Invalid Invitation</b>
+              {{ acceptInvite.error }}
+            </div>
+            <div style="text-align: right;">
+              <a href="#/overview" style="display: inline-block; padding: 9px 18px; background: #0f172a; color: white; text-decoration: none; border-radius: 8px; font-size: 13px; font-weight: 600;">Return to Dashboard</a>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ acceptInvite.success }}" hint-placeholder-val="{{ false }}">
+            <div style="padding: 24px; background: #ecfdf5; border: 1px solid #a7f3d0; border-radius: 10px; color: #047857; font-size: 14.5px; text-align: center;">
+              <div style="font-size: 28px; margin-bottom: 10px;">✓</div>
+              <b style="display: block; margin-bottom: 6px; font-size: 16px;">Account Activated!</b>
+              You can now log in and access your workspace. Redirecting...
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ !acceptInvite.error && !acceptInvite.success }}" hint-placeholder-val="{{ true }}">
+            <div style="padding: 14px 16px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; margin-bottom: 20px; font-size: 13px; color: #334155;">
+              You have been invited by <b style="color: #0f172a;">{{ acceptInvite.invitedBy }}</b> to join as an <b style="color: #4f46e5;">{{ acceptInvite.role }}</b>.
+            </div>
+
+            <div style="margin-bottom: 16px;">
+              <label style="display: block; font-size: 12px; font-weight: 600; color: #334155; margin-bottom: 6px;">Email Address</label>
+              <input value="{{ acceptInvite.email }}" disabled autocomplete="off" style="width: 100%; box-sizing: border-box; padding: 10px 12px; background: #f1f5f9; border: 1px solid #cbd5e1; border-radius: 8px; font-family: inherit; font-size: 13.5px; color: #64748b; outline: none;" />
+            </div>
+
+            <div style="margin-bottom: 16px;">
+              <label style="display: block; font-size: 12px; font-weight: 600; color: #334155; margin-bottom: 6px;">Choose Username</label>
+              <input value="{{ acceptInvite.username }}" onInput="{{ h.acceptUsernameInput }}" placeholder="e.g. jsmith" autocomplete="username" style="width: 100%; box-sizing: border-box; padding: 10px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-family: inherit; font-size: 13.5px; color: #0f172a; outline: none;" />
+            </div>
+
+            <div style="margin-bottom: 22px;">
+              <label style="display: block; font-size: 12px; font-weight: 600; color: #334155; margin-bottom: 6px;">Choose Password</label>
+              <input type="password" value="{{ acceptInvite.password }}" onInput="{{ h.acceptPasswordInput }}" placeholder="At least 8 characters" autocomplete="new-password" style="width: 100%; box-sizing: border-box; padding: 10px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-family: inherit; font-size: 13.5px; color: #0f172a; outline: none;" />
+            </div>
+
+            <div onClick="{{ h.submitAcceptInvite }}" style="width: 100%; box-sizing: border-box; padding: 12px; background: #4f46e5; color: white; font-size: 14px; font-weight: 600; text-align: center; border-radius: 8px; cursor: pointer;" style-hover="background:#4338ca">
+              Activate Account &amp; Continue
+            </div>
+          </sc-if>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
   <!-- ============================ SIDEBAR ============================ -->
   <aside style="width: 240px; flex-shrink: 0; background: white; border-right: 1px solid #e2e8f0; display: flex; flex-direction: column;">
     <div style="height: 64px; flex-shrink: 0; display: flex; align-items: center; gap: 8px; padding: 0 20px; border-bottom: 1px solid #f1f5f9;">
@@ -160,7 +219,7 @@
 
         <sc-if value="{{ hasPageRefresh }}">
           <div onClick="{{ h.refreshPage }}" style="{{ refreshPageBtnStyle }}" style-hover="box-shadow:0 3px 8px rgba(16,185,129,0.3)">
-            <svg style="{{ refreshIconStyle }}" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+            <svg style="{{ refreshPageIconStyle }}" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
             {{ refreshPageLabel }}
           </div>
         </sc-if>
@@ -180,7 +239,7 @@
         <div style="border-radius: 12px; background: white; border: 1px solid #c7d2fe; box-shadow: 0 1px 2px rgba(0,0,0,0.05); padding: 14px 18px; display: flex; align-items: center; gap: 14px; margin-bottom: 20px;">
           <div style="flex: 1; min-width: 0;">
             <div style="display: flex; align-items: baseline; gap: 10px; font-size: 13px;">
-              <span style="font-weight: 600; color: #4338ca;">Syncing {{ projectDomain }}</span>
+              <span style="font-weight: 600; color: #4338ca;">Syncing {{ syncScopeLabel }} for {{ projectDomain }}</span>
               <span style="color: #64748b;">{{ syncStep }}</span>
               <span style="margin-left: auto; color: #94a3b8; font-size: 12px;">{{ syncPctText }} · est. cost {{ syncCostText }}</span>
             </div>
@@ -597,8 +656,9 @@
                           </div>
                           <sc-if value="{{ sendSubPt }}" hint-placeholder-val="{{ false }}">
                             <div style="margin: 2px 0 6px; padding: 4px 4px 4px 34px;">
+                              <div onClick="{{ h.ptCreateAndSend }}" style="display: flex; align-items: center; justify-content: space-between; padding: 7px 8px; border-radius: 6px; font-size: 13px; font-weight: 600; color: #4f46e5; cursor: pointer; margin-bottom: 4px; border: 1px dashed #c7d2fe; background: #f8fafc;" style-hover="background:#eef2ff"><span>＋ Create new project</span><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg></div>
                               <sc-for list="{{ sendProjects }}" as="p" hint-placeholder-count="1">
-                                <div onClick="{{ p.onSend }}" style="display: flex; align-items: center; justify-content: space-between; padding: 7px 8px; border-radius: 6px; font-size: 13px; color: #334155; cursor: pointer;" style-hover="background:#eef2ff">{{ p.domain }}<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#4f46e5" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg></div>
+                                <div onClick="{{ p.onSend }}" style="display: flex; align-items: center; justify-content: space-between; padding: 7px 8px; border-radius: 6px; font-size: 13px; color: #334155; cursor: pointer;" style-hover="background:#eef2ff"><span>Share in <strong style="font-weight:600;color:#0f172a;">{{ p.domain }}</strong></span><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#4f46e5" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg></div>
                               </sc-for>
                             </div>
                           </sc-if>
@@ -729,76 +789,421 @@
       <sc-if value="{{ showPositioning }}" hint-placeholder-val="{{ false }}">
       <div data-screen-label="Position Tracking" style="display: flex; flex-direction: column; gap: 24px;">
 
-        <sc-if value="{{ pt.setup }}" hint-placeholder-val="{{ false }}">
-        <div style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 56px 32px; text-align: center; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
-          <div style="font-size: 15px; font-weight: 600; color: #0f172a; margin-bottom: 6px;">No Position Tracking Data Synced Yet</div>
-          <div style="font-size: 13px; color: #64748b; max-width: 420px; margin: 0 auto 20px;">We haven't synced position tracking snapshots for this domain into the database yet. Click below to fetch current positions right now.</div>
-          <div onClick="{{ h.refreshPage }}" style="display: inline-flex; align-items: center; gap: 8px; border-radius: 8px; background: #10b981; color: white; font-size: 14px; font-weight: 600; padding: 10px 20px; cursor: pointer; box-shadow: 0 1px 2px rgba(0,0,0,0.05);" style-hover="background:#059669">⚡ Fetch Positions Now</div>
+        <!-- ===== PROJECTS LIST ===== -->
+        <sc-if value="{{ ptIsList }}" hint-placeholder-val="{{ true }}">
+        <div style="display: flex; flex-direction: column; gap: 16px;">
+          <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+            <div style="position: relative; flex: 1; min-width: 220px; max-width: 340px;">
+              <svg style="position:absolute;left:11px;top:50%;transform:translateY(-50%);color:#94a3b8;" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.3-4.3"/></svg>
+              <input value="{{ ptSearchVal }}" onChange="{{ ptSearchFn }}" placeholder="Search projects" style="width:100%;box-sizing:border-box;padding:9px 12px 9px 34px;font-size:13px;border-radius:8px;border:1px solid #e2e8f0;outline:none;">
+            </div>
+            <div style="display: flex; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden;">
+              <sc-for list="{{ ptFilters }}" as="f" hint-placeholder-count="2"><span onClick="{{ f.onClick }}" style="{{ f.style }}">{{ f.label }}</span></sc-for>
+            </div>
+            <span onClick="{{ ptNewProject }}" style="margin-left:auto;display:inline-flex;align-items:center;gap:8px;padding:9px 16px;background:#4f46e5;color:white;font-size:13px;font-weight:600;border-radius:8px;cursor:pointer;" style-hover="background:#4338ca"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>Create SEO project</span>
+          </div>
+          <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
+            <div style="display: grid; grid-template-columns: {{ ptListGridCols }}; padding: 12px 20px; background: #f8fafc; border-bottom: 1px solid #f1f5f9; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: #94a3b8; font-weight: 500;">
+              <span>Project</span><span>Visibility</span><span style="text-align:right;">Keywords</span><span style="text-align:right;">▲ Up</span><span style="text-align:right;">▼ Down</span><span style="text-align:right;">Updated</span>
+            </div>
+            <sc-if value="{{ ptNoProjects }}" hint-placeholder-val="{{ false }}">
+              <div style="padding: 40px 20px; text-align: center; font-size: 13px; color: #94a3b8;">No projects match your search. Create one to start tracking.</div>
+            </sc-if>
+            <sc-for list="{{ ptProjects }}" as="p" hint-placeholder-count="3">
+              <div style="{{ p.rowStyle }}" onClick="{{ p.onOpen }}" style-hover="background:#f8fafc">
+                <span style="display:flex;flex-direction:column;gap:2px;min-width:0;"><span style="font-size:14px;font-weight:600;color:#0f172a;display:flex;align-items:center;gap:8px;">{{ p.name }}<sc-if value="{{ p.isCurrent }}" hint-placeholder-val="{{ false }}"><span style="font-size:10px;font-weight:600;color:#4338ca;background:#eef2ff;padding:1px 7px;border-radius:4px;">CURRENT</span></sc-if></span><span style="font-size:12px;color:#94a3b8;">{{ p.domain }} · {{ p.device }} · {{ p.location }}</span></span>
+                <span style="display:flex;align-items:center;gap:10px;"><span style="flex:1;max-width:80px;height:8px;background:#f1f5f9;border-radius:4px;overflow:hidden;"><span style="{{ p.visBarStyle }}"></span></span><span style="font-size:13px;font-weight:600;color:{{ p.visColor }};">{{ p.visLabel }}</span></span>
+                <span style="text-align:right;font-size:14px;color:#334155;">{{ p.tracked }}</span>
+                <span style="text-align:right;font-size:14px;color:#059669;font-weight:500;">{{ p.improved }}</span>
+                <span style="text-align:right;font-size:14px;color:#dc2626;font-weight:500;">{{ p.declined }}</span>
+                <span style="text-align:right;font-size:12px;color:#94a3b8;">{{ p.updated }}</span>
+              </div>
+            </sc-for>
+          </div>
         </div>
         </sc-if>
-        <sc-if value="{{ !pt.setup }}" hint-placeholder-val="{{ true }}">
 
-        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px;">
-          <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; padding: 20px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);"><div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: #64748b; margin-bottom: 4px;">Keywords Tracked</div><div style="font-size: 30px; font-weight: 700; color: #334155;">{{ pt.tracked }}</div></div>
-          <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; padding: 20px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);"><div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: #64748b; margin-bottom: 4px;">Avg Position</div><div style="font-size: 30px; font-weight: 700; color: #334155;">{{ pt.avgPos }}</div></div>
-          <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; padding: 20px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);"><div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: #64748b; margin-bottom: 4px;">Est. Traffic</div><div style="font-size: 30px; font-weight: 700; color: #334155;">{{ pt.traffic }}</div></div>
-          <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; padding: 20px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);"><div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: #64748b; margin-bottom: 4px;">Impressions</div><div style="font-size: 30px; font-weight: 700; color: #334155;">{{ pt.impressions }}</div></div>
-        </div>
-
-        <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; padding: 20px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
-          <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px;"><h2 style="font-size: 15px; font-weight: 600; margin: 0;">Rankings Distribution</h2><span style="font-size: 12px; color: #94a3b8;">Keywords by SERP position · updated weekly</span></div>
-          <div style="display: flex; border-radius: 8px; overflow: hidden; height: 32px; margin-bottom: 16px;">
-            <sc-for list="{{ pt.distSegs }}" as="d" hint-placeholder-count="4">
-              <div style="{{ d.style }}">{{ d.count }}</div>
-            </sc-for>
-          </div>
-          <div style="display: flex; flex-wrap: wrap; gap: 24px; font-size: 12px;">
-            <sc-for list="{{ pt.distLegend }}" as="d" hint-placeholder-count="4">
-              <div style="display: flex; align-items: center; gap: 8px;"><span style="{{ d.swatch }}"></span><span style="color: #64748b;">{{ d.label }}</span><span style="font-weight: 700; color: #334155;">{{ d.count }}</span></div>
-            </sc-for>
-          </div>
-        </div>
-
-        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px;">
-          <div style="border-radius: 12px; background: white; border: 1px solid #bbf7d0; padding: 16px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);"><div style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: #059669;">▲ Improved</div><div style="font-size: 30px; font-weight: 700; color: #334155; margin-top: 4px;">{{ pt.improved }}</div><div style="font-size: 12px; color: #64748b; margin-top: 4px;">Moved up ≥ 2 positions</div></div>
-          <div style="border-radius: 12px; background: white; border: 1px solid #fecaca; padding: 16px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);"><div style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: #dc2626;">▼ Declined</div><div style="font-size: 30px; font-weight: 700; color: #334155; margin-top: 4px;">{{ pt.declined }}</div><div style="font-size: 12px; color: #64748b; margin-top: 4px;">Dropped ≥ 2 positions</div></div>
-          <div style="border-radius: 12px; background: white; border: 1px solid #bfdbfe; padding: 16px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);"><div style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: #2563eb;">＋ New / Manual</div><div style="font-size: 30px; font-weight: 700; color: #334155; margin-top: 4px;">{{ pt.added }}</div><div style="font-size: 12px; color: #64748b; margin-top: 4px;">Newly tracked keywords</div></div>
-          <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; padding: 16px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);"><div style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: #64748b;">－ Lost</div><div style="font-size: 30px; font-weight: 700; color: #334155; margin-top: 4px;">{{ pt.lost }}</div><div style="font-size: 12px; color: #64748b; margin-top: 4px;">No longer ranking</div></div>
-        </div>
-
-        <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
-          <div style="padding: 16px 20px; border-bottom: 1px solid #f1f5f9;"><h2 style="font-size: 15px; font-weight: 600; margin: 0;">Biggest Movers</h2><p style="font-size: 12px; color: #94a3b8; margin: 4px 0 0;">Largest position changes since last weekly sync</p></div>
-          <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
-            <thead><tr style="text-align: left; color: #94a3b8; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;"><th style="font-weight: 500; padding: 10px 20px;">Keyword</th><th style="font-weight: 500; padding: 10px; text-align: center;">Was</th><th style="font-weight: 500; padding: 10px; text-align: center;">Now</th><th style="font-weight: 500; padding: 10px; text-align: center;">Change</th><th style="font-weight: 500; padding: 10px 20px; text-align: right;">Volume</th></tr></thead>
-            <tbody>
-              <sc-for list="{{ pt.movers }}" as="r" hint-placeholder-count="4">
-                <tr style="border-top: 1px solid #f1f5f9;">
-                  <td style="padding: 12px 20px; font-weight: 500; color: #334155;">{{ r.kw }}</td>
-                  <td style="padding: 12px; text-align: center; color: #94a3b8;">{{ r.was }}</td>
-                  <td style="padding: 12px; text-align: center;"><span style="{{ r.posStyle }}">{{ r.now }}</span></td>
-                  <td style="padding: 12px; text-align: center;"><span style="{{ r.chipStyle }}">{{ r.change }}</span></td>
-                  <td style="padding: 12px 20px; text-align: right; color: #475569;">{{ r.volFmt }}</td>
-                </tr>
-              </sc-for>
-            </tbody>
-          </table>
-        </div>
-
-        <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
-          <div style="padding: 16px 20px; border-bottom: 1px solid #f1f5f9;"><h2 style="font-size: 15px; font-weight: 600; margin: 0;">Competitor Rankings</h2><p style="font-size: 12px; color: #94a3b8; margin: 4px 0 0;">Your position vs each competitor, per keyword — parsed from the same weekly SERP snapshot</p></div>
-          <div style="display: grid; grid-template-columns: {{ pt.compGridCols }}; padding: 12px 20px; background: #f8fafc; border-bottom: 1px solid #f1f5f9; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: #94a3b8; font-weight: 500;">
-            <span>Keyword</span>
-            <span style="text-align: center; color: #4338ca;">You</span>
-            <sc-for list="{{ pt.compDomains }}" as="d" hint-placeholder-count="3"><span style="text-align: center;">{{ d }}</span></sc-for>
-          </div>
-          <sc-for list="{{ pt.compRows }}" as="row" hint-placeholder-count="6">
-            <div style="display: grid; grid-template-columns: {{ pt.compGridCols }}; align-items: center; padding: 10px 20px; border-top: 1px solid #f1f5f9;" style-hover="background:#f8fafc">
-              <span style="font-weight: 500; color: #334155; font-size: 14px;">{{ row.kw }}</span>
-              <sc-for list="{{ row.cells }}" as="c" hint-placeholder-count="4">
-                <span style="text-align: center;"><span style="{{ c.style }}">{{ c.text }}</span></span>
-              </sc-for>
+        <!-- ===== CREATE SEO PROJECT WIZARD ===== -->
+        <sc-if value="{{ ptWizOpen }}" hint-placeholder-val="{{ false }}">
+        <div style="position: fixed; inset: 0; z-index: 95; display: flex; align-items: center; justify-content: center; padding: 24px;">
+          <div onClick="{{ ptWizClose }}" style="position:absolute;inset:0;background:rgba(15,23,42,0.4);"></div>
+          <div style="position: relative; width: 560px; max-width: 94vw; max-height: 90vh; overflow-y: auto; background: white; border-radius: 14px; box-shadow: 0 24px 64px rgba(15,23,42,0.28);">
+            <div style="padding: 20px 24px; border-bottom: 1px solid #f1f5f9; display: flex; align-items: center; justify-content: space-between;">
+              <h2 style="font-size: 17px; font-weight: 700; margin: 0;">Create SEO Project</h2>
+              <span onClick="{{ ptWizClose }}" style="color:#94a3b8;cursor:pointer;display:inline-flex;" style-hover="color:#0f172a"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg></span>
             </div>
-          </sc-for>
+            <div style="padding: 16px 24px; border-bottom: 1px solid #f1f5f9; display: flex; align-items: center; gap: 8px;">
+              <sc-for list="{{ ptWiz.stepItems }}" as="st" hint-placeholder-count="4"><div style="display:flex;align-items:center;gap:8px;flex:1;min-width:0;"><span style="{{ st.circleStyle }}">{{ st.n }}</span><span style="{{ st.labelStyle }}">{{ st.label }}</span></div></sc-for>
+            </div>
+            <div style="padding: 24px;">
+              <sc-if value="{{ ptWiz.isStep1 }}" hint-placeholder-val="{{ true }}">
+              <div style="display: flex; flex-direction: column; gap: 16px;">
+                <div><label style="font-size:12px;font-weight:600;color:#334155;display:block;margin-bottom:6px;">Site URL</label><input value="{{ ptWiz.domain }}" onChange="{{ ptWizFieldDomain }}" placeholder="example.com" style="width:100%;box-sizing:border-box;padding:10px 12px;font-size:14px;border-radius:8px;border:1px solid #e2e8f0;outline:none;"></div>
+                <div><label style="font-size:12px;font-weight:600;color:#334155;display:block;margin-bottom:6px;">Project name <span style="color:#94a3b8;font-weight:400;">(optional)</span></label><input value="{{ ptWiz.name }}" onChange="{{ ptWizFieldName }}" placeholder="Auto-generated from domain" style="width:100%;box-sizing:border-box;padding:10px 12px;font-size:14px;border-radius:8px;border:1px solid #e2e8f0;outline:none;"></div>
+              </div>
+              </sc-if>
+              <sc-if value="{{ ptWiz.isStep2 }}" hint-placeholder-val="{{ false }}">
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+                <div><label style="font-size:12px;font-weight:600;color:#334155;display:block;margin-bottom:6px;">Search engine</label><select value="{{ ptWiz.engine }}" onChange="{{ ptWizFieldEngine }}" style="width:100%;box-sizing:border-box;padding:10px 12px;font-size:14px;border-radius:8px;border:1px solid #e2e8f0;outline:none;background:white;"><sc-for list="{{ ptWiz.engineOpts }}" as="o" hint-placeholder-count="2"><option value="{{ o }}">{{ o }}</option></sc-for></select></div>
+                <div><label style="font-size:12px;font-weight:600;color:#334155;display:block;margin-bottom:6px;">Device</label><select value="{{ ptWiz.device }}" onChange="{{ ptWizFieldDevice }}" style="width:100%;box-sizing:border-box;padding:10px 12px;font-size:14px;border-radius:8px;border:1px solid #e2e8f0;outline:none;background:white;"><sc-for list="{{ ptWiz.deviceOpts }}" as="o" hint-placeholder-count="2"><option value="{{ o }}">{{ o }}</option></sc-for></select></div>
+                <div><label style="font-size:12px;font-weight:600;color:#334155;display:block;margin-bottom:6px;">Language</label><select value="{{ ptWiz.language }}" onChange="{{ ptWizFieldLang }}" style="width:100%;box-sizing:border-box;padding:10px 12px;font-size:14px;border-radius:8px;border:1px solid #e2e8f0;outline:none;background:white;"><sc-for list="{{ ptWiz.langOpts }}" as="o" hint-placeholder-count="3"><option value="{{ o }}">{{ o }}</option></sc-for></select></div>
+                <div><label style="font-size:12px;font-weight:600;color:#334155;display:block;margin-bottom:6px;">Location</label><input list="pt-locations" value="{{ ptWiz.location }}" onChange="{{ ptWizFieldLoc }}" onInput="{{ ptWizFieldLoc }}" placeholder="e.g. United States - Austin, TX" style="width:100%;box-sizing:border-box;padding:10px 12px;font-size:14px;border-radius:8px;border:1px solid #e2e8f0;outline:none;background:white;"><datalist id="pt-locations"><sc-for list="{{ ptWiz.locOpts }}" as="o" hint-placeholder-count="4"><option value="{{ o }}"></option></sc-for></datalist></div>
+              </div>
+              </sc-if>
+              <sc-if value="{{ ptWiz.isStep3 }}" hint-placeholder-val="{{ false }}">
+              <div style="display: flex; flex-direction: column; gap: 14px;">
+                <div style="display: flex; gap: 4px; background: #f1f5f9; padding: 4px; border-radius: 8px;">
+                  <span onClick="{{ ptWizModePaste }}" style="{{ ptWiz.pasteTabStyle }}">Enter manually</span>
+                  <span onClick="{{ ptWizModeList }}" style="{{ ptWiz.listTabStyle }}">Choose a list</span>
+                </div>
+                <sc-if value="{{ ptWiz.kwPaste }}" hint-placeholder-val="{{ true }}">
+                <div><label style="font-size:12px;font-weight:600;color:#334155;display:block;margin-bottom:6px;">Keywords <span style="color:#94a3b8;font-weight:400;">(comma-separated)</span></label><textarea value="{{ ptWiz.kwText }}" onChange="{{ ptWizFieldKwText }}" placeholder="iv therapy near me, mobile iv, hydration drip" style="width:100%;box-sizing:border-box;min-height:110px;padding:10px 12px;font-size:14px;border-radius:8px;border:1px solid #e2e8f0;outline:none;resize:vertical;font-family:inherit;"></textarea><div style="font-size:12px;color:#94a3b8;margin-top:6px;">{{ ptWiz.kwCount }} keywords entered</div></div>
+                </sc-if>
+                <sc-if value="{{ ptWiz.kwList }}" hint-placeholder-val="{{ false }}">
+                <div style="display: flex; flex-direction: column; gap: 8px;">
+                  <sc-for list="{{ ptWiz.lists }}" as="l" hint-placeholder-count="2"><div style="{{ l.rowStyle }}" onClick="{{ l.onPick }}"><span style="{{ l.dotStyle }}"></span><div><div style="font-size:13px;font-weight:500;color:#0f172a;">{{ l.name }}</div><div style="font-size:12px;color:#64748b;">{{ l.count }}</div></div></div></sc-for>
+                  <p style="font-size:12px;color:#94a3b8;margin:6px 0 0;">Keyword lists are built in <strong style="color:#64748b;">Keywords → Keyword Explorer</strong>.</p>
+                </div>
+                </sc-if>
+              </div>
+              </sc-if>
+              <sc-if value="{{ ptWiz.isStep4 }}" hint-placeholder-val="{{ false }}">
+              <div style="display: flex; flex-direction: column; gap: 12px;">
+                <label style="font-size:12px;font-weight:600;color:#334155;">Competitors <span style="color:#94a3b8;font-weight:400;">(up to 5)</span></label>
+                <div style="display: flex; gap: 8px;"><input value="{{ ptWiz.compInput }}" onChange="{{ ptWizCompInputFn }}" onKeyDown="{{ ptWizCompKeyFn }}" placeholder="competitor.com" style="flex:1;box-sizing:border-box;padding:10px 12px;font-size:14px;border-radius:8px;border:1px solid #e2e8f0;outline:none;"><span onClick="{{ ptWizCompAddFn }}" style="padding:10px 16px;background:#0f172a;color:white;font-size:13px;font-weight:600;border-radius:8px;cursor:pointer;">Add</span></div>
+                <div style="display: flex; flex-wrap: wrap; gap: 8px;">
+                  <sc-for list="{{ ptWiz.comps }}" as="c" hint-placeholder-count="2"><span style="display:inline-flex;align-items:center;gap:7px;padding:6px 10px;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:8px;font-size:13px;color:#334155;">{{ c.domain }}<span onClick="{{ c.onRemove }}" style="cursor:pointer;color:#94a3b8;display:inline-flex;" style-hover="color:#dc2626"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg></span></span></sc-for>
+                </div>
+                <div style="font-size:12px;color:#94a3b8;">{{ ptWiz.compNote }}</div>
+              </div>
+              </sc-if>
+            </div>
+            <div style="padding: 16px 24px; border-top: 1px solid #f1f5f9; display: flex; align-items: center; justify-content: space-between;">
+              <sc-if value="{{ ptWiz.canBack }}" hint-placeholder-val="{{ false }}"><span onClick="{{ ptWizPrev }}" style="padding:10px 18px;border:1px solid #e2e8f0;border-radius:8px;font-size:13px;font-weight:600;color:#475569;cursor:pointer;" style-hover="background:#f8fafc">Back</span></sc-if>
+              <sc-if value="{{ ptWiz.noBack }}" hint-placeholder-val="{{ true }}"><span></span></sc-if>
+              <span onClick="{{ ptWizNext }}" style="margin-left:auto;padding:10px 22px;background:#4f46e5;color:white;font-size:13px;font-weight:600;border-radius:8px;cursor:pointer;" style-hover="background:#4338ca">{{ ptWiz.nextLabel }}</span>
+            </div>
+          </div>
+        </div>
+        </sc-if>
+
+        <!-- ===== EDIT PROJECT MODAL ===== -->
+        <sc-if value="{{ ptEditOpen }}" hint-placeholder-val="{{ false }}">
+        <div style="position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;">
+          <div onClick="{{ ptEditClose }}" style="position:absolute;inset:0;background:rgba(15,23,42,0.4);"></div>
+          <div style="position:relative;background:white;border-radius:12px;width:100%;max-width:550px;box-shadow:0 10px 25px rgba(0,0,0,0.1);display:flex;flex-direction:column;max-height:85vh;">
+            <div style="padding: 16px 24px; border-bottom: 1px solid #f1f5f9; display: flex; justify-content: space-between; align-items: center;">
+              <h2 style="font-size: 16px; font-weight: 700; margin: 0; color: #0f172a;">Edit Project Settings</h2>
+              <span onClick="{{ ptEditClose }}" style="color:#94a3b8;cursor:pointer;display:inline-flex;" style-hover="color:#0f172a"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg></span>
+            </div>
+            <div style="padding: 24px; overflow-y: auto; display: flex; flex-direction: column; gap: 24px;">
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+                <div><label style="font-size:12px;font-weight:600;color:#334155;display:block;margin-bottom:6px;">Site URL</label><input value="{{ ptEditDomain }}" disabled style="width:100%;box-sizing:border-box;padding:10px 12px;font-size:14px;border-radius:8px;border:1px solid #e2e8f0;background:#f8fafc;color:#94a3b8;outline:none;cursor:not-allowed;"></div>
+                <div><label style="font-size:12px;font-weight:600;color:#334155;display:block;margin-bottom:6px;">Project name</label><input value="{{ ptEditName }}" onChange="{{ ptEditNameFn }}" placeholder="Auto-generated from domain" style="width:100%;box-sizing:border-box;padding:10px 12px;font-size:14px;border-radius:8px;border:1px solid #e2e8f0;outline:none;"></div>
+              </div>
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+                <div><label style="font-size:12px;font-weight:600;color:#334155;display:block;margin-bottom:6px;">Search engine</label><select value="{{ ptEditEngine }}" onChange="{{ ptEditEngineFn }}" style="width:100%;box-sizing:border-box;padding:10px 12px;font-size:14px;border-radius:8px;border:1px solid #e2e8f0;outline:none;background:white;"><sc-for list="{{ ptWiz.engineOpts }}" as="o" hint-placeholder-count="2"><option value="{{ o }}">{{ o }}</option></sc-for></select></div>
+                <div><label style="font-size:12px;font-weight:600;color:#334155;display:block;margin-bottom:6px;">Device</label><select value="{{ ptEditDevice }}" onChange="{{ ptEditDeviceFn }}" style="width:100%;box-sizing:border-box;padding:10px 12px;font-size:14px;border-radius:8px;border:1px solid #e2e8f0;outline:none;background:white;"><sc-for list="{{ ptWiz.deviceOpts }}" as="o" hint-placeholder-count="2"><option value="{{ o }}">{{ o }}</option></sc-for></select></div>
+                <div><label style="font-size:12px;font-weight:600;color:#334155;display:block;margin-bottom:6px;">Language</label><select value="{{ ptEditLang }}" onChange="{{ ptEditLangFn }}" style="width:100%;box-sizing:border-box;padding:10px 12px;font-size:14px;border-radius:8px;border:1px solid #e2e8f0;outline:none;background:white;"><sc-for list="{{ ptWiz.langOpts }}" as="o" hint-placeholder-count="3"><option value="{{ o }}">{{ o }}</option></sc-for></select></div>
+                <div><label style="font-size:12px;font-weight:600;color:#334155;display:block;margin-bottom:6px;">Location</label><input list="pt-locations" value="{{ ptEditLoc }}" onChange="{{ ptEditLocFn }}" onInput="{{ ptEditLocFn }}" placeholder="e.g. United States - Austin, TX" style="width:100%;box-sizing:border-box;padding:10px 12px;font-size:14px;border-radius:8px;border:1px solid #e2e8f0;outline:none;background:white;"></div>
+              </div>
+              <div>
+                <label style="font-size:13px;font-weight:600;color:#334155;display:block;margin-bottom:8px;">Competitors</label>
+                <div style="display: flex; gap: 8px; margin-bottom: 12px;">
+                  <input value="{{ ptWizCompInput }}" onChange="{{ ptWizCompInputFn }}" onKeyDown="{{ ptWizCompKeyFn }}" placeholder="competitor.com" style="flex:1;box-sizing:border-box;padding:10px 12px;font-size:14px;border-radius:8px;border:1px solid #e2e8f0;outline:none;">
+                  <span onClick="{{ ptWizCompAddFn }}" style="padding:10px 16px;background:#0f172a;color:white;font-size:13px;font-weight:600;border-radius:8px;cursor:pointer;">Add</span>
+                </div>
+                <div style="display:flex;flex-wrap:wrap;gap:8px;">
+                  <sc-for list="{{ ptWiz.comps }}" as="c" hint-placeholder-count="2">
+                    <span style="display:inline-flex;align-items:center;gap:7px;padding:6px 10px;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:8px;font-size:13px;color:#334155;">{{ c.domain }}<span onClick="{{ c.onRemove }}" style="cursor:pointer;color:#94a3b8;display:inline-flex;" style-hover="color:#dc2626"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg></span></span>
+                  </sc-for>
+                </div>
+                <div style="font-size:12px;color:#94a3b8;margin-top:8px;">{{ ptWiz.compNote }}</div>
+              </div>
+              <div>
+                <label style="font-size:13px;font-weight:600;color:#334155;display:block;margin-bottom:8px;">Tracked Keywords</label>
+                <textarea value="{{ ptEditKws }}" onInput="{{ ptEditKwsFn }}" placeholder="Enter keywords, one per line..." style="width:100%;height:150px;box-sizing:border-box;padding:10px 12px;font-size:14px;border-radius:8px;border:1px solid #e2e8f0;outline:none;resize:vertical;"></textarea>
+                <div style="font-size:12px;color:#94a3b8;margin-top:8px;">Replace your tracked keywords. Enter one keyword per line.</div>
+              </div>
+          </div>
+            <div style="padding: 16px 24px; border-top: 1px solid #f1f5f9; display: flex; align-items: center; justify-content: flex-end; gap: 12px;">
+              <span onClick="{{ ptEditClose }}" style="padding:10px 18px;border:1px solid #e2e8f0;border-radius:8px;font-size:13px;font-weight:600;color:#475569;cursor:pointer;" style-hover="background:#f8fafc">Cancel</span>
+              <span onClick="{{ ptEditSave }}" style="padding:10px 22px;background:#4f46e5;color:white;font-size:13px;font-weight:600;border-radius:8px;cursor:pointer;" style-hover="background:#4338ca">{{ ptEditBusy ? 'Saving...' : 'Save Settings' }}</span>
+            </div>
+          </div>
+        </div>
+        </sc-if>
+
+        <!-- ===== PROJECT WORKSPACE ===== -->
+        <sc-if value="{{ ptIsWorkspace }}" hint-placeholder-val="{{ false }}">
+        <div style="display: flex; flex-direction: column; gap: 20px;">
+          <div style="display:flex;align-items:center;margin-bottom:28px;">
+            <span onClick="{{ ptBackToList }}" style="display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border:1px solid #e2e8f0;border-radius:8px;font-size:13px;color:#475569;cursor:pointer;margin-right:24px;" style-hover="background:#f8fafc"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m15 18-6-6 6-6"/></svg>All projects</span>
+            <div><div style="font-size:18px;font-weight:700;letter-spacing:-0.01em;color:#0f172a;">{{ ptWs.name }}</div><div style="font-size:12px;color:#94a3b8;margin-top:2px;">{{ ptWs.domain }} · {{ ptWs.device }} · {{ ptWs.location }}</div></div>
+            <div style="margin-left: auto; display: flex; align-items: center; gap: 12px;">
+              <span onClick="{{ ptWs.onRefresh }}" style="display:inline-flex;align-items:center;padding:8px 13px;border:1px solid #e2e8f0;border-radius:8px;font-size:12px;font-weight:600;color:#0f172a;background:white;cursor:pointer;box-shadow:0 1px 2px rgba(0,0,0,0.05);" style-hover="background:#f8fafc">Refresh Data</span>
+              <span onClick="{{ ptWs.onEdit }}" style="display:inline-flex;align-items:center;padding:8px 13px;border:1px solid #e2e8f0;border-radius:8px;font-size:12px;font-weight:600;color:#0f172a;background:white;cursor:pointer;box-shadow:0 1px 2px rgba(0,0,0,0.05);" style-hover="background:#f8fafc">Edit Project</span>
+              <span onClick="{{ ptWs.onDelete }}" style="display:inline-flex;align-items:center;padding:8px 13px;border:1px solid #fecaca;border-radius:8px;font-size:12px;font-weight:600;color:#dc2626;background:#fef2f2;cursor:pointer;" style-hover="background:#fee2e2">Delete</span>
+              <span style="display:inline-flex;align-items:center;gap:7px;padding:8px 13px;border:1px solid #e2e8f0;border-radius:8px;font-size:12px;color:#475569;background:white;box-shadow:0 1px 2px rgba(0,0,0,0.05);"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>{{ ptWs.snapshotRange }}</span>
+            </div>
+          </div>
+
+          <!-- Workspace Tabs: Landscape / All Tracked Keywords / Competitors -->
+          <div style="display: flex; align-items: center; gap: 6px; border-bottom: 1px solid #e2e8f0; flex-wrap: wrap; margin-top: -4px;">
+            <sc-for list="{{ ptWs.tabs }}" as="t" hint-placeholder-count="3">
+              <span onClick="{{ t.onClick }}" style="{{ t.style }}">{{ t.label }}</span>
+            </sc-for>
+          </div>
+
+          <sc-if value="{{ pt.setup }}" hint-placeholder-val="{{ false }}">
+          <div style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 56px 32px; text-align: center; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+            <div style="font-size: 15px; font-weight: 600; color: #0f172a; margin-bottom: 6px;">No Position Tracking Data Synced Yet</div>
+            <div style="font-size: 13px; color: #64748b; max-width: 420px; margin: 0 auto 20px;">We haven't synced position tracking snapshots for this domain into the database yet. Click below to fetch current positions right now.</div>
+            <div onClick="{{ h.refreshPage }}" style="display: inline-flex; align-items: center; gap: 8px; border-radius: 8px; background: #10b981; color: white; font-size: 14px; font-weight: 600; padding: 10px 20px; cursor: pointer; box-shadow: 0 1px 2px rgba(0,0,0,0.05);" style-hover="background:#059669">⚡ Fetch Positions Now</div>
+          </div>
+          </sc-if>
+          <sc-if value="{{ !pt.setup }}" hint-placeholder-val="{{ true }}">
+
+          <!-- LANDSCAPE -->
+          <sc-if value="{{ ptTabLandscape }}" hint-placeholder-val="{{ true }}">
+          <div style="display: flex; flex-direction: column; gap: 20px;">
+            <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px;">
+              <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; padding: 20px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);"><div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: #64748b; margin-bottom: 4px;">Keywords Tracked</div><div style="font-size: 30px; font-weight: 700; color: #334155;">{{ pt.tracked }}</div></div>
+              <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; padding: 20px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);"><div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: #64748b; margin-bottom: 4px;">Avg Position</div><div style="font-size: 30px; font-weight: 700; color: #334155;">{{ pt.avgPos }}</div></div>
+              <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; padding: 20px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);"><div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: #64748b; margin-bottom: 4px;">Est. Traffic</div><div style="font-size: 30px; font-weight: 700; color: #334155;">{{ pt.traffic }}</div></div>
+              <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; padding: 20px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);"><div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: #64748b; margin-bottom: 4px;">Impressions</div><div style="font-size: 30px; font-weight: 700; color: #334155;">{{ pt.impressions }}</div></div>
+            </div>
+
+            <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; padding: 20px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+              <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px;"><h2 style="font-size: 15px; font-weight: 600; margin: 0;">Rankings Distribution</h2><span style="font-size: 12px; color: #94a3b8;">Keywords by SERP position · updated weekly</span></div>
+              <div style="display: flex; border-radius: 8px; overflow: hidden; height: 32px; margin-bottom: 16px;">
+                <sc-for list="{{ pt.distSegs }}" as="d" hint-placeholder-count="4">
+                  <div style="{{ d.style }}">{{ d.count }}</div>
+                </sc-for>
+              </div>
+              <div style="display: flex; flex-wrap: wrap; gap: 24px; font-size: 12px;">
+                <sc-for list="{{ pt.distLegend }}" as="d" hint-placeholder-count="4">
+                  <div style="display: flex; align-items: center; gap: 8px;"><span style="{{ d.swatch }}"></span><span style="color: #64748b;">{{ d.label }}</span><span style="font-weight: 700; color: #334155;">{{ d.count }}</span></div>
+                </sc-for>
+              </div>
+            </div>
+
+            <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px;">
+              <div style="border-radius: 12px; background: white; border: 1px solid #bbf7d0; padding: 16px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);"><div style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: #059669;">▲ Improved</div><div style="font-size: 30px; font-weight: 700; color: #334155; margin-top: 4px;">{{ pt.improved }}</div><div style="font-size: 12px; color: #64748b; margin-top: 4px;">Moved up ≥ 2 positions</div></div>
+              <div style="border-radius: 12px; background: white; border: 1px solid #fecaca; padding: 16px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);"><div style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: #dc2626;">▼ Declined</div><div style="font-size: 30px; font-weight: 700; color: #334155; margin-top: 4px;">{{ pt.declined }}</div><div style="font-size: 12px; color: #64748b; margin-top: 4px;">Dropped ≥ 2 positions</div></div>
+              <div style="border-radius: 12px; background: white; border: 1px solid #bfdbfe; padding: 16px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);"><div style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: #2563eb;">＋ New / Manual</div><div style="font-size: 30px; font-weight: 700; color: #334155; margin-top: 4px;">{{ pt.added }}</div><div style="font-size: 12px; color: #64748b; margin-top: 4px;">Newly tracked keywords</div></div>
+              <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; padding: 16px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);"><div style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: #64748b;">－ Lost</div><div style="font-size: 30px; font-weight: 700; color: #334155; margin-top: 4px;">{{ pt.lost }}</div><div style="font-size: 12px; color: #64748b; margin-top: 4px;">No longer ranking</div></div>
+            </div>
+
+            <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
+              <div style="padding: 16px 20px; border-bottom: 1px solid #f1f5f9;"><h2 style="font-size: 15px; font-weight: 600; margin: 0;">Biggest Movers</h2><p style="font-size: 12px; color: #94a3b8; margin: 4px 0 0;">Largest position changes since last weekly sync</p></div>
+              <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+                <thead><tr style="text-align: left; color: #94a3b8; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;"><th style="font-weight: 500; padding: 10px 20px;">Keyword</th><th style="font-weight: 500; padding: 10px; text-align: center;">Was</th><th style="font-weight: 500; padding: 10px; text-align: center;">Now</th><th style="font-weight: 500; padding: 10px; text-align: center;">Change</th><th style="font-weight: 500; padding: 10px 20px; text-align: right;">Volume</th></tr></thead>
+                <tbody>
+                  <sc-for list="{{ pt.movers }}" as="r" hint-placeholder-count="4">
+                    <tr style="border-top: 1px solid #f1f5f9;">
+                      <td style="padding: 12px 20px; font-weight: 500; color: #334155;">{{ r.kw }}</td>
+                      <td style="padding: 12px; text-align: center; color: #94a3b8;">{{ r.was }}</td>
+                      <td style="padding: 12px; text-align: center;"><span style="{{ r.posStyle }}">{{ r.now }}</span></td>
+                      <td style="padding: 12px; text-align: center;"><span style="{{ r.chipStyle }}">{{ r.change }}</span></td>
+                      <td style="padding: 12px 20px; text-align: right; color: #475569;">{{ r.volFmt }}</td>
+                    </tr>
+                  </sc-for>
+                </tbody>
+              </table>
+            </div>
+
+            <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
+              <div style="padding: 16px 20px; border-bottom: 1px solid #f1f5f9; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px;">
+                <div style="display: flex; align-items: center; gap: 16px; flex-wrap: wrap;">
+                  <h2 style="font-size: 15px; font-weight: 600; margin: 0; color: #0f172a;">All Tracked Keywords</h2>
+                  <div style="display: flex; gap: 6px;">
+                    <button onClick="{{ ptWs.onTabAll }}" style="padding: 5px 12px; font-size: 12px; font-weight: 600; border-radius: 6px; border: 1px solid {{ ptWs.rankingsTab === 'all' ? '#c7d2fe' : 'transparent' }}; background: {{ ptWs.rankingsTab === 'all' ? '#eef2ff' : 'transparent' }}; color: {{ ptWs.rankingsTab === 'all' ? '#4f46e5' : '#64748b' }}; cursor: pointer; font-family: inherit;">All ({{ pt.tracked }})</button>
+                    <button onClick="{{ ptWs.onTabTop10 }}" style="padding: 5px 12px; font-size: 12px; font-weight: 600; border-radius: 6px; border: 1px solid {{ ptWs.rankingsTab === 'top10' ? '#a7f3d0' : 'transparent' }}; background: {{ ptWs.rankingsTab === 'top10' ? '#ecfdf5' : 'transparent' }}; color: {{ ptWs.rankingsTab === 'top10' ? '#059669' : '#64748b' }}; cursor: pointer; font-family: inherit;">Top 10</button>
+                    <button onClick="{{ ptWs.onTabImproved }}" style="padding: 5px 12px; font-size: 12px; font-weight: 600; border-radius: 6px; border: 1px solid {{ ptWs.rankingsTab === 'improved' ? '#a7f3d0' : 'transparent' }}; background: {{ ptWs.rankingsTab === 'improved' ? '#ecfdf5' : 'transparent' }}; color: {{ ptWs.rankingsTab === 'improved' ? '#059669' : '#64748b' }}; cursor: pointer; font-family: inherit;">Improved ({{ pt.improved }})</button>
+                    <button onClick="{{ ptWs.onTabDeclined }}" style="padding: 5px 12px; font-size: 12px; font-weight: 600; border-radius: 6px; border: 1px solid {{ ptWs.rankingsTab === 'declined' ? '#fecaca' : 'transparent' }}; background: {{ ptWs.rankingsTab === 'declined' ? '#fef2f2' : 'transparent' }}; color: {{ ptWs.rankingsTab === 'declined' ? '#dc2626' : '#64748b' }}; cursor: pointer; font-family: inherit;">Declined ({{ pt.declined }})</button>
+                  </div>
+                </div>
+                <div style="display: flex; align-items: center; gap: 8px;">
+                  <span onClick="{{ ptWs.onRefresh }}" style="display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; font-size: 12px; font-weight: 600; color: #475569; background: white; border: 1px solid #e2e8f0; border-radius: 6px; cursor: pointer;" style-hover="background:#f8fafc">⚡ Refresh Tracked Keywords</span>
+                </div>
+              </div>
+              <div style="overflow-x: auto;">
+                <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
+                  <thead>
+                    <tr style="text-align: left; background: #f8fafc; border-bottom: 1px solid #f1f5f9; color: #64748b; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;">
+                      <th style="font-weight: 600; padding: 12px 20px;">Keyword</th>
+                      <th style="font-weight: 600; padding: 12px; text-align: center;">Pos</th>
+                      <th style="font-weight: 600; padding: 12px; text-align: center;">Δ</th>
+                      <th style="font-weight: 600; padding: 12px; text-align: right;">Volume</th>
+                      <th style="font-weight: 600; padding: 12px; text-align: right;">Clicks</th>
+                      <th style="font-weight: 600; padding: 12px; text-align: center;">KD%</th>
+                      <th style="font-weight: 600; padding: 12px; text-align: right;">CPC</th>
+                      <th style="font-weight: 600; padding: 12px;">Intent</th>
+                      <th style="font-weight: 600; padding: 12px 20px;">Ranking URL</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <sc-for list="{{ pt.filteredRankings }}" as="r" hint-placeholder-count="5">
+                      <tr style="border-top: 1px solid #f1f5f9; transition: background 0.15s;" style-hover="background:#f8fafc">
+                        <td style="padding: 12px 20px; font-weight: 600; color: #334155;">{{ r.kw }}</td>
+                        <td style="padding: 12px; text-align: center;"><span style="{{ r.posBadgeStyle }}">{{ r.pos }}</span></td>
+                        <td style="padding: 12px; text-align: center;"><span style="{{ r.deltaStyle }}">{{ r.deltaText }}</span></td>
+                        <td style="padding: 12px; text-align: right; color: #64748b;">{{ r.volume }}</td>
+                        <td style="padding: 12px; text-align: right; font-weight: 600; color: #334155;">{{ r.clicks }}</td>
+                        <td style="padding: 12px; text-align: center;">
+                          <div style="display: flex; align-items: center; justify-content: center; gap: 6px;">
+                            <div style="width: 28px; height: 6px; border-radius: 3px; background: #f1f5f9; overflow: hidden; display: inline-block;">
+                              <div style="height: 100%; width: {{ r.kdWidth }}; background: {{ r.kdColor }};"></div>
+                            </div>
+                            <span style="font-size: 12px; color: #64748b;">{{ r.kd }}</span>
+                          </div>
+                        </td>
+                        <td style="padding: 12px; text-align: right; color: #64748b;">{{ r.cpc }}</td>
+                        <td style="padding: 12px;"><span style="{{ r.intentStyle }}">{{ r.intent }}</span></td>
+                        <td style="padding: 12px 20px; color: #64748b; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="{{ r.url }}">{{ r.urlShort }}</td>
+                      </tr>
+                    </sc-for>
+                    <sc-if value="{{ pt.filteredRankings.length === 0 }}" hint-placeholder-val="{{ false }}">
+                      <tr>
+                        <td colspan="9" style="padding: 40px 20px; text-align: center; color: #94a3b8; font-size: 13px;">No tracked keywords match this tab or filter yet. Click 'Sync Positions' to update SERP data.</td>
+                      </tr>
+                    </sc-if>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+          </sc-if>
+
+          <!-- OVERVIEW -->
+          <sc-if value="{{ ptTabOverview }}" hint-placeholder-val="{{ false }}">
+          <div style="display: flex; flex-direction: column; gap: 20px;">
+            <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; padding: 20px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+              <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; flex-wrap: wrap; gap: 8px;"><h2 style="font-size: 15px; font-weight: 600; margin: 0;">Visibility</h2><span style="font-size: 12px; color: #94a3b8;">Volume-weighted share of top rankings · last 30 days</span></div>
+              <div style="display: flex; flex-wrap: wrap; gap: 28px; margin-bottom: 18px;">
+                <sc-for list="{{ ptOv.scoreCards }}" as="c" hint-placeholder-count="4">
+                  <div style="min-width: 108px;">
+                    <div style="font-size: 12px; color: #64748b; margin-bottom: 3px; display: flex; align-items: center; gap: 7px; white-space: nowrap;"><span style="{{ c.swatch }}"></span>{{ c.name }}</div>
+                    <div style="display: flex; align-items: baseline; gap: 8px;"><span style="{{ c.cardValStyle }}">{{ c.valLabel }}</span><span style="{{ c.deltaStyle }}">{{ c.deltaLabel }}</span></div>
+                  </div>
+                </sc-for>
+              </div>
+              <div style="display: flex; flex-wrap: wrap; gap: 18px; margin-bottom: 8px;">
+                <sc-for list="{{ ptOv.scoreCards }}" as="c" hint-placeholder-count="4">
+                  <span style="{{ c.legendStyle }}" onClick="{{ c.onToggle }}"><span style="{{ c.checkStyle }}">{{ c.check }}</span>{{ c.name }}</span>
+                </sc-for>
+              </div>
+              <svg viewBox="{{ ptOv.chart.viewBox }}" style="width: 100%; height: auto; display: block; overflow: visible;">
+                <sc-for list="{{ ptOv.chart.grid }}" as="g" hint-placeholder-count="6">
+                  <line x1="{{ ptOv.chart.lineX1 }}" x2="{{ ptOv.chart.lineX2 }}" y1="{{ g.y }}" y2="{{ g.y }}" stroke="#eef2f6" stroke-width="1" vector-effect="non-scaling-stroke"></line>
+                  <text x="{{ ptOv.chart.labelX }}" y="{{ g.y }}" text-anchor="end" dominant-baseline="middle" font-size="11" fill="#94a3b8" font-family="Roboto, sans-serif">{{ g.label }}</text>
+                </sc-for>
+                <sc-for list="{{ ptOv.chart.xTicks }}" as="t" hint-placeholder-count="6">
+                  <text x="{{ t.x }}" y="{{ ptOv.chart.xLabelY }}" text-anchor="middle" font-size="11" fill="#94a3b8" font-family="Roboto, sans-serif">{{ t.label }}</text>
+                </sc-for>
+                <sc-for list="{{ ptOv.chart.series }}" as="s" hint-placeholder-count="4">
+                  <polyline points="{{ s.points }}" fill="none" stroke="{{ s.color }}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"></polyline>
+                  <circle cx="{{ s.dotX }}" cy="{{ s.dotY }}" r="4" fill="{{ s.color }}"></circle>
+                </sc-for>
+              </svg>
+            </div>
+            <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
+              <div style="padding: 16px 20px; border-bottom: 1px solid #f1f5f9; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;"><div><h2 style="font-size: 15px; font-weight: 600; margin: 0;">Rankings Overview</h2><p style="font-size: 12px; color: #94a3b8; margin: 4px 0 0;">Your position vs each competitor per keyword — Δ compares {{ ptOv.prevDate }} → {{ ptOv.curDate }} SERP snapshots</p></div></div>
+              <div style="overflow-x: auto;">
+                <div style="min-width: 640px;">
+                  <div style="display: grid; grid-template-columns: {{ ptOv.gridCols }}; padding: 12px 20px; background: #f8fafc; border-bottom: 1px solid #f1f5f9; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8; font-weight: 600; align-items: center;">
+                    <span>Keyword</span><span style="text-align:right;">Volume</span><span style="text-align:right;">KD %</span>
+                    <sc-for list="{{ ptOv.domains }}" as="d" hint-placeholder-count="4"><span style="{{ d.style }}">{{ d.name }}</span></sc-for>
+                  </div>
+                  <sc-for list="{{ ptOv.rows }}" as="r" hint-placeholder-count="6">
+                    <div style="display: grid; grid-template-columns: {{ ptOv.gridCols }}; align-items: center; padding: 11px 20px; border-top: 1px solid #f1f5f9;" style-hover="background:#f8fafc">
+                      <span style="display:flex;align-items:center;gap:8px;min-width:0;"><span onClick="{{ r.onSerp }}" title="View SERP" style="flex-shrink:0;display:inline-flex;color:#94a3b8;cursor:pointer;" style-hover="color:#4f46e5"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.3-4.3"/></svg></span><span style="font-size:14px;font-weight:500;color:#334155;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ r.kw }}</span></span>
+                      <span style="text-align:right;font-size:13px;color:#94a3b8;">{{ r.volFmt }}</span>
+                      <span style="{{ r.kdStyle }}"><span style="{{ r.kdDotStyle }}"></span>{{ r.kd }}</span>
+                      <sc-for list="{{ r.cells }}" as="c" hint-placeholder-count="4">
+                        <span style="{{ c.cellStyle }}" onClick="{{ c.onCell }}" title="Show ranking URL" style-hover="background:#eef2ff"><span style="{{ c.posStyle }}">{{ c.pos }}</span><span style="{{ c.diffStyle }}">{{ c.diff }}</span></span>
+                      </sc-for>
+                    </div>
+                  </sc-for>
+                </div>
+              </div>
+            </div>
+          </div>
+          </sc-if>
+
+          <!-- PAGES -->
+          <sc-if value="{{ ptTabPages }}" hint-placeholder-val="{{ false }}">
+          <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
+            <div style="padding: 16px 20px; border-bottom: 1px solid #f1f5f9;"><h2 style="font-size: 15px; font-weight: 600; margin: 0;">Pages</h2><p style="font-size: 12px; color: #94a3b8; margin: 4px 0 0;">Every ranking page on {{ ptWs.domain }} — expand a row to see the keywords it ranks for</p></div>
+            <div style="overflow-x: auto;">
+              <div style="min-width: 860px;">
+                <div style="display: grid; grid-template-columns: {{ ptPages.gridCols }}; gap: 12px; padding: 11px 20px; background: #f8fafc; border-bottom: 1px solid #f1f5f9; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8; font-weight: 600;">
+                  <span>URL</span><span style="text-align:right;">Keywords</span><span>Intent rates</span><span style="text-align:right;">Est. traffic</span><span style="text-align:right;">Avg position</span><span style="text-align:right;">Total volume</span>
+                </div>
+                <sc-for list="{{ ptPages.rows }}" as="p" hint-placeholder-count="4">
+                  <div>
+                    <div onClick="{{ p.onToggle }}" style="display: grid; grid-template-columns: {{ ptPages.gridCols }}; gap: 12px; align-items: center; padding: 13px 20px; border-top: 1px solid #f1f5f9; cursor: pointer;" style-hover="background:#f8fafc">
+                      <span style="display:flex;align-items:center;gap:8px;min-width:0;"><span style="{{ p.chevStyle }}">›</span><a href="{{ p.href }}" target="_blank" rel="noopener" onClick="{{ p.onLinkClick }}" style="font-size:13px;color:#4f46e5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-decoration:none;" style-hover="text-decoration:underline">{{ p.url }}</a><sc-if value="{{ p.isNew }}" hint-placeholder-val="{{ false }}"><span style="flex-shrink:0;font-size:10px;font-weight:600;color:#047857;background:#d1fae5;padding:1px 7px;border-radius:4px;">new</span></sc-if></span>
+                      <span style="text-align:right;font-size:14px;color:#334155;">{{ p.kwCount }} <span style="{{ p.kwDiffStyle }}">{{ p.kwDiff }}</span></span>
+                      <span style="display:flex;height:8px;border-radius:4px;overflow:hidden;background:#f1f5f9;"><sc-for list="{{ p.intentSegs }}" as="g" hint-placeholder-count="2"><span style="{{ g.style }}"></span></sc-for></span>
+                      <span style="text-align:right;font-size:14px;color:#334155;">{{ p.etVal }} <span style="{{ p.etDiffStyle }}">{{ p.etDiff }}</span></span>
+                      <span style="text-align:right;font-size:14px;color:#334155;">{{ p.avgPos }} <span style="{{ p.posArrowStyle }}">{{ p.posArrow }}</span></span>
+                      <span style="text-align:right;font-size:14px;color:#334155;">{{ p.totVol }}</span>
+                    </div>
+                    <sc-if value="{{ p.open }}" hint-placeholder-val="{{ false }}">
+                    <div style="background: #fafbfc;">
+                      <sc-for list="{{ p.kws }}" as="k" hint-placeholder-count="3">
+                        <div style="display: grid; grid-template-columns: {{ ptPages.gridCols }}; gap: 12px; align-items: center; padding: 10px 20px 10px 44px; border-top: 1px solid #f1f5f9;">
+                          <span style="font-size:13px;color:#334155;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ k.kw }}</span>
+                          <span></span>
+                          <span><span style="{{ k.intentStyle }}">{{ k.intentLabel }}</span></span>
+                          <span style="text-align:right;font-size:13px;color:#475569;">{{ k.etVal }} <span style="{{ k.etDiffStyle }}">{{ k.etDiff }}</span></span>
+                          <span style="text-align:right;font-size:13px;color:#475569;display:flex;align-items:center;justify-content:flex-end;gap:6px;"><span style="{{ k.posStyle }}">{{ k.pos }}</span><span style="{{ k.posArrowStyle }}">{{ k.posArrow }}</span></span>
+                          <span style="text-align:right;font-size:13px;color:#475569;">{{ k.vol }}</span>
+                        </div>
+                      </sc-for>
+                    </div>
+                    </sc-if>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+          </div>
+          </sc-if>
+
+          <!-- RANKING-URL POPOVER -->
+          <sc-if value="{{ ptOv.urlPopOpen }}" hint-placeholder-val="{{ false }}">
+            <div onClick="{{ ptOv.urlPop.onClose }}" style="position: fixed; inset: 0; z-index: 89;"></div>
+            <div style="{{ ptOv.urlPop.style }}">
+              <div style="font-size: 12px; color: #334155; word-break: break-all; line-height: 1.5; margin-bottom: 10px;">{{ ptOv.urlPop.url }}</div>
+              <div style="display: flex; gap: 8px;">
+                <span onClick="{{ ptOv.urlPop.onCopy }}" style="flex:1;display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:7px 10px;border:1px solid #e2e8f0;border-radius:7px;font-size:12px;font-weight:500;color:#475569;cursor:pointer;" style-hover="background:#f8fafc"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>Copy URL</span>
+                <a href="{{ ptOv.urlPop.href }}" target="_blank" rel="noopener" style="flex:1;display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:7px 10px;border:1px solid #e2e8f0;border-radius:7px;font-size:12px;font-weight:500;color:#475569;cursor:pointer;text-decoration:none;" style-hover="background:#f8fafc"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><path d="M15 3h6v6"/><path d="M10 14 21 3"/></svg>Open URL</a>
+              </div>
+            </div>
+          </sc-if>
+
+          <!-- SERP DRAWER -->
+          <sc-if value="{{ ptSerpOpen }}" hint-placeholder-val="{{ false }}">
+            <div style="position: fixed; inset: 0; z-index: 96; display: flex; justify-content: flex-end;">
+              <div onClick="{{ ptSerpCloseFn }}" style="position:absolute;inset:0;background:rgba(15,23,42,0.35);"></div>
+              <div style="position: relative; width: 460px; max-width: 92vw; height: 100vh; background: white; box-shadow: -16px 0 40px rgba(15,23,42,0.18); overflow-y: auto;">
+                <div style="padding: 20px 24px; border-bottom: 1px solid #e2e8f0; display: flex; align-items: flex-start; justify-content: space-between;">
+                  <div><div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: #94a3b8; font-weight: 600; margin-bottom: 5px;">Live SERP</div><div style="font-size: 18px; font-weight: 700; color: #0f172a;">{{ ptSerp.kw }}</div><a href="{{ ptSerp.href }}" target="_blank" rel="noopener" style="font-size: 12px; color: #4f46e5; text-decoration: none;">Open in Google ↗</a></div>
+                  <span onClick="{{ ptSerpCloseFn }}" style="color:#94a3b8;cursor:pointer;display:inline-flex;" style-hover="color:#0f172a"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg></span>
+                </div>
+                <div style="padding: 12px 24px 24px;">
+                  <sc-for list="{{ ptSerp.rows }}" as="r" hint-placeholder-count="6">
+                    <div style="{{ r.rowStyle }}"><span style="{{ r.badgeStyle }}">{{ r.n }}</span><div style="min-width:0;"><div style="font-size:14px;color:#1a0dab;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ r.title }}</div><div style="font-size:12px;color:#0f766e;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ r.url }}</div></div></div>
+                  </sc-for>
+                  <p style="font-size: 11px; color: #94a3b8; margin: 14px 0 0; line-height: 1.5;">Live SERP is fetched on demand via DataForSEO SERP API (Google Organic, Advanced) — one metered call (~$0.002).</p>
+                </div>
+              </div>
+            </div>
+          </sc-if>
+
+          </sc-if>
         </div>
         </sc-if>
       </div>
@@ -2925,33 +3330,87 @@
         <sc-if value="{{ st.team }}" hint-placeholder-val="{{ false }}">
         <div style="display: flex; flex-direction: column; gap: 22px;">
           <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); padding: 24px;">
-            <h2 style="font-size: 15px; font-weight: 600; margin: 0 0 2px;">Add a teammate</h2>
-            <p style="font-size: 12px; color: #64748b; margin: 0 0 16px;">Create a login directly — no email invitation needed. Password is stored securely and never exposed.</p>
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px;">
+            <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 16px; flex-wrap: wrap;">
               <div>
-                <label style="display: block; font-size: 12px; font-weight: 600; color: #334155; margin-bottom: 6px;">Email address</label>
-                <input value="{{ st.inviteEmail }}" onInput="{{ h.inviteEmail }}" placeholder="name@company.com" autocomplete="off" style="width: 100%; box-sizing: border-box; padding: 9px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-family: inherit; font-size: 13px; color: #334155; outline: none;">
+                <h2 style="font-size: 15px; font-weight: 600; margin: 0 0 4px;">Add a teammate</h2>
+                <p style="font-size: 12px; color: #64748b; margin: 0;">Invite by email with secure link, or create credentials directly.</p>
               </div>
-              <div>
-                <label style="display: block; font-size: 12px; font-weight: 600; color: #334155; margin-bottom: 6px;">Username</label>
-                <input value="{{ st.inviteUsername }}" onInput="{{ h.inviteUsername }}" placeholder="jsmith" autocomplete="off" style="width: 100%; box-sizing: border-box; padding: 9px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-family: inherit; font-size: 13px; color: #334155; outline: none;">
-              </div>
-              <div>
-                <label style="display: block; font-size: 12px; font-weight: 600; color: #334155; margin-bottom: 6px;">Password</label>
-                <input type="password" value="{{ st.invitePassword }}" onInput="{{ h.invitePassword }}" placeholder="Min. 8 characters" autocomplete="new-password" style="width: 100%; box-sizing: border-box; padding: 9px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-family: inherit; font-size: 13px; color: #334155; outline: none;">
-              </div>
-              <div>
-                <label style="display: block; font-size: 12px; font-weight: 600; color: #334155; margin-bottom: 6px;">Role</label>
-                <select value="{{ st.inviteRole }}" onChange="{{ h.inviteRole }}" style="width: 100%; padding: 9px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 13px; color: #334155; background: white; outline: none;">
-                  <sc-for list="{{ st.inviteRoleOptions }}" as="o" hint-placeholder-count="2"><option value="{{ o.value }}">{{ o.label }}</option></sc-for>
-                </select>
+              <div style="display: flex; gap: 4px; background: #f1f5f9; padding: 4px; border-radius: 8px;">
+                <div onClick="{{ h.setInviteModeEmail }}" style="{{ st.inviteModeEmailStyle }}" role="button">Invite via Email</div>
+                <div onClick="{{ h.setInviteModeDirect }}" style="{{ st.inviteModeDirectStyle }}" role="button">Direct Create</div>
               </div>
             </div>
-            <div style="display: flex; align-items: center; gap: 10px;">
-              <div onClick="{{ h.createUser }}" style="padding: 9px 20px; background: #4f46e5; color: white; font-size: 13px; font-weight: 600; border-radius: 8px; cursor: pointer;" style-hover="background:#4338ca">Create user</div>
-              <sc-if value="{{ st.createUserError }}" hint-placeholder-val="{{ false }}"><span style="font-size: 12px; color: #b91c1c;">{{ st.createUserError }}</span></sc-if>
-            </div>
+
+            <!-- MODE 1: Invite via Email -->
+            <sc-if value="{{ st.isEmailMode }}" hint-placeholder-val="{{ true }}">
+              <div style="display: grid; grid-template-columns: 1fr 200px; gap: 12px; margin-bottom: 14px;">
+                <div>
+                  <label style="display: block; font-size: 12px; font-weight: 600; color: #334155; margin-bottom: 6px;">Email address</label>
+                  <input value="{{ st.inviteEmail }}" onInput="{{ h.inviteEmail }}" placeholder="colleague@company.com" autocomplete="off" style="width: 100%; box-sizing: border-box; padding: 9px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-family: inherit; font-size: 13px; color: #334155; outline: none;" />
+                </div>
+                <div>
+                  <label style="display: block; font-size: 12px; font-weight: 600; color: #334155; margin-bottom: 6px;">Role</label>
+                  <select value="{{ st.inviteRole }}" onChange="{{ h.inviteRole }}" style="width: 100%; padding: 9px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 13px; color: #334155; background: white; outline: none;">
+                    <sc-for list="{{ st.inviteRoleOptions }}" as="o" hint-placeholder-count="2"><option value="{{ o.value }}">{{ o.label }}</option></sc-for>
+                  </select>
+                </div>
+              </div>
+              <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+                <div onClick="{{ h.sendInvite }}" style="padding: 9px 20px; background: #4f46e5; color: white; font-size: 13px; font-weight: 600; border-radius: 8px; cursor: pointer;" style-hover="background:#4338ca">Send invitation</div>
+                <sc-if value="{{ st.inviteStatusMsg }}" hint-placeholder-val="{{ false }}"><span style="font-size: 12.5px; color: #059669; font-weight: 500;">{{ st.inviteStatusMsg }}</span></sc-if>
+                <sc-if value="{{ st.inviteErrorMsg }}" hint-placeholder-val="{{ false }}"><span style="font-size: 12.5px; color: #dc2626; font-weight: 500;">{{ st.inviteErrorMsg }}</span></sc-if>
+              </div>
+            </sc-if>
+
+            <!-- MODE 2: Direct Create -->
+            <sc-if value="{{ st.isDirectMode }}" hint-placeholder-val="{{ false }}">
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px;">
+                <div>
+                  <label style="display: block; font-size: 12px; font-weight: 600; color: #334155; margin-bottom: 6px;">Email address</label>
+                  <input value="{{ st.inviteEmail }}" onInput="{{ h.inviteEmail }}" placeholder="name@company.com" autocomplete="off" style="width: 100%; box-sizing: border-box; padding: 9px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-family: inherit; font-size: 13px; color: #334155; outline: none;" />
+                </div>
+                <div>
+                  <label style="display: block; font-size: 12px; font-weight: 600; color: #334155; margin-bottom: 6px;">Username</label>
+                  <input value="{{ st.inviteUsername }}" onInput="{{ h.inviteUsername }}" placeholder="jsmith" autocomplete="off" style="width: 100%; box-sizing: border-box; padding: 9px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-family: inherit; font-size: 13px; color: #334155; outline: none;" />
+                </div>
+                <div>
+                  <label style="display: block; font-size: 12px; font-weight: 600; color: #334155; margin-bottom: 6px;">Password</label>
+                  <input type="password" value="{{ st.invitePassword }}" onInput="{{ h.invitePassword }}" placeholder="Min. 8 characters" autocomplete="new-password" style="width: 100%; box-sizing: border-box; padding: 9px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-family: inherit; font-size: 13px; color: #334155; outline: none;" />
+                </div>
+                <div>
+                  <label style="display: block; font-size: 12px; font-weight: 600; color: #334155; margin-bottom: 6px;">Role</label>
+                  <select value="{{ st.inviteRole }}" onChange="{{ h.inviteRole }}" style="width: 100%; padding: 9px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 13px; color: #334155; background: white; outline: none;">
+                    <sc-for list="{{ st.inviteRoleOptions }}" as="o" hint-placeholder-count="2"><option value="{{ o.value }}">{{ o.label }}</option></sc-for>
+                  </select>
+                </div>
+              </div>
+              <div style="display: flex; align-items: center; gap: 10px;">
+                <div onClick="{{ h.createUser }}" style="padding: 9px 20px; background: #4f46e5; color: white; font-size: 13px; font-weight: 600; border-radius: 8px; cursor: pointer;" style-hover="background:#4338ca">Create user</div>
+                <sc-if value="{{ st.createUserError }}" hint-placeholder-val="{{ false }}"><span style="font-size: 12px; color: #b91c1c;">{{ st.createUserError }}</span></sc-if>
+              </div>
+            </sc-if>
           </div>
+
+          <!-- PENDING INVITATIONS -->
+          <sc-if value="{{ st.hasInvitations }}" hint-placeholder-val="{{ false }}">
+            <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
+              <div style="padding: 16px 24px; border-bottom: 1px solid #f1f5f9; display: flex; align-items: center; justify-content: space-between;">
+                <h2 style="font-size: 15px; font-weight: 600; margin: 0;">Pending invitations</h2>
+                <span style="font-size: 12px; color: #94a3b8;">Users awaiting acceptance</span>
+              </div>
+              <sc-for list="{{ st.invitationRows }}" as="inv" hint-placeholder-count="2">
+                <div style="display: flex; align-items: center; gap: 14px; padding: 14px 24px; border-top: 1px solid #f8fafc;">
+                  <div style="width: 36px; height: 36px; border-radius: 9999px; background: #f1f5f9; color: #64748b; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 600;">@</div>
+                  <div style="min-width: 0; flex: 1;">
+                    <div style="font-size: 14px; font-weight: 600; color: #0f172a;">{{ inv.email }}</div>
+                    <div style="font-size: 12px; color: #94a3b8;">Invited as {{ inv.role }} by {{ inv.invitedBy }} · {{ inv.expiresAtLabel }}</div>
+                  </div>
+                  <button onClick="{{ inv.resend }}" title="Resend email link" style="display: inline-flex; align-items: center; gap: 5px; padding: 6px 12px; background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; color: #334155; font-size: 12px; font-weight: 600; cursor: pointer;">Resend link</button>
+                  <button onClick="{{ inv.revoke }}" title="Revoke invitation" style="display: inline-flex; align-items: center; gap: 5px; padding: 6px 12px; background: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; color: #dc2626; font-size: 12px; font-weight: 600; cursor: pointer;">Revoke</button>
+                </div>
+              </sc-for>
+            </div>
+          </sc-if>
 
           <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
             <div style="padding: 16px 24px; border-bottom: 1px solid #f1f5f9;"><h2 style="font-size: 15px; font-weight: 600; margin: 0;">Members &amp; roles</h2></div>
@@ -2991,6 +3450,24 @@
         <!-- ========== CONNECTIONS ========== -->
         <sc-if value="{{ st.conn }}" hint-placeholder-val="{{ false }}">
         <div style="display: flex; flex-direction: column; gap: 22px;">
+
+          <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
+            <div style="padding: 16px 24px; border-bottom: 1px solid #f1f5f9;">
+              <h2 style="font-size: 15px; font-weight: 600; margin: 0;">Google Authorization</h2>
+              <p style="font-size: 12px; color: #94a3b8; margin: 4px 0 0;">Manage your Google Search Console and Google Analytics 4 connections.</p>
+            </div>
+            <div style="padding: 24px;">
+              <p style="font-size: 13px; color: #475569; margin: 0 0 12px 0;">
+                Google Search Console and GA4 are required for the dashboard to pull SEO and traffic data. 
+                If a newly added site is not pulling data, ensure the authorized Google Account has access to that property.
+              </p>
+              <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 14px; font-size: 12px; color: #334155;">
+                To authorize a different Google account or refresh tokens, run the following command in your terminal from the project root:<br>
+                <code style="display: block; background: #0f172a; color: #f8fafc; padding: 8px 12px; border-radius: 6px; margin-top: 8px; font-family: monospace;">python pipeline/utils/auth.py --generate-token</code>
+              </div>
+            </div>
+          </div>
+
           <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
             <div style="padding: 16px 24px; border-bottom: 1px solid #f1f5f9;"><h2 style="font-size: 15px; font-weight: 600; margin: 0;">Data pipeline</h2><p style="font-size: 12px; color: #94a3b8; margin: 4px 0 0;">Core sources that feed every dashboard. {{ st.healthLabel }}</p></div>
             <div style="padding: 24px;">
@@ -3293,6 +3770,19 @@
             </div>
           </div>
 
+          <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); padding: 24px;">
+            <h2 style="font-size: 15px; font-weight: 600; margin: 0 0 16px;">Change Password</h2>
+            <div style="display: flex; flex-direction: column; gap: 12px; max-width: 400px;">
+              <input type="password" value="{{ cpwOld }}" onInput="{{ h.cpwOldFn }}" placeholder="Current password" style="width: 100%; box-sizing: border-box; padding: 10px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-family: inherit; font-size: 13.5px; outline: none;">
+              <input type="password" value="{{ cpwNew }}" onInput="{{ h.cpwNewFn }}" placeholder="New password" style="width: 100%; box-sizing: border-box; padding: 10px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-family: inherit; font-size: 13.5px; outline: none;">
+              <input type="password" value="{{ cpwNew2 }}" onInput="{{ h.cpwNew2Fn }}" placeholder="Confirm new password" style="width: 100%; box-sizing: border-box; padding: 10px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-family: inherit; font-size: 13.5px; outline: none;">
+              <div style="display: flex; align-items: center; gap: 12px; margin-top: 4px;">
+                <span onClick="{{ h.cpwSave }}" style="padding: 10px 18px; background: #0f172a; color: white; font-size: 13px; font-weight: 600; border-radius: 8px; cursor: pointer;">{{ cpwBusy ? 'Saving...' : 'Update Password' }}</span>
+                <sc-if value="{{ cpwMsg }}" hint-placeholder-val="{{ false }}"><span style="font-size: 13px; font-weight: 500; color: {{ cpwErr ? '#dc2626' : '#059669' }};">{{ cpwMsg }}</span></sc-if>
+              </div>
+            </div>
+          </div>
+
           <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
             <div style="padding: 16px 24px; border-bottom: 1px solid #f1f5f9;"><h2 style="font-size: 15px; font-weight: 600; margin: 0;">Active sessions</h2></div>
             <sc-for list="{{ st.sessions }}" as="x" hint-placeholder-count="2">
@@ -3519,7 +4009,10 @@ class Component extends DCLogic {
     wsDraft: null, notifDraft: null, aiDraft: null, secDraft: null, dataDraft: null, teamDraft: null,
     syncCfg: null, platConn: null, budgetCap: 75, budgetEnforce: true,
     savedWs: false, savedNotif: false, savedAi: false, savedData: false, savedBudget: false,
-    inviteEmail: '', inviteRole: 'Analyst', newTokenName: ''
+    inviteEmail: '', inviteRole: 'Analyst', newTokenName: '',
+    inviteMode: 'email', inviteStatusMsg: null, inviteErrorMsg: null,
+    acceptInviteToken: null, acceptEmail: '', acceptRole: '', acceptInvitedBy: '', acceptUsername: '', acceptPassword: '', acceptError: null, acceptSuccess: null,
+    cpwOld: '', cpwNew: '', cpwNew2: '', cpwErr: false, cpwMsg: '', cpwBusy: false
   };
 
   /* ---------- constants ---------- */
@@ -3532,8 +4025,20 @@ class Component extends DCLogic {
   componentDidMount() {
     this._alive = true;
     this._onHash = () => {
-      const t = (location.hash || '').slice(1);
-      if (this.VALID.includes(t) && t !== this.state.tab) this.go(t);
+      const raw = (location.hash || '').slice(1);
+      if (raw.startsWith('accept-invite')) {
+        const q = raw.split('?')[1] || '';
+        const params = new URLSearchParams(q);
+        const token = params.get('token');
+        if (token && token !== this.state.acceptInviteToken) {
+          this.setState({ acceptInviteToken: token });
+          this.checkInviteStatus(token);
+        }
+      } else {
+        const t = raw;
+        if (this.state.acceptInviteToken) this.setState({ acceptInviteToken: null });
+        if (this.VALID.includes(t) && t !== this.state.tab) this.go(t);
+      }
     };
     window.addEventListener('hashchange', this._onHash);
     this.installA11y();
@@ -3621,6 +4126,15 @@ class Component extends DCLogic {
     if (base) api.config.baseUrl = base;
     if (this.props.demoLatency === false) { api.config.minLatency = 0; api.config.maxLatency = 0; }
     const hh = (location.hash || '').slice(1);
+    if (hh.startsWith('accept-invite')) {
+      const q = hh.split('?')[1] || '';
+      const params = new URLSearchParams(q);
+      const token = params.get('token');
+      if (token) {
+        this.setState({ acceptInviteToken: token });
+        this.checkInviteStatus(token);
+      }
+    }
     const tab = this.VALID.includes(hh) ? hh : this.state.tab;
     const range = ['7d', '30d', '90d'].includes(this.props.defaultRange) ? this.props.defaultRange : this.state.range;
     let kwLists = [];
@@ -3645,6 +4159,7 @@ class Component extends DCLogic {
     }).catch(() => {});
     this.fetchTab(tab, pid, range, false);
     if (tab !== 'alerts') this.fetchTab('alerts', pid, range, false);
+    fetch('/static/spa/us_cities.json').then(r => r.json()).then(locs => { this.setState({ allUsCities: locs }); }).catch(() => {});
   }
 
   /* ---------- data ---------- */
@@ -3758,7 +4273,11 @@ class Component extends DCLogic {
       .then(p => {
         if (!this._alive) return;
         this.setState(s => ({ projects: s.projects.concat([p]), addSiteBusy: false, addSiteOpen: false, addSiteDomain: '', addSiteName: '' }));
-        this.notify('Added ' + p.domain + ' — fetching data…');
+        if (p.gsc_connected === false) {
+          this.notify('Site added, but not found in Search Console. Please connect account in Settings.');
+        } else {
+          this.notify('Added ' + p.domain + ' — fetching data…');
+        }
         this.setProject(p.id);
         // Auto-start the initial sync that the backend kicked off when creating the site.
         // p.sync_task_id is the task_id returned by POST /api/projects; passing it to
@@ -3767,7 +4286,7 @@ class Component extends DCLogic {
           setTimeout(() => { if (this._alive) this.startSync('all', p.sync_task_id); }, 300);
         }
       })
-      .catch(() => { if (this._alive) this.setState({ addSiteBusy: false, addSiteError: 'Could not add site' }); });
+      .catch(err => { if (this._alive) this.setState({ addSiteBusy: false, addSiteError: err.detail || 'Could not add site' }); });
   }
   setProject(pid) {
     try { localStorage.setItem('fh_selected_project', pid); } catch (e) {}
@@ -3795,10 +4314,11 @@ class Component extends DCLogic {
   startSync(scope, preTaskId) {
     if (this.state.sync.active && (!this.state.sync.projectId || this.state.sync.projectId === this.state.projectId)) return;
     const pid = this.state.projectId;
+    const activeScope = scope || 'all';
 
     const _startPolling = (t) => {
       if (!this._alive) return;
-      this.setState({ sync: { active: true, progress: 0.02, step: (t.steps && t.steps[0]) || 'Starting…', cost: t.est_cost || 0, projectId: pid } });
+      this.setState({ sync: { active: true, scope: activeScope, progress: 0.02, step: (t.steps && t.steps[0]) || 'Starting…', cost: t.est_cost || 0, projectId: pid } });
       this._iv = setInterval(() => {
         window.FuseAPI.get('/api/tasks/' + t.task_id).then(st => {
           if (!this._alive) { clearInterval(this._iv); return; }
@@ -3807,13 +4327,16 @@ class Component extends DCLogic {
             this.setState(s => {
               const cache = {};
               Object.keys(s.cache).forEach(k2 => { if (k2.indexOf(pid + ':') !== 0) cache[k2] = s.cache[k2]; });
-              return { sync: { active: false, progress: 1, step: 'Done', cost: t.est_cost || 0, projectId: null }, freshness: 'Just now', cache };
+              return { sync: { active: false, scope: null, progress: 1, step: 'Done', cost: t.est_cost || 0, projectId: null }, freshness: 'Just now', cache };
             });
             this.fetchTab(this.state.tab, pid, this.state.range, true);
             if (this.state.tab !== 'alerts') this.fetchTab('alerts', pid, this.state.range, false);
-            this.notify(scope === 'audit' ? 'Crawl complete — Site Audit refreshed' : 'Sync complete — all data refreshed');
+            const proj = this.state.projects.find(p => p.id === pid) || {};
+            const dom = proj.domain || pid;
+            const scopeNotif = { audit: 'Crawl complete — Site Audit refreshed for ' + dom, positions: 'Positioning data refreshed for ' + dom, positioning: 'Positioning data refreshed for ' + dom, keywords: 'Keywords data refreshed for ' + dom, backlinks: 'Backlinks data refreshed for ' + dom, ads: 'Ads data refreshed for ' + dom, ai: 'AI Optimization data refreshed for ' + dom, overview: 'Overview data refreshed for ' + dom, seo: 'SEO data refreshed for ' + dom };
+            this.notify(scopeNotif[activeScope] || (activeScope === 'all' ? ('All modules refreshed for ' + dom) : (activeScope + ' refreshed for ' + dom)));
           } else {
-            this.setState({ sync: { active: true, progress: st.progress, step: st.step, cost: t.est_cost || 0, projectId: pid } });
+            this.setState({ sync: { active: true, scope: activeScope, progress: st.progress, step: st.step, cost: t.est_cost || 0, projectId: pid } });
           }
         }).catch(() => {});
       }, 500);
@@ -3825,9 +4348,9 @@ class Component extends DCLogic {
       return;
     }
 
-    window.FuseAPI.post('/api/projects/' + pid + '/sync', { scope })
+    window.FuseAPI.post('/api/projects/' + pid + '/sync', { scope: activeScope })
       .then(t => { _startPolling(t); })
-      .catch(() => {});
+      .catch(err => { if (this._alive) this.notify(err.detail || 'Could not start sync'); });
   }
 
   /* ---------- keyword explorer ---------- */
@@ -3857,9 +4380,9 @@ class Component extends DCLogic {
     if (s.resVolMin > 0) rows = rows.filter(r => r.volume >= s.resVolMin);
     if (s.resKdMin > 0 || s.resKdMax < 100) rows = rows.filter(r => r.kd >= s.resKdMin && r.kd <= s.resKdMax);
     if (s.resIntents.length) rows = rows.filter(r => s.resIntents.includes(r.intent));
-    if (s.resIncl.trim()) { const t = s.resIncl.toLowerCase().split(',').map(x => x.trim()).filter(Boolean); rows = rows.filter(r => t.every(x => r.kw.indexOf(x) >= 0)); }
-    if (s.resExcl.trim()) { const t = s.resExcl.toLowerCase().split(',').map(x => x.trim()).filter(Boolean); rows = rows.filter(r => !t.some(x => r.kw.indexOf(x) >= 0)); }
-    if (!skipGroup && s.resGroup) rows = rows.filter(r => (' ' + r.kw + ' ').indexOf(' ' + s.resGroup + ' ') >= 0 || r.kw.indexOf(s.resGroup) >= 0);
+    if (s.resIncl.trim()) { const t = s.resIncl.toLowerCase().split(',').map(x => x.trim()).filter(Boolean); rows = rows.filter(r => t.every(x => (r.kw || '').toLowerCase().indexOf(x) >= 0)); }
+    if (s.resExcl.trim()) { const t = s.resExcl.toLowerCase().split(',').map(x => x.trim()).filter(Boolean); rows = rows.filter(r => !t.some(x => (r.kw || '').toLowerCase().indexOf(x) >= 0)); }
+    if (!skipGroup && s.resGroup) { const grp = (s.resGroup || '').toLowerCase(); rows = rows.filter(r => { const kw = (r.kw || '').toLowerCase(); return (' ' + kw + ' ').indexOf(' ' + grp + ' ') >= 0 || kw.indexOf(grp) >= 0; }); }
     return rows;
   }
 
@@ -3898,9 +4421,10 @@ class Component extends DCLogic {
   // add a batch of keywords to a project's tracking (Position Tracking)
   sendKwsToTracking(pid, rows) {
     if (!rows.length) return;
-    Promise.all(rows.map(r =>
-      window.FuseAPI.post('/api/projects/' + pid + '/keywords', { kw: r.kw, volume: r.volume, kd: r.kd, cpc: r.cpc, intent: r.intent }).catch(() => {})
-    )).then(() => {
+    const payload = {
+      keywords: rows.map(r => ({ kw: r.kw, volume: r.volume, kd: r.kd, cpc: r.cpc, intent: r.intent }))
+    };
+    window.FuseAPI.post('/api/projects/' + pid + '/keywords', payload).catch(() => {}).then(() => {
       if (!this._alive) return;
       this.setState(s => {
         const trackSet = new Set(rows.map(r => r.kw));
@@ -3918,6 +4442,7 @@ class Component extends DCLogic {
       if (['keywords', 'positioning', 'overview'].includes(this.state.tab)) {
         this.fetchTab(this.state.tab, pid, this.state.range, true);
       }
+      window.FuseAPI.get('/api/projects').then(ps => { if (this._alive) this.setState({ projects: ps }); }).catch(() => {});
       const proj = (this.state.projects.find(p => p.id === pid) || {}).domain || 'project';
       this.notify(rows.length + ' keyword' + (rows.length === 1 ? '' : 's') + ' sent to Position Tracking · ' + proj);
     });
@@ -4207,6 +4732,101 @@ class Component extends DCLogic {
     this.putSettings({ budgetEnforce: v }, v ? 'Soft cap enabled' : 'Soft cap disabled');
   }
   setInviteRole(r) { this.setState({ inviteRole: r }); }
+  setInviteMode(m) {
+    this.setState({ inviteMode: m, createUserError: null, inviteErrorMsg: null, inviteStatusMsg: null });
+  }
+  sendInvite() {
+    const email = (this.state.inviteEmail || '').trim();
+    const role = this.state.inviteRole || 'Analyst';
+    if (!email || email.indexOf('@') < 0) { this.setState({ inviteErrorMsg: 'Enter a valid email address.' }); return; }
+    this.setState({ inviteErrorMsg: null, inviteStatusMsg: 'Sending invitation...' });
+    const pid = this.state.projectId;
+    window.FuseAPI.post('/api/projects/' + pid + '/invite', { email, role })
+      .then(res => {
+        if (!this._alive) return;
+        this.setState({ inviteEmail: '', inviteErrorMsg: null, inviteStatusMsg: 'Invitation sent to ' + email });
+        this.notify('Invitation sent to ' + email);
+        this.invalidateSettingsCacheAndReload(pid);
+      })
+      .catch(err => {
+        const msg = (err && (err.detail || err.message)) || 'Could not send invitation. Check permissions.';
+        this.setState({ inviteErrorMsg: msg, inviteStatusMsg: null });
+      });
+  }
+  resendInvite(inviteId) {
+    const pid = this.state.projectId;
+    window.FuseAPI.post('/api/projects/' + pid + '/invite/' + inviteId + '/resend', {})
+      .then(res => {
+        if (!this._alive) return;
+        this.notify('Invitation reminder sent!');
+        this.invalidateSettingsCacheAndReload(pid);
+      })
+      .catch(err => {
+        const msg = (err && (err.detail || err.message)) || 'Could not resend invitation.';
+        this.notify(msg);
+      });
+  }
+  revokeInvite(inviteId) {
+    if (!window.confirm('Revoke this pending invitation?')) return;
+    const pid = this.state.projectId;
+    window.FuseAPI.del('/api/projects/' + pid + '/invite/' + inviteId)
+      .then(() => {
+        if (!this._alive) return;
+        this.notify('Invitation revoked.');
+        this.invalidateSettingsCacheAndReload(pid);
+      })
+      .catch(err => {
+        const msg = (err && (err.detail || err.message)) || 'Could not revoke invitation.';
+        this.notify(msg);
+      });
+  }
+  invalidateSettingsCacheAndReload(pid) {
+    this.setState(s => {
+      const cache = {};
+      Object.keys(s.cache).forEach(k => { if (k.indexOf(pid + ':settings') !== 0) cache[k] = s.cache[k]; });
+      return { cache, setFor: null };
+    });
+    this.fetchTab('settings', pid, this.state.range, true);
+  }
+  checkInviteStatus(token) {
+    this.setState({ acceptError: null, acceptSuccess: null, acceptEmail: '', acceptRole: '' });
+    window.FuseAPI.get('/api/auth/invite-status?token=' + encodeURIComponent(token))
+      .then(res => {
+        if (!this._alive) return;
+        if (res.valid) {
+          this.setState({ acceptEmail: res.email, acceptRole: res.role, acceptInvitedBy: res.invited_by });
+        } else {
+          this.setState({ acceptError: 'This invitation link is no longer valid (' + (res.reason || 'expired') + ').' });
+        }
+      })
+      .catch(err => {
+        if (!this._alive) return;
+        const msg = (err && (err.detail || err.message)) || 'Could not verify invitation link. It may have expired or already been accepted.';
+        this.setState({ acceptError: msg });
+      });
+  }
+  submitAcceptInvite() {
+    const token = this.state.acceptInviteToken;
+    const username = (this.state.acceptUsername || '').trim();
+    const password = (this.state.acceptPassword || '').trim();
+    if (!username) { this.setState({ acceptError: 'Please enter a username.' }); return; }
+    if (password.length < 8) { this.setState({ acceptError: 'Password must be at least 8 characters long.' }); return; }
+    this.setState({ acceptError: null });
+    window.FuseAPI.post('/api/auth/accept-invite', { token, username, password })
+      .then(res => {
+        if (!this._alive) return;
+        this.setState({ acceptSuccess: true, acceptInviteToken: null });
+        this.notify('Account activated successfully! You can now log in.');
+        setTimeout(() => {
+          window.location.hash = '#/overview';
+        }, 2000);
+      })
+      .catch(err => {
+        if (!this._alive) return;
+        const msg = (err && (err.detail || err.message)) || 'Could not accept invitation.';
+        this.setState({ acceptError: msg });
+      });
+  }
   createUser() {
     const email = (this.state.inviteEmail || '').trim();
     const username = (this.state.inviteUsername || '').trim();
@@ -4287,6 +4907,25 @@ class Component extends DCLogic {
     this.setState({ secDraft: sec, newTokenName: '' });
     this.putSettings({ security: sec }, 'API token created — copy it now');
   }
+  changePassword() {
+    const s = this.state;
+    if (s.cpwBusy) return;
+    if (!s.cpwOld) { this.setState({ cpwErr: true, cpwMsg: 'Current password is required.' }); return; }
+    if (s.cpwNew.length < 8) { this.setState({ cpwErr: true, cpwMsg: 'New password must be at least 8 characters.' }); return; }
+    if (s.cpwNew !== s.cpwNew2) { this.setState({ cpwErr: true, cpwMsg: 'New passwords do not match.' }); return; }
+    this.setState({ cpwBusy: true, cpwErr: false, cpwMsg: '' });
+    window.FuseAPI.post('/api/auth/password', { old_password: s.cpwOld, new_password: s.cpwNew })
+      .then(res => {
+        if (!this._alive) return;
+        this.setState({ cpwBusy: false, cpwOld: '', cpwNew: '', cpwNew2: '', cpwErr: false, cpwMsg: 'Password updated successfully.' });
+        setTimeout(() => { if (this._alive) this.setState({ cpwMsg: '' }); }, 3000);
+      })
+      .catch(err => {
+        if (!this._alive) return;
+        this.setState({ cpwBusy: false, cpwErr: true, cpwMsg: err.detail || 'Failed to update password.' });
+      });
+  }
+
   setSettingsSub(sub) { this.setState({ settingsSub: sub }); }
 
   /* ---------- csv ---------- */
@@ -4505,6 +5144,9 @@ class Component extends DCLogic {
     const rBase = { padding: '6px 12px', color: '#64748b', cursor: 'pointer' };
     const rActive = { padding: '6px 12px', background: '#f1f5f9', color: '#1e293b', fontWeight: 500, cursor: 'pointer' };
     const syncing = s.sync.active && (!s.sync.projectId || s.sync.projectId === s.projectId);
+    const activeScope = syncing ? (s.sync.scope || 'all') : null;
+    const isPageSyncing = syncing && activeScope && activeScope !== 'all';
+    const isAllSyncing = syncing && activeScope === 'all';
 
     const tabToScope = {
       overview: 'overview',
@@ -4672,12 +5314,33 @@ class Component extends DCLogic {
       createToken: () => this.createToken(),
       blGoAnchors: () => { this.setState({ blTab: 'anchors' }); this.pushNav({ blTab: 'anchors' }); },
       blGoRefDomains: () => { this.setState({ blTab: 'refdomains' }); this.pushNav({ blTab: 'refdomains' }); },
-      blToggleGap: () => this.setState(st => ({ gapOnly: !st.gapOnly }))
+      blToggleGap: () => this.setState(st => ({ gapOnly: !st.gapOnly })),
+      setInviteModeEmail: () => this.setInviteMode('email'),
+      setInviteModeDirect: () => this.setInviteMode('direct'),
+      sendInvite: () => this.sendInvite(),
+      acceptUsernameInput: e => this.setState({ acceptUsername: e.target.value }),
+      acceptPasswordInput: e => this.setState({ acceptPassword: e.target.value }),
+      submitAcceptInvite: () => this.submitAcceptInvite(),
+      cpwOldFn: e => this.setState({ cpwOld: e.target.value }),
+      cpwNewFn: e => this.setState({ cpwNew: e.target.value }),
+      cpwNew2Fn: e => this.setState({ cpwNew2: e.target.value }),
+      cpwSave: () => this.changePassword()
     };
 
     const uCfg = (window.FuseAPI && window.FuseAPI.config && window.FuseAPI.config.user) || { username: 'founder', initials: 'FO', role: 'Internal' };
     const canManageSettings = uCfg.role !== 'Analyst';
     const vals = {
+      cpwOld: s.cpwOld, cpwNew: s.cpwNew, cpwNew2: s.cpwNew2, cpwErr: s.cpwErr, cpwMsg: s.cpwMsg, cpwBusy: s.cpwBusy,
+      acceptInvite: s.acceptInviteToken ? {
+        token: s.acceptInviteToken,
+        email: s.acceptEmail || 'Loading...',
+        role: s.acceptRole || '',
+        invitedBy: s.acceptInvitedBy || 'Owner',
+        username: s.acceptUsername || '',
+        password: s.acceptPassword || '',
+        error: s.acceptError || null,
+        success: s.acceptSuccess || null
+      } : null,
       userInitials: uCfg.initials, userName: uCfg.username, userRole: uCfg.role, canManageSettings,
       brandName: project.name || 'FuseHealth',
       projectDomain: project.domain || '',
@@ -4691,13 +5354,14 @@ class Component extends DCLogic {
       addSiteOpen: s.addSiteOpen, addSiteDomain: s.addSiteDomain, addSiteName: s.addSiteName, addSiteError: s.addSiteError,
       rangeStyle: { d7: s.range === '7d' ? rActive : rBase, d30: s.range === '30d' ? rActive : rBase, d90: s.range === '90d' ? rActive : rBase },
       hasPageRefresh: !!pageScope,
-      refreshPageLabel: syncing ? 'Syncing…' : (tabToLabel[tab] || 'Fetch page'),
-      refreshPageBtnStyle: { display: 'inline-flex', alignItems: 'center', gap: '8px', borderRadius: '8px', background: syncing ? '#6ee7b7' : '#10b981', color: 'white', fontSize: '14px', fontWeight: 500, padding: '8px 16px', boxShadow: '0 1px 2px rgba(0,0,0,0.05)', cursor: syncing ? 'default' : 'pointer' },
-      refreshLabel: syncing ? 'Syncing…' : 'Refresh all',
-      refreshBtnStyle: { display: 'inline-flex', alignItems: 'center', gap: '8px', borderRadius: '8px', background: syncing ? '#818cf8' : '#4f46e5', color: 'white', fontSize: '14px', fontWeight: 500, padding: '8px 16px', boxShadow: '0 1px 2px rgba(0,0,0,0.05)', cursor: syncing ? 'default' : 'pointer' },
-      refreshIconStyle: syncing ? { animation: 'fuseSpin 1s linear infinite' } : {},
+      refreshPageLabel: isPageSyncing ? 'Syncing…' : (tabToLabel[tab] || 'Fetch page'),
+      refreshPageBtnStyle: { display: 'inline-flex', alignItems: 'center', gap: '8px', borderRadius: '8px', background: isPageSyncing ? '#6ee7b7' : '#10b981', color: 'white', fontSize: '14px', fontWeight: 500, padding: '8px 16px', boxShadow: '0 1px 2px rgba(0,0,0,0.05)', cursor: isPageSyncing ? 'default' : 'pointer' },
+      refreshPageIconStyle: isPageSyncing ? { animation: 'fuseSpin 1s linear infinite' } : {},
+      refreshLabel: isAllSyncing ? 'Syncing all…' : 'Refresh all',
+      refreshBtnStyle: { display: 'inline-flex', alignItems: 'center', gap: '8px', borderRadius: '8px', background: isAllSyncing ? '#818cf8' : '#4f46e5', color: 'white', fontSize: '14px', fontWeight: 500, padding: '8px 16px', boxShadow: '0 1px 2px rgba(0,0,0,0.05)', cursor: isAllSyncing ? 'default' : 'pointer' },
+      refreshIconStyle: isAllSyncing ? { animation: 'fuseSpin 1s linear infinite' } : {},
       freshness: s.freshness,
-      syncing, syncStep: s.sync.step, syncPct: Math.round(s.sync.progress * 100),
+      syncing, syncScopeLabel: activeScope === 'all' ? 'all modules' : (tabToLabel[tab] || activeScope || '').replace('Fetch ', ''), syncStep: s.sync.step, syncPct: Math.round(s.sync.progress * 100),
       syncPctText: Math.round(s.sync.progress * 100) + '%', syncCostText: this.money(s.sync.cost),
       hasError: !!s.error && !s.loading, errorText: s.error || '',
       loading: s.loading && !s.error,
@@ -4723,6 +5387,7 @@ class Component extends DCLogic {
       pd: { show: false },
       auSort: { score: this.mkSortHandler('auPgSort', 'score'), issues: this.mkSortHandler('auPgSort', 'issues'), depth: this.mkSortHandler('auPgSort', 'depth'), inLinks: this.mkSortHandler('auPgSort', 'inLinks'), loadTimeMs: this.mkSortHandler('auPgSort', 'loadTimeMs') },
       auArrow: { score: this.arrow(s.auPgSort, 'score'), issues: this.arrow(s.auPgSort, 'issues'), depth: this.arrow(s.auPgSort, 'depth'), inLinks: this.arrow(s.auPgSort, 'inLinks'), loadTimeMs: this.arrow(s.auPgSort, 'loadTimeMs') },
+      ptView: s.ptView || 'list', ptSearch: s.ptSearch || '', ptFilter: s.ptFilter || 'all', ptWizOpen: !!s.ptWizOpen, ptWizStep: s.ptWizStep || 1, ptWizDomain: s.ptWizDomain || '', ptWizName: s.ptWizName || '', ptWizEngine: s.ptWizEngine || 'Google', ptWizLang: s.ptWizLang || 'English', ptWizLoc: s.ptWizLoc || 'United States', ptWizDevice: s.ptWizDevice || 'Desktop', ptWizKwMode: s.ptWizKwMode || 'paste', ptWizKwText: s.ptWizKwText || '', ptWizListId: s.ptWizListId || null, ptWizComps: s.ptWizComps || [], ptWizCompInput: s.ptWizCompInput || '', ptWizBusy: !!s.ptWizBusy,
       toast: s.toast
     };
 
@@ -5039,9 +5704,237 @@ class Component extends DCLogic {
     /* ============ POSITIONING ============ */
     if (tab === 'positioning') {
       vals.showPositioning = true;
-      const ptSetup = !data || !data.kpis || data.kpis.state === 'setup' || (data.kpis.tracked === 0 && (!data.movers || !data.movers.length) && (!data.competitors || !data.competitors.rows || !data.competitors.rows.length));
+      vals.ptIsList = s.ptView !== 'workspace';
+      vals.ptIsWorkspace = s.ptView === 'workspace';
+      vals.ptWizOpen = s.ptWizOpen;
+      vals.ptEditOpen = s.ptEditOpen;
+      vals.ptEditBusy = s.ptEditBusy;
+      vals.ptEditKws = s.ptEditKws || '';
+      vals.ptEditKwsFn = e => this.setState({ ptEditKws: e.target.value });
+      vals.ptEditDomain = s.ptEditDomain || '';
+      vals.ptEditName = s.ptEditName || '';
+      vals.ptEditNameFn = e => this.setState({ ptEditName: e.target.value });
+      vals.ptEditEngine = s.ptEditEngine || 'Google';
+      vals.ptEditEngineFn = e => this.setState({ ptEditEngine: e.target.value });
+      vals.ptEditDevice = s.ptEditDevice || 'Desktop';
+      vals.ptEditDeviceFn = e => this.setState({ ptEditDevice: e.target.value });
+      vals.ptEditLang = s.ptEditLang || 'English';
+      vals.ptEditLangFn = e => this.setState({ ptEditLang: e.target.value });
+      vals.ptEditLoc = s.ptEditLoc || 'United States';
+      vals.ptEditLocFn = e => this.setState({ ptEditLoc: e.target.value });
+      vals.ptEditClose = () => this.setState({ ptEditOpen: false, ptEditBusy: false });
+      vals.ptEditSave = () => {
+        if (s.ptEditBusy) return;
+        this.setState({ ptEditBusy: true });
+        const kwLines = (s.ptEditKws || '').split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+        const kwsToSend = kwLines.map(kw => ({ kw: kw, volume: 0, kd: null, cpc: null, intent: 'Informational' }));
+        const comps = s.ptWizComps || [];
+        
+        Promise.all([
+          window.FuseAPI.put('/api/projects/' + s.projectId + '/settings', { project: { competitors: comps, name: s.ptEditName, location: s.ptEditLoc } }).catch(() => {}),
+          window.FuseAPI.put('/api/projects/' + s.projectId + '/keywords', { keywords: kwsToSend }).catch(() => {})
+        ]).then(() => {
+          this.setState({ ptEditBusy: false, ptEditOpen: false });
+          this.startSync('positions');
+          if (this.notify) this.notify('Project updated. Refreshing positions...');
+        });
+      };
+
+      /* ---- global handlers exposed for template holes ---- */
+      vals.ptNewProject = () => this.setState({ ptWizOpen: true, ptWizStep: 1, ptWizDomain: '', ptWizName: '', ptWizEngine: 'Google', ptWizLang: 'English', ptWizLoc: 'United States', ptWizDevice: 'Desktop', ptWizKwMode: 'paste', ptWizKwText: '', ptWizListId: (s.kwLists && s.kwLists[0] && s.kwLists[0].id) || null, ptWizComps: [], ptWizCompInput: '' });
+      vals.ptCreateAndSend = () => {
+        const rows = this.selectedRows();
+        this._pendingSendRows = rows;
+        const kwLines = rows.map(r => r.kw).join('\n');
+        this.setState({
+          ptWizOpen: true, ptWizStep: 1, ptWizDomain: '', ptWizName: '', ptWizEngine: 'Google', ptWizLang: 'English', ptWizLoc: 'United States', ptWizDevice: 'Desktop', ptWizKwMode: 'paste', ptWizKwText: kwLines, ptWizComps: [], ptWizCompInput: '', sendOpen: false, sendSub: null
+        });
+      };
+      vals.ptSearchFn = (e) => this.setState({ ptSearch: e.target.value });
+      vals.ptBackToList = () => this.setState({ ptView: 'list' });
+      vals.ptWizClose = () => this.setState({ ptWizOpen: false });
+      vals.ptWizPrev = () => this.setState(st => ({ ptWizStep: Math.max(1, st.ptWizStep - 1) }));
+      vals.ptWizFieldDomain = (e) => this.setState({ ptWizDomain: e.target.value });
+      vals.ptWizFieldName = (e) => this.setState({ ptWizName: e.target.value });
+      vals.ptWizFieldEngine = (e) => this.setState({ ptWizEngine: e.target.value });
+      vals.ptWizFieldLang = (e) => this.setState({ ptWizLang: e.target.value });
+      vals.ptWizFieldLoc = (e) => this.setState({ ptWizLoc: e.target.value });
+      vals.ptWizFieldDevice = (e) => this.setState({ ptWizDevice: e.target.value });
+      vals.ptWizFieldKwText = (e) => this.setState({ ptWizKwText: e.target.value });
+      vals.ptWizModePaste = () => this.setState({ ptWizKwMode: 'paste' });
+      vals.ptWizModeList = () => this.setState({ ptWizKwMode: 'list' });
+      vals.ptWizCompInputFn = (e) => this.setState({ ptWizCompInput: e.target.value });
+      vals.ptWizCompAddFn = () => {
+        const v = (this.state.ptWizCompInput || '').trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/$/, '');
+        if (!v) return;
+        this.setState(st => (st.ptWizComps.includes(v) || st.ptWizComps.length >= 5) ? { ptWizCompInput: '' } : { ptWizComps: st.ptWizComps.concat([v]), ptWizCompInput: '' });
+      };
+      vals.ptWizCompKeyFn = (e) => { if (e.key === 'Enter') vals.ptWizCompAddFn(); };
+
+
+      vals.ptWizFinish = () => {
+        const domainStr = (this.state.ptWizDomain || '').trim();
+        const domain = domainStr.toLowerCase().replace(/^https?:\/\//, '').replace(/\/$/, '');
+        if (!domain) { this.setState({ ptWizStep: 1 }); return; }
+        
+        if (this.state.projects.some(p => p.domain === domain)) {
+          this.setState({ ptWizBusy: false, ptWizOpen: false });
+          if (this.notify) this.notify('That site is already added to Position Tracking');
+          return;
+        }
+
+        this.setState({ ptWizBusy: true });
+        window.FuseAPI.post('/api/projects', { domain: domainStr, name: (this.state.ptWizName || '').trim() || undefined, location: this.state.ptWizLoc })
+          .then(p => {
+            if (!this._alive) return;
+            this.setState({ ptWizBusy: false, ptWizOpen: false, ptView: 'workspace', ptTab: 'landscape', projectId: p.id });
+            
+            // Save competitors
+            if (this.state.ptWizComps && this.state.ptWizComps.length > 0) {
+              window.FuseAPI.put('/api/projects/' + p.id + '/settings', { action: 'targets', competitors: this.state.ptWizComps }).catch(() => {});
+            }
+
+            let kwsToSend = [];
+            if (this._pendingSendRows && this._pendingSendRows.length) {
+              kwsToSend = this._pendingSendRows;
+              this._pendingSendRows = null;
+            } else if (this.state.ptWizKwText && this.state.ptWizKwText.trim()) {
+              const lines = this.state.ptWizKwText.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+              kwsToSend = lines.map(kw => ({ kw: kw, volume: 0, kd: null, cpc: null, intent: 'Informational' }));
+            }
+            if (kwsToSend.length > 0) {
+              this.sendKwsToTracking(p.id, kwsToSend);
+            } else {
+              window.FuseAPI.get('/api/projects').then(ps => { if (this._alive) this.setState({ projects: ps }); }).catch(() => {});
+              this.fetchTab('positioning', p.id, this.state.range, true);
+              if (this.notify) this.notify('SEO project created for ' + p.domain);
+            }
+          })
+          .catch(err => { if (this._alive) { this.setState({ ptWizBusy: false }); if (this.notify) this.notify(err.detail || 'Could not create project'); } });
+      };
+      vals.ptWizNext = () => { if (this.state.ptWizStep >= 4) { vals.ptWizFinish(); } else { this.setState(st => ({ ptWizStep: Math.min(4, st.ptWizStep + 1) })); } };
+
+      /* ---- projects list ---- */
+      const searchVal = (s.ptSearch || '').trim().toLowerCase();
+      vals.ptSearchVal = s.ptSearch || '';
+      const mkFilter = (val, label) => { const active = (s.ptFilter || 'all') === val; return { label, onClick: () => this.setState({ ptFilter: val }), style: { padding: '8px 14px', cursor: 'pointer', fontSize: '13px', background: active ? '#eef2ff' : 'white', color: active ? '#4338ca' : '#64748b', fontWeight: active ? 600 : 400, borderLeft: val === 'all' ? 'none' : '1px solid #e2e8f0' } }; };
+      vals.ptFilters = [mkFilter('all', 'All projects')];
+      const projList = (s.projects || []).filter(p => !searchVal || (p.domain + ' ' + (p.name || '')).toLowerCase().includes(searchVal));
+      const listCols = 'minmax(200px,2fr) 150px 90px 80px 80px 120px';
+      vals.ptListGridCols = listCols;
+      vals.ptProjects = projList.map(p => {
+        const isCur = p.id === s.projectId;
+        const tracked = p.tracked_keywords_count || 0;
+        const avgPos = p.avg_position || 0;
+        const vis = avgPos > 0 ? Math.min(100, Math.max(5, Math.round((100 - avgPos) / 1.2))) : (tracked > 0 ? 50 : 0);
+        const improved = p.improved_count || 0;
+        const declined = p.declined_count || 0;
+        const visColor = vis >= 45 ? '#059669' : vis >= 25 ? '#0891b2' : '#d97706';
+        return {
+          id: p.id, name: p.name || p.domain, domain: p.domain, location: p.location || 'United States', device: 'Desktop',
+          tracked: this.fmt(tracked), improved, declined,
+          visLabel: vis + '%', visColor,
+          visBarStyle: { width: vis + '%', height: '100%', background: visColor, borderRadius: '4px' },
+          updated: p.last_updated || 'No sync yet',
+          isCurrent: isCur,
+          rowStyle: { display: 'grid', gridTemplateColumns: listCols, alignItems: 'center', padding: '14px 20px', borderTop: '1px solid #f1f5f9', cursor: 'pointer', background: isCur ? '#fafaff' : 'white' },
+          onOpen: () => {
+            this.setState({ ptView: 'workspace', projectId: p.id });
+            this.fetchTab('positioning', p.id, this.state.range, true);
+          }
+        };
+      });
+      vals.ptNoProjects = vals.ptProjects.length === 0;
+
+      /* ---- wizard ---- */
+      const lists = s.kwLists || [];
+      const wizComps = s.ptWizComps || [];
+      const wizSteps = ['Site', 'Tracking area', 'Keywords', 'Competitors'];
+      const segStyleFn = (on) => ({ flex: 1, textAlign: 'center', padding: '8px', fontSize: '13px', fontWeight: 500, borderRadius: '6px', cursor: 'pointer', background: on ? '#ffffff' : 'transparent', color: on ? '#4338ca' : '#64748b', boxShadow: on ? '0 1px 2px rgba(0,0,0,0.06)' : 'none' });
+      vals.ptWiz = {
+        stepItems: wizSteps.map((nm, i2) => { const n = i2 + 1; const st2 = n < s.ptWizStep ? 'done' : n === s.ptWizStep ? 'active' : 'todo'; return { label: nm, n, circleStyle: { width: '26px', height: '26px', borderRadius: '9999px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', fontWeight: 600, background: st2 === 'todo' ? '#f1f5f9' : '#4f46e5', color: st2 === 'todo' ? '#94a3b8' : 'white', flexShrink: 0 }, labelStyle: { fontSize: '13px', fontWeight: st2 === 'active' ? 600 : 400, color: st2 === 'todo' ? '#94a3b8' : '#334155', whiteSpace: 'nowrap' } }; }),
+        isStep1: s.ptWizStep === 1, isStep2: s.ptWizStep === 2, isStep3: s.ptWizStep === 3, isStep4: s.ptWizStep === 4,
+        domain: s.ptWizDomain, name: s.ptWizName,
+        engine: s.ptWizEngine, language: s.ptWizLang, location: s.ptWizLoc, device: s.ptWizDevice,
+        engineOpts: ['Google', 'Bing'], langOpts: ['English', 'Spanish', 'French'], 
+        locOpts: s.allUsCities ? (s.ptWizLoc ? s.allUsCities.filter(c => c.toLowerCase().includes(s.ptWizLoc.toLowerCase())).slice(0, 100) : ['United States', 'Canada', 'United Kingdom', 'Australia'].concat(s.allUsCities.slice(0, 96))) : [
+          'United States', 'Canada', 'United Kingdom', 'Australia',
+          'United States - Alabama', 'United States - Alaska', 'United States - Arizona', 'United States - Arkansas', 'United States - California', 'United States - Colorado', 'United States - Connecticut', 'United States - Delaware', 'United States - Florida', 'United States - Georgia', 'United States - Hawaii', 'United States - Idaho', 'United States - Illinois', 'United States - Indiana', 'United States - Iowa', 'United States - Kansas', 'United States - Kentucky', 'United States - Louisiana', 'United States - Maine', 'United States - Maryland', 'United States - Massachusetts', 'United States - Michigan', 'United States - Minnesota', 'United States - Mississippi', 'United States - Missouri', 'United States - Montana', 'United States - Nebraska', 'United States - Nevada', 'United States - New Hampshire', 'United States - New Jersey', 'United States - New Mexico', 'United States - New York', 'United States - North Carolina', 'United States - North Dakota', 'United States - Ohio', 'United States - Oklahoma', 'United States - Oregon', 'United States - Pennsylvania', 'United States - Rhode Island', 'United States - South Carolina', 'United States - South Dakota', 'United States - Tennessee', 'United States - Texas', 'United States - Utah', 'United States - Vermont', 'United States - Virginia', 'United States - Washington', 'United States - West Virginia', 'United States - Wisconsin', 'United States - Wyoming'
+        ],
+        deviceOpts: ['Desktop', 'Mobile'],
+        kwMode: s.ptWizKwMode, kwPaste: s.ptWizKwMode === 'paste', kwList: s.ptWizKwMode === 'list',
+        kwText: s.ptWizKwText, kwCount: (s.ptWizKwText || '').split(',').map(x => x.trim()).filter(Boolean).length,
+        pasteTabStyle: segStyleFn(s.ptWizKwMode === 'paste'), listTabStyle: segStyleFn(s.ptWizKwMode === 'list'),
+        lists: lists.map(l => { const active = s.ptWizListId === l.id; return { name: l.name, count: (l.keywords ? l.keywords.length : 0) + ' keywords', rowStyle: { display: 'flex', alignItems: 'center', gap: '10px', padding: '12px 14px', borderRadius: '8px', cursor: 'pointer', border: '1px solid ' + (active ? '#c7d2fe' : '#e2e8f0'), background: active ? '#eef2ff' : 'white' }, dotStyle: active ? { width: '16px', height: '16px', borderRadius: '9999px', border: '5px solid #4f46e5', boxSizing: 'border-box', flexShrink: 0 } : { width: '16px', height: '16px', borderRadius: '9999px', border: '1px solid #cbd5e1', boxSizing: 'border-box', flexShrink: 0 }, onPick: () => this.setState({ ptWizListId: l.id }) }; }),
+        comps: wizComps.map(d => ({ domain: d, onRemove: () => this.setState(st => ({ ptWizComps: st.ptWizComps.filter(x => x !== d) })) })),
+        compInput: s.ptWizCompInput, compNote: wizComps.length + ' of 5 competitors',
+        canBack: s.ptWizStep > 1, noBack: s.ptWizStep <= 1,
+        nextLabel: s.ptWizStep === 4 ? (s.ptWizBusy ? 'Creating…' : 'Create project') : 'Continue'
+      };
+
+      if (vals.ptIsWorkspace) {
+        const proj = (s.projects || []).find(p => p.id === s.projectId) || {};
+        const activeTab = s.ptWsTab || s.ptTab || 'landscape';
+        const wsTabDef = [['landscape', 'Landscape', false], ['overview', 'Overview', false], ['pages', 'Pages', false]];
+        vals.ptWs = {
+          name: proj.name || proj.domain || 'Project',
+          domain: proj.domain || '',
+          device: 'Desktop',
+          location: proj.location || 'United States',
+          onEdit: () => {
+            this.setState({ 
+              ptEditOpen: true, ptEditBusy: false, ptEditKws: '', ptWizComps: [], ptWizCompInput: '',
+              ptEditDomain: proj.domain || '',
+              ptEditName: proj.name || '',
+              ptEditEngine: 'Google',
+              ptEditDevice: 'Desktop',
+              ptEditLang: 'English',
+              ptEditLoc: proj.location || 'United States'
+            });
+            window.FuseAPI.get('/api/projects/' + proj.id + '/settings').then(res => {
+              if (this.state.ptEditOpen && res && res.project) {
+                this.setState({
+                  ptEditKws: (res.project.tracked_keywords || []).join('\n'),
+                  ptWizComps: (res.project.competitors || [])
+                });
+              }
+            }).catch(() => {});
+          },
+          onDelete: () => {
+            if (confirm('Are you sure you want to delete this project?')) {
+              window.FuseAPI.delete('/api/projects/' + proj.id).then(() => {
+                this.setState({ ptView: 'list', projectId: null });
+                window.FuseAPI.get('/api/projects').then(ps => this.setState({ projects: ps })).catch(() => {});
+              }).catch(err => { if (this.notify) this.notify(err.detail || 'Could not delete project'); });
+            }
+          },
+          onRefresh: () => this.startSync('positions'),
+          snapshotRange: 'Last 30 days',
+          tabs: wsTabDef.map(([k, label, soon]) => {
+            const active = activeTab === k;
+            return {
+              label: label + (soon ? ' · soon' : ''),
+              onClick: soon ? (() => {}) : (() => this.setState({ ptWsTab: k, ptTab: k })),
+              style: { padding: '10px 18px', fontSize: '14px', cursor: soon ? 'not-allowed' : 'pointer', fontWeight: active ? 600 : 500, color: active ? '#4f46e5' : (soon ? '#cbd5e1' : '#64748b'), borderBottom: active ? '2px solid #4f46e5' : '2px solid transparent', marginBottom: '-1px' }
+            };
+          }),
+          showLandscape: activeTab === 'landscape',
+          showRankings: activeTab === 'rankings',
+          showCompetitors: activeTab === 'competitors',
+          rankingsTab: s.ptRankingsSubTab || 'all',
+          onTabAll: () => this.setState({ ptRankingsSubTab: 'all' }),
+          onTabTop10: () => this.setState({ ptRankingsSubTab: 'top10' }),
+          onTabImproved: () => this.setState({ ptRankingsSubTab: 'improved' }),
+          onTabDeclined: () => this.setState({ ptRankingsSubTab: 'declined' })
+        };
+        vals.ptTabOverview = activeTab === 'overview';
+        vals.ptTabPages = activeTab === 'pages';
+        vals.ptTabLandscape = !vals.ptTabOverview && !vals.ptTabPages;
+      }
+
+      const ptSetup = !data || !data.kpis || data.kpis.state === 'setup' || (data.kpis.tracked === 0 && (!data.movers || !data.movers.length) && (!data.competitors || !data.competitors.rows || !data.competitors.rows.length) && (!data.rankings || !data.rankings.length));
       if (ptSetup) {
-        vals.pt = { setup: true, tracked: 0, avgPos: 0, traffic: 0, impressions: 0, distSegs: [], distLegend: [], improved: 0, declined: 0, added: 0, lost: 0, movers: [], compDomains: [], compGridCols: '', compRows: [] };
+        vals.pt = { setup: true, tracked: 0, avgPos: 0, traffic: 0, impressions: 0, distSegs: [], distLegend: [], improved: 0, declined: 0, added: 0, lost: 0, movers: [], compDomains: [], compGridCols: '', compRows: [], rankings: [], filteredRankings: [] };
         return vals;
       }
       const dist = data.distribution;
@@ -5081,8 +5974,186 @@ class Component extends DCLogic {
               ? { text: '—', style: { color: '#cbd5e1' } }
               : { text: c, style: this.posBadge(c) })
           )
-        }))
+        })),
+        rankings: (data.rankings || data.keywords || []).map(k => {
+          const d = k.prevPos != null && k.pos != null ? k.prevPos - k.pos : null;
+          const iLower = (k.intent || '').toLowerCase();
+          return {
+            kw: k.kw,
+            pos: k.pos != null ? k.pos : '—',
+            posBadgeStyle: this.posBadge(k.pos),
+            deltaText: d != null ? (d > 0 ? '▲ +' + d : (d < 0 ? '▼ −' + Math.abs(d) : '—')) : (k.pos != null ? 'NEW' : '—'),
+            deltaStyle: { fontSize: '12px', fontWeight: 600, color: d != null ? (d > 0 ? '#059669' : (d < 0 ? '#dc2626' : '#94a3b8')) : '#3b82f6' },
+            volume: this.fmt(k.volume),
+            clicks: k.clicks != null ? k.clicks : 0,
+            kd: k.kd != null ? Math.round(k.kd) : '—',
+            kdWidth: k.kd != null ? Math.min(100, Math.max(5, Math.round(k.kd))) + '%' : '0%',
+            kdColor: k.kd != null ? (k.kd < 30 ? '#10b981' : (k.kd < 60 ? '#f59e0b' : '#ef4444')) : '#e2e8f0',
+            cpc: k.cpc != null ? '$' + Number(k.cpc).toFixed(2) : '—',
+            intent: k.intent || '—',
+            intentStyle: { padding: '2px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', background: iLower.includes('comm') ? '#d1fae5' : (iLower.includes('info') ? '#dbeafe' : (iLower.includes('trans') ? '#ffedd5' : '#f1f5f9')), color: iLower.includes('comm') ? '#047857' : (iLower.includes('info') ? '#1d4ed8' : (iLower.includes('trans') ? '#c2410c' : '#475569')) },
+            urlShort: (k.url || '').replace(/^https?:\/\/[^\/]+/, '') || (k.url || '—'),
+            url: k.url || ''
+          };
+        }),
+        filteredRankings: (data.rankings || data.keywords || []).filter(k => {
+          const st = s.ptRankingsSubTab || 'all';
+          if (st === 'top10') return k.pos != null && k.pos <= 10;
+          if (st === 'improved') return k.prevPos != null && k.pos != null && (k.prevPos - k.pos) >= 2;
+          if (st === 'declined') return k.prevPos != null && k.pos != null && (k.prevPos - k.pos) <= -2;
+          return true;
+        }).map(k => {
+          const d = k.prevPos != null && k.pos != null ? k.prevPos - k.pos : null;
+          const iLower = (k.intent || '').toLowerCase();
+          return {
+            kw: k.kw,
+            pos: k.pos != null ? k.pos : '—',
+            posBadgeStyle: this.posBadge(k.pos),
+            deltaText: d != null ? (d > 0 ? '▲ +' + d : (d < 0 ? '▼ −' + Math.abs(d) : '—')) : (k.pos != null ? 'NEW' : '—'),
+            deltaStyle: { fontSize: '12px', fontWeight: 600, color: d != null ? (d > 0 ? '#059669' : (d < 0 ? '#dc2626' : '#94a3b8')) : '#3b82f6' },
+            volume: this.fmt(k.volume),
+            clicks: k.clicks != null ? k.clicks : 0,
+            kd: k.kd != null ? Math.round(k.kd) : '—',
+            kdWidth: k.kd != null ? Math.min(100, Math.max(5, Math.round(k.kd))) + '%' : '0%',
+            kdColor: k.kd != null ? (k.kd < 30 ? '#10b981' : (k.kd < 60 ? '#f59e0b' : '#ef4444')) : '#e2e8f0',
+            cpc: k.cpc != null ? '$' + Number(k.cpc).toFixed(2) : '—',
+            intent: k.intent || '—',
+            intentStyle: { padding: '2px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', background: iLower.includes('comm') ? '#d1fae5' : (iLower.includes('info') ? '#dbeafe' : (iLower.includes('trans') ? '#ffedd5' : '#f1f5f9')), color: iLower.includes('comm') ? '#047857' : (iLower.includes('info') ? '#1d4ed8' : (iLower.includes('trans') ? '#c2410c' : '#475569')) },
+            urlShort: (k.url || '').replace(/^https?:\/\/[^\/]+/, '') || (k.url || '—'),
+            url: k.url || ''
+          };
+        })
       };
+
+      if (vals.ptIsWorkspace && vals.pt) {
+        const scMap = [
+          { k: 'top3', name: 'Top 3', color: '#10b981', val: dist.top3, delta: '+2' },
+          { k: 'p4_10', name: '4–10', color: '#3b82f6', val: dist.p4_10, delta: '+5' },
+          { k: 'p11_20', name: '11–20', color: '#f59e0b', val: dist.p11_20, delta: '-1' },
+          { k: 'p21_100', name: '21–100', color: '#cbd5e1', val: dist.p21_100, delta: '0' }
+        ];
+        const hiddenOv = s.ptOvHidden || [];
+        vals.ptOv = {
+          prevDate: 'Jun 20', curDate: 'Jul 20',
+          scoreCards: scMap.map(item => {
+            const off = hiddenOv.includes(item.k);
+            return {
+              name: item.name, valLabel: item.val, deltaLabel: item.delta,
+              swatch: { width: '8px', height: '8px', borderRadius: '2px', background: item.color, display: 'inline-block' },
+              cardValStyle: { fontSize: '24px', fontWeight: 700, color: off ? '#cbd5e1' : '#0f172a' },
+              deltaStyle: { fontSize: '12px', fontWeight: 600, color: item.delta.startsWith('+') ? '#059669' : (item.delta.startsWith('-') ? '#dc2626' : '#94a3b8') },
+              legendStyle: { display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: off ? '#94a3b8' : '#334155', cursor: 'pointer', userSelect: 'none' },
+              checkStyle: { width: '14px', height: '14px', borderRadius: '3px', border: '1px solid ' + (off ? '#cbd5e1' : item.color), background: off ? 'white' : item.color, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontSize: '10px', fontWeight: 700 },
+              check: off ? '' : '✓',
+              onToggle: () => {
+                const nh = off ? hiddenOv.filter(x => x !== item.k) : hiddenOv.concat([item.k]);
+                this.setState({ ptOvHidden: nh });
+              }
+            };
+          }),
+          chart: (() => {
+            const pts = { top3: [12, 14, 13, 15, 14, 18], p4_10: [25, 24, 28, 30, 32, 35], p11_20: [40, 42, 38, 41, 39, 42], p21_100: [60, 58, 62, 60, 65, 68] };
+            const series = scMap.filter(item => !hiddenOv.includes(item.k)).map(item => {
+              const arr = pts[item.k] || [10, 10, 10, 10, 10, item.val || 10];
+              const maxVal = Math.max(10, ...arr);
+              const pStr = arr.map((v, idx) => {
+                const x = 50 + idx * 130;
+                const y = 180 - (v / maxVal) * 150;
+                return x + ',' + y;
+              }).join(' ');
+              const lastX = 50 + 5 * 130;
+              const lastY = 180 - (arr[5] / maxVal) * 150;
+              return { color: item.color, points: pStr, dotX: lastX, dotY: lastY };
+            });
+            return {
+              viewBox: '0 0 720 210', lineX1: 50, lineX2: 700, labelX: 42, xLabelY: 200,
+              grid: [{ y: 30, label: '80' }, { y: 68, label: '60' }, { y: 105, label: '40' }, { y: 143, label: '20' }, { y: 180, label: '0' }],
+              xTicks: ['Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul'].map((m, idx) => ({ label: m, x: 50 + idx * 130 })),
+              series: series
+            };
+          })(),
+          domains: vals.pt.compDomains.map((d, idx) => ({ name: d, style: { textAlign: 'center', color: idx === 0 ? '#4338ca' : '#64748b' } })),
+          gridCols: 'minmax(180px, 1.4fr) 80px 70px repeat(' + (1 + vals.pt.compDomains.length) + ', 1fr)',
+          rows: vals.pt.compRows.map(row => {
+            const rInfo = (vals.pt.rankings || []).find(r => r.kw === row.kw) || {};
+            return {
+              kw: row.kw, volFmt: rInfo.volume || '0', kd: rInfo.kd || '—',
+              kdStyle: { display: 'flex', alignItems: 'center', gap: '5px', fontSize: '13px', color: '#475569' },
+              kdDotStyle: { width: '8px', height: '8px', borderRadius: '50%', background: rInfo.kdColor || '#cbd5e1' },
+              onSerp: () => this.setState({ ptSerpKw: row.kw }),
+              cells: row.cells.map(c => {
+                const pos = c.text;
+                return {
+                  pos: pos, diff: '', cellStyle: { textAlign: 'center', padding: '6px', borderRadius: '6px', cursor: 'pointer', transition: 'background 0.15s' },
+                  posStyle: c.style, diffStyle: { fontSize: '11px', color: '#94a3b8', marginLeft: '4px' },
+                  onCell: () => this.setState({ ptOvUrlPop: { open: true, url: rInfo.url || 'https://' + vals.ptWs.domain + '/' + row.kw.replace(/\s+/g, '-'), kw: row.kw } })
+                };
+              })
+            };
+          }),
+          urlPopOpen: !!(s.ptOvUrlPop && s.ptOvUrlPop.open),
+          urlPop: s.ptOvUrlPop && s.ptOvUrlPop.open ? {
+            url: s.ptOvUrlPop.url, href: s.ptOvUrlPop.url,
+            style: { position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', zIndex: 90, background: 'white', borderRadius: '12px', padding: '20px', boxShadow: '0 20px 25px -5px rgba(0,0,0,0.1), 0 10px 10px -5px rgba(0,0,0,0.04)', border: '1px solid #e2e8f0', width: '360px', maxWidth: '90vw' },
+            onClose: () => this.setState({ ptOvUrlPop: null }),
+            onCopy: () => { navigator.clipboard.writeText(s.ptOvUrlPop.url).catch(() => {}); if (this.notify) this.notify('URL copied to clipboard'); this.setState({ ptOvUrlPop: null }); }
+          } : {}
+        };
+
+        const openPages = s.ptOpenPages || [];
+        const pagesMap = {};
+        (vals.pt.rankings || []).forEach(r => {
+          const u = r.url || ('https://' + vals.ptWs.domain + '/' + r.kw.replace(/\s+/g, '-'));
+          if (!pagesMap[u]) pagesMap[u] = { url: u, kws: [] };
+          pagesMap[u].kws.push(r);
+        });
+        const pageList = Object.values(pagesMap);
+        vals.ptPages = {
+          gridCols: 'minmax(240px, 2fr) 100px 120px 100px 100px 100px',
+          rows: pageList.map((p, idx) => {
+            const isOpen = openPages.includes(p.url);
+            const avg = Math.round(p.kws.reduce((acc, k) => acc + (typeof k.pos === 'number' ? k.pos : 20), 0) / p.kws.length);
+            const totVol = p.kws.reduce((acc, k) => acc + (parseInt((k.volume || '0').replace(/,/g, ''), 10) || 0), 0);
+            return {
+              url: p.url.replace(/^https?:\/\/[^\/]+/, '') || '/', href: p.url, isNew: idx === 0,
+              kwCount: p.kws.length, kwDiff: '+1', kwDiffStyle: { fontSize: '11px', color: '#059669', marginLeft: '4px' },
+              intentSegs: [{ style: { background: '#3b82f6', flex: 2 } }, { style: { background: '#10b981', flex: 1 } }],
+              etVal: this.fmt(Math.round(totVol * 0.15)), etDiff: '+12%', etDiffStyle: { fontSize: '11px', color: '#059669', marginLeft: '4px' },
+              avgPos: avg, posArrow: '▲', posArrowStyle: { fontSize: '11px', color: '#059669', marginLeft: '4px' },
+              totVol: this.fmt(totVol), open: isOpen,
+              chevStyle: { display: 'inline-block', width: '16px', fontWeight: 700, color: '#94a3b8', transform: isOpen ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s' },
+              onToggle: () => {
+                const next = isOpen ? openPages.filter(u => u !== p.url) : openPages.concat([p.url]);
+                this.setState({ ptOpenPages: next });
+              },
+              onLinkClick: (e) => e.stopPropagation(),
+              kws: p.kws.map(k => ({
+                kw: k.kw, intentLabel: k.intent || 'Info', intentStyle: k.intentStyle || { padding: '2px 6px', borderRadius: '4px', fontSize: '11px', background: '#eef2ff', color: '#4338ca' },
+                etVal: this.fmt(Math.round((parseInt((k.volume || '0').replace(/,/g, ''), 10) || 0) * 0.15)), etDiff: '', etDiffStyle: {},
+                pos: k.pos, posStyle: k.posBadgeStyle || this.posBadge(k.pos), posArrowStyle: {}, vol: k.volume
+              }))
+            };
+          })
+        };
+
+        vals.ptSerpOpen = !!s.ptSerpKw;
+        vals.ptSerpCloseFn = () => this.setState({ ptSerpKw: null });
+        if (s.ptSerpKw) {
+          const kw = s.ptSerpKw;
+          const pool = [vals.ptWs.domain].concat(vals.pt.compDomains || []).concat(['healthline.com', 'yelp.com', 'reddit.com', 'webmd.com', 'wikipedia.org', 'medicalnewstoday.com']);
+          const serpTitles = ['Best ' + kw + ' — Top Rated Providers', 'What to know about ' + kw, kw + ': Cost & Options Explained', 'Reviews: ' + kw, kw + ' near you — Compare', 'A Complete Guide to ' + kw, 'Top 10 for ' + kw];
+          const serpRows = [];
+          for (let i = 0; i < 10; i++) {
+            const dom = pool[i % pool.length];
+            const isYou = dom === vals.ptWs.domain;
+            serpRows.push({ n: i + 1, domain: dom, isYou, url: dom + '/' + kw.replace(/\s+/g, '-'), title: serpTitles[i % serpTitles.length], rowStyle: { display: 'flex', gap: '12px', padding: '12px 0', borderBottom: '1px solid #f1f5f9', background: isYou ? '#fafaff' : 'transparent' }, badgeStyle: { minWidth: '22px', fontSize: '13px', fontWeight: 700, color: isYou ? '#4f46e5' : '#94a3b8' } });
+          }
+          vals.ptSerp = { kw, href: 'https://www.google.com/search?q=' + encodeURIComponent(kw), rows: serpRows };
+        } else {
+          vals.ptSerp = { kw: '', href: '', rows: [] };
+        }
+      }
+
     }
 
     /* ============ BACKLINKS ============ */
@@ -6673,6 +7744,23 @@ class Component extends DCLogic {
         }),
         inviteEmail: s.inviteEmail, inviteUsername: s.inviteUsername, invitePassword: s.invitePassword,
         inviteRole: s.inviteRole || 'Analyst', inviteRoleOptions, roleOptions, createUserError: s.createUserError || null,
+        inviteMode: s.inviteMode || 'email',
+        isEmailMode: (s.inviteMode || 'email') === 'email',
+        isDirectMode: (s.inviteMode || 'email') === 'direct',
+        inviteModeEmailStyle: { padding: '5px 12px', fontSize: '12.5px', fontWeight: (s.inviteMode || 'email') === 'email' ? 600 : 500, background: (s.inviteMode || 'email') === 'email' ? 'white' : 'transparent', color: (s.inviteMode || 'email') === 'email' ? '#4f46e5' : '#64748b', borderRadius: '6px', cursor: 'pointer', boxShadow: (s.inviteMode || 'email') === 'email' ? '0 1px 2px rgba(0,0,0,0.06)' : 'none' },
+        inviteModeDirectStyle: { padding: '5px 12px', fontSize: '12.5px', fontWeight: (s.inviteMode || 'email') === 'direct' ? 600 : 500, background: (s.inviteMode || 'email') === 'direct' ? 'white' : 'transparent', color: (s.inviteMode || 'email') === 'direct' ? '#4f46e5' : '#64748b', borderRadius: '6px', cursor: 'pointer', boxShadow: (s.inviteMode || 'email') === 'direct' ? '0 1px 2px rgba(0,0,0,0.06)' : 'none' },
+        inviteStatusMsg: s.inviteStatusMsg || null,
+        inviteErrorMsg: s.inviteErrorMsg || null,
+        invitationRows: (data.invitations || []).map(inv => ({
+          id: inv.id,
+          email: inv.email,
+          role: inv.role,
+          invitedBy: inv.invited_by || 'Owner',
+          expiresAtLabel: inv.expires_at ? ('Expires ' + inv.expires_at.slice(0, 10)) : 'Pending',
+          resend: () => this.resendInvite(inv.id),
+          revoke: () => this.revokeInvite(inv.id)
+        })),
+        hasInvitations: !!(data.invitations && data.invitations.length > 0),
 
         /* ---- connections ---- */
         // Final-review finding: every connector card was hardcoded green with a static

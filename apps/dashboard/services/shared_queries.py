@@ -116,6 +116,14 @@ def _get_keywords_overview(site_id: str, limit: int = 5) -> list[dict]:
 def _get_ranking_distribution(site_id: str, curr_start: date, curr_end: date) -> dict:
     """Compute keyword counts per SERP position bucket — SEMrush Landscape style."""
     try:
+        from pipeline.utils.keywords import load_tracked_keywords
+        tracked_kws = load_tracked_keywords(site_id)
+        if not tracked_kws:
+            return {"total": 0, "top3": 0, "top10": 0, "top20": 0, "top50": 0, "top100": 0,
+                    "avg_position": 0, "total_clicks": 0, "total_impressions": 0,
+                    "top3_pct": 0, "top4_10_pct": 0, "top11_20_pct": 0, "rest_pct": 0}
+
+        tracked_lower = [k.lower() for k in tracked_kws]
         with get_session() as session:
             rows = session.execute(
                 select(
@@ -124,16 +132,21 @@ def _get_ranking_distribution(site_id: str, curr_start: date, curr_end: date) ->
                     func.sum(KeywordRanking.clicks).label("clicks"),
                     func.sum(KeywordRanking.impressions).label("impressions"),
                 )
-                .where(KeywordRanking.site_id == site_id, KeywordRanking.date >= curr_start, KeywordRanking.date <= curr_end)
+                .where(
+                    KeywordRanking.site_id == site_id,
+                    KeywordRanking.date >= curr_start,
+                    KeywordRanking.date <= curr_end,
+                    func.lower(KeywordRanking.keyword).in_(tracked_lower)
+                )
                 .group_by(KeywordRanking.keyword)
             ).all()
 
             if not rows:
-                return {"total": 0, "top3": 0, "top10": 0, "top20": 0, "top50": 0, "top100": 0,
+                return {"total": len(tracked_kws), "top3": 0, "top10": 0, "top20": 0, "top50": 0, "top100": 0,
                         "avg_position": 0, "total_clicks": 0, "total_impressions": 0,
-                        "top3_pct": 0, "top10_pct": 0, "top20_pct": 0, "rest_pct": 0}
+                        "top3_pct": 0, "top4_10_pct": 0, "top11_20_pct": 0, "rest_pct": 0}
 
-            total = len(rows)
+            total = len(tracked_kws)
             top3 = sum(1 for r in rows if r.avg_pos and r.avg_pos <= 3)
             top10 = sum(1 for r in rows if r.avg_pos and r.avg_pos <= 10)
             top20 = sum(1 for r in rows if r.avg_pos and r.avg_pos <= 20)
@@ -170,6 +183,12 @@ def _get_ranking_distribution(site_id: str, curr_start: date, curr_end: date) ->
 
 def _get_position_changes(site_id: str, curr_start: date, curr_end: date, prev_start: date, prev_end: date) -> dict:
     try:
+        from pipeline.utils.keywords import load_tracked_keywords
+        tracked_kws = load_tracked_keywords(site_id)
+        if not tracked_kws:
+            return {k: [] if "count" not in k else 0 for k in ["improved", "improved_count", "declined", "declined_count", "new", "new_count", "lost", "lost_count"]}
+
+        tracked_lower = [k.lower() for k in tracked_kws]
         with get_session() as session:
             # Get current period keywords with enriched data
             curr_rows = session.execute(
@@ -181,14 +200,24 @@ def _get_position_changes(site_id: str, curr_start: date, curr_end: date, prev_s
                     func.max(KeywordRanking.search_volume).label("volume"),
                     func.max(KeywordRanking.url).label("url"),
                 )
-                .where(KeywordRanking.site_id == site_id, KeywordRanking.date >= curr_start, KeywordRanking.date <= curr_end)
+                .where(
+                    KeywordRanking.site_id == site_id,
+                    KeywordRanking.date >= curr_start,
+                    KeywordRanking.date <= curr_end,
+                    func.lower(KeywordRanking.keyword).in_(tracked_lower)
+                )
                 .group_by(KeywordRanking.keyword)
             ).all()
 
             # Get previous period keywords
             prev_rows = session.execute(
                 select(KeywordRanking.keyword, func.avg(KeywordRanking.position).label("pos"))
-                .where(KeywordRanking.site_id == site_id, KeywordRanking.date >= prev_start, KeywordRanking.date <= prev_end)
+                .where(
+                    KeywordRanking.site_id == site_id,
+                    KeywordRanking.date >= prev_start,
+                    KeywordRanking.date <= prev_end,
+                    func.lower(KeywordRanking.keyword).in_(tracked_lower)
+                )
                 .group_by(KeywordRanking.keyword)
             ).all()
 
@@ -263,6 +292,12 @@ def _get_competitor_grid(site_id: str, limit: int = 100) -> dict:
     keyword_rankings) — never calls an API. Returns a status the template branches on.
     """
     try:
+        from pipeline.utils.keywords import load_tracked_keywords
+        tracked_kws = load_tracked_keywords(site_id)
+        if not tracked_kws:
+            return {"status": "no_data", "competitors": [], "rows": [], "dates": [], "overridden": False}
+
+        tracked_lower = [k.lower() for k in tracked_kws]
         from pipeline.services.competitor_service import get_tracked_competitors, is_overridden, _bare
         competitors = get_tracked_competitors(site_id)
         if not competitors:
@@ -305,13 +340,15 @@ def _get_competitor_grid(site_id: str, limit: int = 100) -> dict:
                     CompetitorKeywordRanking.position,
                 )
                 .where(CompetitorKeywordRanking.site_id == site_id,
-                       CompetitorKeywordRanking.date.in_(both))
+                       CompetitorKeywordRanking.date.in_(both),
+                       func.lower(CompetitorKeywordRanking.keyword).in_(tracked_lower))
             ).all()
 
             your_rows = session.execute(
                 select(KeywordRanking.keyword, KeywordRanking.date,
                        func.avg(KeywordRanking.position).label("pos"))
-                .where(KeywordRanking.site_id == site_id, KeywordRanking.date.in_(both))
+                .where(KeywordRanking.site_id == site_id, KeywordRanking.date.in_(both),
+                       func.lower(KeywordRanking.keyword).in_(tracked_lower))
                 .group_by(KeywordRanking.keyword, KeywordRanking.date)
             ).all()
 

@@ -8,7 +8,7 @@ from rest_framework.authtoken.models import Token
 from rest_framework.test import APIClient, APITestCase
 
 from pipeline.db.engine import get_engine
-from pipeline.db.schema import init_db, Site, KeywordRanking
+from pipeline.db.schema import init_db, Site, KeywordRanking, SavedKeyword
 from pipeline.utils.db_connection import get_session
 import pipeline.utils.db_connection as db_connection
 
@@ -27,6 +27,7 @@ class PositionsEndpointTests(APITestCase):
         with get_session() as session:
             session.add(Site(site_url="sc-domain:fusehealth.com", site_name="FuseHealth",
                               slug="fusehealth", is_active=1))
+            session.add(SavedKeyword(site_id="sc-domain:fusehealth.com", keyword="iv therapy"))
             session.add(KeywordRanking(date=date(2026, 6, 30), site_id="sc-domain:fusehealth.com",
                                         keyword="iv therapy", position=2, clicks=40,
                                         impressions=500, search_volume=3000, intent="commercial",
@@ -41,9 +42,10 @@ class PositionsEndpointTests(APITestCase):
         resp = self.client_auth.get("/api/projects/fusehealth/positions", {"range": "30d"})
         self.assertEqual(resp.status_code, 200)
         body = resp.json()
-        for key in ["kpis", "distribution", "movement", "competitors", "movers"]:
+        for key in ["kpis", "distribution", "movement", "competitors", "movers", "rankings", "keywords"]:
             self.assertIn(key, body)
         self.assertEqual(body["kpis"]["tracked"], 1)
+        self.assertEqual(body["rankings"][0]["kw"], "iv therapy")
 
     def test_range_defaults_to_30d(self):
         resp = self.client_auth.get("/api/projects/fusehealth/positions")

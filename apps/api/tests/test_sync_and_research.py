@@ -68,7 +68,7 @@ class SyncEndpointTests(APITestCase):
         )
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(
-            resp.json()["steps"], ["gsc_keywords", "dataforseo_labs_competitors", "dataforseo_serp_competitors"]
+            resp.json()["steps"], ["gsc_keywords", "dataforseo_serp", "dataforseo_keywords", "dataforseo_labs_competitors", "dataforseo_serp_competitors"]
         )
 
     @patch("apps.dashboard.services.sync_api_service.threading.Thread")
@@ -150,13 +150,19 @@ class KeywordResearchEndpointTests(APITestCase):
 
     @patch("pipeline.connectors.dataforseo_keywords.DataForSEOKeywordsConnector")
     def test_research_maps_connector_rows_to_spa_shape(self, mock_conn):
-        mock_conn.return_value.lookup_keywords.return_value = {
+        mock_conn.return_value.expand_keywords.return_value = {
             "status": "ok",
+            "cost": 0.012,
             "rows": [{
-                "keyword": "iv therapy", "search_volume": 40500, "keyword_difficulty": 58,
-                "cpc": 7.63, "intent": "Informational", "serp_features": "people_also_ask, video",
+                "kw": "iv therapy", "volume": 40500, "kd": 58,
+                "cpc": 7.63, "intent": "informational", "match": "exact",
+                "monthly": [10, 20, 30], "serpFeatures": ["people_also_ask", "video"],
+            }, {
+                "kw": "iv therapy near me", "volume": 12000, "kd": 45,
+                "cpc": 5.00, "intent": "commercial", "match": "phrase",
+                "monthly": [5, 10, 15], "serpFeatures": ["local_pack"],
             }],
-            "no_data": [], "location": "United States",
+            "location": "United States",
         }
         resp = self.client_auth.post(
             "/api/research",
@@ -164,7 +170,9 @@ class KeywordResearchEndpointTests(APITestCase):
             format="json",
         )
         self.assertEqual(resp.status_code, 200)
-        row = resp.json()["rows"][0]
+        body = resp.json()
+        self.assertEqual(len(body["rows"]), 2)
+        row = body["rows"][0]
         # exactly the keys the SPA's research table reads
         self.assertEqual(row["kw"], "iv therapy")
         self.assertEqual(row["volume"], 40500)
@@ -173,9 +181,12 @@ class KeywordResearchEndpointTests(APITestCase):
         self.assertEqual(row["match"], "exact")
         self.assertEqual(row["serpFeatures"], ["people_also_ask", "video"])
         self.assertIs(row["tracked"], False)
+        self.assertEqual(body["rows"][1]["match"], "phrase")
+        self.assertEqual(body["cost"], 0.012)
 
     @patch("pipeline.connectors.dataforseo_keywords.DataForSEOKeywordsConnector")
     def test_connector_failure_is_honest_empty_not_a_500(self, mock_conn):
+        mock_conn.return_value.expand_keywords.side_effect = RuntimeError("no credentials")
         mock_conn.return_value.lookup_keywords.side_effect = RuntimeError("no credentials")
         resp = self.client_auth.post(
             "/api/research", {"project": "fusehealth", "keywords": ["x"]}, format="json"
@@ -184,6 +195,39 @@ class KeywordResearchEndpointTests(APITestCase):
         body = resp.json()
         self.assertEqual(body["rows"], [])   # honest empty -- never fabricated rows
         self.assertIn("error", body)
+
+    @patch("pipeline.connectors.dataforseo_keywords.DataForSEOKeywordsConnector")
+    def test_exact_seed_safeguard_fetches_missing_seed(self, mock_conn):
+        mock_conn.return_value.expand_keywords.return_value = {
+            "status": "ok",
+            "cost": 0.012,
+            "rows": [{
+                "kw": "expanded idea", "volume": 1000, "kd": 20,
+                "cpc": 1.5, "intent": "informational", "match": "broad",
+                "monthly": [], "serpFeatures": [],
+            }],
+            "location": "United States",
+        }
+        mock_conn.return_value.lookup_keywords.return_value = {
+            "status": "ok",
+            "rows": [{
+                "keyword": "my exact seed", "search_volume": 500, "keyword_difficulty": 10,
+                "cpc": 2.0, "intent": "Informational", "serp_features": "video",
+            }],
+            "no_data": [], "location": "United States",
+        }
+        resp = self.client_auth.post(
+            "/api/research",
+            {"project": "fusehealth", "keywords": ["my exact seed"], "location": "United States"},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(len(body["rows"]), 2)
+        # Missing exact seed is inserted at index 0
+        self.assertEqual(body["rows"][0]["kw"], "my exact seed")
+        self.assertEqual(body["rows"][0]["match"], "exact")
+        self.assertEqual(body["rows"][1]["kw"], "expanded idea")
 
     def test_empty_keywords_is_handled(self):
         body = self.client_auth.post(
@@ -236,3 +280,22 @@ class TrackKeywordEndpointTests(APITestCase):
             "/api/projects/fusehealth/keywords", {"volume": 100}, format="json"
         )
         self.assertEqual(resp.status_code, 400)
+
+    def test_post_batch_keywords_saves_all_to_db(self):
+        from pipeline.services.saved_keyword_service import list_saved_keywords
+
+        batch = [
+            {"kw": "iv therapy", "volume": 40500, "kd": 58, "cpc": 7.63, "intent": "Informational"},
+            {"kw": "mobile iv drip", "volume": 12000, "kd": 45, "cpc": 5.00, "intent": "Commercial"},
+            {"kw": "vitamin drip near me", "volume": 8100, "kd": 38, "cpc": 4.20, "intent": "Transactional"},
+        ]
+        resp = self.client_auth.post(
+            "/api/projects/fusehealth/keywords", {"keywords": batch}, format="json"
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["saved"], 3)
+
+        saved = [r["keyword"] for r in list_saved_keywords(SITE_URL)]
+        self.assertIn("iv therapy", saved)
+        self.assertIn("mobile iv drip", saved)
+        self.assertIn("vitamin drip near me", saved)

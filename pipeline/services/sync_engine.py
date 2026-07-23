@@ -39,8 +39,8 @@ PAGE_CONNECTORS: dict[str, list[str]] = {
     "insights":    [],                    # no connectors — data entered by user
     "alerts":      ["gsc", "ga4"],        # anomaly detection runs on fresh data
     "settings":    [],                    # no data to sync
-    # Positioning per-page refresh captures per-keyword competitor ranks (SEMrush-style).
-    "positioning": ["gsc_keywords", "dataforseo_labs_competitors", "dataforseo_serp_competitors"],
+    # Positioning per-page refresh captures domain SERP positions, keyword metrics, and competitor ranks.
+    "positioning": ["gsc_keywords", "dataforseo_serp", "dataforseo_keywords", "dataforseo_labs_competitors", "dataforseo_serp_competitors"],
     # AI visibility / AI-keyword volume refresh (DataForSEO AI Optimization API).
     "ai":          ["dataforseo_ai_keywords"],
     # Site-audit crawl (DataForSEO OnPage) -- distinct from the "pages" GSC/PageSpeed refresh.
@@ -51,6 +51,8 @@ ALL_CONNECTORS: list[str] = [
     "gsc",
     "ga4",
     "gsc_keywords",
+    "dataforseo_serp",
+    "dataforseo_keywords",
     "gsc_pages",
     "url_inspection",
     "pagespeed",

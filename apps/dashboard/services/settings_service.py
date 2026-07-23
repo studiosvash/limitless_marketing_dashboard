@@ -143,6 +143,23 @@ def query_team_raw() -> list[dict]:
     return result
 
 
+def query_invitations_raw() -> list[dict]:
+    """Return all pending (unaccepted) UserInvitation records."""
+    from apps.accounts.models import UserInvitation
+    invites = UserInvitation.objects.filter(is_accepted=False).order_by("-created_at")
+    return [
+        {
+            "id": inv.id,
+            "email": inv.email,
+            "role": inv.role,
+            "invited_by": inv.invited_by.username if inv.invited_by else "Owner",
+            "created_at": inv.created_at.isoformat() if inv.created_at else None,
+            "expires_at": inv.expires_at.isoformat() if inv.expires_at else None,
+        }
+        for inv in invites
+    ]
+
+
 def _get_or_create_blob(site_id: str) -> ProjectSettings:
     obj, _ = ProjectSettings.objects.get_or_create(site_url=site_id, defaults={"data": {}})
     return obj
@@ -204,6 +221,7 @@ def build_settings_response(site_id: str) -> dict:
     with get_session() as session:
         site = session.execute(select(Site).where(Site.site_url == site_id)).scalars().first()
 
+    from pipeline.services.saved_keyword_service import list_saved_keywords
     project = {
         "id": site.id if site else None,
         "domain": site.site_url if site else site_id,
@@ -211,6 +229,7 @@ def build_settings_response(site_id: str) -> dict:
         "vertical": (site.vertical or "") if site else "",
         "location": (site.location or "") if site else "",
         "competitors": get_tracked_competitors(site_id),
+        "tracked_keywords": [k["keyword"] for k in list_saved_keywords(site_id)],
     }
     credentials = {
         "gsc_property": (site.gsc_property or "") if site else "",
@@ -229,6 +248,7 @@ def build_settings_response(site_id: str) -> dict:
         "credentials": credentials,
         "connectors": query_connectors_raw(site_id),
         "team": query_team_raw(),
+        "invitations": query_invitations_raw(),
         "sync": _sync_summary_raw(site_id),
         "usage": _usage_raw(blob["syncConfig"], blob["budget"]["cap"]),
         **blob,
@@ -259,8 +279,22 @@ def apply_settings_update(site_id: str, body: dict) -> dict:
                 dataforseo_target_domain=body["credentials"].get("dataforseo_target_domain") or None,
             )
 
-    if "project" in body and isinstance(body["project"], dict) and "competitors" in body["project"]:
-        set_tracked_competitors(site_id, body["project"]["competitors"])
+    if "project" in body and isinstance(body["project"], dict):
+        proj = body["project"]
+        if "competitors" in proj:
+            set_tracked_competitors(site_id, proj["competitors"])
+        
+        update_kwargs = {}
+        if "name" in proj:
+            update_kwargs["site_name"] = proj["name"]
+        if "location" in proj:
+            update_kwargs["location"] = proj["location"]
+            
+        if update_kwargs:
+            with get_session() as session:
+                site = session.execute(select(Site).where(Site.site_url == site_id)).scalars().first()
+            if site:
+                update_site(site.id, **update_kwargs)
 
     blob_obj = _get_or_create_blob(site_id)
     data = dict(blob_obj.data)
