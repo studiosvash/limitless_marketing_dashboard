@@ -22,6 +22,8 @@ logger = logging.getLogger(__name__)
 EXPLORER_LOCATIONS = {
     "United States", "United Kingdom", "Canada", "Australia", "India",
     "Germany", "France", "Spain", "Italy", "Netherlands",
+    "Brazil", "Mexico", "Japan", "South Africa", "New Zealand",
+    "Ireland", "Singapore", "Philippines", "Malaysia"
 }
 
 

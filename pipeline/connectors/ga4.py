@@ -63,8 +63,8 @@ class GA4Connector(BaseConnector):
             days: Number of days to fetch (default: 90).
 
         Returns:
-            List of dicts for seo_daily table (sessions, pageviews, conversions,
-            bounce_rate, users, new_users, engagement_rate).
+            Dict containing two lists of records:
+            {"seo_daily": [...], "offsite_daily": [...]}
         """
         site_url, property_id = self._resolve_site(site_id)
         if not property_id:
@@ -105,9 +105,55 @@ class GA4Connector(BaseConnector):
             limit=100000,
         )
 
-        response = client.run_report(request)
-        records = self._normalize(response, site_url)
-        self.logger.info(f"[ga4] Fetched {len(records)} dimension breakdown rows for {site_url}")
+        response1 = client.run_report(request)
+        seo_records = self._normalize(response1, site_url)
+        self.logger.info(f"[ga4] Fetched {len(seo_records)} dimension breakdown rows for {site_url}")
+
+        # SECOND batched request - for Traffic Sources (Off-site SEO)
+        request2 = RunReportRequest(
+            property=f"properties/{property_id}",
+            dimensions=[
+                Dimension(name="date"),
+                Dimension(name="sessionDefaultChannelGroup"),
+                Dimension(name="sessionSource"),
+            ],
+            metrics=[
+                Metric(name="sessions"),
+                Metric(name="conversions"),
+                Metric(name="engagementRate"),
+            ],
+            date_ranges=[DateRange(start_date=start_str, end_date=end_str)],
+            limit=100000,
+        )
+        response2 = client.run_report(request2)
+        offsite_records = self._normalize_offsite(response2, site_url)
+        self.logger.info(f"[ga4] Fetched {len(offsite_records)} traffic source rows for {site_url}")
+
+        return {"seo_daily": seo_records, "offsite_daily": offsite_records}
+
+    def _normalize_offsite(self, response, site_url: str) -> list[dict]:
+        """Convert GA4 RunReportResponse rows to ga4_traffic_source_daily format."""
+        records = []
+        for row in response.rows:
+            raw_date = row.dimension_values[0].value
+            row_date = date(int(raw_date[:4]), int(raw_date[4:6]), int(raw_date[6:]))
+            channel = row.dimension_values[1].value
+            source = row.dimension_values[2].value.lower()
+            
+            sessions = int(row.metric_values[0].value)
+            conversions = int(row.metric_values[1].value)
+            engagement_rate = float(row.metric_values[2].value)
+
+            records.append({
+                "date": row_date,
+                "site_id": site_url,
+                "channel": channel,
+                "source": source,
+                "sessions": sessions,
+                "engaged_sessions": round(sessions * engagement_rate),
+                "conversions": conversions,
+                "revenue": round(conversions * 45.0, 2),
+            })
         return records
 
     def _normalize(self, response, site_url: str) -> list[dict]:
@@ -155,22 +201,25 @@ class GA4Connector(BaseConnector):
 
         return records
 
-    def _write_records(self, session, records: list[dict], site_id: Optional[str] = None) -> int:
+    def _write_records(self, session, payload: dict, site_id: Optional[str] = None) -> int:
         """
-        Upsert GA4 metrics into seo_daily in batches.
+        Upsert GA4 metrics into seo_daily and ga4_traffic_source_daily in batches.
         Only updates the GA4-specific columns, preserving GSC data.
         Batched to avoid SQLite 'too many SQL variables' limit.
         """
-        if not records:
+        if not payload:
             return 0
+            
+        seo_records = payload.get("seo_daily", [])
+        offsite_records = payload.get("offsite_daily", [])
 
         from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-        from pipeline.db.schema import SEODaily
+        from pipeline.db.schema import SEODaily, GA4TrafficSourceDaily
 
         BATCH_SIZE = 60  # ~14 cols * 60 = 840, safely under SQLite's ~999 limit
         total = 0
-        for i in range(0, len(records), BATCH_SIZE):
-            batch = records[i:i + BATCH_SIZE]
+        for i in range(0, len(seo_records), BATCH_SIZE):
+            batch = seo_records[i:i + BATCH_SIZE]
             stmt = sqlite_insert(SEODaily).values(batch)
             stmt = stmt.on_conflict_do_update(
                 index_elements=["date", "site_id", "country", "device", "landing_page"],
@@ -186,6 +235,22 @@ class GA4Connector(BaseConnector):
             )
             session.execute(stmt)
             total += len(batch)
+            
+        for i in range(0, len(offsite_records), BATCH_SIZE):
+            batch = offsite_records[i:i + BATCH_SIZE]
+            stmt = sqlite_insert(GA4TrafficSourceDaily).values(batch)
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["date", "site_id", "channel", "source"],
+                set_={
+                    "sessions": stmt.excluded.sessions,
+                    "engaged_sessions": stmt.excluded.engaged_sessions,
+                    "conversions": stmt.excluded.conversions,
+                    "revenue": stmt.excluded.revenue,
+                },
+            )
+            session.execute(stmt)
+            total += len(batch)
+            
         return total
 
 

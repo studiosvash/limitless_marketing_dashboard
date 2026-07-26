@@ -101,6 +101,66 @@ def query_top_pages_raw(site_id: str, start_date: date, end_date: date, limit: i
         return []
 
 
+def query_top_ga4_pages_weekly_raw(site_id: str) -> list[dict]:
+    """Top 10 GA4 pages this week with location and traffic count (sessions)."""
+    today = date.today()
+    start_date = today - timedelta(days=7)
+    try:
+        with get_session() as session:
+            rows = session.execute(
+                select(
+                    SEODaily.landing_page,
+                    func.max(SEODaily.country).label("top_location"),
+                    func.sum(SEODaily.sessions).label("total_traffic")
+                )
+                .where(
+                    SEODaily.site_id == site_id, 
+                    SEODaily.date >= start_date, 
+                    SEODaily.date <= today,
+                    SEODaily.landing_page.isnot(None),
+                    SEODaily.sessions > 0
+                )
+                .group_by(SEODaily.landing_page)
+                .order_by(func.sum(SEODaily.sessions).desc())
+                .limit(10)
+            ).all()
+            return [
+                {
+                    "url": row.landing_page,
+                    "location": row.top_location or "Unknown",
+                    "traffic": int(row.total_traffic or 0)
+                }
+                for row in rows
+            ]
+    except Exception as e:
+        import logging; logging.getLogger(__name__).error(f"Error: {e}", exc_info=True)
+        return []
+
+
+def query_top_audit_pages_raw(site_id: str, limit: int = 10) -> list[dict]:
+    """Top 10 Site Audit pages by lowest performance score."""
+    try:
+        with get_session() as session:
+            rows = session.execute(
+                select(PageSpeed)
+                .where(PageSpeed.site_id == site_id)
+                .order_by(PageSpeed.performance_score.asc().nulls_last())
+                .limit(limit)
+            ).scalars().all()
+            return [
+                {
+                    "url": r.url,
+                    "performance": int(r.performance_score or 0),
+                    "seo": int(r.seo_score or 0),
+                    "lcp": float(r.lcp_ms or 0)
+                }
+                for r in rows
+            ]
+    except Exception as e:
+        import logging; logging.getLogger(__name__).error(f"Error: {e}", exc_info=True)
+        return []
+
+
 def query_daily_traffic_raw(site_id: str, start_date: date, end_date: date) -> list[dict]:
     """Raw [{date, clicks, impressions}] points — the API `trend[]` shape and also the
     source data for the old view's Plotly chart dict."""

@@ -339,6 +339,12 @@ def get_domain_checks(site_id: str, force: bool = False) -> list[dict]:
 def _humanize(issue_type: str) -> tuple[str, str, str]:
     if issue_type in _ISSUE_META:
         return _ISSUE_META[issue_type]
+    
+    if issue_type.startswith("lh:"):
+        parts = issue_type.split(":", 2)
+        if len(parts) == 3:
+            return (parts[2], parts[1], "")
+            
     return (issue_type.replace("_", " ").capitalize(), "Other",
             "Review the affected pages and resolve this issue.")
 
@@ -533,6 +539,9 @@ def build_site_audit_response(site_id: str) -> dict:
     hidden_ids = set(get_state(site_id, "auditHidden", []))
     for issue_type, items in sorted(by_type.items(), key=lambda kv: -len(kv[1])):
         title, category, how_to_fix = _humanize(issue_type)
+        if issue_type.startswith("lh:") and items[0].description:
+            how_to_fix = items[0].description
+            
         severity = _SEVERITY_MAP.get((items[0].severity or "").lower(), "notice")
         is_hidden = issue_type in hidden_ids
         if not is_hidden:  # HANDOFF_SPEC 2.4: totals over non-hidden checks only

@@ -46,8 +46,6 @@
         })),
         clickPts: this.linePts(data.trend, 'clicks', 600, 220),
         imprPts: this.linePts(data.trend, 'impressions', 600, 220),
-        maxClicks: this.fmt(Math.max.apply(null, data.trend.map(d => d.clicks))),
-        dateFrom: data.trend[0] ? data.trend[0].date : '', dateTo: data.trend.length ? data.trend[data.trend.length - 1].date : '',
         rangeLabel: s.range === '7d' ? 'last 7 days' : s.range === '90d' ? 'last 90 days' : 'last 30 days',
         summary: [
           { title: 'Wins', items: data.summary.wins, kind: 'win' },
@@ -62,7 +60,49 @@
             dotStyle: { marginTop: '6px', width: '4px', height: '4px', borderRadius: '9999px', background: m[3], flexShrink: 0 }
           };
         }),
-        topPages: data.topPages.map(r => ({ url: r.url, clicksFmt: this.fmt(r.clicks), imprFmt: this.fmt(r.impressions), ctrFmt: r.ctr + '%' }))
+        topPages: (data.topPages || []).map(r => ({ url: r.url, clicksFmt: this.fmt(r.clicks), imprFmt: this.fmt(r.impressions), ctrFmt: r.ctr + '%' })),
+        
+        yTicksC: (() => {
+          const m = Math.max(1, ...((data.trend || []).map(d => d.clicks)));
+          return [this.fmt(m), this.fmt(Math.round(m * 0.66)), this.fmt(Math.round(m * 0.33)), 0];
+        })(),
+        yTicksI: (() => {
+          const m = Math.max(1, ...((data.trend || []).map(d => d.impressions)));
+          return [this.fmt(m), this.fmt(Math.round(m * 0.66)), this.fmt(Math.round(m * 0.33)), 0];
+        })(),
+        xTicks: (() => {
+          const tr = data.trend || [];
+          if (!tr.length) return [];
+          const step = Math.max(1, (tr.length - 1) / 9);
+          const out = [];
+          for (let i = 0; i <= 9; i++) {
+            const idx = Math.min(tr.length - 1, Math.round(i * step));
+            if (tr[idx]) {
+              const d = new Date(tr[idx].date);
+              out.push({
+                label: (d.getMonth() + 1) + '/' + d.getDate() + '/' + String(d.getFullYear()).slice(2),
+                pct: (i * 11.111).toFixed(3)
+              });
+            }
+          }
+          return out;
+        })(),
+
+        hoverZones: (data.trend || []).map((d, i) => {
+          const xCount = Math.max(1, (data.trend || []).length - 1);
+          const cx = i * (600 / xCount);
+          return {
+            x: cx - (600 / xCount / 2),
+            w: 600 / xCount,
+            onEnter: () => this.setState({ chartHoverIndex: i })
+          };
+        }),
+        hasHover: s.chartHoverIndex !== null && data.trend[s.chartHoverIndex],
+        hoverX: s.chartHoverIndex !== null ? (s.chartHoverIndex * (600 / Math.max(1, (data.trend || []).length - 1))).toFixed(1) : 0,
+        ttX: s.chartHoverIndex !== null ? ((s.chartHoverIndex * (600 / Math.max(1, (data.trend || []).length - 1))) < 300 ? (s.chartHoverIndex * (600 / Math.max(1, (data.trend || []).length - 1))) + 15 : (s.chartHoverIndex * (600 / Math.max(1, (data.trend || []).length - 1))) - 150) : 0,
+        ttData: s.chartHoverIndex !== null ? data.trend[s.chartHoverIndex] : null,
+        ttClicksFmt: s.chartHoverIndex !== null && data.trend[s.chartHoverIndex] ? this.fmt(data.trend[s.chartHoverIndex].clicks) : '',
+        ttImprFmt: s.chartHoverIndex !== null && data.trend[s.chartHoverIndex] ? this.fmt(data.trend[s.chartHoverIndex].impressions) : ''
       };
     }
 

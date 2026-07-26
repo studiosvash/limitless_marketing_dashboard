@@ -24,7 +24,7 @@ from pipeline.db.schema import (
 from apps.dashboard.services.overview_service import (
     get_kpi_raw, build_kpis_api, build_top_pages_api, query_daily_traffic_raw,
     range_to_period_dates, get_ai_summary_text, parse_ai_summary, build_summary_lists,
-    build_pillars, build_modules, build_priority_feed,
+    build_pillars, build_modules, build_priority_feed, query_top_ga4_pages_weekly_raw, query_top_audit_pages_raw
 )
 from apps.dashboard.services.decision_engine import generate_signals, generate_ad_overlap_signals
 from apps.dashboard.services.keywords_service import build_keywords_response
@@ -188,6 +188,8 @@ class ProjectOverviewView(APIView):
         kpis = build_kpis_api(kpis_current, kpis_previous)
         trend = query_daily_traffic_raw(site_id, curr_start, curr_end)
         top_pages = build_top_pages_api(site_id, curr_start, curr_end)
+        top_ga4_pages = query_top_ga4_pages_weekly_raw(site_id)
+        top_audit_pages = query_top_audit_pages_raw(site_id)
 
         ads_overview, ads_curr, ads_prev = _get_ads_overview(site_id, curr_start, curr_end, prev_start, prev_end)
         signals = generate_signals(kpis_current, kpis_previous, ads_curr, ads_prev)
@@ -215,6 +217,8 @@ class ProjectOverviewView(APIView):
             "trend": trend,
             "summary": summary,
             "topPages": top_pages,
+            "topGa4Pages": top_ga4_pages,
+            "topAuditPages": top_audit_pages,
         })
 
 
@@ -911,6 +915,58 @@ class PromptResearchView(APIView):
         site_id = resolve_project_or_404(request.data.get("project", "")).site_url
         seeds = request.data.get("seeds") or []
         return Response(run_prompt_research(site_id, seeds))
+
+
+@method_decorator(login_not_required, name="dispatch")
+class DomainOverviewView(APIView):
+    def post(self, request):
+        from django.core.cache import cache
+        from pipeline.connectors.dataforseo_domain_overview import DataForSEODomainOverviewConnector
+        
+        target = request.data.get("target") or ""
+        location = request.data.get("location") or "United States"
+        
+        if not target:
+            return Response({"detail": "Target URL is required"}, status=400)
+            
+        cache_key = f"domain_overview_{target}_{location}"
+        cached_data = cache.get(cache_key)
+        if cached_data:
+            return Response(cached_data)
+            
+        connector = DataForSEODomainOverviewConnector()
+        result = connector.get_domain_overview(target, location)
+        
+        if result.get("status") == "ok":
+            cache.set(cache_key, result, 60 * 60 * 24) # 24 hours caching
+            
+        return Response(result)
+
+
+@method_decorator(login_not_required, name="dispatch")
+class LiveSERPView(APIView):
+    def post(self, request):
+        from django.core.cache import cache
+        from pipeline.connectors.dataforseo_live_serp import DataForSEOLiveSERPConnector
+        
+        keyword = request.data.get("keyword") or ""
+        location = request.data.get("location") or "United States"
+        
+        if not keyword:
+            return Response({"detail": "Keyword is required"}, status=400)
+            
+        cache_key = f"live_serp_{keyword}_{location}"
+        cached_data = cache.get(cache_key)
+        if cached_data:
+            return Response(cached_data)
+            
+        connector = DataForSEOLiveSERPConnector()
+        result = connector.get_live_serp(keyword, location)
+        
+        if result.get("status") == "ok":
+            cache.set(cache_key, result, 60 * 60 * 24) # 24 hours caching
+            
+        return Response(result)
 
 
 # ---------------------------------------------------------------------------

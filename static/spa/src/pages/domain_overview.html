@@ -1,0 +1,90 @@
+<sc-if value="{{ showDomainOverview }}" hint-placeholder-val="{{ false }}">
+  <div data-screen-label="Domain Overview" style="display: flex; flex-direction: column; gap: 24px;">
+    
+    <!-- Header / Search Bar -->
+    <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
+      <div style="padding: 16px 20px; border-bottom: 1px solid #f1f5f9; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;">
+        <div>
+          <h2 style="font-size: 15px; font-weight: 600; margin: 0; display: flex; align-items: center; gap: 8px;">Domain Overview</h2>
+          <p style="font-size: 12px; color: #94a3b8; margin: 4px 0 0;">Analyze the overall performance and top keywords of any domain, subdomain, or exact URL.</p>
+        </div>
+      </div>
+      <div style="padding: 20px; display: flex; gap: 12px;">
+        <input value="{{ do.query }}" onChange="{{ h.doInput }}" onKeyDown="{{ h.doKey }}" aria-label="Enter Domain or URL" placeholder="e.g. apple.com or fusehealth.com/blog/post" style="flex: 1; padding: 10px 14px; font-size: 14px; border-radius: 8px; border: 1px solid #e2e8f0; outline: none; font-family: inherit; color: #0f172a;">
+        <div onClick="{{ h.runDomainOverview }}" style="display: inline-flex; align-items: center; gap: 8px; padding: 10px 20px; font-size: 14px; font-weight: 600; color: white; background: #4f46e5; border-radius: 8px; cursor: pointer;" style-hover="background:#4338ca">
+          <sc-if value="{{ do.loading }}" hint-placeholder-val="{{ false }}">Analyzing...</sc-if>
+          <sc-if value="{{ !do.loading }}" hint-placeholder-val="{{ true }}">Analyze</sc-if>
+        </div>
+      </div>
+    </div>
+    
+    <sc-if value="{{ do.error }}" hint-placeholder-val="{{ false }}">
+      <div style="padding: 16px 20px; background: #fef2f2; border: 1px solid #fecaca; border-radius: 12px; color: #dc2626; font-size: 13px; font-weight: 500;">
+        {{ do.error }}
+      </div>
+    </sc-if>
+
+    <!-- Data Sections -->
+    <sc-if value="{{ do.data }}" hint-placeholder-val="{{ true }}">
+      
+      <!-- KPI Cards -->
+      <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px;">
+        <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; padding: 20px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+          <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: #64748b; margin-bottom: 4px;">Organic Traffic</div>
+          <div style="font-size: 30px; font-weight: 700; color: #334155;">{{ do.metrics.organicTraffic }}</div>
+          <div style="font-size: 12px; color: #94a3b8; margin-top: 4px;">Estimated monthly clicks</div>
+        </div>
+        <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; padding: 20px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+          <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: #64748b; margin-bottom: 4px;">Traffic Value</div>
+          <div style="font-size: 30px; font-weight: 700; color: #334155;">{{ do.metrics.trafficValue }}</div>
+          <div style="font-size: 12px; color: #94a3b8; margin-top: 4px;">Equivalent Google Ads cost</div>
+        </div>
+        <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; padding: 20px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+          <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: #64748b; margin-bottom: 4px;">Ranked Keywords</div>
+          <div style="font-size: 30px; font-weight: 700; color: #334155;">{{ do.metrics.rankedKeywords }}</div>
+          <div style="font-size: 12px; color: #94a3b8; margin-top: 4px;">Top 100 positions</div>
+        </div>
+      </div>
+      
+      <!-- Keywords Table -->
+      <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
+        <div style="padding: 16px 20px; border-bottom: 1px solid #f1f5f9; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;">
+          <div>
+            <h2 style="font-size: 15px; font-weight: 600; margin: 0; display: flex; align-items: center; gap: 8px;">Top Organic Keywords</h2>
+          </div>
+        </div>
+        <div style="overflow-x: auto;">
+          <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+            <thead>
+              <tr style="text-align: left; color: #94a3b8; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;">
+                <th style="font-weight: 500; padding: 10px 10px 10px 20px;">Keyword</th>
+                <th style="font-weight: 500; padding: 10px;">Intent</th>
+                <th style="font-weight: 500; padding: 10px; text-align: center;">Position</th>
+                <th style="font-weight: 500; padding: 10px; text-align: right;">Volume</th>
+                <th style="font-weight: 500; padding: 10px; text-align: right;">CPC</th>
+                <th style="font-weight: 500; padding: 10px 20px 10px 10px; text-align: right;">Traffic</th>
+              </tr>
+            </thead>
+            <tbody>
+              <sc-for list="{{ do.rows }}" as="r" hint-placeholder-count="3">
+                <tr style="border-top: 1px solid #f1f5f9;" style-hover="background:#f8fafc">
+                  <td style="padding: 10px 10px 10px 20px; font-weight: 500;">
+                    <div style="color: #0f172a;">{{ r.kw }}</div>
+                    <div style="font-size: 12px; color: #94a3b8; font-weight: 400; max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"><a href="{{ r.url }}" target="_blank" style="color: inherit; text-decoration: none;" style-hover="text-decoration:underline">{{ r.url }}</a></div>
+                  </td>
+                  <td style="padding: 10px;"><span style="{{ r.intentStyle }}">{{ r.intentLabel }}</span></td>
+                  <td style="padding: 10px; text-align: center;"><span style="{{ r.posStyle }}">{{ r.posText }}</span></td>
+                  <td style="padding: 10px; text-align: right; color: #475569;">{{ r.volFmt }}</td>
+                  <td style="padding: 10px; text-align: right; color: #475569;">{{ r.cpcFmt }}</td>
+                  <td style="padding: 10px 20px 10px 10px; text-align: right; color: #475569;">{{ r.trafficFmt }}</td>
+                </tr>
+              </sc-for>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      
+    </sc-if>
+    
+  </div>
+</sc-if>

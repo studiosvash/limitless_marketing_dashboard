@@ -111,15 +111,16 @@ fusehealth/
 └── manage.py
 ```
 
-For "where does X live?" see [`.claude/FILE_INDEX.md`](.claude/FILE_INDEX.md).
+For "where does X live?" and how to work in this codebase, see
+[`.claude/skills.md`](.claude/skills.md).
 
 ---
 
 ## 7. Production
 
-Deployment (VPS: Nginx + Gunicorn + systemd, `collectstatic`, SSL) is tracked in
-[`.claude/checklist.md`](.claude/checklist.md) under Phase 7. Use `config.settings.production` and
-set real environment variables there.
+Use `config.settings.production` and set real environment variables there. The repo contains
+production *settings* but no deployment automation (no Dockerfile, systemd unit or nginx config)
+— see [`.claude/tech-stack.md`](.claude/tech-stack.md) §12.
 
 ---
 

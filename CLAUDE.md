@@ -1,7 +1,7 @@
 # FuseHealth — Project Brain (auto-loaded every session)
 
-You are a **senior Python / Django engineer** taking the FuseHealth SEO + Ads Intelligence
-Dashboard from a Streamlit MVP to a **production Django + HTMX + Tailwind** application for
+You are a **senior Python / Django engineer** working on the FuseHealth (Limitless) SEO + Ads
+Intelligence Dashboard: a **Django 6 + DRF backend serving a single-page frontend** for
 **2–3 internal users**.
 
 This file is deliberately short. Its only job is to route you to the right reference *before*
@@ -10,37 +10,37 @@ Guessing is how mistakes get made here; reading the relevant `.claude/` file fir
 
 ---
 
-## The one contract (summary — full version in PRODUCT_CONTEXT.md)
+## The one contract
 
 The dashboard is **database-first**:
 
 1. Pages **read only from the database.** Never call an external API while rendering a page.
-2. The **Refresh All** button is the path that calls every API → writes to DB → UI updates.
+2. The **Refresh all** button is the path that calls every API → writes to DB → UI updates.
 3. Each page has its **own refresh button** that syncs only that page's APIs.
-4. Every refresh shows a **live progress bar** (HTMX polling sync status from the DB).
+4. Every refresh shows a **live progress bar** (the SPA polls `GET /api/tasks/<id>` every 500 ms).
 5. Between refreshes, the user sees the **last saved data**. Stale-but-instant beats fresh-but-slow.
 
 Why: the APIs are rate-limited and a full sync takes minutes. Calling them on page load would
 flicker, freeze, and burn quota. The database is the single source of truth the UI trusts.
 
+The only sanctioned exceptions are three explicit user lookups — `/api/research`,
+`/api/domain-overview`, `/api/live-serp` — which call an API because the user pressed a button.
+
 ---
 
 ## Before you write code — read the file for your layer
 
-| You are touching… | Read first | Status |
-|---|---|---|
-| Plain-English feature overview (client-facing, shareable) | `FEATURES.md` (project root) | ✅ |
-| Anything, unsure where to start | `.claude/PRODUCT_CONTEXT.md` | ✅ |
-| Project structure, settings, the 3 apps, data flow | `.claude/ARCHITECTURE.md` | ✅ |
-| "Where does X live / what is this file?" | `.claude/FILE_INDEX.md` | ✅ living |
-| How to write code here (patterns, standards) | `.claude/SKILLS.md` | ✅ v1 |
-| What to build next / current state | `.claude/checklist.md` | ✅ |
-| UI, templates, CSS, colors, components | `.claude/DESIGN.md` | ⏳ Phase 1 |
-| Database tables, fields, queries, upserts | `.claude/DATABASE.md` | ✅ Phase 3 |
-| Connectors, API calls, credentials, rate limits | `.claude/API_REFERENCE.md` | ✅ Phase 4 |
+| You are touching… | Read first |
+|---|---|
+| **Anything. Start here.** How to work in this codebase, patterns, traps, checklists | `.claude/skills.md` |
+| Endpoints, request/response shapes, external API integrations | `.claude/api-reference.md` |
+| What each page does, user flows, permissions, known gaps | `.claude/features.md` |
+| UI tokens, components, layout, states, accessibility | `.claude/design.md` |
+| Frameworks, databases, dependencies, env vars, deployment | `.claude/tech-stack.md` |
 
-A ⏳ file is **not written yet** — its content is not decided. Do not invent it; follow the
-checklist to author it in its phase.
+These five files were reverse-engineered from the current code and are the authoritative
+description of it. `FEATURES.md` (project root), `docs/superpowers/`, `Design_features/` and
+`scratch/` are historical or throwaway material — **do not treat them as specifications.**
 
 ---
 
@@ -48,15 +48,16 @@ checklist to author it in its phase.
 
 | Rule | Why |
 |---|---|
-| Never call an external API from a view that renders a page | Rate limits + latency; the DB is the source of truth |
+| Never call an external API from a page-data endpoint | Rate limits + latency; the DB is the source of truth |
+| Every API view needs `@method_decorator(login_not_required, name="dispatch")` | `LoginRequiredMiddleware` runs before DRF; without it, token requests are 302'd to the login page |
+| Never fabricate data to fill a shape — return empty, `null`, or `state: "setup"` | An invented number that looks real is worse than a visible gap |
 | Never commit `.env` or hardcode a secret | Secrets come from `.env` (dev) / real env vars (prod) only |
-| `default` DB = `django_internal.db` (Django ORM) · analytics = `fusehealth.db` (SQLAlchemy) | Django plumbing stays separate from analytics data |
-| Reuse the pipeline (`connectors/`, `db/`, `services/`, `utils/`) — don't rewrite working API logic | The pipeline is proven; this migration replaces the UI, not the data layer |
-| Build one page, verify with real data, then the next | Catches schema/connector gaps before they multiply |
-| Update `FILE_INDEX.md` whenever you add or move a file | The index is what prevents "where is X" hallucination |
-| Track build status/progress in `.claude/checklist.md` only; keep `FEATURES.md` simple & client-facing (no status tags) | `FEATURES.md` is shared with the client — it describes WHAT they get; the checklist tracks HOW far we are |
-| When feature *scope* changes (add/drop/rename), update `FEATURES.md` (plain words) and the `checklist.md` tasks together | Keeps the client doc and the build plan in agreement |
-| Never claim a feature is done until it shows real data (not demo) and is verified | "Building/demo" is not "Done" — be honest about progress in the checklist |
+| `default` DB = `django_internal.db` (Django ORM) · analytics = `data/fusehealth.db` (SQLAlchemy) | Django plumbing stays separate from analytics data; the join key is the `site_url` string |
+| Analytics writes always go through a `pipeline/db/writer.py` upsert | Re-syncs must update, never duplicate |
+| Reuse the pipeline (`connectors/`, `db/`, `services/`, `utils/`) — don't rewrite working API logic | The pipeline is proven |
+| Views resolve and delegate; services compute; connectors fetch; writers persist | One concern per file |
+| Never claim a feature is done until it shows real data (not a placeholder) and is verified | Several screens are fully built over data sources that don't exist — see `features.md` §17 |
+| Update the relevant `.claude/` file in the same change as the behaviour it describes | A stale doc is worse than none |
 
 ---
 

@@ -74,6 +74,28 @@ def build_positions_response(site_id: str, curr_start: date, curr_end: date,
             "action": "new",
         })
 
+    # Fetch missing KD/Volume live using DataForSEO as requested
+    missing_volume_kws = [
+        item for item in merged_kws_raw 
+        if not item.get("search_volume")
+    ]
+    if missing_volume_kws:
+        try:
+            from pipeline.connectors.dataforseo_keywords import DataForSEOKeywordsConnector
+            connector = DataForSEOKeywordsConnector()
+            missing_texts = [i["keyword"] for i in missing_volume_kws if i.get("keyword")]
+            if missing_texts:
+                fallback = connector.lookup_keywords(missing_texts, "United States")
+                if fallback and fallback.get("status") == "ok":
+                    lookup_map = { (r.get("keyword") or "").lower(): r for r in fallback.get("rows", []) }
+                    for item in missing_volume_kws:
+                        kw_lower = (item.get("keyword") or "").lower()
+                        if kw_lower in lookup_map:
+                            item["search_volume"] = lookup_map[kw_lower].get("search_volume") or 0
+                            item["keyword_difficulty"] = lookup_map[kw_lower].get("keyword_difficulty") or 0
+        except Exception as e:
+            import logging; logging.getLogger(__name__).warning(f"Failed to lookup missing volume: {e}")
+
     movers_raw = [
         r for r in merged_kws_raw
         if r.get("pos_change") is not None and abs(r["pos_change"]) >= 2
@@ -83,19 +105,19 @@ def build_positions_response(site_id: str, curr_start: date, curr_end: date,
     rankings = [to_api_keyword(r) for r in merged_kws_raw]
 
     domains = grid.get("competitors", [])
-    comp_rows_map = {row["keyword"].lower(): row for row in grid.get("rows", [])}
+    comp_rows_map = {(row.get("kw") or row.get("keyword") or "").lower(): row for row in grid.get("rows", [])}
     comp_rows = []
     for r in merged_kws_raw:
         kw = r["keyword"]
         if kw.lower() in comp_rows_map:
             row = comp_rows_map[kw.lower()]
-            comps = [
-                next((c["pos"] for c in row["cells"] if c["domain"] == dom), None)
-                for dom in domains
-            ]
-            comp_rows.append({"kw": kw, "you": row["you"]["pos"], "comps": comps})
+            comps = []
+            for dom in domains:
+                c = next((cell for cell in row.get("comps", []) if cell["domain"] == dom), None)
+                comps.append(c)
+            comp_rows.append({"kw": kw, "you": row["you"], "comps": comps})
         else:
-            comp_rows.append({"kw": kw, "you": r.get("position"), "comps": [None] * len(domains)})
+            comp_rows.append({"kw": kw, "you": {"pos": r.get("position"), "prev": r.get("prev_position"), "diff": r.get("pos_change"), "direction": "up" if r.get("pos_change") and r.get("pos_change") > 0 else ("down" if r.get("pos_change") and r.get("pos_change") < 0 else "flat")}, "comps": [None] * len(domains)})
     competitors = {"domains": domains, "rows": comp_rows}
 
     total_tracked = max(dist["total"], len(merged_kws_raw))

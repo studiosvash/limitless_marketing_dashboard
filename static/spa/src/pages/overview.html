@@ -70,17 +70,43 @@
               <h2 style="font-size: 15px; font-weight: 600; margin: 0;">Traffic trend</h2>
               <span style="font-size: 12px; color: #94a3b8;">Clicks &amp; impressions · {{ ov.rangeLabel }}</span>
             </div>
-            <svg viewBox="0 0 600 220" preserveAspectRatio="none" style="width: 100%; height: 240px; display: block;">
-              <polyline points="{{ ov.imprPts }}" fill="none" stroke="#c7d2fe" stroke-width="2"></polyline>
-              <polyline points="{{ ov.clickPts }}" fill="none" stroke="#4f46e5" stroke-width="2.5"></polyline>
-            </svg>
-            <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 8px;">
-              <span style="font-size: 11px; color: #94a3b8;">{{ ov.dateFrom }}</span>
-              <div style="display: flex; gap: 16px; font-size: 12px; color: #64748b;">
-                <span style="display: inline-flex; align-items: center; gap: 6px;"><span style="width: 10px; height: 3px; border-radius: 2px; background: #4f46e5;"></span>Clicks · peak {{ ov.maxClicks }}</span>
-                <span style="display: inline-flex; align-items: center; gap: 6px;"><span style="width: 10px; height: 3px; border-radius: 2px; background: #c7d2fe;"></span>Impressions</span>
+            <div style="position: relative; width: 100%; height: 260px; padding: 10px 40px 20px 40px; box-sizing: border-box; font-family: sans-serif;">
+              <div style="position: absolute; left: 0; top: 10px; height: 220px; width: 40px; display: flex; flex-direction: column; justify-content: space-between; text-align: right; font-size: 11px; color: #64748b; padding-right: 8px;">
+                <div style="position: absolute; top: -18px; right: 8px; color: #475569;">Clicks</div>
+                <sc-for list="{{ ov.yTicksC }}" as="yt"><span>{{ yt }}</span></sc-for>
               </div>
-              <span style="font-size: 11px; color: #94a3b8;">{{ ov.dateTo }}</span>
+              <div style="position: absolute; right: 0; top: 10px; height: 220px; width: 40px; display: flex; flex-direction: column; justify-content: space-between; text-align: left; font-size: 11px; color: #64748b; padding-left: 8px;">
+                <div style="position: absolute; top: -18px; left: 8px; color: #475569;">Impressions</div>
+                <sc-for list="{{ ov.yTicksI }}" as="yt"><span>{{ yt }}</span></sc-for>
+              </div>
+              
+              <div style="position: relative; width: 100%; height: 220px;">
+                <svg viewBox="0 0 600 220" preserveAspectRatio="none" style="width: 100%; height: 100%; display: block; overflow: visible;" onMouseLeave="{{ h.chartHoverOut }}">
+                  <line x1="0" y1="0" x2="600" y2="0" stroke="#f1f5f9" stroke-width="1"></line>
+                  <line x1="0" y1="73.3" x2="600" y2="73.3" stroke="#f1f5f9" stroke-width="1"></line>
+                  <line x1="0" y1="146.6" x2="600" y2="146.6" stroke="#f1f5f9" stroke-width="1"></line>
+                  <line x1="0" y1="220" x2="600" y2="220" stroke="#f1f5f9" stroke-width="1"></line>
+
+                  <polyline points="{{ ov.imprPts }}" fill="none" stroke="#a78bfa" stroke-width="2"></polyline>
+                  <polyline points="{{ ov.clickPts }}" fill="none" stroke="#3b82f6" stroke-width="2.5"></polyline>
+                  
+                  <sc-for list="{{ ov.hoverZones }}" as="hz">
+                    <rect x="{{ hz.x }}" y="0" width="{{ hz.w }}" height="220" fill="transparent" onMouseEnter="{{ hz.onEnter }}" style="cursor:crosshair; outline:none;"></rect>
+                  </sc-for>
+
+                  <sc-if value="{{ ov.hasHover }}">
+                    <line x1="{{ ov.hoverX }}" y1="10" x2="{{ ov.hoverX }}" y2="210" stroke="#94a3b8" stroke-width="1" stroke-dasharray="4"></line>
+                    <circle cx="{{ ov.hoverX }}" cy="210" r="3" fill="#94a3b8"></circle>
+
+                  </sc-if>
+                </svg>
+              </div>
+
+              <div style="position: absolute; left: 40px; right: 40px; bottom: 0; height: 16px;">
+                <sc-for list="{{ ov.xTicks }}" as="xt">
+                  <span style="position: absolute; left: {{ xt.pct }}%; transform: translateX(-50%); font-size: 11px; color: #64748b;">{{ xt.label }}</span>
+                </sc-for>
+              </div>
             </div>
           </div>
 

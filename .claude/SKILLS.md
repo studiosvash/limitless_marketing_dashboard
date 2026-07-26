@@ -1,82 +1,501 @@
-# FuseHealth — Coding Standards (SKILLS)
+# Skills — Onboarding Guide for AI Coding Assistants
 
-*How to write code in this project. Read before writing any Python or template. This is v1 —
-sections marked (expanded: Phase N) get filled in once that layer is built. When you establish a
-new pattern, add it here so the next session matches it.*
+> Read this before writing any code in this repository. It is written for you, not for end users:
+> it explains how the codebase is organised, which patterns are load-bearing, and which mistakes
+> this project has already made and fixed. Companion docs: `api-reference.md` (endpoints),
+> `features.md` (product behaviour), `design.md` (UI tokens), `tech-stack.md` (dependencies).
 
-## Golden rules (the non-negotiables, with reasons)
+---
 
-1. **No external API call in a page-render view.** Views read the DB and return HTML. API calls
-   happen only inside the sync engine (`apps/sync`). Reason: the DB-first contract — pages must
-   be instant and must not depend on rate-limited, minutes-long API calls.
-2. **Secrets come from the environment, never the code.** Read via `settings` (which reads
-   `.env`/env vars). Never hardcode a key; never log a secret; never commit `.env`.
-3. **Reuse the pipeline, don't rewrite it.** The connectors/services/db logic is proven. Import
-   and call it; only refine it when a task genuinely requires it.
-4. **One concern per file.** A view module renders; a service computes; a connector fetches.
-   Don't mix fetching into a view or business logic into a template.
+## 1. Project in one paragraph
 
-## Python style
+An internal SEO / paid-media intelligence dashboard for a 2–3 person team. A Django + DRF backend
+serves a single-page frontend that is assembled server-side from HTML fragments and driven by a
+bundled React runtime. All page data comes from two local SQLite databases. External APIs
+(Google Search Console, GA4, PageSpeed, DataForSEO, OpenAI, optionally Google Ads) are called
+**only** by a background sync triggered from a Refresh button, plus three explicit
+user-initiated lookup endpoints.
 
-- **Type hints** on every function signature. **Docstrings** on every public function/connector
-  `fetch()` — state what it returns and what it raises.
-- **Function length:** aim under ~30 lines; if longer, extract a helper. You reason better about
-  small focused functions, and so will the next session.
-- **Comments explain WHY, not WHAT.** The code already says what; comment the non-obvious reason.
-- **Error messages are specific:** include the component, the operation, and the actual cause.
-  Never `raise Exception("error")`.
-  ```python
-  # good
-  raise ValueError(f"[{self.name}] missing env var DATAFORSEO_LOGIN — check .env")
-  # bad
-  raise ValueError("missing login")
-  ```
+---
 
-## Django conventions
+## 2. The rules that actually matter
 
-- **Settings:** put shared config in `config/settings/base.py`; environment-specific overrides in
-  `local.py` / `production.py`. Read values with the `env()` helper in `base.py`.
-- **Apps:** code lives under `apps/<name>/`; app configs use `name = "apps.<name>"` with a short
-  `label`. Reference models/urls by the `label`.
-- **Internal data** (users, sync_log) uses the **Django ORM** on the `default` DB.
-  **Analytics data** uses the reused **SQLAlchemy** pipeline on `fusehealth.db` — do not create
-  Django models for analytics tables.
-- **URLs are namespaced** per app (e.g. `dashboard:overview`); use `{% url %}` / `reverse()`,
-  never hardcode paths.
-- **Every view that shows data is behind login**, and behind `@role_required` where the role
-  matters (see `apps/accounts`, Phase 2).
+These are ordered by how expensive it is to get them wrong.
 
-## Templates, HTMX & charts
+**1. Never call an external API from a page-data endpoint.** Pages read SQLite and return
+instantly. The whole product contract rests on this. The three sanctioned exceptions are
+`/api/research`, `/api/domain-overview` and `/api/live-serp` — explicit user lookups, not page
+renders. (One page endpoint does violate this: `/positions` backfills missing keyword volume via
+DataForSEO. It is a known wart, not a precedent to copy.)
 
-**`DESIGN.md` is the authority for all visual decisions** (colors, type, spacing, components,
-Plotly theme). Never introduce an off-palette color or a second font — use the brand tokens
-registered in `base.html`. The patterns:
+**2. Every API view needs `@method_decorator(login_not_required, name="dispatch")`.**
+`LoginRequiredMiddleware` runs before DRF, so without it a token-authenticated request is 302'd
+to the login page instead of reaching your view. This is the single most common mistake in this
+codebase.
 
-- Every page **extends `base.html`** and fills its blocks (`page_title`, `page_subtitle`,
-  `topbar_actions`, `content`, `body_extra`). Never hand-roll a page shell.
-- Reusable pieces live in `templates/components/` (`stat_card`, `refresh_button`,
-  `sync_progress`); shared chrome in `templates/partials/` (`_sidebar`, `_topbar`).
-- Sidebar nav data comes from the `navigation` context processor — add nav/badges there, once.
-- **Tailwind via CDN**, **HTMX** included once in `base.html`. No Node build step.
-- A page = a full template extending `base.html` + small **partials** for the HTMX-swappable
-  regions (a chart, a table, the progress bar).
-- **Filters/refresh use HTMX**: `hx-post`/`hx-get` returns just the partial HTML for the changed
-  region (`hx-target`), never a full-page reload.
-- **Progress bar** polls the status endpoint: `hx-trigger="every 2s" hx-get="/sync/status/"`,
-  and stops polling when the sync row reports done.
-- **Plotly** charts are serialized to JSON in the view (`PlotlyJSONEncoder`) and rendered
-  client-side with `Plotly.newPlot` — keep heavy rendering off the server.
+**3. Never fabricate data to fill a shape.** When a data source does not exist, return an honest
+empty list, `null`, or a `state: "setup"` marker — and say so in a comment. Multiple existing
+modules carry docstrings recording where a previous version faked a number and what broke.
+Where placeholders do exist (Backlinks link rows, AI share-of-voice, Ads pacing), they are
+flagged in `features.md` §17; do not add more.
 
-## Connectors & sync (expanded: Phase 4)
+**4. Analytics writes are always upserts.** Use the helpers in `pipeline/db/writer.py`, which
+issue `sqlite_insert(...).on_conflict_do_update(...)`. Never a bare `INSERT`. Batch at 60–80 rows
+to stay under SQLite's ~999 bound-parameter ceiling.
 
-- Every connector inherits `BaseConnector` (retry + logging built in) and writes a `sync_log`
-  row: start time, finish time, records fetched, error (if any).
-- The sync engine maps each page to its connectors so a per-page refresh hits only what's needed.
-- Connectors **upsert** (never blind insert) so re-running a sync doesn't duplicate rows.
+**5. Secrets come from the environment.** Read via `settings` or `os.getenv`. Never hardcode,
+never log, never commit `.env`.
 
-## Definition of done (per task)
+**6. Service functions do not raise.** They catch, log with
+`logging.getLogger(__name__).error(..., exc_info=True)`, and return a safe empty shape of the
+right type. That is why API views rarely need try/except.
 
-- Code runs; `python manage.py check` is clean.
-- New/changed files reflected in `.claude/FILE_INDEX.md`.
-- No secret in the diff (`.env` untouched, no key in any `.py`).
-- For a page: it loads from the DB with real data, and its refresh button updates that data.
+**7. One concern per file.** A view resolves and delegates; a service computes; a connector
+fetches; a writer persists. Do not fetch in a view or compute in a template.
+
+---
+
+## 3. Architecture map
+
+```
+Browser
+  │  Bearer token, JSON
+  ▼
+apps/api/views.py ─── resolve_project_or_404(slug) ─► Site.site_url  ("site_id")
+  │
+  ├─► apps/dashboard/services/<page>_service.py     # all business logic
+  │        │
+  │        ├─► pipeline/utils/db_connection.get_session()  ─► fusehealth.db (SQLAlchemy)
+  │        └─► Django ORM                                  ─► django_internal.db
+  │
+  └─► apps/dashboard/services/sync_api_service.start_sync_run()
+           └─► thread ─► pipeline/services/sync_engine.sync_all|sync_page
+                              └─► pipeline/connectors/*.sync()
+                                       ├─► external API
+                                       ├─► pipeline/db/writer.upsert_*  ─► fusehealth.db
+                                       └─► apps.sync.SyncLog            ─► django_internal.db
+```
+
+**The one identifier you must understand:** the URL carries `Site.slug` (`"fusehealth"`), but
+everything below the view layer uses `Site.site_url` (`"sc-domain:fusehealth.com"`) as the
+`site_id` string. It is the join key across both databases. `resolve_project_or_404(slug).site_url`
+is the conversion, and every slug-taking view calls it as its first statement.
+
+Because sites can be registered with or without the `sc-domain:` prefix, several services match
+against **both** forms:
+
+```python
+def _resolve_site_ids(site_id: str) -> list[str]:
+    alt = site_id.replace("sc-domain:", "") if site_id.startswith("sc-domain:") else f"sc-domain:{site_id}"
+    return [site_id, alt]
+```
+
+Use it (`ads_service`, `offsite_service`, `backlinks_service`, `site_audit_service`, `ai_service`
+all do) whenever you query analytics tables.
+
+---
+
+## 4. The data model
+
+### `django_internal.db` — Django ORM, `manage.py migrate`
+
+| Model | App | Purpose |
+|---|---|---|
+| `User`, `Session`, `Token` | contrib / authtoken | Auth |
+| `UserProfile` | accounts | `user` (1-1), `role`. Auto-created by a `post_save` signal. |
+| `UserInvitation` | accounts | `email`, `role`, `invited_by`, `token`, `created_at`, `expires_at`, `is_accepted` |
+| `Insight` | dashboard | Team-entered qualitative context. Admin-only; **no API or UI surface.** |
+| `AITarget` | dashboard | One per site: `brand`, `aliases[]`, `competitors[]`, `setup_done` |
+| `AIPromptList` | dashboard | Named prompt group |
+| `AIPrompt` | dashboard | `text`, `list` FK, `tracked_models[]` |
+| `ProjectSettings` | dashboard | `site_url` + a single `data` JSONField — **the app's key-value store** |
+| `SyncLog` | sync | Last result per (connector, site_url): `status`, `last_synced`, `records_written`, `error_message`, `duration_seconds` |
+| `RefreshRun` | sync | One refresh: `scope`, `status`, `current_connector`, `completed_count`/`total_count`, `records_written`, `error_message`, `percent` property |
+
+**`ProjectSettings.data` holds more than Settings.** Three non-settings keys live there and must
+never be clobbered by a settings save: `alertAcks` (acknowledged alert ids), `auditHidden`
+(hidden audit checks), `adsOverrides` (campaign status/budget/negatives/promoted), and
+`domainChecksCache`. Access them through `apps/dashboard/services/mutation_state.py`
+(`get_state` / `set_state`), never directly.
+
+### `data/fusehealth.db` — SQLAlchemy, `pipeline/db/schema.py`
+
+Every table has a `site_id VARCHAR(255)` column. Uniqueness is enforced by explicit
+`UniqueConstraint`s, which is what makes the upserts work.
+
+| Table | Model | Unique on | Written by |
+|---|---|---|---|
+| `sites` | `Site` | `site_url`, `slug` | `site_service` |
+| `seo_daily` | `SEODaily` | date, site_id, country, device, landing_page | `gsc` (search cols), `ga4` (analytics cols) |
+| `ga4_traffic_source_daily` | `GA4TrafficSourceDaily` | date, site_id, channel, source | `ga4` |
+| `keyword_rankings` | `KeywordRanking` | date, site_id, keyword | `gsc_keywords`, `dataforseo_serp` (position), `dataforseo_keywords` (volume/CPC only) |
+| `pages` | `Page` | site_id, url | `gsc_pages`, `sitemap`, CMS connectors |
+| `ad_metrics_daily` | `AdMetricDaily` | date, site_id, platform, campaign | `google_ads` |
+| `backlinks` | `Backlink` | site_id, referring_domain, target_url | `dataforseo_backlinks` |
+| `backlinks_snapshot` | `BacklinksSnapshot` | site_id (PK) | `manage.py refresh_backlinks` |
+| `competitor_visibility` | `CompetitorVisibility` | date, site_id, competitor_domain | *(unwritten)* |
+| `competitor_domains` | `CompetitorDomain` | site_id, competitor_domain | `dataforseo_labs_competitors` |
+| `competitor_keyword_rankings` | `CompetitorKeywordRanking` | date, site_id, keyword, competitor_domain | `dataforseo_serp_competitors` |
+| `tracked_competitors` | `TrackedCompetitor` | site_id, competitor_domain | `competitor_service` (user override) |
+| `technical_issues` | `TechnicalIssue` | site_id, url, issue_type | `dataforseo_onpage`, `technical_issues_service` |
+| `page_speed` | `PageSpeed` | site_id, url, strategy | `pagespeed` |
+| `indexing_status` | `IndexingStatus` | site_id, url | `url_inspection` |
+| `seo_aggregates` | `SEOAggregate` | site_id, period_type, period_start | `aggregate_service` |
+| `ai_summaries` | `AISummary` | week_start, site_id | `ai_summary_service` |
+| `ai_keyword_data` | `AIKeywordData` | date, site_id, keyword | `dataforseo_ai_keywords` |
+| `saved_keywords` | `SavedKeyword` | site_id, keyword, location | `saved_keyword_service` — **the tracked-keyword list** |
+| `anomalies` | `Anomaly` | date, site_id, metric_type | `anomaly_service` |
+| `comparative_metrics` | `ComparativeMetrics` | site_id, metric_type, week_start | *(unwritten)* |
+| `metric_forecasts` | `MetricForecast` | site_id, metric_type, period_type, target_date, model_name | *(unwritten — designed, never built)* |
+| `keyword_opportunities` | `KeywordOpportunity` | site_id, keyword | *(unwritten)* |
+| `risk_signals` | `RiskSignal` | — | *(unwritten)* |
+
+**`SavedKeyword` is the money table.** `pipeline/utils/keywords.load_tracked_keywords(site_id)`
+reads it, and the paid per-keyword DataForSEO connectors read that. Adding rows here increases
+API spend; that is why the UI gates it behind an explicit "Track" action.
+
+`technical_issues` is **rebuilt wholesale** after every GSC/GA4 sync
+(`rebuild_technical_issues` deletes then re-inserts), so its primary keys are not stable. That is
+why alert acknowledgement keys technical items on a SHA-1 of `(url, issue_type)`.
+
+### Changing the analytics schema
+
+Django migrations do **not** cover `fusehealth.db`. Options, in order of preference:
+
+1. **New table** — add the model to `schema.py`; `init_db()` creates it, and
+   `ensure_tables(session, Model)` will self-provision it on first use in an existing database.
+2. **New nullable column** — add it to the model, then write a guarded one-off management command
+   using `PRAGMA table_info` + `ALTER TABLE` (copy
+   `apps/sync/management/commands/add_project_fields.py`).
+3. **Anything else** — you are writing a migration script by hand. Think first.
+
+---
+
+## 5. Backend patterns
+
+### Adding an API endpoint
+
+1. **Route** — add to `apps/api/urls.py`. No trailing slash. Name it `resource-action`.
+2. **View** — a plain `APIView` in `apps/api/views.py`:
+
+```python
+@method_decorator(login_not_required, name="dispatch")
+class ProjectThingView(APIView):
+    def get(self, request, slug):
+        site_id, curr_start, curr_end, prev_start, prev_end = resolve_range_periods(request, slug)
+        return Response(build_thing_response(site_id, curr_start, curr_end, prev_start, prev_end))
+```
+
+   Use `resolve_range_periods(request, slug)` for a range-aware endpoint; use
+   `resolve_project_or_404(slug).site_url` when there is no period concept.
+   **Views contain no business logic** — resolve, delegate, return.
+
+3. **Service** — `apps/dashboard/services/<page>_service.py`, exposing:
+   - `query_*_raw(...)` — one DB read each, returning primitives, wrapped in try/except.
+   - `build_*_response(...)` — assembles the exact JSON the frontend reads.
+4. **Test** — `apps/api/tests/test_<page>.py`, using the temp-DB fixture from §8.
+5. **Document** — add the endpoint to `api-reference.md`.
+
+### Adding a mutation
+
+```python
+@method_decorator(login_not_required, name="dispatch")
+class ThingActionView(APIView):
+    def post(self, request, slug):
+        from apps.dashboard.services.thing_service import do_thing   # lazy: avoids a cycle
+        site_id = resolve_project_or_404(slug).site_url
+        value = (request.data.get("value") or "").strip()
+        if not value:
+            return Response({"detail": "value is required"}, status=400)
+        return Response({"ok": True, "result": do_thing(site_id, value)})
+```
+
+Rules: validate explicitly and return `{"detail": "..."}` with a 4xx; make it **idempotent**
+(the frontend fires bulk actions in parallel); persist first-party state through
+`mutation_state.get_state/set_state`; return a minimal ack, because the SPA always refetches.
+
+### Adding a connector
+
+1. Subclass `BaseConnector` in `pipeline/connectors/`:
+
+```python
+class MyConnector(BaseConnector):
+    name = "my_source"                       # the SyncLog key
+
+    @with_retry(max_retries=3, base_delay=5.0)
+    def fetch(self, site_id: str | None = None, **kw) -> list[dict]:
+        ...                                  # raise on unrecoverable failure
+
+    def _write_records(self, session, records, site_id=None) -> int:
+        return upsert_my_table(session, records, site_id=site_id)
+```
+
+   `BaseConnector.sync()` handles timing, the `SyncLog` row, and the success/error envelope.
+   **Never override `sync()`.**
+
+2. Register it in `sync_engine._get_connector`'s `connector_map`.
+3. Add it to the relevant `PAGE_CONNECTORS` scope and/or `ALL_CONNECTORS`.
+4. Add an `upsert_*` helper to `pipeline/db/writer.py` if the table is new.
+
+A connector that cannot be constructed (missing credentials) returns `None` from the factory and
+is **skipped silently** — the run still completes. Raise inside `fetch()` if you want a visible
+error instead.
+
+### Where things live
+
+| Need | Location |
+|---|---|
+| A new page's data logic | `apps/dashboard/services/<page>_service.py` |
+| A query two pages share | `apps/dashboard/services/shared_queries.py` |
+| First-party per-project state | `ProjectSettings.data` via `mutation_state` |
+| A period calculation | `pipeline/utils/period_utils.py` |
+| A DB write | `pipeline/db/writer.py` |
+| An external call | `pipeline/connectors/` |
+| A derived-from-owned-data computation | `pipeline/services/` |
+
+---
+
+## 6. Frontend patterns
+
+### The mental model
+
+There is one React component. `state` is one object. `renderVals()` runs on every render and
+returns one object; every `{{ … }}` in every template reads from it. Files in `js/pages/` are
+**not modules** — they are spliced into `renderVals()`'s body by the `#include` preprocessor and
+start mid-scope with `if (tab === 'x') { … }`.
+
+Available inside a `js/pages/*.js` file: `s` (state), `tab`, `data` (the cached response for the
+current tab), `vals`, `project`, and `this` (the component). Nothing is imported.
+
+### Adding a page
+
+1. `static/spa/src/pages/<name>.html` — the fragment, wrapped in
+   `<sc-if value="{{ showName }}">`.
+2. `static/spa/src/js/pages/<name>.js` — the view model:
+
+```js
+    /* ============ NAME ============ */
+    if (tab === 'name') {
+      vals.showName = true;
+      const setup = !data || !data.kpis || data.kpis.total === 0;
+      if (setup) { vals.nm = { setup: true, rows: [] }; return vals; }
+      vals.nm = { /* …every value and style the template reads… */ };
+    }
+```
+
+3. Add both `#include` directives — the HTML in `index.html`'s `<main>`, the JS at the bottom of
+   `app.js`'s `renderVals()`.
+4. Register the tab in `app.js`: `VALID`, `RES` (tab → API resource), the `titles` map, and
+   `SEOTABS`/`ADSTABS` if it belongs to a group.
+5. Add a nav entry in `components/sidebar.html` plus `navStyle` / `dotStyle` / `h.navName`.
+6. Add a sync scope to `tabToScope` / `tabToLabel` if the page has its own refresh.
+
+### Data fetching
+
+`fetchTab(tab, pid, range, force)` is the only fetch path. It keys the cache as
+`pid:tab[:range]` (range only for range-aware tabs), sets `loading`, calls
+`FuseAPI.get('/api/projects/' + pid + '/' + this.RES[tab], params)`, and stores the result.
+
+After a mutation, drop the affected keys and refetch:
+
+```js
+this.setState(s => {
+  const cache = {};
+  Object.keys(s.cache).forEach(k => { if (k.indexOf(pid + ':ads') !== 0) cache[k] = s.cache[k]; });
+  return { cache };
+});
+this.fetchTab(this.state.tab, pid, this.state.range, true);
+```
+
+### Forms
+
+There is no form library and no `<form>` element in the SPA. A field is a controlled input:
+`value="{{ x }}"` + `onInput`/`onChange` writing to state. Multi-field forms keep a **draft**
+object in state (`wsDraft`, `notifDraft`, `aiDraft`, `dataDraft`, `teamDraft`, `crawlCfg`),
+seeded from the fetched data on first load of that tab and submitted whole by a Save button that
+flips its label to `Saved ✓`. Validate in the handler before calling the API; show errors as
+inline state (`addSiteError`, `createUserError`, `cpwMsg`).
+
+### Tables
+
+Build rows in `renderVals()` — every cell value **and** every cell style pre-computed. Sorting
+uses `this.sortRows(rows, sort)` plus `mkSortHandler(stateKey, key)` and `arrow(sort, key)`.
+Filtering is plain `Array.filter` over the cached data. Selection is an array of ids in state
+with a `Set` for lookup.
+
+### State conventions
+
+- One flat `state` object; namespaced prefixes per page (`au*` audit, `ai*` AI, `pt*` positions,
+  `trm*` search terms, `cmp*` campaigns, `bl*` backlinks, `res*` explorer results).
+- Non-render values go on `this` directly: `_alive`, `_hist`, `_histIdx`, `_iv` (poll interval),
+  `_nt` (toast timer), `_rt`/`_bt` (debounce timers).
+- Guard every async callback with `if (!this._alive) return;`.
+- `localStorage` holds exactly two things: `fh_selected_project` and `fh_keyword_lists`.
+
+---
+
+## 7. Auth & permissions
+
+**In the backend:**
+
+```python
+if not check_owner_admin(request.user):     # blocks Analyst
+    return Response({"detail": "…requires Owner or Admin access."}, status=403)
+
+if not check_owner_only(request.user):      # blocks everyone but Owner
+    return Response({"detail": "Only the Owner can …"}, status=403)
+```
+
+Both return `True` for an unauthenticated user and hard-allow `user.id == 1` or a username of
+`founder`/`owner`. **These are UI guards, not a security boundary** — do not rely on them to
+protect anything that matters.
+
+**In the frontend:** the role arrives via the injected bootstrap as
+`window.FuseAPI.config.user.role` and surfaces as `vals.userRole` / `vals.canManageSettings`.
+Gate nav items with `<sc-if value="{{ canManageSettings }}">` and add a server-side check too.
+
+**Do not extend the legacy role system.** `apps/accounts/models.Role` (`founder`/`seo`/`ads`),
+`ROLE_PAGE_ACCESS`, and `apps/accounts/decorators.role_required` are dead — no live caller uses
+them, and `UserProfile.role` actually stores `Owner`/`Admin`/`Analyst`, which are outside the
+declared choices. Use the live vocabulary.
+
+---
+
+## 8. Testing
+
+Run: `python manage.py test` (a specific module: `python manage.py test apps.api.tests.test_overview`).
+
+**The analytics-DB fixture — copy this verbatim:**
+
+```python
+class MyEndpointTests(APITestCase):
+    def setUp(self):
+        db_connection._SessionFactory = None
+        self.addCleanup(setattr, db_connection, "_SessionFactory", None)
+        tmp = tempfile.mkdtemp()
+        db_path = str(Path(tmp) / "fusehealth.db")
+        init_db(get_engine(db_path))
+        self._ctx = override_settings(ANALYTICS_DB_PATH=db_path)
+        self._ctx.enable()
+        self.addCleanup(self._ctx.disable)
+
+        with get_session() as session:
+            session.add(Site(site_url="sc-domain:example.com", site_name="Example",
+                             slug="example", is_active=1))
+            # … seed the rows your assertions depend on …
+
+        user = get_user_model().objects.create_user("tester", password="x")
+        token = Token.objects.get(user=user)          # created by the post_save signal
+        self.client_auth = APIClient()
+        self.client_auth.credentials(HTTP_AUTHORIZATION=f"Bearer {token.key}")
+```
+
+Resetting `_SessionFactory` is mandatory — it is a module-level singleton and will otherwise leak
+the previous test's database.
+
+**What to test:** every top-level key of the response shape; that numbers reflect seeded data;
+that unbuilt features report `setup` rather than a fake value; that an unknown slug 404s; that
+the default range is 30d; that mutations persist and are idempotent.
+
+**Watch the period arithmetic.** The current window is anchored to the *latest data date* and
+ends the day before it, so the newest seeded row is intentionally excluded. Seed two rows and
+assert against the older one — `test_overview.py` explains this in a comment.
+
+Never call a real external API from a test. Inject a fake object
+(`pipeline/connectors/tests/test_gsc_property.py` shows the pattern).
+
+---
+
+## 9. Things that will bite you
+
+Each of these is a real bug that was found and fixed. Do not re-introduce them.
+
+| Trap | Why it matters |
+|---|---|
+| Missing `@login_not_required` on an API view | Token requests get 302'd to `/login/`, not 401'd |
+| `html.replace("<head>", …)` in `spa_views` | The literal string `<head>` also appears inside a JS string in the SPA; a blanket replace corrupts the script. Insert by **position** using `str.index()` |
+| Setting `FuseAPI.config` once | `app/api.js` executes **twice** (parse + `<helmet>` relocation) and reassigns `window.FuseAPI` each time. Hence the `defineProperty` interceptor |
+| `config.baseUrl = ''` | Empty string is falsy, so the transport silently falls through to fixture data forever. It must be `'/'` |
+| Acking alerts by database id | `technical_issues` rows are rebuilt after every sync and their PKs change. Key on a content hash |
+| Falling back to `.env` `GA4_PROPERTY_ID` when a `Site` row lacks one | Once wrote 6 654 rows of one site's data under another site's id. Fail loudly instead |
+| Storing GSC rows under the queried *property* URL | The property and the canonical `site_url` differ for `sc-domain:` sites; once filed 47 k rows under a key no page reads |
+| `default=list` on a `JSONField` in `apps/dashboard/models.py` | `AIPrompt` has a field literally named `list`, which shadows the builtin for the rest of the class body. Use `_empty_list` / `_empty_dict` |
+| `round(None, 1)` on an aggregate | `avg(position)` returns `NULL` when every row is null. Guard before rounding |
+| `.where(pd.notna(df), None)` on a float column | pandas silently reverts `None` to `NaN`. Cast with `.astype(object)` first |
+| Reading `request.data.get("models")` for prompt config | The SPA nests it as `{cfg: {models: …}}`; the flat read wiped `tracked_models` on every save |
+| Comparing `SyncLog.status` to `"ok"` | The real values are `never|running|success|error` |
+| A 404 from `GET /api/tasks/<id>` | The SPA polls at 500 ms and treats any non-2xx as fatal. Unknown ids must return `{done: true}` |
+| Building a segment list from a different slice than the table | A tab can then show a count with no matching rows. Union the segments into the table set |
+| Dropping an explicit `None` in `_update_django_sync_log` | Stale error text stuck to successful rows forever |
+
+---
+
+## 10. Known-broken code — do not copy
+
+- `apps/dashboard/views_export.py` — references `role_required`, `get_active_period`,
+  `_get_top_pages` and friends, none of which are imported or exist. Not routed. **Dead file.**
+- `app.js::clearData()` — reads `this.props.ctx.route.params.id`, which does not exist in this
+  runtime.
+- Position Tracking's delete action calls `window.FuseAPI.delete(...)`; the transport exposes
+  `del`.
+- `apps/dashboard/context_processors.py` — still lists the removed template pages; harmless but
+  meaningless now that no Django template renders a dashboard.
+- The email-invite path creates a `User` but never a `UserInvitation`, and emails a login link
+  rather than an accept-invite token link.
+- A stray `print("INCOMING KEYWORDS BATCH:", batch)` in `ProjectKeywordsView.put`.
+
+If you touch any of these, fix them properly rather than extending them.
+
+---
+
+## 11. Common tasks
+
+**Add a metric to an existing page** — extend the service's `query_*_raw`, add it to
+`build_*_response`, surface it in `js/pages/<page>.js`, render it in the fragment, extend the
+test, update `api-reference.md`.
+
+**Add a page** — §6 "Adding a page" plus §5 "Adding an API endpoint". Do both halves in one
+change; a half-wired page is worse than none.
+
+**Add an external data source** — §5 "Adding a connector". Then decide which scope runs it and
+which page reads it, and add the env vars to `.env.example`.
+
+**Add a settings group** — add its defaults to `DEFAULT_SETTINGS_BLOB` in `settings_service.py`,
+add the key to the persisted list in `apply_settings_update`, add a draft to frontend state, and
+add the sub-tab UI. It persists automatically.
+
+**Change the sync scope of a page** — edit `PAGE_CONNECTORS` in `pipeline/services/sync_engine.py`
+and `tabToScope` in `app.js`. Add an alias to `SCOPE_ALIASES` if the names differ.
+
+---
+
+## 12. Before you finish
+
+- [ ] No external API call added to a page-data path.
+- [ ] Every new API view carries `@method_decorator(login_not_required, name="dispatch")`.
+- [ ] Every new analytics write goes through a `writer.py` upsert helper.
+- [ ] No fabricated value fills a gap — empty, `null`, or `setup` instead, with a comment.
+- [ ] Every service function catches, logs and returns a safe shape.
+- [ ] Loading, error, empty-no-data, empty-filtered and setup states all exist for new UI.
+- [ ] Mutations are idempotent, confirm with a toast, and invalidate their caches.
+- [ ] `python manage.py test` passes.
+- [ ] `api-reference.md` / `features.md` / `design.md` updated if behaviour, endpoints or tokens
+      changed.
+- [ ] No secret hardcoded; new env vars added to `.env.example`.
+
+---
+
+## 13. What not to do
+
+- Do not add a frontend build step, a CSS framework, or a component library. The inline-style,
+  text-inclusion approach is a deliberate decision (see `design.md` §1).
+- Do not edit `static/spa/vendor/support.js` — it is generated.
+- Do not put business logic in `apps/api/views.py` or in a template.
+- Do not import Django models into `pipeline/connectors/` at module level; the lazy import inside
+  `_update_django_sync_log` is intentional so the pipeline stays runnable outside Django.
+- Do not add cross-database foreign keys. There are two databases; the join key is a string.
+- Do not "clean up" the long explanatory docstrings. They record why the code is shaped the way
+  it is, and they have already prevented regressions.
+- Do not trust `docs/superpowers/`, `Design_features/`, or `scratch/` as specifications. They are
+  historical design material and throwaway scripts. **The code is the specification; these five
+  `.claude/` files describe the code.**

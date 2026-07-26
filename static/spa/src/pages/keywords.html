@@ -10,46 +10,7 @@
         </sc-if>
         <sc-if value="{{ !kw.setup }}" hint-placeholder-val="{{ true }}">
 
-        <div style="display: flex; align-items: center; gap: 12px;">
-          <div style="font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: #94a3b8;">Your tracked portfolio</div>
-          <div style="flex: 1; height: 1px; background: #e2e8f0;"></div>
-        </div>
 
-        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px;">
-          <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; padding: 20px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);"><div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: #64748b; margin-bottom: 4px;">Total Keywords</div><div style="font-size: 30px; font-weight: 700; color: #334155;">{{ kw.total }}</div><div style="font-size: 12px; color: #94a3b8; margin-top: 4px;">Unique keywords tracked</div></div>
-          <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; padding: 20px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);"><div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: #64748b; margin-bottom: 4px;">Avg Position</div><div style="font-size: 30px; font-weight: 700; color: #334155;">{{ kw.avgPos }}</div><div style="font-size: 12px; color: #94a3b8; margin-top: 4px;">Across all keywords</div></div>
-          <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; padding: 20px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);"><div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: #64748b; margin-bottom: 4px;">Total Volume</div><div style="font-size: 30px; font-weight: 700; color: #334155;">{{ kw.totalVolume }}</div><div style="font-size: 12px; color: #94a3b8; margin-top: 4px;">Monthly search volume</div></div>
-          <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; padding: 20px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);"><div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: #64748b; margin-bottom: 4px;">Total Clicks</div><div style="font-size: 30px; font-weight: 700; color: #334155;">{{ kw.totalClicks }}</div><div style="font-size: 12px; color: #94a3b8; margin-top: 4px;">Organic traffic captured</div></div>
-        </div>
-
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px;">
-          <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; padding: 20px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
-            <h2 style="font-size: 15px; font-weight: 600; margin: 0 0 16px;">Search Intent Distribution</h2>
-            <div style="display: flex; flex-direction: column; gap: 12px;">
-              <sc-for list="{{ kw.intentRows }}" as="r" hint-placeholder-count="4">
-                <div style="display: flex; align-items: center; gap: 12px;">
-                  <span style="{{ r.iconStyle }}">{{ r.iconChar }}</span>
-                  <span style="font-size: 14px; color: #334155; width: 110px;">{{ r.label }}</span>
-                  <div style="flex: 1; height: 8px; border-radius: 9999px; background: #f1f5f9; overflow: hidden;"><div style="{{ r.barStyle }}"></div></div>
-                  <span style="font-size: 14px; font-weight: 600; width: 32px; text-align: right;">{{ r.count }}</span>
-                </div>
-              </sc-for>
-            </div>
-          </div>
-          <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; padding: 20px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
-            <h2 style="font-size: 15px; font-weight: 600; margin: 0 0 16px;">Keyword Difficulty Distribution</h2>
-            <div style="display: flex; flex-direction: column; gap: 12px;">
-              <sc-for list="{{ kw.kdRows }}" as="r" hint-placeholder-count="3">
-                <div style="display: flex; align-items: center; gap: 12px;">
-                  <span style="{{ r.iconStyle }}">{{ r.iconChar }}</span>
-                  <span style="font-size: 14px; color: #334155; width: 110px;">{{ r.label }}</span>
-                  <div style="flex: 1; height: 8px; border-radius: 9999px; background: #f1f5f9; overflow: hidden;"><div style="{{ r.barStyle }}"></div></div>
-                  <span style="{{ r.countStyle }}">{{ r.count }}</span>
-                </div>
-              </sc-for>
-            </div>
-          </div>
-        </div>
 
         <div style="display: flex; align-items: center; gap: 12px;">
           <div style="font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: #94a3b8;">Discover new keywords</div>
@@ -73,6 +34,21 @@
               <option value="Canada">Canada</option>
               <option value="United Kingdom">United Kingdom</option>
               <option value="Australia">Australia</option>
+              <option value="India">India</option>
+              <option value="Germany">Germany</option>
+              <option value="France">France</option>
+              <option value="Spain">Spain</option>
+              <option value="Italy">Italy</option>
+              <option value="Netherlands">Netherlands</option>
+              <option value="Brazil">Brazil</option>
+              <option value="Mexico">Mexico</option>
+              <option value="Japan">Japan</option>
+              <option value="South Africa">South Africa</option>
+              <option value="New Zealand">New Zealand</option>
+              <option value="Ireland">Ireland</option>
+              <option value="Singapore">Singapore</option>
+              <option value="Philippines">Philippines</option>
+              <option value="Malaysia">Malaysia</option>
             </select>
             <div onClick="{{ h.runResearch }}" style="display: inline-flex; align-items: center; gap: 8px; padding: 10px 20px; font-size: 14px; font-weight: 600; color: white; background: #4f46e5; border-radius: 8px; cursor: pointer;" style-hover="background:#4338ca">{{ researchLabel }}</div>
           </div>
@@ -269,6 +245,47 @@
               </div>
             </div>
           </sc-if>
+        </div>
+
+        <div style="display: flex; align-items: center; gap: 12px;">
+          <div style="font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: #94a3b8;">Your tracked portfolio</div>
+          <div style="flex: 1; height: 1px; background: #e2e8f0;"></div>
+        </div>
+
+        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px;">
+          <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; padding: 20px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);"><div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: #64748b; margin-bottom: 4px;">Total Keywords</div><div style="font-size: 30px; font-weight: 700; color: #334155;">{{ kw.total }}</div><div style="font-size: 12px; color: #94a3b8; margin-top: 4px;">Unique keywords tracked</div></div>
+          <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; padding: 20px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);"><div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: #64748b; margin-bottom: 4px;">Avg Position</div><div style="font-size: 30px; font-weight: 700; color: #334155;">{{ kw.avgPos }}</div><div style="font-size: 12px; color: #94a3b8; margin-top: 4px;">Across all keywords</div></div>
+          <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; padding: 20px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);"><div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: #64748b; margin-bottom: 4px;">Total Volume</div><div style="font-size: 30px; font-weight: 700; color: #334155;">{{ kw.totalVolume }}</div><div style="font-size: 12px; color: #94a3b8; margin-top: 4px;">Monthly search volume</div></div>
+          <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; padding: 20px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);"><div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: #64748b; margin-bottom: 4px;">Total Clicks</div><div style="font-size: 30px; font-weight: 700; color: #334155;">{{ kw.totalClicks }}</div><div style="font-size: 12px; color: #94a3b8; margin-top: 4px;">Organic traffic captured</div></div>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px;">
+          <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; padding: 20px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+            <h2 style="font-size: 15px; font-weight: 600; margin: 0 0 16px;">Search Intent Distribution</h2>
+            <div style="display: flex; flex-direction: column; gap: 12px;">
+              <sc-for list="{{ kw.intentRows }}" as="r" hint-placeholder-count="4">
+                <div style="display: flex; align-items: center; gap: 12px;">
+                  <span style="{{ r.iconStyle }}">{{ r.iconChar }}</span>
+                  <span style="font-size: 14px; color: #334155; width: 110px;">{{ r.label }}</span>
+                  <div style="flex: 1; height: 8px; border-radius: 9999px; background: #f1f5f9; overflow: hidden;"><div style="{{ r.barStyle }}"></div></div>
+                  <span style="font-size: 14px; font-weight: 600; width: 32px; text-align: right;">{{ r.count }}</span>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+          <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; padding: 20px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+            <h2 style="font-size: 15px; font-weight: 600; margin: 0 0 16px;">Keyword Difficulty Distribution</h2>
+            <div style="display: flex; flex-direction: column; gap: 12px;">
+              <sc-for list="{{ kw.kdRows }}" as="r" hint-placeholder-count="3">
+                <div style="display: flex; align-items: center; gap: 12px;">
+                  <span style="{{ r.iconStyle }}">{{ r.iconChar }}</span>
+                  <span style="font-size: 14px; color: #334155; width: 110px;">{{ r.label }}</span>
+                  <div style="flex: 1; height: 8px; border-radius: 9999px; background: #f1f5f9; overflow: hidden;"><div style="{{ r.barStyle }}"></div></div>
+                  <span style="{{ r.countStyle }}">{{ r.count }}</span>
+                </div>
+              </sc-for>
+            </div>
+          </div>
         </div>
 
         <!-- keyword overview drawer -->        <!-- keyword overview drawer -->

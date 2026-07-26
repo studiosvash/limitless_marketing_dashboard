@@ -47,36 +47,72 @@ class URLInspectionConnector(BaseConnector):
             return resolve_gsc_property(key, stored)
         return self._default_site_url or ""
 
-    def _get_pages_to_inspect(self, site_url: str, limit: int = 100) -> list[str]:
+    def _get_pages_to_inspect(self, site_url: str, limit: int = 50) -> list[str]:
         """
-        Get pages to inspect for this site:
-        1. Top pages by clicks (most important to keep indexed)
-        2. Pages with 0 clicks but impressions > 0 (potential crawl issues)
-        Filters by site_id so multi-site inspection stays correctly scoped.
+        Intelligently sample pages to inspect:
+        1. Homepage & Main Templates (Depth 1 / short paths like /services)
+        2. Sample of blog pages
+        3. High traffic fallback
+        4. Zero-click pages with impressions (potential indexing errors)
         """
-        urls = []
         with get_session() as session:
-            top_pages = session.execute(
+            rows = session.execute(
                 text(
                     "SELECT url FROM pages "
-                    "WHERE clicks > 0 AND site_id = :sid "
-                    "ORDER BY clicks DESC LIMIT :limit"
-                ),
-                {"limit": limit, "sid": site_url}
-            ).fetchall()
-            urls.extend([r[0] for r in top_pages])
-
-            zero_click = session.execute(
-                text(
-                    "SELECT url FROM pages "
-                    "WHERE clicks = 0 AND impressions > 0 AND site_id = :sid "
-                    "ORDER BY impressions DESC LIMIT 50"
+                    "WHERE site_id = :sid "
+                    "ORDER BY clicks DESC LIMIT 200"
                 ),
                 {"sid": site_url}
             ).fetchall()
-            urls.extend([r[0] for r in zero_click if r[0] not in urls])
-
-        return urls[:200]  # Cap at 200 to be safe with daily quota
+            
+        all_urls = [r[0] for r in rows]
+        sampled = []
+        
+        # 1. Homepage
+        home = next((u for u in all_urls if u.strip('/') == site_url.strip('/')), None)
+        if home:
+            sampled.append(home)
+            
+        # 2. Main Templates (Depth 1 paths e.g., /pricing, /about)
+        main_pages = []
+        for u in all_urls:
+            if u in sampled: continue
+            path = u.replace(site_url, '').strip('/')
+            if 0 <= path.count('/') <= 1 and 'blog' not in path and 'news' not in path:
+                main_pages.append(u)
+        sampled.extend(main_pages[:30])
+        
+        # 3. Blog pages
+        blog_pages = []
+        for u in all_urls:
+            if u in sampled: continue
+            if '/blog' in u or '/news' in u or '/article' in u:
+                blog_pages.append(u)
+        sampled.extend(blog_pages[:2])
+        
+        # 4. Fallback (top traffic)
+        for u in all_urls:
+            if len(sampled) >= limit: break
+            if u not in sampled:
+                sampled.append(u)
+                
+        # 5. Fill remaining slots with zero-click pages to find indexing errors
+        if len(sampled) < limit:
+            with get_session() as session:
+                zero_click = session.execute(
+                    text(
+                        "SELECT url FROM pages "
+                        "WHERE clicks = 0 AND impressions > 0 AND site_id = :sid "
+                        "ORDER BY impressions DESC LIMIT 20"
+                    ),
+                    {"sid": site_url}
+                ).fetchall()
+            for r in zero_click:
+                if len(sampled) >= limit: break
+                if r[0] not in sampled:
+                    sampled.append(r[0])
+                
+        return sampled[:limit]
 
     def _inspect_url(self, service, url: str, site_url: str, canonical: str) -> dict | None:
         """
@@ -138,7 +174,7 @@ class URLInspectionConnector(BaseConnector):
             raise ValueError("[url_inspection] No GSC site configured for this Site row or .env.")
         canonical = site_id or site_url
 
-        pages = self._get_pages_to_inspect(canonical, limit=100)
+        pages = self._get_pages_to_inspect(canonical, limit=50)
         if not pages:
             self.logger.warning(f"[url_inspection] No pages in DB for {site_url} — run gsc_pages first.")
             return []

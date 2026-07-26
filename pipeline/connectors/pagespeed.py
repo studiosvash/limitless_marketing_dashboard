@@ -9,6 +9,7 @@ Returns: Performance, SEO, Accessibility scores + LCP, CLS, INP, FCP, TTFB.
 Rate limit: ~400 requests/day free tier. We scan top pages only.
 """
 
+import json
 import os
 import time
 from datetime import datetime, timezone
@@ -43,18 +44,51 @@ class PageSpeedConnector(BaseConnector):
                 return site.site_url
         return os.getenv("GSC_SITE_URL", "")
 
-    def _get_top_pages(self, site_url: str, limit: int = 50) -> list[str]:
-        """Get the top pages by clicks for this site from the pages table."""
+    def _get_top_pages(self, site_url: str, limit: int = 15) -> list[str]:
+        """Intelligently sample top pages (Home, short paths, blogs, fallback) up to the limit."""
         with get_session() as session:
+            # Fetch a larger pool to sample from
             rows = session.execute(
                 text(
                     "SELECT url FROM pages "
                     "WHERE clicks > 0 AND site_id = :sid "
-                    "ORDER BY clicks DESC LIMIT :limit"
+                    "ORDER BY clicks DESC LIMIT 100"
                 ),
-                {"limit": limit, "sid": site_url}
+                {"sid": site_url}
             ).fetchall()
-        return [r[0] for r in rows]
+            
+        all_urls = [r[0] for r in rows]
+        sampled = []
+        
+        # 1. Homepage
+        home = next((u for u in all_urls if u.strip('/') == site_url.strip('/')), None)
+        if home:
+            sampled.append(home)
+            
+        # 2. Main Templates (Short paths e.g., /pricing, /about)
+        main_pages = []
+        for u in all_urls:
+            if u in sampled: continue
+            path = u.replace(site_url, '').strip('/')
+            if 0 <= path.count('/') <= 1 and 'blog' not in path and 'news' not in path:
+                main_pages.append(u)
+        sampled.extend(main_pages[:5])
+        
+        # 3. Blog pages
+        blog_pages = []
+        for u in all_urls:
+            if u in sampled: continue
+            if '/blog' in u or '/news' in u or '/article' in u:
+                blog_pages.append(u)
+        sampled.extend(blog_pages[:2])
+        
+        # 4. Fallback (top traffic)
+        for u in all_urls:
+            if len(sampled) >= limit: break
+            if u not in sampled:
+                sampled.append(u)
+                
+        return sampled[:limit]
 
     def _fetch_psi(self, url: str, strategy: str = "mobile") -> dict | None:
         """
@@ -103,6 +137,22 @@ class PageSpeedConnector(BaseConnector):
                 val = a.get("numericValue")
                 return round(val, 4) if val is not None else None
 
+            # Extract detailed audits for Technical Issues (score < 1 or opportunity with savings)
+            failed_audits = []
+            for audit_id, audit in audits.items():
+                sc = audit.get("score")
+                details = audit.get("details", {})
+                savings = details.get("overallSavingsMs", 0)
+                if (sc is not None and sc < 1) or savings > 0:
+                    failed_audits.append({
+                        "id": audit_id,
+                        "title": audit.get("title", ""),
+                        "description": audit.get("description", ""),
+                        "score": sc,
+                        "savings_ms": savings,
+                        "displayValue": audit.get("displayValue", "")
+                    })
+
             return {
                 "url": url,
                 "strategy": strategy,
@@ -116,6 +166,7 @@ class PageSpeedConnector(BaseConnector):
                 "fcp_ms": audit_ms("first-contentful-paint"),
                 "ttfb_ms": audit_ms("server-response-time"),
                 "si_ms": audit_ms("speed-index"),
+                "lighthouse_audits": json.dumps(failed_audits) if failed_audits else None,
                 "last_checked": datetime.now(timezone.utc),
             }
 
@@ -138,7 +189,7 @@ class PageSpeedConnector(BaseConnector):
         if not site_url:
             raise ValueError("[pagespeed] No site configured.")
 
-        pages = self._get_top_pages(site_url, limit=50)
+        pages = self._get_top_pages(site_url, limit=15)
         if not pages:
             self.logger.warning(f"[pagespeed] No pages in DB for {site_url} — run gsc_pages first.")
             return []
@@ -191,6 +242,7 @@ class PageSpeedConnector(BaseConnector):
                     "fcp_ms": stmt.excluded.fcp_ms,
                     "ttfb_ms": stmt.excluded.ttfb_ms,
                     "si_ms": stmt.excluded.si_ms,
+                    "lighthouse_audits": stmt.excluded.lighthouse_audits,
                     "last_checked": stmt.excluded.last_checked,
                 },
             )

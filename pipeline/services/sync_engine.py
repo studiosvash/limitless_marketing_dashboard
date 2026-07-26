@@ -151,6 +151,15 @@ def _run_post_sync(site_url: str, connectors_run: list[str]) -> None:
         except Exception as exc:
             logger.warning(f"[sync_engine] Technical issue rebuild failed for {site_url!r}: {exc}")
 
+    # Run AI Summary Generation last (needs updated technical issues & aggregates)
+    if any(c in connectors_run for c in ("gsc", "ga4", "gsc_pages", "url_inspection")):
+        try:
+            from pipeline.services.ai_summary_service import generate_ai_summary
+            logger.info(f"[sync_engine] Running AI Summary generator for {site_url!r}")
+            generate_ai_summary(site_url)
+        except Exception as exc:
+            logger.warning(f"[sync_engine] AI Summary generation failed for {site_url!r}: {exc}")
+
 
 # ---------------------------------------------------------------------------
 # sync_all

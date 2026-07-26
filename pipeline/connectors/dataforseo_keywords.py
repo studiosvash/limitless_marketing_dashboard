@@ -292,13 +292,13 @@ class DataForSEOKeywordsConnector(BaseConnector):
     def _fetch_keyword_suggestions(self, seeds: list[str], location_name: str, limit: int) -> dict:
         """Labs keyword_suggestions/live call (long-tail suggestions)."""
         payload = [{
-            "keywords": [s.lower() for s in seeds][:200],
+            "keyword": s.lower().strip(),
             "location_name": location_name,
             "language_name": "English",
             "include_serp_info": True,
             "limit": max(1, min(limit, 1000)),
             "order_by": ["keyword_info.search_volume,desc"],
-        }]
+        } for s in seeds[:20] if s.strip()]
         resp = requests.post(
             f"{DATAFORSEO_BASE}/dataforseo_labs/google/keyword_suggestions/live",
             auth=self.auth,
@@ -312,13 +312,14 @@ class DataForSEOKeywordsConnector(BaseConnector):
     def _parse_idea_item(item: dict) -> Optional[dict]:
         """Map one keyword_ideas item to the Explorer's row shape (before match/tracked).
         Returns None if the item has no keyword."""
-        kw = item.get("keyword")
+        data = item.get("keyword_data") if isinstance(item.get("keyword_data"), dict) else item
+        kw = data.get("keyword")
         if not kw:
             return None
-        info = item.get("keyword_info") or {}
-        props = item.get("keyword_properties") or {}
-        intent_info = item.get("search_intent_info") or {}
-        serp = item.get("serp_info") or {}
+        info = data.get("keyword_info") or {}
+        props = data.get("keyword_properties") or {}
+        intent_info = data.get("search_intent_info") or {}
+        serp = data.get("serp_info") or {}
 
         # monthly_searches comes newest-first; the sparkline wants oldest→newest.
         monthly_raw = info.get("monthly_searches") or []
@@ -371,7 +372,7 @@ class DataForSEOKeywordsConnector(BaseConnector):
         with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
             f_ideas = pool.submit(self._fetch_keyword_ideas, cleaned, location_name, limit)
             f_related = pool.submit(self._fetch_related_keywords, cleaned[0], location_name, min(limit, 50))
-            f_questions = pool.submit(self._fetch_keyword_suggestions, question_seeds[:20], location_name, min(limit, 50))
+            f_questions = pool.submit(self._fetch_keyword_suggestions, cleaned, location_name, min(limit, 50))
 
             try:
                 ideas_payload = f_ideas.result()
@@ -407,24 +408,23 @@ class DataForSEOKeywordsConnector(BaseConnector):
                 row["match"] = self._classify_match(row["kw"], seed_phrases, seed_token_sets)
                 rows.append(row)
 
-        # 2. Parse related keywords -> match: "related"
+        # 2. Parse related keywords
         task_related = (related_payload.get("tasks") or [{}])[0]
         for item in ((task_related.get("result") or [{}])[0].get("items") or []):
             row = self._parse_idea_item(item)
             if row and row["kw"].lower() not in seen_kws:
                 seen_kws.add(row["kw"].lower())
                 match_class = self._classify_match(row["kw"], seed_phrases, seed_token_sets)
-                row["match"] = "exact" if match_class == "exact" else ("questions" if match_class == "questions" else "related")
+                row["match"] = "related" if match_class == "broad" else match_class
                 rows.append(row)
 
-        # 3. Parse question suggestions -> match: "questions"
+        # 3. Parse keyword suggestions
         task_questions = (questions_payload.get("tasks") or [{}])[0]
         for item in ((task_questions.get("result") or [{}])[0].get("items") or []):
             row = self._parse_idea_item(item)
             if row and row["kw"].lower() not in seen_kws:
                 seen_kws.add(row["kw"].lower())
-                match_class = self._classify_match(row["kw"], seed_phrases, seed_token_sets)
-                row["match"] = "exact" if match_class == "exact" else "questions"
+                row["match"] = self._classify_match(row["kw"], seed_phrases, seed_token_sets)
                 rows.append(row)
 
         return {"status": "ok", "location": location_name, "cost": round(float(total_cost), 4),

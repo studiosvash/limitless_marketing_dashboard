@@ -33,6 +33,7 @@
 <div style="font-family: 'Inter', system-ui, sans-serif; background: #f8fafc; color: #0f172a; height: 100vh; display: flex; -webkit-font-smoothing: antialiased;">
 
   <!-- #include "components/accept_invite_modal.html" -->
+  <!-- #include "components/password_modal.html" -->
 
   <!-- ============================ SIDEBAR ============================ -->
   <!-- #include "components/sidebar.html" -->
@@ -53,7 +54,7 @@
             <div style="display: flex; align-items: baseline; gap: 10px; font-size: 13px;">
               <span style="font-weight: 600; color: #4338ca;">Syncing {{ syncScopeLabel }} for {{ projectDomain }}</span>
               <span style="color: #64748b;">{{ syncStep }}</span>
-              <span style="margin-left: auto; color: #94a3b8; font-size: 12px;">{{ syncPctText }} · est. cost {{ syncCostText }}</span>
+              <span style="margin-left: auto; color: #94a3b8; font-size: 12px;">{{ syncPctText }} · Est. time: {{ syncEtaText }}</span>
             </div>
             <div style="height: 6px; background: #f1f5f9; border-radius: 9999px; margin-top: 8px; overflow: hidden;">
               <div style="height: 100%; background: #4f46e5; border-radius: 9999px; transition: width 0.4s ease; width: {{ syncPct }}%;"></div>
@@ -92,6 +93,9 @@
 
       <!-- ============ SEO PERFORMANCE ============ -->
       <!-- #include "pages/seo.html" -->
+
+      <!-- ============ DOMAIN OVERVIEW ============ -->
+      <!-- #include "pages/domain_overview.html" -->
 
       <!-- ============ KEYWORDS ============ -->
       <!-- #include "pages/keywords.html" -->

@@ -81,7 +81,7 @@
             click: () => { this.setState({ auSub: 'issues', auCat: name, auSev: 'all' }); this.pushNav({ auSub: 'issues' }); }
           };
         });
-        const vitalVerdict = (m) => m.p75 <= m.good ? ['Good', '#dcfce7', '#15803d'] : m.p75 <= m.poor ? ['Needs work', '#fef3c7', '#b45309'] : ['Poor', '#fee2e2', '#b91c1c'];
+        const vitalVerdict = (m) => m.p75 === null ? ['N/A', '#f1f5f9', '#64748b'] : m.p75 <= m.good ? ['Good', '#dcfce7', '#15803d'] : m.p75 <= m.poor ? ['Needs work', '#fef3c7', '#b45309'] : ['Poor', '#fee2e2', '#b91c1c'];
         au.vitals = [
           ['LCP', 'Largest Contentful Paint', data.cwv.lcp],
           ['TBT', 'Total Blocking Time', data.cwv.tbt],
@@ -90,7 +90,7 @@
           const m = v[2], vd = vitalVerdict(m);
           const b = m.buckets, tot = Math.max(1, b.good + b.mid + b.poor);
           return {
-            name: v[0], desc: v[1], p75: m.p75, unit: m.unit,
+            name: v[0], desc: v[1], p75: m.p75 !== null ? m.p75 : '—', unit: m.p75 !== null ? m.unit : '',
             verdict: vd[0], badge: { fontSize: '11px', fontWeight: 700, padding: '2px 9px', borderRadius: '999px', background: vd[1], color: vd[2] },
             numStyle: { fontSize: '30px', fontWeight: 800, marginTop: '10px', color: vd[2] },
             segs: [
@@ -150,9 +150,18 @@
             chev: { color: '#cbd5e1', fontSize: '18px', transform: open ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s ease' },
             toggle: () => this.setState({ auOpen: open ? null : c.id }),
             hasPages: c.pages.length > 0,
-            pages: shown.map(u => { const pg2 = pgByUrl[u]; return { url: u, score: pg2 ? pg2.score : '—', scoreStyle: scoreChip(pg2 ? pg2.score : 0), status: statusOf(pg2) }; }),
+            pages: shown.map(u => {
+              const urlStr = typeof u === 'string' ? u : u.url;
+              const pg2 = pgByUrl[urlStr];
+              return {
+                url: urlStr,
+                score: pg2 ? pg2.score : (u.score !== undefined ? u.score : '—'),
+                scoreStyle: scoreChip(pg2 ? pg2.score : (u.score || 0)),
+                status: (pg2 && pg2.statusCode) ? statusOf(pg2) : (u.status || '200')
+              };
+            }),
             more: c.pages.length > 8, moreLabel: '+ ' + (c.pages.length - 8) + ' more pages — export for the full list',
-            exportPages: () => this.downloadCsv(project.domain + '-' + c.id + '.csv', [['url', 'url']], c.pages.map(u => ({ url: u }))),
+            exportPages: () => this.downloadCsv(project.domain + '-' + c.id + '.csv', [['url', 'url']], c.pages.map(x => ({ url: typeof x === 'string' ? x : x.url }))),
             hide: () => this.toggleAuditCheck(c.id),
             hideLabel: c.hidden ? 'Restore check' : 'Hide this check'
           };

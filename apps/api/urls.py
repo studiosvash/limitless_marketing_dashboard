@@ -42,4 +42,6 @@ urlpatterns = [
     # Keyword / Prompt Explorer (project id in body)
     path("research", views.KeywordResearchView.as_view(), name="keyword-research"),
     path("prompt-research", views.PromptResearchView.as_view(), name="prompt-research"),
+    path("domain-overview", views.DomainOverviewView.as_view(), name="domain-overview"),
+    path("live-serp", views.LiveSERPView.as_view(), name="live-serp"),
 ]

@@ -15,6 +15,8 @@ Reconstructs our comprehensive check catalog covering all thematic categories:
 Every issue is backed by concrete, checkable metrics.
 """
 
+import json
+import re
 from urllib.parse import urlparse
 from sqlalchemy import select, func, delete
 
@@ -138,6 +140,30 @@ def rebuild_technical_issues(site_id: str) -> int:
                 if acc < 90:
                     _add(url, "missing_alt_tags", "medium",
                          f"Informational images on this page lack descriptive ALT text attributes.")
+            
+            # Dynamic Lighthouse audits
+            if ps.lighthouse_audits:
+                try:
+                    audits_data = json.loads(ps.lighthouse_audits)
+                    for audit in audits_data:
+                        # Extract title and description
+                        title = audit.get("title", "")
+                        desc_md = audit.get("description", "")
+                        
+                        # Strip markdown links from description, e.g. [Learn more](url)
+                        desc_clean = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', desc_md).strip()
+                        if audit.get("displayValue"):
+                            desc_clean += f" ({audit['displayValue']})"
+                            
+                        sc = audit.get("score")
+                        sev = "high" if sc is not None and sc < 0.5 else "medium"
+                        
+                        # Use a dynamic prefix lh:Category:Title
+                        # We use 'PageSpeed' as a catch-all category for these detailed audits
+                        issue_type = f"lh:PageSpeed:{title}"
+                        _add(url, issue_type, sev, desc_clean)
+                except Exception as e:
+                    logger.error(f"Failed to parse lighthouse_audits for {url}: {e}")
 
             # Best practices score warnings
             if bp is not None:

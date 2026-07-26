@@ -92,18 +92,29 @@ def query_alert_technical_issues_raw(site_id: str) -> list[dict]:
     caps at 15 for its own display table; this is a separate, unlimited function)."""
     try:
         with get_session() as session:
+            from sqlalchemy import func
             rows = session.execute(
-                select(TechnicalIssue).where(TechnicalIssue.site_id == site_id)
-                .order_by(TechnicalIssue.detected_at.desc())
-            ).scalars().all()
+                select(
+                    TechnicalIssue.issue_type,
+                    TechnicalIssue.severity,
+                    TechnicalIssue.description,
+                    func.max(TechnicalIssue.detected_at).label("latest_detected"),
+                    func.count(TechnicalIssue.id).label("issue_count"),
+                    func.max(TechnicalIssue.url).label("example_url")
+                )
+                .where(TechnicalIssue.site_id == site_id)
+                .group_by(TechnicalIssue.issue_type, TechnicalIssue.severity, TechnicalIssue.description)
+                .order_by(func.max(TechnicalIssue.detected_at).desc())
+            ).all()
             return [
                 {
-                    "id": r.id,
-                    "url": r.url,
+                    "id": f"group-{r.issue_type}",
+                    "url": r.example_url,
                     "issue_type": r.issue_type,
                     "severity": r.severity or "medium",
                     "description": r.description or "",
-                    "detected_at": r.detected_at,
+                    "detected_at": r.latest_detected,
+                    "count": r.issue_count
                 }
                 for r in rows
             ]
@@ -163,15 +174,24 @@ def build_alerts_response(site_id: str) -> dict:
         })
     for i in issues:
         issue_label = _ISSUE_LABELS.get(i["issue_type"], i["issue_type"].replace("_", " ").title())
+        count = i["count"]
         short_url = (i["url"] or "").split("//")[-1][:55]
-        feed_id = _issue_feed_id(i["url"], i["issue_type"])
+        feed_id = _issue_feed_id(i["url"] or i["issue_type"], i["issue_type"])
+        
+        if count > 1:
+            title_text = f"{issue_label} ({count} pages affected)"
+            detail_text = f"e.g., {short_url} - {i['description']}"
+        else:
+            title_text = f"{issue_label}: {short_url}"
+            detail_text = i["description"]
+            
         feed.append({
             "id": feed_id,
             "ts": str(i["detected_at"].date()) if i["detected_at"] else "",
             "kind": "technical",
             "severity": i["severity"],
-            "title": f"{issue_label}: {short_url}",
-            "detail": i["description"],
+            "title": title_text,
+            "detail": detail_text,
             "acknowledged": feed_id in acked,
         })
 

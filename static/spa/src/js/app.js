@@ -6,9 +6,10 @@
     projectId: 'fusehealth', projects: [],
     addSiteOpen: false, addSiteDomain: '', addSiteName: '', addSiteError: null, addSiteBusy: false,
     range: '30d',
-    cache: {}, loading: true, error: null,
+    cache: {}, loading: true, error: null, chartHoverIndex: null,
     sync: { active: false, progress: 0, step: '', cost: 0 },
     freshness: 'Weekly · Mon',
+    doQuery: '', doData: null, doLoading: false, doError: null,
     explorerQ: '', explorerLoc: 'United States', research: null, researching: false,
     matchType: 'broad', selectedKws: [], sendOpen: false, exportOpen: false, sendSub: null, newListName: '', kwLists: [], toast: null, showLists: false,
     resVolMin: 0, resKdMin: 0, resKdMax: 100, resIntents: [], resIncl: '', resExcl: '', resOpenFilter: null, resGroup: null, resGroupMode: 'number', resDrawer: null,
@@ -38,14 +39,14 @@
     inviteEmail: '', inviteRole: 'Analyst', newTokenName: '',
     inviteMode: 'email', inviteStatusMsg: null, inviteErrorMsg: null,
     acceptInviteToken: null, acceptEmail: '', acceptRole: '', acceptInvitedBy: '', acceptUsername: '', acceptPassword: '', acceptError: null, acceptSuccess: null,
-    cpwOld: '', cpwNew: '', cpwNew2: '', cpwErr: false, cpwMsg: '', cpwBusy: false
+    cpwOpen: false, cpwOld: '', cpwNew: '', cpwNew2: '', cpwErr: false, cpwMsg: '', cpwBusy: false
   };
 
   /* ---------- constants ---------- */
-  get VALID() { return ['overview', 'seo', 'keywords', 'positioning', 'backlinks', 'offsite', 'pages', 'ai', 'ads', 'campaigns', 'terms', 'attribution', 'alerts', 'settings']; }
-  get SEOTABS() { return ['seo', 'keywords', 'positioning', 'backlinks', 'offsite', 'pages', 'ai']; }
+  get VALID() { return ['overview', 'seo', 'domain_overview', 'keywords', 'positioning', 'backlinks', 'offsite', 'pages', 'ai', 'ads', 'campaigns', 'terms', 'attribution', 'alerts', 'settings']; }
+  get SEOTABS() { return ['seo', 'domain_overview', 'keywords', 'positioning', 'backlinks', 'offsite', 'pages', 'ai']; }
   get ADSTABS() { return ['ads', 'campaigns', 'terms', 'attribution']; }
-  get RES() { return { overview: 'overview', seo: 'seo', keywords: 'keywords', positioning: 'positions', backlinks: 'backlinks', offsite: 'offsite', pages: 'audit', ai: 'ai', ads: 'ads', campaigns: 'ads', terms: 'ads', attribution: 'ads', alerts: 'alerts', settings: 'settings' }; }
+  get RES() { return { overview: 'overview', seo: 'seo', domain_overview: 'seo', keywords: 'keywords', positioning: 'positions', backlinks: 'backlinks', offsite: 'offsite', pages: 'audit', ai: 'ai', ads: 'ads', campaigns: 'ads', terms: 'ads', attribution: 'ads', alerts: 'alerts', settings: 'settings' }; }
 
   /* ---------- lifecycle ---------- */
   componentDidMount() {
@@ -234,6 +235,23 @@
       .catch(e => { if (this._alive) this.setState({ loading: false, error: (e && e.message) || 'Request failed' }); });
   }
 
+  fetchLiveSerp(kw, location) {
+    this.setState({ ptSerpKw: kw, ptSerpLoading: true, ptSerpData: null, ptSerpError: null });
+    window.FuseAPI.post('/api/live-serp', { keyword: kw, location })
+      .then(res => {
+        if (!this._alive || this.state.ptSerpKw !== kw) return;
+        if (res.error) {
+          this.setState({ ptSerpLoading: false, ptSerpError: res.error });
+        } else {
+          this.setState({ ptSerpLoading: false, ptSerpData: res.items || [] });
+        }
+      })
+      .catch(e => {
+        if (!this._alive || this.state.ptSerpKw !== kw) return;
+        this.setState({ ptSerpLoading: false, ptSerpError: e.message || 'Failed to fetch SERP' });
+      });
+  }
+
   go(tab) {
     this.pushNav({ tab });
     this.setState({ tab, seoOpen: this.state.seoOpen || this.SEOTABS.includes(tab), adsOpen: this.state.adsOpen || this.ADSTABS.includes(tab), error: null });
@@ -344,7 +362,7 @@
 
     const _startPolling = (t) => {
       if (!this._alive) return;
-      this.setState({ sync: { active: true, scope: activeScope, progress: 0.02, step: (t.steps && t.steps[0]) || 'Starting…', cost: t.est_cost || 0, projectId: pid } });
+      this.setState({ sync: { active: true, scope: activeScope, progress: 0.02, step: (t.steps && t.steps[0]) || 'Starting…', cost: t.est_cost || 0, projectId: pid, startTime: Date.now() } });
       this._iv = setInterval(() => {
         window.FuseAPI.get('/api/tasks/' + t.task_id).then(st => {
           if (!this._alive) { clearInterval(this._iv); return; }
@@ -353,7 +371,7 @@
             this.setState(s => {
               const cache = {};
               Object.keys(s.cache).forEach(k2 => { if (k2.indexOf(pid + ':') !== 0) cache[k2] = s.cache[k2]; });
-              return { sync: { active: false, scope: null, progress: 1, step: 'Done', cost: t.est_cost || 0, projectId: null }, freshness: 'Just now', cache };
+              return { sync: { active: false, scope: null, progress: 1, step: 'Done', cost: t.est_cost || 0, projectId: null, startTime: null }, freshness: 'Just now', cache };
             });
             this.fetchTab(this.state.tab, pid, this.state.range, true);
             if (this.state.tab !== 'alerts') this.fetchTab('alerts', pid, this.state.range, false);
@@ -362,7 +380,7 @@
             const scopeNotif = { audit: 'Crawl complete — Site Audit refreshed for ' + dom, positions: 'Positioning data refreshed for ' + dom, positioning: 'Positioning data refreshed for ' + dom, keywords: 'Keywords data refreshed for ' + dom, backlinks: 'Backlinks data refreshed for ' + dom, ads: 'Ads data refreshed for ' + dom, ai: 'AI Optimization data refreshed for ' + dom, overview: 'Overview data refreshed for ' + dom, seo: 'SEO data refreshed for ' + dom };
             this.notify(scopeNotif[activeScope] || (activeScope === 'all' ? ('All modules refreshed for ' + dom) : (activeScope + ' refreshed for ' + dom)));
           } else {
-            this.setState({ sync: { active: true, scope: activeScope, progress: st.progress, step: st.step, cost: t.est_cost || 0, projectId: pid } });
+            this.setState({ sync: { active: true, scope: activeScope, progress: st.progress, step: st.step, cost: t.est_cost || 0, projectId: pid, startTime: this.state.sync.startTime } });
           }
         }).catch(() => {});
       }, 500);
@@ -387,6 +405,24 @@
     window.FuseAPI.post('/api/research', { project: this.state.projectId, keywords: q.split(','), location: this.state.explorerLoc })
       .then(r => { if (this._alive) { r.seeds = q.toLowerCase(); this.setState({ researching: false, research: r, matchType: 'broad', resGroup: null, resDrawer: null, resVolMin: 0, resKdMin: 0, resKdMax: 100, resIntents: [], resIncl: '', resExcl: '', resOpenFilter: null }); this.pushNav({ research: r }); } })
       .catch(() => { if (this._alive) this.setState({ researching: false, error: 'Research request failed' }); });
+  }
+
+  /* ---------- domain overview ---------- */
+  runDomainOverview() {
+    const q = this.state.doQuery.trim();
+    if (!q || this.state.doLoading) return;
+    this.setState({ doLoading: true, doError: null });
+    window.FuseAPI.post('/api/domain-overview', { target: q, location: this.state.explorerLoc || 'United States' })
+      .then(r => { if (this._alive) this.setState({ doLoading: false, doData: r, doError: r.error }); })
+      .catch(e => { if (this._alive) this.setState({ doLoading: false, doError: 'Failed to fetch domain overview: ' + e }); });
+  }
+
+  analyzeUrlInDomainOverview(url) {
+    if (!url) return;
+    this.setState({ doQuery: url }, () => {
+      this.go('domain_overview');
+      this.runDomainOverview();
+    });
   }
 
   // rows visible under the current match-type tab + filters (server-side over the cached expansion set in prod)
@@ -944,7 +980,7 @@
       .then(res => {
         if (!this._alive) return;
         this.setState({ cpwBusy: false, cpwOld: '', cpwNew: '', cpwNew2: '', cpwErr: false, cpwMsg: 'Password updated successfully.' });
-        setTimeout(() => { if (this._alive) this.setState({ cpwMsg: '' }); }, 3000);
+        setTimeout(() => { if (this._alive) this.setState({ cpwMsg: '', cpwOpen: false }); }, 2000);
       })
       .catch(err => {
         if (!this._alive) return;
@@ -1020,6 +1056,11 @@
       const y = (hgt - 10 - (d[keyName] / max) * (hgt - 30)).toFixed(1);
       return x + ',' + y;
     }).join(' ');
+  }
+  chartHoverOut() {
+    if (this.state.chartHoverIndex !== null) {
+      this.setState({ chartHoverIndex: null });
+    }
   }
   toggleAuditCheck(checkId) {
     const pid = this.state.projectId;
@@ -1152,6 +1193,7 @@
     const titles = {
       overview: ['Overview', 'Your traffic, rankings, and what needs attention'],
       seo: ['SEO Performance', 'Opportunities, anomalies, and technical issues'],
+      domain_overview: ['Domain Overview', 'Deep-dive organic traffic and keywords for any domain'],
       keywords: ['Keyword Research', 'Your organic keyword portfolio — powered by DataForSEO'],
       positioning: ['Position Tracking', 'Weekly SERP snapshots, competitors, and movement'],
       backlinks: ['Backlinks', 'Live and lost links with referring domain quality'],
@@ -1207,10 +1249,14 @@
     const h = {
       logout: () => { try { localStorage.clear(); sessionStorage.clear(); } catch (e) {} window.location.href = '/logout/'; },
       navOverview: () => this.go('overview'), navSeo: () => this.go('seo'),
-      navKeywords: () => this.go('keywords'), navPositioning: () => this.go('positioning'),
+      navDomainOverview: () => this.go('domain_overview'), navKeywords: () => this.go('keywords'), navPositioning: () => this.go('positioning'),
       navBacklinks: () => this.go('backlinks'), navOffsite: () => this.go('offsite'), navPages: () => this.go('pages'), navAi: () => this.go('ai'),
       navAds: () => this.go('ads'), navCampaigns: () => this.go('campaigns'), navTerms: () => this.go('terms'), navAttribution: () => this.go('attribution'),
-      navAlerts: () => this.go('alerts'), navSettings: () => { if (this.state.userRole !== 'Analyst') this.go('settings'); else this.notify('Settings require Owner or Admin access.'); },
+      doInput: e => this.setState({ doQuery: e.target.value }),
+      doKey: e => { if (e.key === 'Enter') this.runDomainOverview(); },
+      runDomainOverview: () => this.runDomainOverview(),
+      fetchLiveSerp: (kw, loc) => this.fetchLiveSerp(kw, loc),
+      analyzeUrlInDomainOverview: url => this.analyzeUrlInDomainOverview(url), navAlerts: () => this.go('alerts'), navSettings: () => { if (this.state.userRole !== 'Analyst') this.go('settings'); else this.notify('Settings require Owner or Admin access.'); },
       goConnections: () => { if (this.state.userRole === 'Analyst') { this.notify('Connecting social platforms requires Owner or Admin access.'); } else { this.setState({ tab: 'settings', settingsSub: 'connections' }); this.pushNav({ tab: 'settings', settingsSub: 'connections' }); } },
       cmpSearch: e => this.setState({ cmpSearch: e.target.value }),
       exportCampaigns: () => { const d = s.cache[this.key(s.tab)]; if (d) this.downloadCsv(project.domain + '-campaigns.csv', [['campaign', 'name'], ['platform', 'platform'], ['type', 'type'], ['status', 'status'], ['budget_daily', 'budget_daily'], ['spend', 'spend'], ['impressions', 'impressions'], ['clicks', 'clicks'], ['ctr', 'ctr'], ['cpc', 'cpc'], ['conversions', 'conversions'], ['cpa', 'cpa'], ['roas', 'roas'], ['lost_is_budget', 'lost_is_budget']], d.campaigns); },
@@ -1350,13 +1396,30 @@
       cpwOldFn: e => this.setState({ cpwOld: e.target.value }),
       cpwNewFn: e => this.setState({ cpwNew: e.target.value }),
       cpwNew2Fn: e => this.setState({ cpwNew2: e.target.value }),
-      cpwSave: () => this.changePassword()
+      cpwSave: () => this.changePassword(),
+      openCpwModal: () => this.setState({ cpwOpen: true, cpwOld: '', cpwNew: '', cpwNew2: '', cpwErr: false, cpwMsg: '' }),
+      closeCpwModal: () => this.setState({ cpwOpen: false })
     };
 
     const uCfg = (window.FuseAPI && window.FuseAPI.config && window.FuseAPI.config.user) || { username: 'founder', initials: 'FO', role: 'Internal' };
     const canManageSettings = uCfg.role !== 'Analyst';
+
+    let syncEtaText = '';
+    if (s.sync.startTime && s.sync.progress > 0 && s.sync.progress < 1) {
+        const elapsed = Date.now() - s.sync.startTime;
+        let remainingSec = 0;
+        if (s.sync.progress < 0.05 || elapsed < 3000) {
+            remainingSec = (activeScope === 'audit' || activeScope === 'pages' || activeScope === 'all') ? 300 : 60;
+        } else {
+            const totalEst = elapsed / s.sync.progress;
+            remainingSec = Math.max(0, Math.round((totalEst - elapsed) / 1000));
+        }
+        if (remainingSec > 60) syncEtaText = Math.ceil(remainingSec / 60) + 'm remaining';
+        else syncEtaText = remainingSec + 's remaining';
+    }
+
     const vals = {
-      cpwOld: s.cpwOld, cpwNew: s.cpwNew, cpwNew2: s.cpwNew2, cpwErr: s.cpwErr, cpwMsg: s.cpwMsg, cpwBusy: s.cpwBusy,
+      cpwOpen: s.cpwOpen, cpwOld: s.cpwOld, cpwNew: s.cpwNew, cpwNew2: s.cpwNew2, cpwErr: s.cpwErr, cpwMsg: s.cpwMsg, cpwBusy: s.cpwBusy,
       acceptInvite: s.acceptInviteToken ? {
         token: s.acceptInviteToken,
         email: s.acceptEmail || 'Loading...',
@@ -1371,8 +1434,8 @@
       brandName: project.name || 'FuseHealth',
       projectDomain: project.domain || '',
       h,
-      navStyle: { overview: mk('overview'), seo: mk('seo'), keywords: sub('keywords'), positioning: sub('positioning'), backlinks: sub('backlinks'), offsite: sub('offsite'), pages: sub('pages'), ai: sub('ai'), ads: mk('ads'), campaigns: sub('campaigns'), terms: sub('terms'), attribution: sub('attribution'), alerts: mk('alerts'), settings: mk('settings') },
-      dotStyle: { overview: dot('overview'), seo: dot('seo'), ads: dot('ads'), campaigns: sdot('campaigns'), terms: sdot('terms'), attribution: sdot('attribution'), alerts: dot('alerts'), settings: dot('settings'), keywords: sdot('keywords'), positioning: sdot('positioning'), backlinks: sdot('backlinks'), offsite: sdot('offsite'), pages: sdot('pages'), ai: sdot('ai') },
+      navStyle: { overview: mk('overview'), seo: mk('seo'), domain_overview: sub('domain_overview'), keywords: sub('keywords'), positioning: sub('positioning'), backlinks: sub('backlinks'), offsite: sub('offsite'), pages: sub('pages'), ai: sub('ai'), ads: mk('ads'), campaigns: sub('campaigns'), terms: sub('terms'), attribution: sub('attribution'), alerts: mk('alerts'), settings: mk('settings') },
+      dotStyle: { overview: dot('overview'), seo: dot('seo'), ads: dot('ads'), campaigns: sdot('campaigns'), terms: sdot('terms'), attribution: sdot('attribution'), alerts: dot('alerts'), settings: dot('settings'), domain_overview: sdot('domain_overview'), keywords: sdot('keywords'), positioning: sdot('positioning'), backlinks: sdot('backlinks'), offsite: sdot('offsite'), pages: sdot('pages'), ai: sdot('ai') },
       seoOpen: s.seoOpen, adsOpen: s.adsOpen,
       title: titles[tab][0], subtitle: titles[tab][1] + ' · ' + project.domain,
       projects: s.projects.length ? s.projects : [{ id: s.projectId, domain: project.domain }],
@@ -1388,7 +1451,7 @@
       refreshIconStyle: isAllSyncing ? { animation: 'fuseSpin 1s linear infinite' } : {},
       freshness: s.freshness,
       syncing, syncScopeLabel: activeScope === 'all' ? 'all modules' : (tabToLabel[tab] || activeScope || '').replace('Fetch ', ''), syncStep: s.sync.step, syncPct: Math.round(s.sync.progress * 100),
-      syncPctText: Math.round(s.sync.progress * 100) + '%', syncCostText: this.money(s.sync.cost),
+      syncPctText: Math.round(s.sync.progress * 100) + '%', syncCostText: this.money(s.sync.cost), syncEtaText,
       hasError: !!s.error && !s.loading, errorText: s.error || '',
       loading: s.loading && !s.error,
       hasUnacked: unacked > 0, unackedCount: unacked,
@@ -1553,6 +1616,8 @@
         };
       });
     }
+
+    /* #include "js/pages/domain_overview.js" */
 
     if (s.loading || s.error || !data) return vals;
 

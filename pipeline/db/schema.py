@@ -72,6 +72,27 @@ class SEODaily(Base):
     )
 
 
+class GA4TrafficSourceDaily(Base):
+    """GA4 Traffic by sessionDefaultChannelGroup and sessionSource."""
+    __tablename__ = "ga4_traffic_source_daily"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    date = Column(Date, nullable=False, index=True)
+    site_id = Column(String(255), nullable=False, index=True)
+    channel = Column(String(100), nullable=False, index=True)
+    source = Column(String(200), nullable=False, index=True)
+    sessions = Column(Integer, default=0)
+    engaged_sessions = Column(Integer, default=0)
+    conversions = Column(Integer, default=0)
+    revenue = Column(Float, default=0.0)
+
+    __table_args__ = (
+        UniqueConstraint("date", "site_id", "channel", "source",
+                         name="uq_ga4_traffic_source_date_site_channel_source"),
+        Index("ix_ga4_traffic_source_site_date", "site_id", "date"),
+    )
+
+
 class KeywordRanking(Base):
     """Daily keyword rankings: GSC engagement + DataForSEO market data."""
     __tablename__ = "keyword_rankings"
@@ -247,6 +268,7 @@ class PageSpeed(Base):
     fcp_ms = Column(Float, nullable=True)
     ttfb_ms = Column(Float, nullable=True)
     si_ms = Column(Float, nullable=True)
+    lighthouse_audits = Column(Text, nullable=True)
     last_checked = Column(DateTime, server_default=func.now())
 
     __table_args__ = (

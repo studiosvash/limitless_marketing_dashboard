@@ -398,12 +398,15 @@ def _get_competitor_grid(site_id: str, limit: int = 100) -> dict:
 
         rows = []
         for kw in keywords:
-            you = make_cell(your_cell.get(kw, {}))
-            comp_cells = [
+            kw_comps = [
                 {"domain": dom, **make_cell(cell.get(kw, {}).get(dom, {}))}
                 for dom in competitors
             ]
-            rows.append({"keyword": kw, "you": you, "cells": comp_cells})
+            rows.append({
+                "kw": kw,
+                "you": make_cell(your_cell.get(kw, {})),
+                "comps": kw_comps
+            })
 
         # Surface keywords where you actually rank first; nulls (not ranking) last.
         rows.sort(key=lambda r: (r["you"]["pos"] is None, r["you"]["pos"] or 9999))
