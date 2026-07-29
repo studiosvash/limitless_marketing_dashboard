@@ -15,6 +15,53 @@ def _resolve_site_ids(site_id: str) -> list[str]:
     return [site_id, alt_id]
 
 
+# --- revenue --------------------------------------------------------------
+# Revenue exists in exactly one place: ga4_traffic_source_daily.revenue, written
+# from GA4's `totalRevenue` metric. seo_daily has no revenue column, so the
+# SEODaily-based aggregates below cannot derive it and must read it from here.
+# When GA4 reports no revenue (a property with no ecommerce/revenue events) the
+# honest answer is 0.0 — never a per-conversion estimate.
+
+def _revenue_total_raw(site_ids: list[str], start, end) -> float:
+    """Real GA4 revenue for the whole period, or 0.0 when GA4 reported none."""
+    try:
+        with get_session() as session:
+            row = session.execute(
+                select(func.sum(GA4TrafficSourceDaily.revenue).label("revenue"))
+                .where(
+                    GA4TrafficSourceDaily.site_id.in_(site_ids),
+                    GA4TrafficSourceDaily.date >= start,
+                    GA4TrafficSourceDaily.date <= end,
+                )
+            ).first()
+            return round(float(row.revenue or 0.0), 2) if row else 0.0
+    except Exception as e:
+        logger.error(f"_revenue_total_raw error: {e}", exc_info=True)
+        return 0.0
+
+
+def _revenue_by_date_raw(site_ids: list[str], start, end) -> dict:
+    """Real GA4 revenue per day, keyed by ISO date string. Missing day -> no revenue."""
+    try:
+        with get_session() as session:
+            rows = session.execute(
+                select(
+                    GA4TrafficSourceDaily.date,
+                    func.sum(GA4TrafficSourceDaily.revenue).label("revenue"),
+                )
+                .where(
+                    GA4TrafficSourceDaily.site_id.in_(site_ids),
+                    GA4TrafficSourceDaily.date >= start,
+                    GA4TrafficSourceDaily.date <= end,
+                )
+                .group_by(GA4TrafficSourceDaily.date)
+            ).all()
+            return {str(r.date): round(float(r.revenue or 0.0), 2) for r in rows}
+    except Exception as e:
+        logger.error(f"_revenue_by_date_raw error: {e}", exc_info=True)
+        return {}
+
+
 def query_offsite_totals_raw(site_id: str, start, end) -> dict:
     site_ids = _resolve_site_ids(site_id)
     try:
@@ -41,7 +88,8 @@ def query_offsite_totals_raw(site_id: str, start, end) -> dict:
         "engagementRate": round(engagement_rate * 100, 1),
         "engagedSessions": round(sessions * engagement_rate),
         "keyEvents": int(row.conversions or 0) if row else 0,
-        "revenue": round(int(row.conversions or 0) * 45.0, 2) if row and row.conversions else 0,
+        # Real GA4 totalRevenue, not conversions x an invented average order value.
+        "revenue": _revenue_total_raw(site_ids, start, end),
         "referringDomains": ref_domains,
     }
 
@@ -65,6 +113,9 @@ def query_offsite_trend_raw(site_id: str, start, end) -> list[dict]:
         logger.error(f"query_offsite_trend_raw error: {e}", exc_info=True)
         return []
 
+    # Real GA4 totalRevenue per day; days GA4 reported no revenue for stay at 0.0.
+    revenue_by_date = _revenue_by_date_raw(site_ids, start, end)
+
     out = []
     for r in rows:
         sessions = int(r.sessions or 0)
@@ -75,7 +126,7 @@ def query_offsite_trend_raw(site_id: str, start, end) -> list[dict]:
             "sessions": sessions,
             "engagedSessions": round(sessions * er),
             "keyEvents": convs,
-            "revenue": round(convs * 45.0, 2),
+            "revenue": revenue_by_date.get(str(r.date), 0.0),
         })
     return out
 
@@ -108,7 +159,12 @@ def query_offsite_landing_pages_raw(site_id: str, start, end) -> list[dict]:
     return [
         {
             "url": r.url,
-            "topSource": "Organic Search",
+            # seo_daily has no channel dimension, so the channel that drove each
+            # landing page is genuinely unknown. Hard-coding "Organic Search"
+            # labelled every page — including referral and social entries — with a
+            # source we never measured. Empty string = "we don't know"; the SPA
+            # renders it as a dash.
+            "topSource": "",
             "sessions": int(r.sessions or 0),
             "engagedRate": round(float(r.engagement_rate or 0.0), 4),
             "keyEvents": int(r.conversions or 0),
@@ -152,6 +208,37 @@ def query_traffic_sources_raw(site_id: str, start, end) -> list[dict]:
         logger.error(f"query_traffic_sources_raw error: {e}", exc_info=True)
         return []
 
+def _last_ga4_sync(site_id: str) -> tuple:
+    """`(iso_timestamp_or_None, last_run_status)` for this site's `ga4` connector.
+
+    Every number on the Off-site page comes from GA4, so this is the honest "as of" for the
+    whole screen.
+
+    Why a status is returned alongside the date, rather than just filtering to successful runs:
+    `SyncLog` is UNIQUE on `(connector, site_url)` -- exactly ONE row per pair, rewritten in
+    place by each run. So `status` describes the LATEST attempt, and the table has no memory of
+    when the last *successful* one was. Filtering `status="success"` would therefore report
+    "never synced" for a project that has synced fine for months and merely failed this
+    morning, which is worse than the bug being fixed.
+
+    Instead: report the real `last_synced` date, and hand the status back so the caller can say
+    "as of <date> — last refresh failed". Both facts, neither invented.
+    """
+    try:
+        from apps.sync.models import SyncLog
+        row = (
+            SyncLog.objects.filter(site_url=site_id, connector="ga4")
+            .values("last_synced", "status")
+            .first()
+        )
+        if not row or not row["last_synced"]:
+            return (None, row["status"] if row else "never")
+        return (row["last_synced"].isoformat(), row["status"] or "never")
+    except Exception as exc:
+        logger.error(f"_last_ga4_sync failed for {site_id!r}: {exc}", exc_info=True)
+        return (None, "never")
+
+
 def build_offsite_response(site_id: str, curr_start, curr_end, prev_start, prev_end) -> dict:
     """API-shaped Off-site SEO response across all tabs and charts."""
     totals = query_offsite_totals_raw(site_id, curr_start, curr_end)
@@ -185,10 +272,9 @@ def build_offsite_response(site_id: str, curr_start, curr_end, prev_start, prev_
             "offsite": "Organic" in ch or "Referral" in ch or "Social" in ch or "Video" in ch
         })
         
-    if not channels:
-        channels = [
-            {"channel": "Organic Search", "sessions": 0, "pct": 0, "engagementRate": 0, "keyEvents": 0, "offsite": True}
-        ]
+    # No placeholder row when ga4_traffic_source_daily is empty: an "Organic Search
+    # / 0 sessions" row is a channel we never measured. An empty list is the honest
+    # shape and the SPA already renders the channel mix as blank.
 
     # Real referrers session mapping
     ref_domains = query_referring_domains_raw(site_id)
@@ -206,14 +292,21 @@ def build_offsite_response(site_id: str, curr_start, curr_end, prev_start, prev_
         share = match["sessions"] if match else 0
         engaged = match["engaged_sessions"] if match else 0
         convs = match["conversions"] if match else 0
-        
+        rev = match["revenue"] if match else 0.0
+
         referrers.append({
             "domain": rd["domain"],
             "authorityScore": rd["rank"],
             "sessions": share,
-            "users": share, # estimate
+            # ga4_traffic_source_daily has no user count, so per-referrer users is
+            # unknown. It used to be set to `sessions` and commented "# estimate" —
+            # a fabricated number. null says "not measured".
+            "users": None,
             "engagementRate": round(engaged / share * 100, 1) if share > 0 else 0.0,
             "keyEvents": convs,
+            # Real GA4 totalRevenue attributed to this source, or 0.0 when GA4
+            # reported none / the domain drove no measured sessions.
+            "revenue": rev,
         })
 
     from apps.dashboard.services.settings_service import build_settings_response
@@ -238,12 +331,21 @@ def build_offsite_response(site_id: str, curr_start, curr_end, prev_start, prev_
     yt_sess, yt_eng, yt_conv, yt_rev = get_social_metrics("youtube")
     tw_sess, tw_eng, tw_conv, tw_rev = get_social_metrics("t.co")
 
+    # Platform impressions are ALWAYS None. GA4 measures sessions that arrived from
+    # a source; it cannot see how many times a post was shown on LinkedIn, Reddit,
+    # YouTube or X. Those counts only exist in each platform's own API, and no
+    # platform connector is wired yet — so there is no impression data for any
+    # platform, connected toggle or not. The previous `sessions * 12 / 8 / 5 / 4`
+    # multipliers were invented out of thin air. None makes the SPA render "—" with
+    # a "connector needed" caption, which is the truth.
     social = [
-        {"platform": "LinkedIn", "source": "linkedin.com", "channel": "Social", "connected": li_conn, "impressions": round(li_sess * 12) if li_conn else None, "sessions": li_sess, "engagedRate": round(li_eng / li_sess, 3) if li_sess > 0 else 0, "engagementRate": round(li_eng / li_sess * 100, 1) if li_sess > 0 else 0, "keyEvents": li_conv, "revenue": li_rev},
-        {"platform": "Reddit", "source": "reddit.com", "channel": "Social", "connected": reddit_conn, "impressions": round(rd_sess * 8) if reddit_conn else None, "sessions": rd_sess, "engagedRate": round(rd_eng / rd_sess, 3) if rd_sess > 0 else 0, "engagementRate": round(rd_eng / rd_sess * 100, 1) if rd_sess > 0 else 0, "keyEvents": rd_conv, "revenue": rd_rev},
-        {"platform": "YouTube", "source": "youtube.com", "channel": "Video", "connected": yt_conn, "impressions": round(yt_sess * 5) if yt_conn else None, "sessions": yt_sess, "engagedRate": round(yt_eng / yt_sess, 3) if yt_sess > 0 else 0, "engagementRate": round(yt_eng / yt_sess * 100, 1) if yt_sess > 0 else 0, "keyEvents": yt_conv, "revenue": yt_rev},
-        {"platform": "X / Twitter", "source": "t.co", "channel": "Social", "connected": x_conn, "impressions": round(tw_sess * 4) if x_conn else None, "sessions": tw_sess, "engagedRate": round(tw_eng / tw_sess, 3) if tw_sess > 0 else 0, "engagementRate": round(tw_eng / tw_sess * 100, 1) if tw_sess > 0 else 0, "keyEvents": tw_conv, "revenue": tw_rev},
+        {"platform": "LinkedIn", "source": "linkedin.com", "channel": "Social", "connected": li_conn, "impressions": None, "sessions": li_sess, "engagedRate": round(li_eng / li_sess, 3) if li_sess > 0 else 0, "engagementRate": round(li_eng / li_sess * 100, 1) if li_sess > 0 else 0, "keyEvents": li_conv, "revenue": li_rev},
+        {"platform": "Reddit", "source": "reddit.com", "channel": "Social", "connected": reddit_conn, "impressions": None, "sessions": rd_sess, "engagedRate": round(rd_eng / rd_sess, 3) if rd_sess > 0 else 0, "engagementRate": round(rd_eng / rd_sess * 100, 1) if rd_sess > 0 else 0, "keyEvents": rd_conv, "revenue": rd_rev},
+        {"platform": "YouTube", "source": "youtube.com", "channel": "Video", "connected": yt_conn, "impressions": None, "sessions": yt_sess, "engagedRate": round(yt_eng / yt_sess, 3) if yt_sess > 0 else 0, "engagementRate": round(yt_eng / yt_sess * 100, 1) if yt_sess > 0 else 0, "keyEvents": yt_conv, "revenue": yt_rev},
+        {"platform": "X / Twitter", "source": "t.co", "channel": "Social", "connected": x_conn, "impressions": None, "sessions": tw_sess, "engagedRate": round(tw_eng / tw_sess, 3) if tw_sess > 0 else 0, "engagementRate": round(tw_eng / tw_sess * 100, 1) if tw_sess > 0 else 0, "keyEvents": tw_conv, "revenue": tw_rev},
     ]
+
+    _ga4_at, _ga4_status = _last_ga4_sync(site_id)
 
     return {
         "totals": totals,
@@ -257,5 +359,16 @@ def build_offsite_response(site_id: str, curr_start, curr_end, prev_start, prev_
             "linkedin": li_conn, "reddit": reddit_conn, "youtube": yt_conn,
             "x": x_conn, "facebook": bool(plat_conn.get("facebook", False)), "instagram": bool(plat_conn.get("instagram", False)),
         },
-        "syncMeta": {"state": "ready", "lastUpdated": totals.get("engagementRate", 0)},
+        # `lastUpdated` used to be `totals["engagementRate"]` -- the engagement-rate PERCENTAGE
+        # under a key the frontend renders as a timestamp. Now it is the real last successful
+        # `ga4` sync for this site (GA4 is what feeds every number on this page), or None when
+        # GA4 has never synced. `None` is the honest answer; the banner prints "never synced"
+        # rather than inventing a date.
+        #
+        # Deliberately NOT returned: `cadence` and `ga4_tokens_used`/`ga4_tokens_limit`. The
+        # frontend read all three and none has ever existed here, so the banner rendered the
+        # literal "undefined · undefined / 0 GA4 tokens". GA4 API token quota is not tracked
+        # anywhere in this codebase, so there is no real number to show -- the fix is to stop
+        # claiming one, not to invent a counter.
+        "syncMeta": {"state": "ready", "lastUpdated": _ga4_at, "lastStatus": _ga4_status},
     }

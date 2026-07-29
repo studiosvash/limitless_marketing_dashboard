@@ -1,13 +1,13 @@
 """Overview page data — raw calculators (shared by the old Django view and the new
 DRF API view) plus the old view's presentation formatters. Query logic lives here
 exactly once; each caller formats it however its output needs (see
-docs/superpowers/specs/2026-07-10-limitless-migration-roadmap-and-phaseA-design.md §2.2)."""
+.claude/api-reference.md §2.2)."""
 
 from datetime import date, timedelta
 
 from sqlalchemy import func, select
 
-from pipeline.db.schema import SEODaily, AISummary
+from pipeline.db.schema import SEODaily, AISummary, PageSpeed
 from pipeline.utils.db_connection import get_session
 
 
@@ -138,21 +138,46 @@ def query_top_ga4_pages_weekly_raw(site_id: str) -> list[dict]:
 
 
 def query_top_audit_pages_raw(site_id: str, limit: int = 10) -> list[dict]:
-    """Top 10 Site Audit pages by lowest performance score."""
+    """Slowest audited pages, worst Lighthouse performance score first.
+
+    Fixed 2026-07-27, and it had been silently dead: `PageSpeed` was referenced here but never
+    imported, so every call raised `NameError`, the blanket `except` swallowed it, and the
+    Overview "Slowest pages (Site Audit)" panel returned `[]` forever. It read as "no audit data
+    yet" on projects that had a full PageSpeed table.
+
+    Three things the restored query has to get right, all of which the original got wrong:
+
+    1. `strategy == "mobile"`. `page_speed` holds one row per (url, strategy). Without the
+       filter this mixes desktop and mobile and can list the same URL twice with different
+       scores. Mobile is what `site_audit_service` scores the site on, so the two must agree.
+    2. Both `site_id` forms. Sites are registered with or without the `sc-domain:` prefix and
+       the analytics tables contain both; matching one form only silently returns nothing for
+       half of them. Same reason `site_audit_service._site_id_variants` exists.
+    3. `None`, not `0`. The old code coerced with `or 0`, so a page whose SEO score had not been
+       captured was reported as scoring zero -- indistinguishable from a genuinely terrible
+       page, and the frontend's score chip rendered it red. A missing measurement is `None` and
+       the UI prints a dash.
+    """
+    variants = [site_id]
+    if site_id.startswith("sc-domain:"):
+        variants.append(site_id.replace("sc-domain:", "", 1))
+    else:
+        variants.append(f"sc-domain:{site_id}")
+
     try:
         with get_session() as session:
             rows = session.execute(
                 select(PageSpeed)
-                .where(PageSpeed.site_id == site_id)
+                .where(PageSpeed.site_id.in_(variants), PageSpeed.strategy == "mobile")
                 .order_by(PageSpeed.performance_score.asc().nulls_last())
                 .limit(limit)
             ).scalars().all()
             return [
                 {
                     "url": r.url,
-                    "performance": int(r.performance_score or 0),
-                    "seo": int(r.seo_score or 0),
-                    "lcp": float(r.lcp_ms or 0)
+                    "performance": int(r.performance_score) if r.performance_score is not None else None,
+                    "seo": int(r.seo_score) if r.seo_score is not None else None,
+                    "lcp": float(r.lcp_ms) if r.lcp_ms is not None else None,
                 }
                 for r in rows
             ]
@@ -314,6 +339,196 @@ def build_top_pages_api(site_id: str, start_date: date, end_date: date, limit: i
     """HANDOFF_SPEC.md overview `topPages[≤6]` shape: [{url, clicks, impressions, ctr}]."""
     raw = query_top_pages_raw(site_id, start_date, end_date, limit=limit)
     return [{"url": p["page"], "clicks": p["clicks"], "impressions": p["impressions"], "ctr": p["ctr"]} for p in raw]
+
+
+def _to_number(raw):
+    """A number, or `None` when there is no value — never 0 as a stand-in for "unknown".
+
+    `shared_queries._get_keywords_overview` returns raw numbers and `None` (it used to emit
+    display strings — "1,234" / "N/A" / "—" — and that lossy formatting was removed on
+    2026-07-27). This guard exists only so a `None` stays a `None` and so any non-numeric
+    value that somehow reaches here becomes `None` rather than a fabricated zero. It
+    deliberately does NOT parse strings back into numbers: doing so would make "formatted
+    string" a supported input shape again, which is exactly the two-sources-of-truth problem
+    that was just removed."""
+    if raw is None or isinstance(raw, bool):
+        return None
+    if isinstance(raw, (int, float)):
+        return raw
+    return None
+
+
+def build_top_keywords_api(keywords_overview: list[dict]) -> list[dict]:
+    """Overview `topKeywords[<=5]` shape: [{keyword, position, clicks, impressions, volume}]
+    with **raw numbers** (or `None`), not display strings.
+
+    Every value in the Overview response is a raw number that the SPA renders through
+    `this.fmt()` / `this.posBadge()`. Handing the frontend pre-formatted strings would mean
+    the one page formats numbers two different ways, and would make the columns unsortable
+    and uncomparable (`"1,234" < "9"` is true as a string). This function is the adapter:
+    overview_service owns the shape of the Overview response.
+
+    Precision is now preserved end-to-end: `_get_keywords_overview` returns
+    `round(avg(position), 1)`, so a keyword averaging 8.4 arrives as 8.4 and the caller
+    decides whether to show it whole. (Before 2026-07-27 the query formatted it with
+    `f"{avg:.0f}"` and the decimal could not be recovered here.)
+
+    `None` is preserved as `None` so the UI can say "no data" rather than print a zero."""
+    out = []
+    for row in keywords_overview or []:
+        out.append({
+            "keyword": row.get("keyword") or "",
+            # None everywhere the source had no value — never coerced to 0, which the UI
+            # would render as a real "zero clicks" instead of "we don't know".
+            "position": _to_number(row.get("position")),
+            "clicks": _to_number(row.get("clicks")),
+            "impressions": _to_number(row.get("impressions")),
+            "volume": _to_number(row.get("volume")),
+        })
+    return out
+
+
+def _coverage_state(ranked: int, total: int) -> str:
+    """How much of the comparison keyword set a competitor was actually captured on.
+
+    'none'    -> zero captured positions. There is NO average to show.
+    'partial' -> captured on some but not all of the compared keywords; the average is real
+                 but covers a smaller keyword set than a fully-captured competitor's, so it
+                 is not comparable like-for-like and the UI must qualify it.
+    'ok'      -> captured on every keyword in the comparison set.
+    """
+    if total <= 0 or ranked <= 0:
+        return "none"
+    return "ok" if ranked >= total else "partial"
+
+
+def _avg_position(positions: list) -> float | None:
+    """Mean of the captured positions, or None when nothing was captured. Never 0."""
+    real = [p for p in positions if p is not None]
+    if not real:
+        return None
+    return round(sum(real) / len(real), 1)
+
+
+def build_positioning_overview(site_id: str) -> dict:
+    """Overview `positioningOverview` — the summary card the approved design calls
+    "Positioning vs Competitors": your average position next to each tracked competitor's.
+
+    Aggregates shared_queries._get_competitor_grid, which returns per-keyword cells
+    ({kw, you, comps:[{domain, pos}]}). This is the Overview *summary*; the per-keyword
+    Competitor Map on the Positioning page renders the same grid in full detail.
+
+    HONESTY CONTRACT (the reason this function is careful). That grid used to invent a
+    competitor's position from an MD5 hash of keyword+domain whenever no capture existed;
+    the fabrication was removed and missing pairs are now genuinely absent. An average is
+    exactly the kind of aggregate that can quietly re-fabricate that data — mean over a
+    list that silently skips the gaps produces a confident-looking number that describes a
+    keyword set the reader never sees. So:
+
+      * A competitor with zero captured positions gets `avgPosition: None` and
+        `state: "none"`. It is never averaged, never ranked against you, and never given a
+        stand-in number.
+      * A competitor captured on some keywords gets a real average over exactly those
+        keywords, plus `keywordsRanked`/`keywordsTotal` and `state: "partial"` so the
+        number can never be read as covering more than it does.
+      * The same rule applies to your own row — partial coverage of your own positions is
+        labelled the same way.
+
+    Returns `status: "setup"` (with a `note` naming what is missing) rather than an empty
+    "ok" card when there are no tracked keywords, no tracked competitors, or no captured
+    dates yet."""
+    try:
+        from apps.dashboard.services.shared_queries import _get_competitor_grid
+
+        grid = _get_competitor_grid(site_id)
+        competitors = grid.get("competitors") or []
+        rows = grid.get("rows") or []
+
+        # Order matters: name the *actual* thing that is missing. An empty grid can mean no
+        # tracked keywords (competitors also come back empty), no tracked competitors, or
+        # keywords + competitors but no captured ranking dates yet — three different fixes.
+        if not rows and not competitors:
+            # _get_competitor_grid returns competitors=[] as soon as the tracked-keyword
+            # list is empty, even when competitor domains ARE tracked — so this note states
+            # what the card needs rather than asserting which piece is missing.
+            return _positioning_setup(
+                "Nothing to compare yet. This card needs tracked keywords and captured "
+                "positions: track keywords in the Keyword Explorer, add competitor domains "
+                "on the Positioning page, then run a positions sync."
+            )
+        if grid.get("status") == "no_competitors" or not competitors:
+            return _positioning_setup(
+                "No competitors are being tracked yet. Add competitor domains on the "
+                "Positioning page, then run a positions sync."
+            )
+        if not rows:
+            # Either no tracked keywords, or no captured ranking dates. Both mean there is
+            # nothing real to average — say so instead of rendering an empty comparison.
+            return _positioning_setup(
+                "No captured keyword positions yet. Track keywords and run a positions "
+                "sync to compare against your competitors."
+            )
+
+        # The comparison set is the grid's own row set — the tracked keywords where at least
+        # one party (you or a competitor) has a captured position. It is NOT the full tracked
+        # keyword list: a keyword nobody ranks for produces no row, and counting it as
+        # "uncovered" would understate every competitor equally for no information gain.
+        keywords_total = len(rows)
+
+        your_positions = [r.get("you", {}).get("pos") for r in rows]
+        your_ranked = sum(1 for p in your_positions if p is not None)
+        you = {
+            "avgPosition": _avg_position(your_positions),
+            "keywordsRanked": your_ranked,
+            "keywordsTotal": keywords_total,
+            "state": _coverage_state(your_ranked, keywords_total),
+        }
+
+        by_domain: dict[str, list] = {domain: [] for domain in competitors}
+        for row in rows:
+            for cell in row.get("comps") or []:
+                domain = cell.get("domain")
+                if domain in by_domain:
+                    by_domain[domain].append(cell.get("pos"))
+
+        competitor_rows = []
+        for domain in competitors:
+            positions = by_domain.get(domain, [])
+            ranked = sum(1 for p in positions if p is not None)
+            competitor_rows.append({
+                "domain": domain,
+                "avgPosition": _avg_position(positions),   # None when ranked == 0
+                "keywordsRanked": ranked,
+                "keywordsTotal": keywords_total,
+                "state": _coverage_state(ranked, keywords_total),
+            })
+
+        # Best average first; competitors with no captured positions sort last, because
+        # "no data" is not a good rank and must never lead the list.
+        competitor_rows.sort(
+            key=lambda c: (c["avgPosition"] is None, c["avgPosition"] if c["avgPosition"] is not None else 0)
+        )
+
+        covered = sum(1 for c in competitor_rows if c["state"] != "none")
+        return {
+            "status": "ok",
+            "note": "",
+            "you": you,
+            "competitors": competitor_rows,
+            "keywordsTotal": keywords_total,
+            "competitorsWithData": covered,
+            "capturedAt": grid.get("latest_date"),
+        }
+    except Exception as e:
+        import logging; logging.getLogger(__name__).error(f"Error: {e}", exc_info=True)
+        return _positioning_setup("Positioning comparison is unavailable right now.")
+
+
+def _positioning_setup(note: str) -> dict:
+    """Honest empty shape for build_positioning_overview — no invented averages, and a
+    note naming exactly what is missing so the card can tell the user what to do."""
+    return {"status": "setup", "note": note, "you": None, "competitors": [],
+            "keywordsTotal": 0, "competitorsWithData": 0, "capturedAt": None}
 
 
 def build_pillars(site_id: str, kpis_current: dict, kpis_previous: dict, top3_count: int) -> list[dict]:

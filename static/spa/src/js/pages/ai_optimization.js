@@ -202,9 +202,12 @@
               const nm = this.state.aiNewPlName.trim();
               const texts = selTexts();
               if (!nm || !texts.length) return;
+              /* Only list CREATION can reject here -- aiAddPrompts handles and reports its own
+                 failure and resolves undefined, so there is no double toast. Staying silent
+                 would leave the user staring at an unchanged screen after naming a new list. */
               this.aiPost('lists', { op: 'create', name: nm })
                 .then(r => this.aiAddPrompts(texts, r.id, () => this.setState({ aiExpSel: [], aiExpAddOpen: false, aiNewPlName: '', aiListFilter: r.id })))
-                .catch(() => {});
+                .catch(err => { if (this._alive) this.notify(this.errText(err, 'Could not create the prompt list')); });
             };
             aiv.expNewCreate = expCreateAdd;
             aiv.expNewKey = e => { if (e.key === 'Enter') expCreateAdd(); };
@@ -400,9 +403,10 @@
             const nm = this.state.aiNewPlName.trim();
             const texts = selPromptTexts();
             if (!nm || !texts.length) return;
+            /* Same as expCreateAdd above: only the list creation rejects into this catch. */
             this.aiPost('lists', { op: 'create', name: nm })
               .then(r => this.aiAddPrompts(texts, r.id, () => this.setState({ aiKwSel: [], aiKwAddOpen: false, aiNewPlName: '' })))
-              .catch(() => {});
+              .catch(err => { if (this._alive) this.notify(this.errText(err, 'Could not create the prompt list')); });
           };
           aiv.kwNewCreate = kwCreateAdd;
           aiv.kwNewKey = e => { if (e.key === 'Enter') kwCreateAdd(); };

@@ -18,6 +18,7 @@ import requests
 from dotenv import load_dotenv
 
 from pipeline.connectors.base import BaseConnector
+from pipeline.connectors.dataforseo_cost import extract_cost, record_cost
 from pipeline.utils.retry import with_retry
 from pipeline.utils.db_connection import get_session
 from pipeline.db.writer import upsert_competitor_domains
@@ -80,6 +81,8 @@ class DataForSEOLabsCompetitorsConnector(BaseConnector):
                 "[dataforseo_labs_competitors] Missing DATAFORSEO_LOGIN or DATAFORSEO_PASSWORD in .env."
             )
         self.auth = (self.login, self.password)
+        # USD DataForSEO reported for the current fetch() (one live call per run).
+        self._run_cost = 0.0
 
     @staticmethod
     def _strip(domain: str) -> str:
@@ -118,6 +121,9 @@ class DataForSEOLabsCompetitorsConnector(BaseConnector):
         resp = requests.post(ENDPOINT, auth=self.auth, json=payload, timeout=45)
         resp.raise_for_status()
         data = resp.json()
+        # Labs bills the live call itself — the charge is on this envelope. Read it before
+        # any status/empty-result early return, because a non-20000 task is still billable.
+        self._run_cost += extract_cost(data)
 
         tasks = data.get("tasks") or []
         if not tasks:
@@ -149,7 +155,16 @@ class DataForSEOLabsCompetitorsConnector(BaseConnector):
         self.logger.info(
             f"[dataforseo_labs_competitors] Fetching top {limit} competitors for {target}"
         )
+        self._run_cost = 0.0
         items = self._call(target, limit)
+        # `units` = competitor domains returned. Labs competitors_domain meters per
+        # returned row, so cost/units is the real per-competitor price. Placed after the
+        # call rather than in a `finally`: if _call raised, no response was parsed, so
+        # _run_cost is 0 and there is genuinely nothing to book.
+        record_cost(
+            self.name, resolved_site_id, self._run_cost, units=len(items),
+            notes=f"labs/competitors_domain live for {target}",
+        )
 
         records = []
         for item in items:

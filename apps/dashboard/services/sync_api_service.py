@@ -26,6 +26,11 @@ logger = logging.getLogger(__name__)
 #  'ai', 'audit' now all match real PAGE_CONNECTORS keys after the sync_engine fix.)
 SCOPE_ALIASES = {
     "positions": "positioning",
+    # Incremental positions refresh: same connectors, narrowed at run time to the keywords
+    # that have never been measured. Exists so that sending a handful of new keywords from
+    # the Keyword Explorer does not require re-querying the entire tracked set against every
+    # competitor -- which is slow and, because DataForSEO meters per query, billable.
+    "positions_new": "positioning_new",
 }
 
 

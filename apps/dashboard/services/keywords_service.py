@@ -1,7 +1,7 @@
 """Keywords page data — raw calculator (shared by the old Django view and the new DRF API
 view) built on the existing keyword-intelligence pandas pipeline (health score, intent/KD
 distribution, action-bucket segments). See
-docs/superpowers/specs/2026-07-10-phaseB2-keywords-design.md for the all_keywords/prevPos fix."""
+.claude/api-reference.md for the all_keywords/prevPos fix."""
 
 from datetime import date
 
@@ -226,7 +226,7 @@ def build_keywords_response(site_id: str, curr_start: date, curr_end: date,
                              prev_start: date, prev_end: date) -> dict:
     """HANDOFF_SPEC.md `keywords` view shape — verified against the real fixture's
     keywordsView() in Limitless marketing dashboard2/app/api.js. See
-    docs/superpowers/specs/2026-07-10-phaseB2-keywords-design.md for the field mapping."""
+    .claude/api-reference.md for the field mapping."""
     intel = get_keyword_intelligence_raw(site_id, curr_start, curr_end, prev_start, prev_end, tracked_only=True)
 
     return {

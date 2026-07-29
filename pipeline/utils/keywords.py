@@ -90,3 +90,68 @@ def load_tracked_keywords(site_id: Optional[str] = None, path: str = KEYWORDS_FI
             f"Track keywords from the Keyword Explorer to manage this list from the dashboard."
         )
     return _load_from_file(path)
+
+
+def keywords_needing_backfill(site_id: str) -> list[str]:
+    """Tracked keywords that have never been measured — the subset an incremental sync needs.
+
+    A keyword sent from the Keyword Explorer lands in `saved_keywords` immediately, but it has
+    no SERP position, no search volume and no difficulty until a sync fetches them. Re-running
+    the whole `positions` scope to pick those up re-queries EVERY tracked keyword against every
+    competitor, which is slow and — because DataForSEO meters per query — expensive. This
+    returns only the keywords with real work outstanding, so the caller can sync just those.
+
+    "Outstanding" means either of:
+      * no `keyword_rankings` row at all for the keyword (never looked up), or
+      * a row exists but `search_volume` IS NULL (position captured, market data missing).
+
+    A keyword that has been measured and genuinely ranks nowhere is NOT returned: it has a row,
+    and re-querying it is exactly the waste this exists to avoid. Refreshing those is what the
+    scheduled full sync is for.
+
+    Returns [] on any failure — the caller then falls back to a normal full sync rather than
+    silently syncing nothing.
+    """
+    try:
+        from sqlalchemy import select
+        from pipeline.db.schema import KeywordRanking
+        from pipeline.utils.db_connection import get_session
+
+        tracked = load_tracked_keywords(site_id)
+        if not tracked:
+            return []
+
+        variants = [site_id]
+        if site_id.startswith("sc-domain:"):
+            variants.append(site_id.replace("sc-domain:", "", 1))
+        else:
+            variants.append(f"sc-domain:{site_id}")
+
+        with get_session() as session:
+            rows = session.execute(
+                select(KeywordRanking.keyword, KeywordRanking.search_volume)
+                .where(KeywordRanking.site_id.in_(variants))
+            ).all()
+
+        # A keyword counts as "measured" only if SOME row for it carries a volume. Matching is
+        # case-insensitive because GSC lower-cases queries while the Explorer preserves what the
+        # user typed, and the same keyword must not look unmeasured purely because of casing.
+        measured = set()
+        seen = set()
+        for kw, vol in rows:
+            key = (kw or "").strip().lower()
+            if not key:
+                continue
+            seen.add(key)
+            if vol is not None:
+                measured.add(key)
+
+        out = [k for k in tracked if (k or "").strip().lower() not in measured]
+        logger.info(
+            f"[keywords] {len(out)} of {len(tracked)} tracked keywords need backfill for "
+            f"{site_id!r} ({len(seen)} have a ranking row, {len(measured)} have volume)"
+        )
+        return out
+    except Exception as exc:
+        logger.error(f"[keywords] keywords_needing_backfill failed for {site_id!r}: {exc}", exc_info=True)
+        return []

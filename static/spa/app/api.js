@@ -56,7 +56,29 @@ window.FuseAPI = (function () {
       err.status = res.status;
       throw err;
     }
-    return res.json();
+    /* 204 No Content has no body, so res.json() throws
+       "Failed to execute 'json' on 'Response': Unexpected end of JSON input" -- and because
+       that throw happens AFTER the server has already done the work, the caller reports a
+       failure for an operation that actually succeeded. Every DELETE in this API returns 204
+       (DELETE /projects/<slug>, DELETE /projects/<slug>/data), so both the Danger-zone
+       "Delete this project" and "Clear data" hit it.
+       205 and 304 are equally body-less; a Content-Length of 0 covers any endpoint that
+       returns 200 with an empty body. */
+    if (res.status === 204 || res.status === 205 || res.status === 304) return null;
+    if (res.headers.get('content-length') === '0') return null;
+    const text = await res.text();
+    if (!text) return null;
+    try {
+      return JSON.parse(text);
+    } catch (e) {
+      /* A 2xx that is genuinely not JSON. Surface what came back rather than the opaque
+         parser message, which named neither the endpoint nor the payload. */
+      const err = new Error('Server returned a non-JSON response for ' + path);
+      err.detail = 'Server returned a non-JSON response for ' + path;
+      err.status = res.status;
+      err.body = text.slice(0, 200);
+      throw err;
+    }
   }
 
   /* ---------- fixture routing ---------- */
@@ -1110,6 +1132,22 @@ window.FuseAPI = (function () {
       const t = tasks[seg[1]];
       if (!t) return { task_id: seg[1], progress: 1, done: true, step: 'Done' };
       return { task_id: t.id, progress: +t.progress.toFixed(2), step: t.step, done: t.done, est_cost: t.est_cost };
+    }
+
+    /* Batch ack must be tested BEFORE the single-alert route: "alerts/ack" is two segments
+       and "alerts/<id>/ack" is three, so the single route's `seg[2] === 'ack'` never matches
+       the batch path and it would otherwise fall through to "No route". Mirrors the real
+       AlertBatchAckView contract: {ok, acknowledged: [...], failed: [...]}, with `ok` true
+       only when nothing failed. */
+    if (method === 'POST' && seg[0] === 'alerts' && seg[1] === 'ack' && !seg[2]) {
+      const ids = (q && q.ids) || [];
+      const acknowledged = [];
+      const failed = [];
+      ids.forEach(id => {
+        if (typeof id === 'string' && id) { setMut('ack.' + id, true); acknowledged.push(id); }
+        else failed.push({ id: String(id), detail: 'Not a valid alert id.' });
+      });
+      return { ok: failed.length === 0, acknowledged: acknowledged, failed: failed };
     }
 
     if (method === 'POST' && seg[0] === 'alerts' && seg[2] === 'ack') {

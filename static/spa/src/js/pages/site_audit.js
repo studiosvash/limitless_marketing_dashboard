@@ -4,19 +4,30 @@
       const auSetup = !data || data.score == null || (typeof data.score === 'object' && data.score.state === 'setup') || (data.crawl && (data.crawl.status === 'never' || data.crawl.pagesCrawled === 0));
 
       if (auSetup) {
+        /* Setup state: nothing measured, so nothing to attribute. */
         vals.au = {
           setup: true,
+          srcScore: this.srcBadge(null), srcVitals: this.srcBadge(null),
+          srcBreakdown: this.srcBadge(null), srcIssues: this.srcBadge(null),
+          srcCrawled: this.srcBadge(null), srcStats: this.srcBadge(null),
+          srcHistory: this.srcBadge(null), srcDomChecks: this.srcBadge(null),
           subTabs: [], showOverview: false, showIssues: false, showCrawled: false,
           showCompare: false, showProgress: false, showStats: false,
-          domain: project.domain, crawlDate: '', pagesCrawled: 0, crawlDuration: '', userAgent: '',
-          barSegs: [], breakRows: [], sevTotals: [], cats: [], vitals: [], domChecks: [], topIssues: [],
+          domain: project.domain, crawlDate: '', pagesCrawled: 0, crawlDuration: '', userAgent: '', measuredLabel: '',
+          barSegs: [], breakRows: [], sevTotals: [], cats: [], vitals: [], domChecks: [], noDomChecks: false, topIssues: [],
+          hasCritical: false, noCritical: false, criticalRows: [], criticalMore: false,
+          criticalCountLabel: '', criticalMoreLabel: '',
           sevFilters: [], catFilters: [], noIssues: true, issueRows: [], search: '',
           tableTabStyle: {}, treeTabStyle: {}, showTable: false, showTree: false,
           pgSearch: '', pageRows: [], pageRowCount: '', treeRows: [],
           statKpis: [], statCharts: [],
+          statShowEmpty: false, statHasKpis: false, statEmptyTitle: '', statEmptyMsg: '',
           cmpOptions: [], cmpOptions2: [], cmpFilters: [], cmpKpis: [], cmpEmpty: true, cmpRows: [],
           cmpA: '', cmpB: '', cmpALabel: '', cmpBLabel: '',
-          progToggles: [], progLines: [], progFrom: '', progTo: '', progRows: []
+          cmpHasHistory: false, cmpShowEmpty: false, cmpEmptyTitle: '', cmpEmptyMsg: '',
+          progToggles: [], progLines: [], progFrom: '', progTo: '', progRows: [],
+          progHasHistory: false, progShowEmpty: false, progHasChart: false, progOnePoint: false,
+          progEmptyTitle: '', progEmptyMsg: '', progCountLabel: ''
         };
         return vals;
       }
@@ -24,7 +35,24 @@
       const SEVC = { error: '#dc2626', warning: '#d97706', notice: '#2563eb' };
       const sevRank = { error: 0, warning: 1, notice: 2 };
       const scoreColor = v => v >= 80 ? '#059669' : v >= 60 ? '#d97706' : '#dc2626';
-      const scoreChip = v => ({ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', minWidth: '34px', height: '22px', padding: '0 6px', borderRadius: '4px', fontSize: '12px', fontWeight: 700, background: v >= 80 ? '#dcfce7' : v >= 60 ? '#fef3c7' : '#fee2e2', color: v >= 80 ? '#15803d' : v >= 60 ? '#b45309' : '#b91c1c' });
+      /* MEASURED vs UNMEASURED. Only a sampled subset of crawled pages is ever Lighthouse-
+         scored, so `score`, `loadTimeMs`, `inLinks`, `internalLinks` and `wordCount` are null
+         on every page the relevant crawler never reached. Null is never rendered as 0 and
+         never enters an average: it renders as an em dash in a neutral chip, so an unscored
+         page reads as "not measured" rather than as the worst score on the site. */
+      const NA = '—';
+      const chipBase = { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', minWidth: '34px', height: '22px', padding: '0 6px', borderRadius: '4px', fontSize: '12px', fontWeight: 700 };
+      const chipNA = Object.assign({}, chipBase, { background: '#f1f5f9', color: '#94a3b8' });
+      const scoreChip = v => v == null ? chipNA : Object.assign({}, chipBase, { background: v >= 80 ? '#dcfce7' : v >= 60 ? '#fef3c7' : '#fee2e2', color: v >= 80 ? '#15803d' : v >= 60 ? '#b45309' : '#b91c1c' });
+      const scoreText = v => v == null ? NA : v;
+      const secsText = ms => ms == null ? NA : (ms / 1000).toFixed(1) + ' s';
+      const numText = v => v == null ? NA : this.fmt(v);
+      /* Mean over the values that exist. Returns null — not 0 — for an empty set, so a KPI
+         with nothing measured behind it disappears instead of printing a confident zero. */
+      const avgOf = (arr, f) => {
+        const vals = arr.map(f).filter(v => v != null);
+        return vals.length ? vals.reduce((a, b2) => a + b2, 0) / vals.length : null;
+      };
       const dot = c => ({ width: '9px', height: '9px', borderRadius: '50%', background: c, flexShrink: 0 });
       const sub = s.auSub;
       const totalIssues = data.totals.errors + data.totals.warnings + data.totals.notices;
@@ -33,9 +61,40 @@
       const activeChecks = data.checks.filter(c => !c.hidden && c.count > 0);
       const hiddenChecks = data.checks.filter(c => c.hidden);
       const crawlDate = data.crawl.startedAt;
+
+      /* Provenance. This page is the clearest case for naming the OLDEST contributing source
+         rather than one label: the health score is literally 60% Lighthouse mobile performance
+         + 40% GSC URL-Inspection indexed share, with issue counts from DataForSEO OnPage. Three
+         connectors, three separate schedules -- so the score is only as fresh as whichever ran
+         longest ago, which is exactly what srcBadge() reports.
+
+         The sub-surfaces are attributed individually because they genuinely differ:
+           Core Web Vitals      -> Lighthouse only
+           Indexing breakdown   -> GSC URL Inspection only
+           Issues / Top issues  -> DataForSEO OnPage (+ rows derived from the other two)
+           Crawled pages        -> GSC inventory, with Lighthouse scores where measured
+           Domain checks        -> run during sync, not a connector; see the note below
+           Compare / Progress   -> audit_snapshots, written after each crawl completes */
+      const AUDIT_ALL = ['pagespeed', 'url_inspection', 'dataforseo_onpage'];
       const au = {
+        srcScore: this.srcBadge(AUDIT_ALL),
+        srcVitals: this.srcBadge(['pagespeed']),
+        srcBreakdown: this.srcBadge(['url_inspection']),
+        srcIssues: this.srcBadge(['dataforseo_onpage', 'url_inspection', 'pagespeed']),
+        srcCrawled: this.srcBadge(['url_inspection', 'pagespeed'],
+          'A dash means the page was crawled but never Lighthouse-scored — only a sample is.'),
+        srcStats: this.srcBadge(['url_inspection', 'pagespeed'],
+          'Averages and distributions cover Lighthouse-measured pages only.'),
+        srcHistory: this.srcBadge(AUDIT_ALL,
+          'One snapshot is recorded per completed crawl, so history is as fresh as the last sync.'),
+        srcDomChecks: this.srcBadge(AUDIT_ALL,
+          'SSL, sitemap, robots.txt, HTTP/2 and llms.txt are probed during the sync, not when this page loads.'),
         domain: project.domain,
         crawlDate, pagesCrawled: data.crawl.pagesCrawled, crawlDuration: data.crawl.duration, userAgent: data.crawl.userAgent,
+        /* Lighthouse samples; GSC's URL inspection covers everything. The two counts are
+           routinely far apart, so the header says which is which rather than letting
+           "pages crawled" be read as "pages measured". */
+        measuredLabel: (data.crawl.pagesMeasured || 0) + ' Lighthouse-measured',
         subTabs: [['overview', 'Overview'], ['issues', 'Issues (' + this.fmt(totalIssues) + ')'], ['crawled', 'Crawled Pages (' + data.crawl.pagesCrawled + ')'], ['stats', 'Statistics'], ['compare', 'Compare Crawls'], ['progress', 'Progress']].map(t => ({
           label: t[1],
           style: sub === t[0] ? Object.assign({}, subBase, { color: '#4f46e5', borderBottom: '2px solid #4f46e5' }) : subBase,
@@ -101,6 +160,11 @@
             goodLbl: 'Good ' + b.good, midLbl: 'Needs impr. ' + b.mid, poorLbl: 'Poor ' + b.poor
           };
         });
+        /* Domain checks are probed during a crawl, not on page load (the six SSL/sitemap/
+           robots/HTTP-2/www/llms.txt requests used to run inside this GET). An empty list
+           therefore means "no crawl has recorded them yet", not "the domain has no checks" --
+           say that instead of rendering a blank card. */
+        au.noDomChecks = data.domainChecks.length === 0;
         au.domChecks = data.domainChecks.map(d => ({
           label: d.label, detail: d.detail, mark: d.ok ? '✓' : '!',
           icon: { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '20px', height: '20px', borderRadius: '50%', fontSize: '12px', fontWeight: 700, background: d.ok ? '#dcfce7' : '#fef3c7', color: d.ok ? '#15803d' : '#b45309', flexShrink: 0 }
@@ -111,6 +175,29 @@
           countStyle: { fontSize: '12px', fontWeight: 700, color: SEVC[c.severity], minWidth: '28px', textAlign: 'right' },
           click: () => { this.setState({ auSub: 'issues', auSev: 'all', auCat: 'all', auOpen: c.id, auSearch: '' }); this.pushNav({ auSub: 'issues' }); }
         }));
+
+        /* --- Critical Issues ("Fix these first") ---------------------------------
+           The design's lead section. Deliberately narrower than Top Issues: only
+           error-severity, non-hidden checks that actually affect a page, biggest
+           blast radius first, with the fix guidance inline so the user can act
+           without expanding anything. data.totals.errors is already the sum of
+           counts over exactly this set (non-hidden), so it needs no re-derivation. */
+        const CRIT_MAX = 5;
+        const critical = activeChecks.filter(c => c.severity === 'error').slice().sort((a, b2) => b2.count - a.count);
+        au.hasCritical = critical.length > 0;
+        au.noCritical = critical.length === 0;
+        au.criticalCountLabel = critical.length + ' check' + (critical.length === 1 ? '' : 's') + ' · ' + this.fmt(data.totals.errors) + ' affected page' + (data.totals.errors === 1 ? '' : 's');
+        au.criticalRows = critical.slice(0, CRIT_MAX).map(c => ({
+          title: c.title, category: c.category,
+          dot: dot(SEVC.error),
+          countLabel: this.fmt(c.count) + ' page' + (c.count === 1 ? '' : 's'),
+          hasFix: !!c.howToFix, howToFix: c.howToFix,
+          aria: 'Critical issue: ' + c.title + ', ' + c.category + ', ' + c.count + ' page' + (c.count === 1 ? '' : 's') + ' affected. Open this check in the Issues tab.',
+          click: () => { this.setState({ auSub: 'issues', auSev: 'all', auCat: 'all', auOpen: c.id, auSearch: '' }); this.pushNav({ auSub: 'issues' }); }
+        }));
+        au.criticalMore = critical.length > CRIT_MAX;
+        au.criticalMoreLabel = 'View all ' + critical.length + ' critical issues →';
+        au.criticalMoreClick = () => { this.setState({ auSub: 'issues', auSev: 'error', auCat: 'all', auOpen: null, auSearch: '' }); this.pushNav({ auSub: 'issues' }); };
       }
 
       if (sub === 'issues') {
@@ -153,10 +240,13 @@
             pages: shown.map(u => {
               const urlStr = typeof u === 'string' ? u : u.url;
               const pg2 = pgByUrl[urlStr];
+              /* Both sources carry the same measured-or-null score by contract, so an
+                 unscored page shows the neutral dash chip here too rather than a red 0. */
+              const sc3 = pg2 ? pg2.score : (u && u.score !== undefined ? u.score : null);
               return {
                 url: urlStr,
-                score: pg2 ? pg2.score : (u.score !== undefined ? u.score : '—'),
-                scoreStyle: scoreChip(pg2 ? pg2.score : (u.score || 0)),
+                score: scoreText(sc3),
+                scoreStyle: scoreChip(sc3),
                 status: (pg2 && pg2.statusCode) ? statusOf(pg2) : (u.status || '200')
               };
             }),
@@ -181,36 +271,81 @@
           rows = this.sortRows(rows, s.auPgSort);
           au.pageRows = rows.slice(0, 40).map(r => ({
             open: () => this.setState({ auPage: r.id }),
-            url: r.url, score: r.score, scoreStyle: scoreChip(r.score),
+            url: r.url, score: scoreText(r.score), scoreStyle: scoreChip(r.score),
             status: String(r.statusCode),
             statusStyle: { padding: '2px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: 700, background: r.statusCode === 200 ? '#dcfce7' : r.statusCode < 400 ? '#f3e8ff' : '#fee2e2', color: r.statusCode === 200 ? '#15803d' : r.statusCode < 400 ? '#7c3aed' : '#b91c1c' },
             issuesLabel: r.errors + 'E · ' + r.warnings + 'W · ' + r.notices + 'N',
-            depth: r.depth, inLinks: r.inLinks,
-            loadLabel: (r.loadTimeMs / 1000).toFixed(1) + ' s',
-            loadStyle: { fontSize: '12.5px', fontWeight: 600, color: r.loadTimeMs > 3000 ? '#dc2626' : r.loadTimeMs > 1500 ? '#b45309' : '#64748b' }
+            /* In-links = OnPage's meta.inbound_links_count, i.e. internal links POINTING AT
+               this page. A real 0 means an orphan page and is called out in amber; a page the
+               OnPage crawl never reached is null and shows a dash, because "no inbound links"
+               and "we did not look" are different findings. */
+            depth: r.depth,
+            inLinks: numText(r.inLinks),
+            inLinksStyle: { fontSize: '12.5px', fontWeight: 600, color: r.inLinks == null ? '#94a3b8' : r.inLinks === 0 ? '#b45309' : '#64748b' },
+            loadLabel: secsText(r.loadTimeMs),
+            loadStyle: { fontSize: '12.5px', fontWeight: 600, color: r.loadTimeMs == null ? '#94a3b8' : r.loadTimeMs > 3000 ? '#dc2626' : r.loadTimeMs > 1500 ? '#b45309' : '#64748b' }
           }));
-          au.pageRowCount = rows.length > 40 ? 'Showing 40 of ' + rows.length + ' pages — refine with the URL filter or export the full list' : rows.length + ' page' + (rows.length === 1 ? '' : 's');
+          const shownN = Math.min(40, rows.length);
+          const measuredShown = rows.slice(0, shownN).filter(r => r.measured).length;
+          au.pageRowCount = (rows.length > 40 ? 'Showing 40 of ' + rows.length + ' pages — refine with the URL filter or export the full list' : rows.length + ' page' + (rows.length === 1 ? '' : 's'))
+            + ' · ' + measuredShown + ' of ' + shownN + ' Lighthouse-scored (a dash means the page was crawled but not measured)';
         } else {
+          /* `avgScore` averages the folder's MEASURED pages only and is null when it has
+             none, so the column states its own denominator instead of implying the average
+             covers every page in the folder. */
           au.treeRows = data.structure.map(t => ({
-            folder: t.folder, pages: t.pages, avgScore: t.avgScore, scoreStyle: scoreChip(t.avgScore),
+            folder: t.folder, pages: t.pages,
+            avgScore: scoreText(t.avgScore), scoreStyle: scoreChip(t.avgScore),
+            measuredLabel: t.measuredPages > 0 ? 'of ' + t.measuredPages + ' measured' : 'not measured',
             errors: t.errors, warnings: t.warnings, notices: t.notices
           }));
         }
       }
       if (sub === 'stats') {
+        /* EVERY AGGREGATE ON THIS TAB STATES ITS OWN DENOMINATOR.
+
+           `crawledPages` is one row per GSC-inspected URL (154 on the live site), but only the
+           pages Lighthouse sampled carry a score or a load time (48), and only the pages the
+           OnPage crawl reached carry link and word counts. The payload marks the rest null.
+
+           Averaging or bucketing across all of them is what produced "Avg. page score 27
+           across 152 healthy pages" and "Fast (<1.5 s): 152 (100%)" — a placeholder 0 counted
+           as a measurement. Each aggregate below filters to the pages that have the value it
+           needs, and prints how many that was. */
         const cp = data.crawledPages;
         const ok = cp.filter(x => x.kind === 'ok');
-        const avg = (arr, f) => arr.length ? arr.reduce((s2, x) => s2 + f(x), 0) / arr.length : 0;
-        au.statKpis = [
-          { label: 'Avg. page score', value: Math.round(avg(ok, x => x.score)), sub: 'across ' + ok.length + ' healthy pages' },
-          { label: 'Avg. load time', value: (avg(ok, x => x.loadTimeMs) / 1000).toFixed(1) + ' s', sub: 'server response + render' },
-          { label: 'Avg. internal links', value: Math.round(avg(ok, x => x.internalLinks)), sub: 'outgoing per page' },
-          { label: 'Avg. word count', value: this.fmt(Math.round(avg(ok, x => x.wordCount))), sub: 'per indexable page' }
-        ];
-        const mkChart = (title, defs, colorAt) => {
+        const scored = ok.filter(x => x.score != null);
+        const timed = ok.filter(x => x.loadTimeMs != null);
+        const linked = cp.filter(x => x.internalLinks != null);
+        const worded = cp.filter(x => x.wordCount != null);
+        const pages = n => n + ' page' + (n === 1 ? '' : 's');
+
+        au.statKpis = [];
+        if (scored.length) au.statKpis.push({
+          label: 'Avg. page score', value: Math.round(avgOf(scored, x => x.score)),
+          sub: 'across ' + pages(scored.length) + ' measured by Lighthouse'
+        });
+        if (timed.length) au.statKpis.push({
+          label: 'Avg. load time', value: secsText(avgOf(timed, x => x.loadTimeMs)),
+          sub: 'server response · across ' + pages(timed.length) + ' measured'
+        });
+        /* Restored as real measurements: OnPage's meta.internal_links_count and
+           meta.content.plain_text_word_count. They previously read `performance_score * 0.4`
+           and `fcp_ms * 1.5`, i.e. a Lighthouse score and a millisecond timing relabelled as
+           links and words. A tile only appears when something was actually counted. */
+        if (linked.length) au.statKpis.push({
+          label: 'Avg. internal links', value: Math.round(avgOf(linked, x => x.internalLinks)),
+          sub: 'links on the page · across ' + pages(linked.length) + ' crawled'
+        });
+        if (worded.length) au.statKpis.push({
+          label: 'Avg. word count', value: this.fmt(Math.round(avgOf(worded, x => x.wordCount))),
+          sub: 'across ' + pages(worded.length) + ' crawled'
+        });
+
+        const mkChart = (title, sub2, defs, colorAt) => {
           const total = Math.max(1, defs.reduce((s2, d) => s2 + d[1], 0));
           return {
-            title,
+            title, sub: sub2,
             rows: defs.map((d, k) => {
               const col = colorAt(k, d);
               return {
@@ -223,40 +358,70 @@
         };
         const seq = ['#4f46e5', '#818cf8', '#c7d2fe', '#e0e7ff'];
         const gwp = ['#059669', '#d97706', '#dc2626'];
+        /* HTTP status and crawl depth are facts about every crawled URL — status comes from
+           GSC coverage, depth from the URL path — so they legitimately cover all of `cp`. */
         au.statCharts = [
-          mkChart('HTTP status codes', [
+          mkChart('HTTP status codes', 'all ' + pages(cp.length) + ' crawled', [
             ['200 OK', cp.filter(x => x.statusCode === 200).length],
             ['3xx redirect', cp.filter(x => x.statusCode >= 300 && x.statusCode < 400).length],
             ['4xx client error', cp.filter(x => x.statusCode >= 400 && x.statusCode < 500).length],
             ['5xx server error', cp.filter(x => x.statusCode >= 500).length]
           ], (k) => k === 0 ? '#059669' : k === 1 ? '#8b5cf6' : k === 2 ? '#dc2626' : '#991b1b'),
-          mkChart('Crawl depth', [
+          mkChart('Crawl depth', 'all ' + pages(cp.length) + ' crawled', [
             ['1 click', cp.filter(x => x.depth <= 1).length],
             ['2 clicks', cp.filter(x => x.depth === 2).length],
             ['3 clicks', cp.filter(x => x.depth === 3).length],
             ['4+ clicks', cp.filter(x => x.depth >= 4).length]
-          ], k => seq[k]),
-          mkChart('Load time', [
-            ['Fast (<1.5 s)', ok.filter(x => x.loadTimeMs < 1500).length],
-            ['Average (1.5–3 s)', ok.filter(x => x.loadTimeMs >= 1500 && x.loadTimeMs <= 3000).length],
-            ['Slow (>3 s)', ok.filter(x => x.loadTimeMs > 3000).length]
-          ], k => gwp[k]),
-          mkChart('Content length', [
-            ['In-depth (1000+ words)', ok.filter(x => x.wordCount >= 1000).length],
-            ['Standard (250–999)', ok.filter(x => x.wordCount >= 250 && x.wordCount < 1000).length],
-            ['Thin (<250 words)', ok.filter(x => x.wordCount < 250).length]
-          ], k => gwp[k])
+          ], k => seq[k])
         ];
+        if (timed.length) au.statCharts.push(
+          mkChart('Load time', pages(timed.length) + ' measured', [
+            ['Fast (<1.5 s)', timed.filter(x => x.loadTimeMs < 1500).length],
+            ['Average (1.5–3 s)', timed.filter(x => x.loadTimeMs >= 1500 && x.loadTimeMs <= 3000).length],
+            ['Slow (>3 s)', timed.filter(x => x.loadTimeMs > 3000).length]
+          ], k => gwp[k])
+        );
+        /* Content length, restored over real word counts. Buckets are the conventional
+           thin/short/medium/long split; before, every bucket was counting `fcp_ms * 1.5`, so
+           a page's render time decided whether it was called in-depth or thin. */
+        if (worded.length) au.statCharts.push(
+          mkChart('Content length', pages(worded.length) + ' crawled', [
+            ['Thin (<300 words)', worded.filter(x => x.wordCount < 300).length],
+            ['Short (300–999)', worded.filter(x => x.wordCount >= 300 && x.wordCount < 1000).length],
+            ['Medium (1,000–1,999)', worded.filter(x => x.wordCount >= 1000 && x.wordCount < 2000).length],
+            ['Long (2,000+)', worded.filter(x => x.wordCount >= 2000).length]
+          ], k => seq[k])
+        );
+
+        /* Nothing measured at all: the two structural charts above still describe the crawl
+           honestly, but there is no score, timing, link or word data to summarise. Say that
+           and offer the crawl, rather than printing four zeroed tiles. */
+        au.statShowEmpty = au.statKpis.length === 0;
+        au.statHasKpis = au.statKpis.length > 0;
+        au.statEmptyTitle = 'No page measurements recorded yet';
+        au.statEmptyMsg = 'Page scores and load times come from the Lighthouse sample, link and word counts from the OnPage crawl. Neither has run for this site yet, so there is nothing to average — the charts below still describe every crawled URL.';
       }
 
-      if (sub === 'compare' && !data.snapshots.length) {
-        // No audit history yet (nothing records historical crawl snapshots) -- show an empty
-        // state instead of crashing on snaps[0].
+      if (sub === 'compare' && data.snapshots.length < 2) {
+        /* Comparison needs TWO crawls. Zero and one are different situations and the user
+           should be told which one they are in -- the old bare empty state said only
+           "No checks changed between these two crawls", which is a lie when there are no
+           crawls to compare. Nothing is fabricated to fill the gap. */
+        const n = data.snapshots.length;
         au.cmpOptions = []; au.cmpOptions2 = []; au.cmpFilters = []; au.cmpKpis = [];
-        au.cmpRows = []; au.cmpEmpty = true; au.cmpA = ''; au.cmpB = '';
+        au.cmpRows = []; au.cmpEmpty = false; au.cmpA = ''; au.cmpB = '';
         au.cmpALabel = '—'; au.cmpBLabel = '—';
+        au.cmpHasHistory = false;
+        au.cmpShowEmpty = true;
+        au.cmpEmptyTitle = n === 0 ? 'No crawl history recorded yet' : 'Only one crawl recorded so far';
+        au.cmpEmptyMsg = n === 0
+          ? 'Each completed crawl saves a snapshot of the score, issue counts and pages crawled. Nothing has been recorded for this site yet — run a crawl to capture the first one. Comparing needs two.'
+          : 'The first snapshot was captured on ' + data.snapshots[0].date + '. Run another crawl to compare it against and see which checks were fixed and which are new.';
       } else if (sub === 'compare') {
         const snaps = data.snapshots;
+        au.cmpHasHistory = true;
+        au.cmpShowEmpty = false;
+        au.cmpEmptyTitle = ''; au.cmpEmptyMsg = '';
         const iA = Math.min(s.auCmpA != null ? s.auCmpA : 0, snaps.length - 1);
         const iB = Math.min(s.auCmpB != null ? s.auCmpB : snaps.length - 1, snaps.length - 1);
         const A = snaps[iA], B = snaps[iB];
@@ -304,8 +469,23 @@
         // No audit history yet -- empty state instead of crashing on snaps[0].date.
         au.progToggles = []; au.progLines = []; au.progRows = [];
         au.progFrom = '—'; au.progTo = '—';
+        au.progShowEmpty = true; au.progHasHistory = false;
+        au.progHasChart = false; au.progOnePoint = false;
+        au.progCountLabel = '';
+        au.progEmptyTitle = 'No crawl history recorded yet';
+        au.progEmptyMsg = 'Every completed crawl saves one snapshot here — health score, errors, warnings, notices and pages crawled. Run a crawl to record the first one; the trend line appears once there are two.';
       } else if (sub === 'progress') {
         const snaps = data.snapshots;
+        au.progShowEmpty = false; au.progHasHistory = true;
+        au.progEmptyTitle = ''; au.progEmptyMsg = '';
+        /* A polyline needs two points: with one snapshot `k / (snaps.length - 1)` is a
+           division by zero and every x becomes NaN. Show the real single row in the table
+           and say plainly why there is no line yet. */
+        au.progHasChart = snaps.length > 1;
+        au.progOnePoint = snaps.length === 1;
+        au.progCountLabel = snaps.length === 1
+          ? '1 recorded crawl'
+          : snaps.length + ' recorded crawls · ' + snaps[0].date + ' → ' + snaps[snaps.length - 1].date;
         const prog = s.auProg;
         const METRICS = [
           ['score', 'Health score', '#4f46e5', sn => sn.score],
@@ -324,7 +504,7 @@
             click: () => this.setState(st => ({ auProg: Object.assign({}, st.auProg, { [m[0]]: !st.auProg[m[0]] }) }))
           };
         });
-        au.progLines = METRICS.filter(m => prog[m[0]]).map(m => {
+        au.progLines = !au.progHasChart ? [] : METRICS.filter(m => prog[m[0]]).map(m => {
           const vals2 = snaps.map(m[3]);
           const max = Math.max(1, ...vals2);
           const pts = vals2.map((v, k) => {
@@ -347,36 +527,43 @@
       if (s.auPage) {
         const pg3 = data.crawledPages.find(x => x.id === s.auPage);
         if (pg3) {
-          const cwvDot = (v, good, poor) => ({ width: '8px', height: '8px', borderRadius: '50%', flexShrink: 0, background: v <= good ? '#059669' : v <= poor ? '#d97706' : '#dc2626' });
+          /* The failed checks for this page come from the real check list -- every check
+             carries the pages it affects. `pg3.failed` was read here but the payload has
+             never contained it, so opening the drawer threw on `pg3.failed.length` and took
+             the whole render down with it. */
+          const failed = data.checks.filter(c => c.pages.some(p => (typeof p === 'string' ? p : p.url) === pg3.url));
+          /* Only measured facts, and only when they were measured. Each tile below is pushed
+             only if its source produced a value for THIS page: score/load time come from the
+             Lighthouse sample, the link and word counts from the OnPage crawl, and neither
+             covers every crawled URL. A tile that would read "—" is omitted instead. */
+          const pdStats = [
+            { label: 'Crawl depth', value: pg3.depth + (pg3.depth === 1 ? ' click' : ' clicks') }
+          ];
+          if (pg3.loadTimeMs != null) pdStats.push({ label: 'Load time', value: secsText(pg3.loadTimeMs) });
+          if (pg3.inLinks != null) pdStats.push({ label: 'In-links', value: numText(pg3.inLinks) });
+          if (pg3.internalLinks != null) pdStats.push({ label: 'Internal links', value: numText(pg3.internalLinks) });
+          if (pg3.externalLinks != null) pdStats.push({ label: 'External links', value: numText(pg3.externalLinks) });
+          if (pg3.wordCount != null) pdStats.push({ label: 'Word count', value: numText(pg3.wordCount) });
+          pdStats.push({ label: 'Issues', value: pg3.errors + 'E · ' + pg3.warnings + 'W · ' + pg3.notices + 'N' });
           vals.pd = {
             show: true, url: pg3.url,
-            score: pg3.score, scoreStyle: scoreChip(pg3.score),
+            /* Unmeasured renders as the neutral dash chip (the drawer template in index.html
+               reads pd.score/pd.scoreStyle as-is), so a page Lighthouse never sampled does not
+               open showing a red 0. */
+            score: scoreText(pg3.score), scoreStyle: scoreChip(pg3.score),
             status: pg3.statusCode + (pg3.kind === 'gone' ? ' · broken' : pg3.kind === 'redirect' ? ' · redirect' : pg3.kind === 'noindex' ? ' · blocked' : ' OK'),
             statusStyle: { marginLeft: 'auto', padding: '3px 10px', borderRadius: '999px', fontSize: '11px', fontWeight: 700, background: pg3.statusCode === 200 ? '#dcfce7' : pg3.statusCode < 400 ? '#f3e8ff' : '#fee2e2', color: pg3.statusCode === 200 ? '#15803d' : pg3.statusCode < 400 ? '#7c3aed' : '#b91c1c' },
-            stats: [
-              { label: 'Crawl depth', value: pg3.depth + (pg3.depth === 1 ? ' click' : ' clicks') },
-              { label: 'In-links', value: pg3.inLinks },
-              { label: 'Load time', value: (pg3.loadTimeMs / 1000).toFixed(1) + ' s' },
-              { label: 'Internal links', value: pg3.internalLinks },
-              { label: 'External links', value: pg3.externalLinks },
-              { label: 'Word count', value: this.fmt(pg3.wordCount) }
-            ],
-            hasCwv: !!pg3.cwv,
-            cwv: pg3.cwv ? [
-              { name: 'LCP', value: pg3.cwv.lcp + ' s', dot: cwvDot(pg3.cwv.lcp, 2.5, 4) },
-              { name: 'TBT', value: pg3.cwv.tbt + ' ms', dot: cwvDot(pg3.cwv.tbt, 200, 600) },
-              { name: 'CLS', value: pg3.cwv.cls, dot: cwvDot(pg3.cwv.cls, 0.1, 0.25) }
-            ] : [],
-            checkCount: pg3.failed.length, noChecks: pg3.failed.length === 0,
-            checks: pg3.failed.map(id => {
-              const c = data.checks.find(x => x.id === id) || { title: id, severity: 'notice' };
-              return {
-                title: c.title, sev: c.severity,
-                sevStyle: { fontSize: '10px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: SEVC[c.severity] },
-                dot: dot(SEVC[c.severity]),
-                click: () => { this.setState({ auPage: null, auSub: 'issues', auSev: 'all', auCat: 'all', auOpen: id, auSearch: '' }); this.pushNav({ auSub: 'issues' }); }
-              };
-            })
+            stats: pdStats,
+            /* Per-page Core Web Vitals are not in the crawled-page payload (the site-wide p75
+               is, on the Overview tab). The section stays hidden rather than showing zeros. */
+            hasCwv: false, cwv: [],
+            checkCount: failed.length, noChecks: failed.length === 0,
+            checks: failed.map(c => ({
+              title: c.title, sev: c.severity,
+              sevStyle: { fontSize: '10px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: SEVC[c.severity] },
+              dot: dot(SEVC[c.severity]),
+              click: () => { this.setState({ auPage: null, auSub: 'issues', auSev: 'all', auCat: 'all', auOpen: c.id, auSearch: '' }); this.pushNav({ auSub: 'issues' }); }
+            }))
           };
         }
       }

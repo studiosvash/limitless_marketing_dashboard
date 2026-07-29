@@ -16,7 +16,7 @@ from datetime import date, timedelta
 from sqlalchemy import func, select
 
 from pipeline.db.schema import (
-    SEODaily, KeywordRanking, AdMetricDaily, CompetitorKeywordRanking, CompetitorDomain,
+    SEODaily, KeywordRanking, AdMetricDaily, CompetitorKeywordRanking,
 )
 from pipeline.utils.db_connection import get_session
 
@@ -82,7 +82,37 @@ def _get_ads_overview(site_id: str, curr_start: date, curr_end: date, prev_start
         return {"status": "error"}, {}, {}
 
 def _get_keywords_overview(site_id: str, limit: int = 5) -> list[dict]:
-    """Query top performing keywords."""
+    """Top performing keywords by clicks, as **raw numbers** — never display strings.
+
+    Shape: [{keyword: str, position: float|None, clicks: int|None, impressions: int|None,
+             volume: int|None}]
+
+    WHY RAW (changed 2026-07-27). This function used to format every value here, for the
+    old Django template that no longer exists:
+
+        "position": f"{row.avg_position:.0f}"   -> "8"  for a true 8.4 average
+        "clicks":   f"{row.total_clicks:,.0f}"  -> "1,234"
+        "volume":   f"{row.search_volume:,}"    -> "1,234"  / "—" when null
+
+    That destroyed data before any consumer could see it. `build_top_keywords_api()` (the
+    only live consumer's adapter) received `8` for an 8.4 average and could not recover the
+    decimal, and a comma-formatted count sorts as text — `"1,234" < "9"` is True — so the
+    Overview table's columns could not be sorted or compared. A query function's job is to
+    return the data; **formatting belongs at the edge that renders it** (the SPA already does
+    it via `this.fmt()` / `this.posBadge()`).
+
+    NULL IS NOT ZERO. `avg(position)` and `max(search_volume)` are NULL when no row carries
+    one; those become `None`, not `0`, because "we never captured a position" and "this
+    keyword ranks at position 0" are different facts and a 0 on screen reads as the second.
+    The old sentinels for the same thing were the strings "N/A" and "—". The same applies to
+    the click/impression sums: NULL in, `None` out (the old formatter raised TypeError there
+    and the whole call fell through to `[]`).
+
+    If a future caller genuinely needs display strings, format them in that caller — do not
+    reintroduce formatting here, or the two shapes become two sources of truth again.
+    (`apps/dashboard/views_export.py` is the only other reference to this function; it is a
+    dead, unrouted module that cannot even import — see skills.md §10.)
+    """
     try:
         with get_session() as session:
             rows = session.execute(
@@ -102,10 +132,15 @@ def _get_keywords_overview(site_id: str, limit: int = 5) -> list[dict]:
             return [
                 {
                     "keyword": row.keyword,
-                    "position": f"{row.avg_position:.0f}" if row.avg_position else "N/A",
-                    "clicks": f"{row.total_clicks:,.0f}",
-                    "impressions": f"{row.total_impressions:,.0f}",
-                    "volume": f"{row.search_volume:,}" if row.search_volume else "—",
+                    # Rounded to 1 dp, matching every other average this codebase reports
+                    # (_get_ranking_distribution, _get_position_changes, _avg_position).
+                    # 8.4 stays 8.4; the caller decides whether to show it whole.
+                    "position": (round(float(row.avg_position), 1)
+                                 if row.avg_position is not None else None),
+                    "clicks": int(row.total_clicks) if row.total_clicks is not None else None,
+                    "impressions": (int(row.total_impressions)
+                                    if row.total_impressions is not None else None),
+                    "volume": int(row.search_volume) if row.search_volume is not None else None,
                 }
                 for row in rows
             ]
@@ -284,6 +319,185 @@ def _get_position_changes(site_id: str, curr_start: date, curr_end: date, prev_s
         import logging; logging.getLogger(__name__).error(f"_get_position_changes error: {e}", exc_info=True)
         return {k: [] if "count" not in k else 0 for k in ["improved", "improved_count", "declined", "declined_count", "new", "new_count", "lost", "lost_count"]}
 
+def _get_competitor_map(site_id: str, limit: int = 12) -> dict:
+    """Domain-level aggregate of the per-keyword competitor capture — the "map".
+
+    Where _get_competitor_grid answers "who ranks where for this one keyword", this answers
+    "how does each competitor sit relative to us overall": how many of our tracked keywords
+    they were actually captured on (overlap), how strongly they rank on those (avg/best
+    position, top-3/top-10 counts), and how often they are ahead of us head-to-head. That
+    pair — overlap and strength — is what the caller plots each domain at.
+
+    EVERY NUMBER COMES FROM A CAPTURED ROW. This file previously synthesised a competitor's
+    position from an MD5 of the keyword+domain string whenever no capture existed; that was
+    removed and must not come back in any form here. A (keyword, domain) pair with no row on
+    the capture date is not scored, not interpolated and not counted as a rank — the
+    dataforseo_serp_competitors connector captures the SERP to depth 30 and writes a row only
+    where the domain actually appeared, so "no row" means "not in the captured top 30", and
+    the only honest treatment is to leave it out of the position statistics and report the
+    coverage separately. With no captured rows at all the map returns status "no_data" and an
+    empty domains list; the caller renders an empty state rather than a picture.
+
+    Two dates are reported, not one, because they come from two connectors:
+      captured_date — the latest date in competitor_keyword_rankings (the competitors' ranks)
+      your_date     — the latest date in keyword_rankings at or before it (your own ranks)
+    They are normally the same day; when they are not, the caller can say so instead of
+    implying a same-moment comparison.
+    """
+    empty = {"status": "no_data", "captured_date": None, "your_date": None,
+             "keywords_captured": 0, "tracked_total": 0, "volume_weighted": False,
+             "domains": []}
+    try:
+        from pipeline.utils.keywords import load_tracked_keywords
+        tracked_kws = load_tracked_keywords(site_id)
+        if not tracked_kws:
+            return empty
+        tracked_lower = [k.lower() for k in tracked_kws]
+
+        from pipeline.services.competitor_service import get_tracked_competitors, _bare
+        competitors = get_tracked_competitors(site_id)
+        if not competitors:
+            return {**empty, "status": "no_competitors", "tracked_total": len(tracked_kws)}
+
+        with get_session() as session:
+            from pipeline.db.writer import ensure_tables
+            ensure_tables(session, CompetitorKeywordRanking)  # idempotent; clean pre-first-refresh state
+
+            captured_date = session.execute(
+                select(func.max(CompetitorKeywordRanking.date))
+                .where(CompetitorKeywordRanking.site_id == site_id)
+            ).scalar()
+            if captured_date is None:
+                return {**empty, "tracked_total": len(tracked_kws)}
+
+            comp_rows = session.execute(
+                select(CompetitorKeywordRanking.keyword,
+                       CompetitorKeywordRanking.competitor_domain,
+                       CompetitorKeywordRanking.position)
+                .where(CompetitorKeywordRanking.site_id == site_id,
+                       CompetitorKeywordRanking.date == captured_date,
+                       func.lower(CompetitorKeywordRanking.keyword).in_(tracked_lower))
+            ).all()
+
+            # Your own ranks: the latest keyword_rankings date at or before the capture date,
+            # so the comparison never reads your future position against their past one.
+            your_date = session.execute(
+                select(func.max(KeywordRanking.date))
+                .where(KeywordRanking.site_id == site_id, KeywordRanking.date <= captured_date)
+            ).scalar()
+            your_rows = []
+            if your_date is not None:
+                your_rows = session.execute(
+                    select(KeywordRanking.keyword,
+                           func.avg(KeywordRanking.position).label("pos"))
+                    .where(KeywordRanking.site_id == site_id,
+                           KeywordRanking.date == your_date,
+                           func.lower(KeywordRanking.keyword).in_(tracked_lower))
+                    .group_by(KeywordRanking.keyword)
+                ).all()
+
+            # Search volume is the weight for the visibility figure. Taken across all dates
+            # (max) because volume is a market fact refreshed on its own cadence, not a
+            # per-capture measurement.
+            vol_rows = session.execute(
+                select(KeywordRanking.keyword,
+                       func.max(KeywordRanking.search_volume).label("vol"))
+                .where(KeywordRanking.site_id == site_id,
+                       func.lower(KeywordRanking.keyword).in_(tracked_lower))
+                .group_by(KeywordRanking.keyword)
+            ).all()
+
+        your_pos = {r.keyword.lower(): (int(round(r.pos)) if r.pos is not None else None)
+                    for r in your_rows}
+        volumes = {r.keyword.lower(): int(r.vol or 0) for r in vol_rows}
+
+        # keyword -> domain -> position, captured rows only.
+        captured: dict = {}
+        for r in comp_rows:
+            if r.position is None:
+                continue
+            captured.setdefault(r.keyword.lower(), {})[r.competitor_domain] = int(r.position)
+        keywords_captured = len(captured)
+        if not keywords_captured:
+            return {**empty, "captured_date": str(captured_date),
+                    "your_date": str(your_date) if your_date else None,
+                    "tracked_total": len(tracked_kws)}
+
+        # Weighting: real volumes when any exist, otherwise every keyword counts once. The
+        # fallback is a stated assumption about the WEIGHTS over the same real positions, not
+        # a substitute for a missing position.
+        weight_pool = [volumes.get(k, 0) for k in captured]
+        volume_weighted = any(w > 0 for w in weight_pool)
+
+        def weight(kw_lower: str) -> float:
+            return float(volumes.get(kw_lower, 0)) if volume_weighted else 1.0
+
+        def summarise(label: str, positions: dict, is_you: bool) -> dict:
+            """positions: {keyword_lower: position} — captured/known ranks only."""
+            ranked = [p for p in positions.values() if p is not None]
+            # Visibility: weighted mean of (101 - position)/100 over EVERY captured keyword,
+            # so a domain absent from a keyword's top 30 scores 0 for it rather than being
+            # skipped. Denominator is the same for every domain, which is what makes the
+            # scores comparable.
+            denom = sum(weight(k) for k in captured)
+            numer = 0.0
+            for kw_lower in captured:
+                pos = positions.get(kw_lower)
+                if pos is not None and 1 <= pos <= 100:
+                    numer += weight(kw_lower) * ((101 - pos) / 100.0)
+            head_to_head = beats_you = you_beat = 0
+            if not is_you:
+                for kw_lower, pos in positions.items():
+                    mine = your_pos.get(kw_lower)
+                    if pos is None or mine is None:
+                        continue
+                    head_to_head += 1
+                    if pos < mine:
+                        beats_you += 1
+                    elif mine < pos:
+                        you_beat += 1
+            return {
+                "domain": label,
+                "is_you": is_you,
+                "keywords_ranked": len(ranked),
+                "coverage_pct": round(len(ranked) / keywords_captured * 100, 1) if keywords_captured else 0.0,
+                "avg_position": round(sum(ranked) / len(ranked), 1) if ranked else None,
+                "best_position": min(ranked) if ranked else None,
+                "top3": sum(1 for p in ranked if p <= 3),
+                "top10": sum(1 for p in ranked if p <= 10),
+                "head_to_head": head_to_head,
+                "beats_you": beats_you,
+                "you_beat": you_beat,
+                "visibility": round(numer / denom * 100, 1) if denom else None,
+            }
+
+        domains = [summarise(
+            _bare(site_id) or site_id,
+            {k: v for k, v in your_pos.items() if k in captured and v is not None},
+            is_you=True,
+        )]
+        for dom in competitors:
+            positions = {kw: pos_map[dom] for kw, pos_map in captured.items() if dom in pos_map}
+            domains.append(summarise(dom, positions, is_you=False))
+
+        # You first, then competitors by how much of your keyword set they cover, then by how
+        # strongly they rank on it.
+        rivals = sorted(domains[1:],
+                        key=lambda d: (-d["keywords_ranked"], d["avg_position"] if d["avg_position"] is not None else 999))
+        return {
+            "status": "ok",
+            "captured_date": str(captured_date),
+            "your_date": str(your_date) if your_date else None,
+            "keywords_captured": keywords_captured,
+            "tracked_total": len(tracked_kws),
+            "volume_weighted": volume_weighted,
+            "domains": domains[:1] + rivals[:limit],
+        }
+    except Exception as e:
+        import logging; logging.getLogger(__name__).error(f"_get_competitor_map error: {e}", exc_info=True)
+        return empty
+
+
 def _get_competitor_grid(site_id: str, limit: int = 100) -> dict:
     """
     SEMrush-style per-keyword competitor grid: for each tracked keyword, your rank
@@ -338,6 +552,10 @@ def _get_competitor_grid(site_id: str, limit: int = 100) -> dict:
                     CompetitorKeywordRanking.competitor_domain,
                     CompetitorKeywordRanking.date,
                     CompetitorKeywordRanking.position,
+                    # The competitor's OWN ranking URL. Without it the grid had no per-cell
+                    # URL at all, so the UI fell back to your row-level URL and every
+                    # competitor cell showed one of YOUR pages.
+                    CompetitorKeywordRanking.url,
                 )
                 .where(CompetitorKeywordRanking.site_id == site_id,
                        CompetitorKeywordRanking.date.in_(both),
@@ -346,55 +564,54 @@ def _get_competitor_grid(site_id: str, limit: int = 100) -> dict:
 
             your_rows = session.execute(
                 select(KeywordRanking.keyword, KeywordRanking.date,
-                       func.avg(KeywordRanking.position).label("pos"))
+                       func.avg(KeywordRanking.position).label("pos"),
+                       # max() only to satisfy the GROUP BY; one keyword/date has one URL.
+                       func.max(KeywordRanking.url).label("url"))
                 .where(KeywordRanking.site_id == site_id, KeywordRanking.date.in_(both),
                        func.lower(KeywordRanking.keyword).in_(tracked_lower))
                 .group_by(KeywordRanking.keyword, KeywordRanking.date)
             ).all()
 
-            comp_avg_map = {}
-            if not comp_rows and your_rows:
-                comp_domain_rows = session.execute(
-                    select(CompetitorDomain.competitor_domain, CompetitorDomain.avg_position)
-                    .where(CompetitorDomain.site_id == site_id, CompetitorDomain.competitor_domain.in_(competitors))
-                ).all()
-                comp_avg_map = {r.competitor_domain: (r.avg_position or 30.0) for r in comp_domain_rows}
-                for dom in competitors:
-                    if dom not in comp_avg_map:
-                        comp_avg_map[dom] = 25.0
-
         # cell[keyword][domain] = {"latest": pos, "prev": pos}
+        # Populated ONLY from real CompetitorKeywordRanking rows (captured by the
+        # dataforseo_serp_competitors connector). A keyword/domain pair with no captured row
+        # stays absent, and make_cell() below renders it as "—".
+        #
+        # REMOVED (2026-07): this block used to invent a position for every missing pair when
+        # `competitor_keyword_rankings` was empty -- it took the competitor's site-wide average
+        # from CompetitorDomain (defaulting to 30.0, or a flat 25.0 for domains with no row at
+        # all) and added an MD5-derived offset of the keyword+domain string, then a second hash
+        # for the previous date so the grid even showed a plausible-looking movement arrow.
+        # The numbers were deterministic, which made them look stable and therefore real, and
+        # they fed the Positioning score cards and the visibility comparison. Nobody could tell
+        # them apart from captured data. Per skills.md rule 3, an absent cell is the honest
+        # answer: run a positions sync to capture real competitor ranks.
         cell: dict = {}
         for r in comp_rows:
             slot = cell.setdefault(r.keyword, {}).setdefault(r.competitor_domain, {})
-            slot["latest" if r.date == latest else "prev"] = r.position
-
-        if not comp_rows and your_rows and comp_avg_map:
-            import hashlib
-            for r in your_rows:
-                for dom in competitors:
-                    avg_p = comp_avg_map.get(dom, 30.0)
-                    h = int(hashlib.md5(f"{r.keyword}:{dom}".encode()).hexdigest()[:8], 16)
-                    offset = (h % 31) - 15
-                    est_pos = max(1, min(100, int(avg_p + offset)))
-                    if r.date == prev:
-                        h_prev = int(hashlib.md5(f"{r.keyword}:{dom}:prev".encode()).hexdigest()[:8], 16)
-                        est_pos = max(1, min(100, est_pos + ((h_prev % 7) - 3)))
-                    slot = cell.setdefault(r.keyword, {}).setdefault(dom, {})
-                    slot["latest" if r.date == latest else "prev"] = est_pos
+            key = "latest" if r.date == latest else "prev"
+            slot[key] = r.position
+            if key == "latest":
+                slot["url"] = r.url or ""
 
         your_cell: dict = {}
         for r in your_rows:
             slot = your_cell.setdefault(r.keyword, {})
             pos = round(r.pos, 0) if r.pos is not None else None
-            slot["latest" if r.date == latest else "prev"] = int(pos) if pos is not None else None
+            key = "latest" if r.date == latest else "prev"
+            slot[key] = int(pos) if pos is not None else None
+            if key == "latest":
+                slot["url"] = r.url or ""
 
         keywords = sorted(set(cell) | set(your_cell))
 
         def make_cell(data: dict) -> dict:
             lp, pp = data.get("latest"), data.get("prev")
             diff, direction = _diff_label(lp, pp)
-            return {"pos": lp, "prev": pp, "diff": diff, "direction": direction}
+            # `url` is the ranking URL for THIS cell -- this domain, this keyword. Empty
+            # string when the snapshot recorded none; never another domain's URL.
+            return {"pos": lp, "prev": pp, "diff": diff, "direction": direction,
+                    "url": data.get("url") or ""}
 
         rows = []
         for kw in keywords:

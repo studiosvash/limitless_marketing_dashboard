@@ -18,6 +18,31 @@ if not SECRET_KEY:
         "DJANGO_SECRET_KEY is not set. Refusing to start in production without it."
     )
 
+# --- Static files (WhiteNoise) ----------------------------------------------
+# whitenoise was already a dependency but was never wired into MIDDLEWARE, so a
+# production boot served no CSS or JS at all -- the SPA is ~900 KB of static assets
+# and every one of them would have 404'd behind Gunicorn (runserver serves them in
+# DEBUG, which is why this never showed up locally).
+#
+# Position is fixed by WhiteNoise's own docs: immediately AFTER SecurityMiddleware
+# and BEFORE everything else, so it can short-circuit a static request before any
+# session/auth work happens. Inserted rather than appended for that reason.
+MIDDLEWARE = list(MIDDLEWARE)  # noqa: F405
+MIDDLEWARE.insert(1, "whitenoise.middleware.WhiteNoiseMiddleware")
+
+# CompressedManifestStaticFilesStorage fingerprints filenames and gzips them, so the
+# assets can be cached hard. Run `manage.py collectstatic` before starting Gunicorn --
+# with the manifest backend a missing collectstatic is a hard 500, not a silent miss.
+STORAGES = {
+    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+    "staticfiles": {"BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage"},
+}
+
+# --- Databases ---------------------------------------------------------------
+# DATABASES is deliberately NOT overridden here. base.py selects Postgres as soon
+# as POSTGRES_DB is present in the real environment (and falls back to SQLite if
+# it isn't), so switching the VPS over is an env-var change, not a code change.
+
 # Comma-separated hostnames, e.g. "dashboard.fusehealth.com,1.2.3.4"
 _hosts = env("DJANGO_ALLOWED_HOSTS", "")
 ALLOWED_HOSTS = [h.strip() for h in _hosts.split(",") if h.strip()]

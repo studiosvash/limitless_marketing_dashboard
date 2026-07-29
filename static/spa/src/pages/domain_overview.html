@@ -5,8 +5,9 @@
     <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
       <div style="padding: 16px 20px; border-bottom: 1px solid #f1f5f9; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;">
         <div>
-          <h2 style="font-size: 15px; font-weight: 600; margin: 0; display: flex; align-items: center; gap: 8px;">Domain Overview</h2>
+          <h2 style="font-size: 15px; font-weight: 600; margin: 0; display: flex; align-items: center; gap: 8px;">Domain Overview</h2><sc-if value="{{ do.src.show }}" hint-placeholder-val="{{ true }}"><div style="margin-top: 6px;"><span style="{{ do.src.style }}" title="{{ do.src.title }}" aria-label="{{ do.src.aria }}">{{ do.src.text }}</span></div></sc-if>
           <p style="font-size: 12px; color: #94a3b8; margin: 4px 0 0;">Analyze the overall performance and top keywords of any domain, subdomain, or exact URL.</p>
+          <p style="font-size: 12px; color: #64748b; margin: 6px 0 0; display: flex; align-items: center; gap: 6px;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="2"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0z"/><circle cx="12" cy="10" r="3"/></svg>Market: <strong style="font-weight: 600; color: #334155;">{{ do.location }}</strong> — the project's location, same as Position Tracking</p>
         </div>
       </div>
       <div style="padding: 20px; display: flex; gap: 12px;">
@@ -50,25 +51,53 @@
       <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
         <div style="padding: 16px 20px; border-bottom: 1px solid #f1f5f9; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;">
           <div>
-            <h2 style="font-size: 15px; font-weight: 600; margin: 0; display: flex; align-items: center; gap: 8px;">Top Organic Keywords</h2>
+            <h2 style="font-size: 15px; font-weight: 600; margin: 0; display: flex; align-items: center; gap: 8px;">Top Organic Keywords</h2><sc-if value="{{ do.src.show }}" hint-placeholder-val="{{ true }}"><div style="margin-top: 6px;"><span style="{{ do.src.style }}" title="{{ do.src.title }}" aria-label="{{ do.src.aria }}">{{ do.src.text }}</span></div></sc-if>
+            <p style="font-size: 12px; color: #94a3b8; margin: 4px 0 0;">Tick the keywords worth chasing and send them straight to Position Tracking.</p>
           </div>
         </div>
+
+        <!-- toolbar: result meta / selection actions -->
+        <div style="padding: 12px 20px; display: flex; align-items: center; justify-content: space-between; gap: 12px; background: {{ do.toolbarBg }}; border-bottom: 1px solid #f1f5f9;">
+          <div style="display: flex; align-items: center; gap: 14px; min-width: 0;">
+            <sc-if value="{{ do.anySelected }}" hint-placeholder-val="{{ false }}">
+              <span style="font-size: 13px; font-weight: 600; color: #4338ca;">{{ do.selectedCount }} selected</span>
+            </sc-if>
+            <sc-if value="{{ do.noneSelected }}" hint-placeholder-val="{{ true }}">
+              <span style="font-size: 12px; color: #64748b;">{{ do.rowsMeta }}</span>
+            </sc-if>
+          </div>
+          <sc-if value="{{ do.anySelected }}" hint-placeholder-val="{{ false }}">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span onClick="{{ h.doClearSel }}" role="button" style="font-size: 12px; color: #94a3b8; cursor: pointer;" style-hover="color:#64748b">Clear</span>
+              <span onClick="{{ h.doTrackSelected }}" role="button" style="display: inline-flex; align-items: center; gap: 7px; padding: 8px 13px; background: #0f172a; color: white; font-size: 13px; font-weight: 600; border-radius: 8px; cursor: pointer;" style-hover="opacity:0.9">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>{{ do.trackSelLabel }}
+              </span>
+            </div>
+          </sc-if>
+        </div>
+
         <div style="overflow-x: auto;">
           <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
             <thead>
               <tr style="text-align: left; color: #94a3b8; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;">
-                <th style="font-weight: 500; padding: 10px 10px 10px 20px;">Keyword</th>
+                <th style="width: 40px; padding: 10px 0 10px 20px;"><span onClick="{{ h.doToggleAll }}" role="button" aria-label="Select all keywords" style="cursor: pointer; display: inline-flex;"><span style="{{ do.allCheckStyle }}"><sc-if value="{{ do.allChecked }}" hint-placeholder-val="{{ false }}"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg></sc-if></span></span></th>
+                <th style="font-weight: 500; padding: 10px 10px 10px 4px;">Keyword</th>
                 <th style="font-weight: 500; padding: 10px;">Intent</th>
                 <th style="font-weight: 500; padding: 10px; text-align: center;">Position</th>
                 <th style="font-weight: 500; padding: 10px; text-align: right;">Volume</th>
                 <th style="font-weight: 500; padding: 10px; text-align: right;">CPC</th>
-                <th style="font-weight: 500; padding: 10px 20px 10px 10px; text-align: right;">Traffic</th>
+                <th style="font-weight: 500; padding: 10px; text-align: right;">Traffic</th>
+                <th style="font-weight: 500; padding: 10px 20px 10px 10px; text-align: right;">Track</th>
               </tr>
             </thead>
             <tbody>
+              <sc-if value="{{ do.noRows }}" hint-placeholder-val="{{ false }}">
+                <tr><td colspan="8" style="padding: 28px 20px; text-align: center; font-size: 13px; color: #94a3b8;">No organic keywords returned for this target in {{ do.location }}.</td></tr>
+              </sc-if>
               <sc-for list="{{ do.rows }}" as="r" hint-placeholder-count="3">
-                <tr style="border-top: 1px solid #f1f5f9;" style-hover="background:#f8fafc">
-                  <td style="padding: 10px 10px 10px 20px; font-weight: 500;">
+                <tr style="border-top: 1px solid #f1f5f9; background: {{ r.rowBg }};" style-hover="background:#f8fafc">
+                  <td style="padding: 10px 0 10px 20px;"><span onClick="{{ r.onToggle }}" role="button" aria-label="Select keyword" style="cursor: pointer; display: inline-flex;"><span style="{{ r.checkStyle }}"><sc-if value="{{ r.checked }}" hint-placeholder-val="{{ false }}"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg></sc-if></span></span></td>
+                  <td style="padding: 10px 10px 10px 4px; font-weight: 500;">
                     <div style="color: #0f172a;">{{ r.kw }}</div>
                     <div style="font-size: 12px; color: #94a3b8; font-weight: 400; max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"><a href="{{ r.url }}" target="_blank" style="color: inherit; text-decoration: none;" style-hover="text-decoration:underline">{{ r.url }}</a></div>
                   </td>
@@ -76,7 +105,24 @@
                   <td style="padding: 10px; text-align: center;"><span style="{{ r.posStyle }}">{{ r.posText }}</span></td>
                   <td style="padding: 10px; text-align: right; color: #475569;">{{ r.volFmt }}</td>
                   <td style="padding: 10px; text-align: right; color: #475569;">{{ r.cpcFmt }}</td>
-                  <td style="padding: 10px 20px 10px 10px; text-align: right; color: #475569;">{{ r.trafficFmt }}</td>
+                  <td style="padding: 10px; text-align: right; color: #475569;">{{ r.trafficFmt }}</td>
+                  <td style="padding: 10px 20px 10px 10px; text-align: right;">
+                    <sc-if value="{{ r.notTracked }}" hint-placeholder-val="{{ true }}">
+                      <span onClick="{{ r.onTrack }}" role="button" title="Send this keyword to Position Tracking" style="display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px; font-size: 12px; font-weight: 600; color: #4338ca; background: #eef2ff; border: 1px solid #c7d2fe; border-radius: 7px; cursor: pointer;" style-hover="background:#e0e7ff">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>Track
+                      </span>
+                    </sc-if>
+                    <sc-if value="{{ r.tracked }}" hint-placeholder-val="{{ false }}">
+                      <span title="Tracked in the project you have open" style="display: inline-flex; align-items: center; gap: 5px; padding: 5px 10px; font-size: 12px; font-weight: 600; color: #059669; background: #ecfdf5; border: 1px solid #a7f3d0; border-radius: 7px;">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg>Tracked
+                      </span>
+                    </sc-if>
+                    <!-- Sent to a DIFFERENT project this session. Naming it stops the row
+                         reading as "nothing happened" straight after a success toast. -->
+                    <sc-if value="{{ r.sentElsewhere }}" hint-placeholder-val="{{ false }}">
+                      <span title="Sent to another project — switch to it to see the keyword" style="{{ r.elsewhereStyle }}">{{ r.elsewhereLabel }}</span>
+                    </sc-if>
+                  </td>
                 </tr>
               </sc-for>
             </tbody>
@@ -86,5 +132,40 @@
       
     </sc-if>
     
+    <!-- ===== Send-to-project picker =====================================================
+         Opened by the per-row "+ Track" and the bulk "Track selected (N)" whenever more
+         than one project exists. The looked-up domain is usually a competitor's, so the
+         destination is a real decision, not a default. Nothing is sent until Send is
+         pressed; the backdrop and Cancel both discard the pending rows. -->
+    <sc-if value="{{ do.pickOpen }}" hint-placeholder-val="{{ false }}">
+      <div style="position: fixed; inset: 0; z-index: 120; display: flex; align-items: center; justify-content: center; padding: 20px;">
+        <div onClick="{{ h.doPickCancel }}" role="button" aria-label="Cancel and close" style="position: absolute; inset: 0; background: rgba(15,23,42,0.4); backdrop-filter: blur(2px);"></div>
+        <div style="position: relative; background: white; border-radius: 16px; width: 100%; max-width: 460px; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.1), 0 8px 10px -6px rgba(0,0,0,0.1); overflow: hidden;">
+          <div style="padding: 22px 24px 0;">
+            <h2 style="font-size: 17px; font-weight: 700; color: #0f172a; margin: 0 0 6px;">{{ do.pickTitle }}</h2>
+            <p style="font-size: 13px; color: #64748b; margin: 0 0 16px; line-height: 1.5;">{{ do.pickSubtitle }}</p>
+          </div>
+          <div style="padding: 0 24px; max-height: 320px; overflow-y: auto;">
+            <sc-for list="{{ do.pickProjects }}" as="pk" hint-placeholder-count="3">
+              <div onClick="{{ pk.select }}" role="button" aria-label="{{ pk.name }}" style="{{ pk.rowStyle }}" style-hover="border-color:#a5b4fc">
+                <span style="{{ pk.radioStyle }}"></span>
+                <div style="min-width: 0; flex: 1;">
+                  <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                    <span style="font-size: 13.5px; font-weight: 600; color: #0f172a;">{{ pk.name }}</span>
+                    <sc-if value="{{ pk.isActive }}" hint-placeholder-val="{{ true }}"><span style="{{ pk.activeStyle }}">{{ pk.activeLabel }}</span></sc-if>
+                  </div>
+                  <div style="font-size: 11.5px; color: #94a3b8; margin-top: 2px;">{{ pk.domain }} · {{ pk.kwLabel }}</div>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+          <div style="display: flex; align-items: center; justify-content: flex-end; gap: 10px; padding: 16px 24px 22px;">
+            <span onClick="{{ h.doPickCancel }}" role="button" aria-label="Cancel" style="font-size: 13px; font-weight: 600; color: #64748b; cursor: pointer; padding: 9px 14px;" style-hover="color:#334155">Cancel</span>
+            <span onClick="{{ h.doPickConfirm }}" role="button" aria-label="{{ do.pickConfirmLabel }}" style="{{ do.pickConfirmStyle }}" style-hover="background:#4338ca">{{ do.pickConfirmLabel }}</span>
+          </div>
+        </div>
+      </div>
+    </sc-if>
+
   </div>
 </sc-if>

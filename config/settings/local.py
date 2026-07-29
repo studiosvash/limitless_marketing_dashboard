@@ -14,3 +14,7 @@ ALLOWED_HOSTS = ["localhost", "127.0.0.1", "[::1]"]
 
 # A fixed dev key is fine here because DEBUG/dev is never internet-facing.
 SECRET_KEY = env("DJANGO_SECRET_KEY", "dev-only-insecure-key-not-for-production")
+
+# DATABASES is deliberately NOT overridden here. base.py picks SQLite or Postgres
+# from the environment: set POSTGRES_DB in .env to develop against Postgres,
+# leave it empty for the default SQLite files. Nothing in this module changes.

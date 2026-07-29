@@ -1,4 +1,23 @@
 <sc-if value="{{ showSettings }}" hint-placeholder-val="{{ false }}">
+        <!-- Delete-project confirmation. Replaces a stub that toasted "Type the workspace name
+             to confirm deletion" with no field to type into and no endpoint behind it. -->
+        <sc-if value="{{ st.delOpen }}" hint-placeholder-val="{{ false }}">
+          <div style="position: fixed; inset: 0; z-index: 130; display: flex; align-items: center; justify-content: center; padding: 20px;">
+            <div onClick="{{ h.deleteProjectClose }}" role="button" aria-label="Cancel" style="position: absolute; inset: 0; background: rgba(15,23,42,0.45); backdrop-filter: blur(2px);"></div>
+            <div style="position: relative; background: white; border-radius: 16px; width: 100%; max-width: 440px; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.15); overflow: hidden; border: 1px solid #fecaca;">
+              <div style="padding: 22px 24px;">
+                <h2 style="font-size: 17px; font-weight: 700; color: #b91c1c; margin: 0 0 8px;">{{ st.delTitle }}</h2>
+                <p style="font-size: 13px; color: #475569; margin: 0 0 16px; line-height: 1.55;">{{ st.delBody }}</p>
+                <label style="display: block; font-size: 12.5px; font-weight: 600; color: #334155; margin-bottom: 6px;">{{ st.delPrompt }}</label>
+                <input value="{{ st.delText }}" onInput="{{ h.deleteProjectType }}" aria-label="{{ st.delPrompt }}" style="{{ st.delInputStyle }}">
+                <div style="display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin-top: 18px;">
+                  <span onClick="{{ h.deleteProjectClose }}" role="button" aria-label="Cancel" style="font-size: 13px; font-weight: 600; color: #64748b; cursor: pointer; padding: 9px 14px;">Cancel</span>
+                  <span onClick="{{ h.deleteProjectConfirm }}" role="button" aria-label="{{ st.delBtnLabel }}" style="{{ st.delBtnStyle }}">{{ st.delBtnLabel }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </sc-if>
       <div data-screen-label="Settings" style="max-width: 880px;">
 
         <!-- sub-tab bar -->
@@ -92,8 +111,8 @@
               <div onClick="{{ h.clearData }}" style="padding: 7px 14px; background: #dc2626; color: white; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer;" style-hover="background:#b91c1c">Clear data</div>
             </div>
             <div style="display: flex; align-items: center; justify-content: space-between; padding: 14px 0; border-top: 1px solid #fee2e2;">
-              <div><div style="font-size: 14px; font-weight: 600; color: #0f172a;">Delete workspace</div><div style="font-size: 12px; color: #94a3b8;">Permanently removes all projects, history and connections.</div></div>
-              <div onClick="{{ h.deleteWorkspace }}" style="padding: 7px 14px; background: #dc2626; color: white; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer;" style-hover="background:#b91c1c">Delete</div>
+              <div><div style="font-size: 14px; font-weight: 600; color: #0f172a;">Delete this project</div><div style="font-size: 12px; color: #94a3b8;">Permanently removes this project, its keywords and every synced metric for it.</div></div>
+              <div onClick="{{ h.deleteProjectOpen }}" style="padding: 7px 14px; background: #dc2626; color: white; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer;" style-hover="background:#b91c1c">Delete</div>
             </div>
           </div>
         </div>
@@ -250,6 +269,9 @@
                     <div style="font-weight: 600; font-size: 14px; color: #0f172a; display: flex; align-items: center; gap: 8px;"><span style="{{ c.dotStyle }}"></span>{{ c.name }}</div>
                     <div style="font-size: 12px; color: #64748b; margin-top: 5px;">Last synced: {{ c.last }}</div>
                     <div style="{{ c.recordsStyle }}">{{ c.records }}</div>
+                    <sc-if value="{{ c.isStale }}" hint-placeholder-val="{{ false }}">
+                      <div style="{{ c.staleStyle }}">{{ c.staleNote }}</div>
+                    </sc-if>
                     <sc-if value="{{ c.error }}" hint-placeholder-val="{{ false }}">
                       <div style="margin-top: 8px; font-size: 11.5px; color: #b91c1c; background: #fff1f2; padding: 6px 8px; border-radius: 6px; border: 1px solid #fecaca; line-height: 1.4; word-break: break-word;">{{ c.error }}</div>
                     </sc-if>
@@ -257,6 +279,86 @@
                 </sc-for>
               </div>
             </div>
+          </div>
+
+          <!-- Ads platforms. Deliberately status cards + setup instructions, NOT credential
+               inputs: nothing in this app can save an Ads credential, and the connectors read
+               them from the server environment. Every value below is pre-computed in
+               settings.js from the real SyncLog rows in data.connectors. -->
+          <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
+            <div style="padding: 16px 24px; border-bottom: 1px solid #f1f5f9;">
+              <h2 style="font-size: 15px; font-weight: 600; margin: 0;">Ads platforms</h2>
+              <p style="font-size: 12px; color: #94a3b8; margin: 4px 0 0;">{{ st.adsIntro }}</p>
+            </div>
+            <sc-for list="{{ st.adsCards }}" as="ad" hint-placeholder-count="2">
+              <div style="padding: 20px 24px; border-top: 1px solid #f1f5f9;">
+                <div style="display: flex; align-items: center; gap: 9px; flex-wrap: wrap;">
+                  <span style="{{ ad.dotStyle }}"></span>
+                  <span style="font-size: 14px; font-weight: 600; color: #0f172a;">{{ ad.name }}</span>
+                  <span style="{{ ad.statusStyle }}">{{ ad.statusLabel }}</span>
+                </div>
+                <div style="font-size: 12px; color: #94a3b8; margin-top: 4px;">{{ ad.desc }}</div>
+
+                <div style="{{ ad.whyStyle }}">
+                  <div style="{{ ad.whyTitleStyle }}">{{ ad.whyTitle }}</div>
+                  <div style="{{ ad.whyBodyStyle }}">{{ ad.whyBody }}</div>
+                </div>
+
+                <sc-if value="{{ ad.hasError }}" hint-placeholder-val="{{ false }}">
+                  <div style="margin-top: 10px; font-size: 11.5px; color: #b91c1c; background: #fff1f2; padding: 8px 10px; border-radius: 6px; border: 1px solid #fecaca; line-height: 1.45; word-break: break-word;">{{ ad.errorText }}</div>
+                </sc-if>
+
+                <div style="display: flex; align-items: baseline; gap: 8px; margin-top: 14px; flex-wrap: wrap;">
+                  <span style="font-size: 12px; font-weight: 600; color: #334155;">{{ ad.accountLabel }}</span>
+                  <span style="font-size: 12.5px; color: #94a3b8;">{{ ad.accountValue }}</span>
+                </div>
+                <div style="font-size: 11.5px; color: #94a3b8; line-height: 1.5; margin-top: 3px;">{{ ad.accountNote }}</div>
+
+                <div style="margin-top: 14px; border: 1px solid #e2e8f0; border-radius: 10px; overflow: hidden;">
+                  <sc-for list="{{ ad.connectorRows }}" as="cr" hint-placeholder-count="2">
+                    <div style="display: flex; align-items: center; gap: 12px; padding: 11px 14px; border-top: 1px solid #f8fafc;">
+                      <div style="min-width: 0; flex: 1;">
+                        <div style="font-family: monospace; font-size: 12px; font-weight: 600; color: #334155;">{{ cr.name }}</div>
+                        <div style="font-size: 11.5px; color: #94a3b8; margin-top: 3px; line-height: 1.45;">{{ cr.desc }}</div>
+                        <div style="font-size: 11.5px; color: #94a3b8; margin-top: 2px;">{{ cr.meta }}</div>
+                      </div>
+                      <span style="{{ cr.statusStyle }}">{{ cr.statusLabel }}</span>
+                    </div>
+                  </sc-for>
+                </div>
+
+                <div style="margin-top: 14px; background: #fffbeb; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px 14px;">
+                  <div style="font-size: 12.5px; font-weight: 600; color: #b45309;">{{ ad.accessTitle }}</div>
+                  <div style="font-size: 12px; color: #475569; line-height: 1.55; margin-top: 4px;">{{ ad.accessBody }}</div>
+                </div>
+
+                <sc-if value="{{ ad.showSetup }}" hint-placeholder-val="{{ true }}">
+                  <div style="{{ ad.sectionLabelStyle }}">{{ ad.stepsLabel }}</div>
+                </sc-if>
+                <sc-for list="{{ ad.steps }}" as="stp" hint-placeholder-count="5">
+                  <div style="display: flex; align-items: flex-start; gap: 10px; padding: 4px 0;">
+                    <span style="{{ stp.numStyle }}">{{ stp.n }}</span>
+                    <span style="font-size: 12.5px; color: #475569; line-height: 1.55;">{{ stp.text }}</span>
+                  </div>
+                </sc-for>
+                <sc-if value="{{ ad.showSetup }}" hint-placeholder-val="{{ true }}">
+                  <div style="{{ ad.sectionLabelStyle }}">{{ ad.envLabel }}</div>
+                </sc-if>
+                <sc-for list="{{ ad.envRows }}" as="ev" hint-placeholder-count="4">
+                  <div style="display: flex; align-items: baseline; gap: 10px; padding: 4px 0; flex-wrap: wrap;">
+                    <code style="font-family: monospace; font-size: 11.5px; color: #f8fafc; background: #0f172a; padding: 2px 8px; border-radius: 5px;">{{ ev.name }}</code>
+                    <span style="font-size: 12px; color: #64748b; flex: 1; min-width: 200px; line-height: 1.5;">{{ ev.purpose }}</span>
+                  </div>
+                </sc-for>
+
+                <div style="display: flex; align-items: center; gap: 14px; margin-top: 16px; flex-wrap: wrap;">
+                  <sc-if value="{{ ad.showSync }}" hint-placeholder-val="{{ true }}">
+                    <span onClick="{{ ad.runSync }}" role="button" aria-label="{{ ad.syncAria }}" style="{{ ad.syncStyle }}" style-hover="background:#059669">{{ ad.syncLabel }}</span>
+                  </sc-if>
+                  <span style="font-size: 11.5px; color: #94a3b8; flex: 1; min-width: 220px; line-height: 1.5;">{{ ad.syncNote }}</span>
+                </div>
+              </div>
+            </sc-for>
           </div>
 
           <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
@@ -353,14 +455,36 @@
           <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); padding: 24px;">
             <h2 style="font-size: 15px; font-weight: 600; margin: 0 0 4px;">DataForSEO budget</h2>
             <p style="font-size: 12px; color: #64748b; margin: 0 0 16px;">Scheduled crons always run. The soft cap only blocks manual on-demand syncs.</p>
+            <!-- Left figure is MEASURED (cost_since the 1st of this month, billed rows only).
+                 Right figure is the one PROJECTION on this screen and never appears without
+                 its PROJECTED tag and the basis sentence below. When there is no billed run
+                 this month there is nothing to project from, so the right side renders an
+                 em dash rather than a $0.00 that would read as a measured result. -->
             <div style="border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px;">
-              <div style="display: flex; align-items: baseline; justify-content: space-between; font-size: 13px;">
-                <span style="color: #64748b;">Spend this month</span>
-                <span><span style="font-weight: 700; color: #0f172a;">{{ st.mtd }}</span><span style="color: #94a3b8;"> · projected {{ st.projected }}</span></span>
+              <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap;">
+                <div>
+                  <div style="font-size: 12px; color: #64748b;">Spend this month <span style="font-size: 11px; color: #94a3b8;">— measured</span></div>
+                  <div style="{{ st.mtdStyle }}">{{ st.mtd }}</div>
+                </div>
+                <div style="text-align: right;">
+                  <div style="display: flex; align-items: center; gap: 7px; justify-content: flex-end;">
+                    <span style="{{ st.projTagStyle }}">{{ st.projTag }}</span>
+                    <span style="font-size: 12px; color: #64748b;">full month</span>
+                  </div>
+                  <sc-if value="{{ st.projIsForecast }}" hint-placeholder-val="{{ true }}">
+                    <div style="font-size: 24px; font-weight: 600; color: #b45309; margin-top: 3px;">{{ st.projected }}</div>
+                  </sc-if>
+                  <sc-if value="{{ st.noProjection }}" hint-placeholder-val="{{ false }}">
+                    <div style="font-size: 24px; font-weight: 600; color: #cbd5e1; margin-top: 3px;">—</div>
+                  </sc-if>
+                </div>
               </div>
-              <div style="height: 8px; background: #f1f5f9; border-radius: 9999px; margin-top: 10px; overflow: hidden;">
+              <div style="font-size: 11.5px; color: #94a3b8; margin-top: 8px;">{{ st.mtdNote }}</div>
+              <div style="height: 8px; background: #f1f5f9; border-radius: 9999px; margin-top: 12px; overflow: hidden;">
                 <div style="{{ st.capBar }}"></div>
               </div>
+              <div style="font-size: 11.5px; color: #94a3b8; margin-top: 7px;">{{ st.capNote }}</div>
+              <div style="{{ st.projBasisStyle }}">{{ st.projBasis }}</div>
               <sc-if value="{{ st.overCap }}" hint-placeholder-val="{{ false }}"><div style="font-size: 12px; color: #b45309; margin-top: 8px;">Projected spend exceeds your cap — manual syncs will be blocked.</div></sc-if>
             </div>
             <div style="display: flex; align-items: center; gap: 20px; margin-top: 18px; flex-wrap: wrap;">
@@ -373,6 +497,73 @@
                 <span style="font-size: 13px; color: #334155;">Enforce cap on manual syncs</span>
               </div>
             </div>
+          </div>
+
+          <!-- Recorded spend. Every figure here is a sum of connector_costs rows — the charge
+               each DataForSEO / OpenAI response reported for itself. Nothing is estimated. -->
+          <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
+            <div style="padding: 16px 20px; border-bottom: 1px solid #f1f5f9;">
+              <h2 style="font-size: 15px; font-weight: 600; margin: 0;">Recorded spend by connector</h2>
+              <p style="font-size: 12px; color: #94a3b8; margin: 4px 0 0;">{{ st.costWindowLabel }}</p>
+            </div>
+
+            <!-- Empty (no data yet). Not a $0.00 row: no recorded run means no measurement. -->
+            <sc-if value="{{ st.noCost }}" hint-placeholder-val="{{ false }}">
+              <div style="padding: 56px 32px; text-align: center;">
+                <div style="font-size: 15px; font-weight: 600; color: #0f172a;">{{ st.costEmptyTitle }}</div>
+                <div style="font-size: 13px; color: #64748b; line-height: 1.6; max-width: 420px; margin: 8px auto 0;">{{ st.costEmptyBody }}</div>
+                <div onClick="{{ st.costEmptyRun }}" role="button" style="{{ st.costEmptyBtnStyle }}" style-hover="background:#059669">{{ st.costEmptyBtn }}</div>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{ st.hasCost }}" hint-placeholder-val="{{ true }}">
+              <div style="padding: 20px;">
+                <div style="display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;">
+                  <span style="font-size: 24px; font-weight: 600; color: #0f172a;">{{ st.costTotal }}</span>
+                  <span style="font-size: 12px; color: #64748b;">{{ st.costRunsLabel }}</span>
+                </div>
+                <table style="width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 14px;">
+                  <thead><tr style="text-align: left; color: #94a3b8; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;"><th style="font-weight: 500; padding: 8px 0;">Connector</th><th style="font-weight: 500; padding: 8px 0;">Runs</th><th style="font-weight: 500; padding: 8px 0;">Units</th><th style="font-weight: 500; padding: 8px 0; text-align: right;">Cost / unit</th><th style="font-weight: 500; padding: 8px 0; text-align: right;">Cost</th></tr></thead>
+                  <tbody>
+                    <sc-for list="{{ st.connectorRows }}" as="c" hint-placeholder-count="4">
+                      <tr style="border-top: 1px solid #f1f5f9;">
+                        <td style="padding: 10px 0; color: #334155; font-family: monospace; font-size: 12px; font-weight: 600;">{{ c.name }}</td>
+                        <td style="padding: 10px 0; color: #64748b;">{{ c.runsLabel }}</td>
+                        <td style="padding: 10px 0; color: #64748b;">{{ c.unitsLabel }}</td>
+                        <td style="{{ c.rateStyle }}">{{ c.rateFmt }}</td>
+                        <td style="padding: 10px 0; text-align: right; color: #0f172a; font-weight: 600;">{{ c.costFmt }}</td>
+                      </tr>
+                      <tr>
+                        <td colspan="5" style="padding: 0 0 8px;"><div style="height: 4px; background: #f1f5f9; border-radius: 9999px; overflow: hidden;"><div style="{{ c.barStyle }}"></div></div></td>
+                      </tr>
+                    </sc-for>
+                  </tbody>
+                </table>
+                <sc-if value="{{ st.hasUnattributed }}" hint-placeholder-val="{{ false }}">
+                  <div style="margin-top: 14px; padding: 12px 14px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; font-size: 12px; color: #475569; line-height: 1.55;">{{ st.unattributedNote }}</div>
+                </sc-if>
+              </div>
+            </sc-if>
+          </div>
+
+          <!-- Month over month. cost_by_month returns a dense series, so a month with no
+               recorded spend is shown as such rather than dropped — a compressed series
+               would imply activity in months that had none. -->
+          <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); padding: 24px;">
+            <h2 style="font-size: 15px; font-weight: 600; margin: 0 0 4px;">Month over month</h2>
+            <p style="font-size: 12px; color: #64748b; margin: 0 0 16px;">Billed spend per calendar month. The current month is still accruing.</p>
+            <div style="display: flex; flex-direction: column; gap: 14px;">
+              <sc-for list="{{ st.monthRows }}" as="m" hint-placeholder-count="3">
+                <div>
+                  <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 10px;">
+                    <span style="font-size: 12.5px; font-weight: 600; color: #475569;">{{ m.label }} <sc-if value="{{ m.isPartial }}" hint-placeholder-val="{{ false }}"><span style="font-size: 11px; font-weight: 500; color: #6366f1;">· {{ m.partialLabel }}</span></sc-if></span>
+                    <span><span style="{{ m.costStyle }}">{{ m.costFmt }}</span> <span style="font-size: 11.5px; color: #94a3b8;">{{ m.runsLabel }}</span></span>
+                  </div>
+                  <div style="height: 7px; background: #f1f5f9; border-radius: 9999px; overflow: hidden; margin-top: 6px;"><div style="{{ m.barStyle }}"></div></div>
+                </div>
+              </sc-for>
+            </div>
+            <div style="{{ st.trendStyle }}">{{ st.trendLabel }}</div>
           </div>
 
           <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); padding: 24px;">
@@ -394,15 +585,24 @@
           </div>
 
           <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); padding: 24px;">
-            <h2 style="font-size: 15px; font-weight: 600; margin: 0 0 12px;">Cost by module</h2>
+            <!-- The cost column is a MEASUREMENT (recorded spend over the 90-day window),
+                 not a forecast — hence the heading. A module whose connectors produced no
+                 billed run says "not yet recorded" instead of $0.00. Cost/unit is blank when
+                 the denominator is unknown (nothing metered, or several connectors metering
+                 different things); the real per-connector rates are in the card above. -->
+            <h2 style="font-size: 15px; font-weight: 600; margin: 0 0 4px;">Cost by module</h2>
+            <p style="font-size: 12px; color: #64748b; margin: 0 0 12px;">{{ st.moduleTotalLabel }}</p>
             <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
-              <thead><tr style="text-align: left; color: #94a3b8; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;"><th style="font-weight: 500; padding: 8px 0;">Module</th><th style="font-weight: 500; padding: 8px 0;">Cadence</th><th style="font-weight: 500; padding: 8px 0; text-align: right;">Est. / month</th><th style="font-weight: 500; padding: 8px 0; text-align: right;"></th></tr></thead>
+              <thead><tr style="text-align: left; color: #94a3b8; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;"><th style="font-weight: 500; padding: 8px 0;">Module</th><th style="font-weight: 500; padding: 8px 0;">Cadence</th><th style="font-weight: 500; padding: 8px 0;">Runs</th><th style="font-weight: 500; padding: 8px 0;">Units</th><th style="font-weight: 500; padding: 8px 0; text-align: right;">Cost / unit</th><th style="font-weight: 500; padding: 8px 0; text-align: right;">Recorded · 90 days</th><th style="font-weight: 500; padding: 8px 0; text-align: right;"></th></tr></thead>
               <tbody>
                 <sc-for list="{{ st.usageRows }}" as="u" hint-placeholder-count="5">
                   <tr style="border-top: 1px solid #f1f5f9;">
                     <td style="padding: 10px 0; color: #334155; font-weight: 500;">{{ u.module }}</td>
                     <td style="padding: 10px 0; color: #64748b;">{{ u.cadence }}</td>
-                    <td style="padding: 10px 0; text-align: right; color: #475569;">{{ u.estFmt }}</td>
+                    <td style="padding: 10px 0; color: #64748b;">{{ u.runsLabel }}</td>
+                    <td style="padding: 10px 0; color: #64748b;" title="{{ u.rateTitle }}">{{ u.unitsLabel }}</td>
+                    <td style="{{ u.rateStyle }}" title="{{ u.rateTitle }}">{{ u.rateFmt }}</td>
+                    <td style="{{ u.estStyle }}">{{ u.estFmt }}</td>
                     <td style="padding: 10px 0; text-align: right;"><sc-if value="{{ u.canSync }}" hint-placeholder-val="{{ false }}"><span onClick="{{ u.run }}" style="cursor: pointer; font-size: 12px; font-weight: 500; color: #4f46e5;" style-hover="opacity:0.7">Sync now</span></sc-if></td>
                   </tr>
                 </sc-for>
@@ -629,6 +829,7 @@
             </div>
           </div>
         </div>
+
         </sc-if>
 
       </div>

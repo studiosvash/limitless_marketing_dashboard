@@ -34,7 +34,14 @@
       if (tab === 'ads') {
         vals.showAds = true;
         if (adsSetup) {
-          vals.ads = { setup: true };
+          /* Setup state still carries the badge, deliberately. On Ads "never synced" is the
+             single most useful thing the screen can say: the pages are fully built and the
+             connectors are wired, and they are empty only because Google has not granted
+             Standard Access yet. Hiding the badge here would hide the actual explanation. */
+          vals.ads = {
+            setup: true,
+            srcAds: this.srcBadge(['google_ads'])
+          };
           return vals;
         }
         const cpa = t.conversions ? t.spend / t.conversions : 0;
@@ -42,6 +49,9 @@
         const kpi = (label, value, c, note) => ({ label, value, chipLabel: c.label, chipStyle: c.style, note: note || '' });
         const noChip = { label: '', style: {} };
         vals.ads = {
+          /* Campaign metrics are Google Ads. Attribution joins them against GA4 campaign rows,
+             so it names both and is only as fresh as the older of the two. */
+          srcAds: this.srcBadge(['google_ads']),
           kpis: [
             kpi('Spend', this.money(t.spend), chip(pctD(t.spend, pv.spend), true), 'vs. previous period'),
             kpi('Conversions', String(Math.round(t.conversions)), chip(pctD(t.conversions, pv.conversions)), 'Google Ads + Meta'),
@@ -179,7 +189,9 @@
       if (tab === 'terms') {
         vals.showTerms = true;
         if (adsSetup) {
-          vals.trm = { setup: true };
+          /* Kept in the setup branch on purpose: "Google Ads · never synced" IS the
+             explanation for why this page is empty (Standard Access not yet granted). */
+          vals.trm = { setup: true, src: this.srcBadge(['google_ads_search_terms']) };
           return vals;
         }
         const scopeCmp = s.termCampaign ? cs.find(c2 => c2.id === s.termCampaign) : null;
@@ -224,6 +236,7 @@
           tracked: { label: 'Tracking as keyword', bg: '#eef2ff', fg: '#4338ca' }
         };
         vals.trm = {
+          src: this.srcBadge(['google_ads_search_terms']),
           kpis: [
             { label: 'Term spend', value: this.money(all.reduce((s2, x2) => s2 + x2.cost, 0)), note: all.length + ' terms in period' },
             { label: 'Wasted spend', value: this.money(wasted), note: counts.wasted + ' zero-conversion terms', accent: '#b91c1c' },
@@ -301,12 +314,15 @@
       if (tab === 'attribution') {
         vals.showAttribution = true;
         if (adsSetup) {
-          vals.att = { setup: true };
+          /* Same reasoning as trm: the badge names BOTH halves of the join, so the user can
+             see which side is missing. */
+          vals.att = { setup: true, src: this.srcBadge(['google_ads', 'ga4']) };
           return vals;
         }
         const rowsA = data.attribution;
         const maxConv = Math.max.apply(null, rowsA.map(r2 => Math.max(r2.ads_conversions, r2.ga4_key_events)).concat([1]));
         vals.att = {
+          src: this.srcBadge(['google_ads', 'ga4']),
           totals: {
             ads: String(Math.round(t.conversions)), ga4: String(Math.round(t.ga4_key_events)),
             adsVal: this.money(t.conv_value), ga4Val: this.money(t.ga4_revenue),

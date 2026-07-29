@@ -28,7 +28,15 @@
       /* ---- sub-tab bar ---- */
       const invitedCount = team.filter(m => m.status === 'invited').length;
       const enabledRules = rulesArr.filter(r => r.on).length;
-      const overCap = u.est_monthly > s.budgetCap;
+      /* A cap of 0 is "no cap set", not "a cap of zero dollars". Comparing against it flagged
+         the "!" sub-tab badge and the over-budget warning on every project that had ever spent
+         a cent, before the user had chosen any budget at all. `u.est_monthly` is also the one
+         PROJECTED figure in this payload (settings_service._usage_raw) -- it is 0 whenever
+         there is no recorded spend to project from, so this can never fire off a forecast
+         built from nothing. */
+      const capNum = Number(s.budgetCap) || 0;
+      const hasCap = capNum > 0;
+      const overCap = hasCap && u.est_monthly > capNum;
       const subDefs = [
         ['general', 'General', null],
         ['team', 'Team & Access', invitedCount ? String(team.length) : String(team.length)],
@@ -68,7 +76,279 @@
       const q = data.budget.quotas;
       const bar = (used, limit, color) => ({ pct: Math.min(100, Math.round((used / limit) * 100)), style: { height: '100%', borderRadius: '9999px', background: color, width: Math.min(100, Math.round((used / limit) * 100)) + '%' } });
 
+      /* ---- recorded spend -------------------------------------------------------------
+         Every dollar figure below EXCEPT `projected` is a sum of `connector_costs` rows,
+         i.e. charges a real billed DataForSEO / OpenAI response reported for itself
+         (settings_service._usage_raw -> cost_service). `projected` is the single forecast
+         on this screen and is never rendered without `u.est_monthly_basis` next to it.
+
+         Three distinctions this code exists to preserve:
+
+         1. "Nothing recorded" is not "$0.00". `u.has_recorded_spend` is derived from the
+            COUNT of spend events, not the total -- which is 0.0 in both the never-synced and
+            the genuinely-free case. A project that has never run a paid connector gets the
+            empty state, not a measurement it does not have. Same rule per module row via
+            `item.recorded`.
+         2. `cost_per_unit` is null (never 0) when the denominator is unknown: a connector
+            that metered no units, or a module row fed by several connectors that meter
+            different things. `rate()` renders those as "—", never "$0.0000".
+         3. this.money() is 2dp, which prints a real $0.0034 charge as "$0.00" -- the same
+            lie as case 1 in a different disguise. `usd()` says "under $0.01" instead. It is
+            worded, not "<$0.01", because a literal '<' in a rendered value is a tag start to
+            anything that treats the output as markup. */
+      const usd = v => (v > 0 && v < 0.01) ? 'under $0.01' : this.money(v);
+      const plural = (n, word) => n + ' ' + word + (n === 1 ? '' : 's');
+      /* Unit rates are genuinely sub-cent ($0.00125 per crawled page is DataForSEO's real
+         OnPage price), so a fixed 2 or 4 dp would round the actual published rate away.
+         Six dp then trimmed of trailing zeros keeps the exact recorded figure and still
+         prints a normal $1.50 as $1.50. */
+      const rate = v => {
+        if (v == null) return '—';
+        let str = Number(v).toFixed(6).replace(/0+$/, '');
+        if (/\.$/.test(str)) str += '00';
+        else if (/\.\d$/.test(str)) str += '0';
+        return '$' + str;
+      };
+      const win = u.window || { total: 0, runs: 0, days: 90, start: '', end: '', by_connector: [] };
+      const connCosts = win.by_connector || [];
+      const monthCosts = u.by_month || [];
+      const maxConnCost = connCosts.reduce((m, c) => (c.cost > m ? c.cost : m), 0) || 1;
+      const maxMonthCost = monthCosts.reduce((m, c) => (c.cost > m ? c.cost : m), 0) || 1;
+      // A zero-spend month/connector gets a zero-width bar, not a 2% sliver: a visible bar
+      // where nothing was billed is a small fabrication of its own. The 2% floor exists only
+      // so a real-but-tiny charge is still visible next to a large one.
+      const costTrack = (value, max, color) => ({
+        height: '100%', borderRadius: '9999px', background: color,
+        width: (value > 0 ? Math.max(2, Math.round((value / max) * 100)) : 0) + '%'
+      });
+
+      /* Month-over-month, stated against the last COMPLETE month only. The current month is
+         still accruing (cost_by_month marks it `partial`), so comparing a part-month against
+         a whole one would read as a fall in spend that has not happened. */
+      const fullMonths = monthCosts.filter(m => !m.partial);
+      const lastFull = fullMonths.length ? fullMonths[fullMonths.length - 1] : null;
+      const prevFull = fullMonths.length > 1 ? fullMonths[fullMonths.length - 2] : null;
+      let trendLabel = 'Not enough history yet to compare months.';
+      let trendColor = '#94a3b8';
+      if (lastFull && prevFull && prevFull.cost > 0) {
+        const delta = Math.round(((lastFull.cost - prevFull.cost) / prevFull.cost) * 100);
+        trendLabel = lastFull.label + ' was ' + (delta >= 0 ? 'up ' : 'down ') + Math.abs(delta)
+          + '% on ' + prevFull.label + ' (' + usd(prevFull.cost) + ' → ' + usd(lastFull.cost) + ').';
+        trendColor = delta > 0 ? '#b45309' : '#15803d';
+      } else if (lastFull && prevFull) {
+        trendLabel = 'Nothing was billed in ' + prevFull.label + ', so there is no baseline to compare '
+          + lastFull.label + ' against.';
+      }
+
+      /* ---- connections: Ads platforms (Google Ads / Meta Ads) -------------------------
+         These are STATUS CARDS, not credential forms, and that is deliberate.
+
+         There is no endpoint anywhere in this app that saves an Ads credential, and there
+         should not be one: the connectors read their secrets from the process environment
+         (`os.getenv` in GoogleAdsConnector.__init__ / MetaConnector.__init__, after
+         `load_dotenv()`), so a token typed into a box here and stored in
+         ProjectSettings.data would be read by nothing, ever. Rendering an input that looks
+         like it connects Google Ads and connects nothing is precisely the defect just
+         removed from the Security tab. A card that tells the truth beats a form that lies.
+
+         What IS honestly knowable from the real /settings payload:
+
+         `data.connectors` is a straight reshape of SyncLog (settings_service
+         .query_connectors_raw). A SyncLog row can only exist if BaseConnector.sync() ran,
+         which sync_engine only reaches once `_get_connector()` actually CONSTRUCTED the
+         class -- and GoogleAdsConnector.__init__ raises ValueError unless BOTH
+         GOOGLE_ADS_CUSTOMER_ID and GOOGLE_ADS_DEVELOPER_TOKEN are set (MetaConnector
+         likewise for META_ACCESS_TOKEN / META_AD_ACCOUNT_ID); on a raise the factory
+         returns None and the engine skips the connector WITHOUT writing a log row.
+
+         So "a row exists at all" is real evidence that the credentials were present at the
+         last attempt. That is exactly the missing-credentials vs credentials-present-but-
+         no-data-synced distinction the user needs -- derived from real rows, not invented.
+         The states, in the order they are tested:
+
+           no row            -> credentials missing, or an Ads sync has never been run
+           status 'running'  -> a sync is in flight right now
+           status 'error'    -> credentials present, last attempt failed (real error shown)
+           'success', 0 recs -> credentials present, API answered, returned nothing
+                                (what an unapproved access level looks like)
+           'success', n recs -> connected
+           status 'never'    -> row exists but no run has finished
+
+         The ONE thing genuinely not derivable is the customer / ad-account ID itself: the
+         Settings response carries no Ads credential fields at all. That row says so rather
+         than showing a plausible-looking number. See the task report for the precise
+         backend addition that would supply it.
+
+         Colour reuses `dataConnectors`' three card looks exactly (green success / red error
+         / grey otherwise) so this is not a second visual language; the finer states are
+         carried by the status pill, which is the same 11px/600 pill as `platRows`. */
+      const connByName = {};
+      data.connectors.forEach(c => { connByName[c.name] = c; });
+      const adsTime = iso => (iso ? (iso.slice(0, 10) + ' ' + iso.slice(11, 16)) : 'never');
+      const adsState = row => {
+        if (!row) return 'absent';
+        if (row.status === 'running') return 'running';
+        if (row.status === 'error') return 'failing';
+        if (row.status === 'success') return row.records > 0 ? 'connected' : 'nodata';
+        return 'attempted';
+      };
+      const ADS_TONE = {
+        connected: { label: 'Connected', dot: '#22c55e', pillBg: '#ecfdf5', pillFg: '#059669' },
+        nodata: { label: 'No data returned', dot: '#f59e0b', pillBg: '#fffbeb', pillFg: '#b45309' },
+        failing: { label: 'Last sync failed', dot: '#dc2626', pillBg: '#fef2f2', pillFg: '#b91c1c' },
+        running: { label: 'Syncing…', dot: '#6366f1', pillBg: '#eef2ff', pillFg: '#4338ca' },
+        attempted: { label: 'Not synced yet', dot: '#cbd5e1', pillBg: '#f1f5f9', pillFg: '#64748b' },
+        absent: { label: 'Not connected', dot: '#cbd5e1', pillBg: '#f1f5f9', pillFg: '#94a3b8' }
+      };
+      const adsPill = tone => ({ fontSize: '11px', fontWeight: 600, padding: '2px 9px', borderRadius: '9999px', background: tone.pillBg, color: tone.pillFg });
+      const adsStepNum = { flexShrink: 0, width: '18px', height: '18px', borderRadius: '9999px', background: '#eef2ff', color: '#4338ca', fontSize: '11px', fontWeight: 700, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', marginTop: '1px' };
+      const ADS_SECTION_LABEL = { fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#94a3b8', margin: '14px 0 6px' };
+
+      const ADS_PLATFORMS = [
+        {
+          key: 'google_ads',
+          name: 'Google Ads',
+          desc: 'Campaign spend, clicks, conversions and the real search terms your ads matched.',
+          cls: 'GoogleAdsConnector',
+          envPair: 'GOOGLE_ADS_CUSTOMER_ID and GOOGLE_ADS_DEVELOPER_TOKEN',
+          accountLabel: 'Customer ID',
+          accountEnv: 'GOOGLE_ADS_CUSTOMER_ID',
+          connectors: [
+            ['google_ads', 'Daily campaign spend/clicks/conversions → ad_metrics_daily'],
+            ['google_ads_search_terms', 'search_term_view queries → ad_search_terms']
+          ],
+          accessTitle: 'Standard Access approval is required before any data flows',
+          accessBody: 'A new developer token is issued at Basic Access, which returns report data for test accounts only — it authenticates fine and hands back an empty report for a real account. Google must approve Standard Access before this connector returns live campaign, spend or search-term rows. Apply at developers.google.com/google-ads/api/docs/access-levels; approval usually takes several business days.',
+          steps: [
+            'Add GOOGLE_ADS_CUSTOMER_ID and GOOGLE_ADS_DEVELOPER_TOKEN to .env on the server. Add GOOGLE_ADS_LOGIN_CUSTOMER_ID too if the account sits under a manager (MCC) account.',
+            'Make sure GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET and GOOGLE_REFRESH_TOKEN are already set — the Ads connector reuses the same OAuth credentials as Search Console. Regenerate them with: python pipeline/utils/auth.py --generate-token',
+            'Apply for Standard Access and wait for Google’s approval. Until it lands, syncs succeed and write zero rows.',
+            'Restart the server. .env is read once, when the connector module is first imported — editing the file on a running process changes nothing.',
+            'Press “Run Ads sync now” below and watch this card.'
+          ],
+          envRows: [
+            ['GOOGLE_ADS_CUSTOMER_ID', 'The account reports are pulled for. Digits only — dashes are stripped.'],
+            ['GOOGLE_ADS_DEVELOPER_TOKEN', 'Issued to your Google Ads manager account. Starts at Basic Access.'],
+            ['GOOGLE_ADS_LOGIN_CUSTOMER_ID', 'Optional. Only when the account is under a manager (MCC) account.'],
+            ['GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET / GOOGLE_REFRESH_TOKEN', 'Shared with the Search Console + GA4 connectors — already set if those sync.']
+          ],
+          syncScope: 'ads',
+          syncNote: 'Runs google_ads, google_ads_search_terms and ga4. Note that the top-right “Refresh all” does NOT include the Ads connectors — only this button and the Ads pages’ own refresh run them.'
+        },
+        {
+          key: 'meta_ads',
+          name: 'Meta Ads',
+          desc: 'Daily campaign spend, clicks, impressions and purchases from the Meta Marketing API.',
+          cls: 'MetaConnector',
+          envPair: 'META_ACCESS_TOKEN and META_AD_ACCOUNT_ID',
+          accountLabel: 'Ad account',
+          accountEnv: 'META_AD_ACCOUNT_ID',
+          connectors: [
+            ['meta', 'Daily campaign insights → ad_metrics_daily (platform=meta)']
+          ],
+          accessTitle: 'Ads Management Standard Access is required before any data flows',
+          accessBody: 'The Development tier allows 300 points/hour, which is not enough to complete a single sync. Apply for Ads Management Standard Access (100K points/hour) in Business Manager → App Review.',
+          steps: [
+            'Create a System User in Meta Business Manager and issue it a token. A personal token expires and the connector will stop without warning.',
+            'Add META_ACCESS_TOKEN and META_AD_ACCOUNT_ID (in Meta’s act_XXXXXXXXXX form) to .env on the server.',
+            'Apply for Ads Management Standard Access in Business Manager → App Review.',
+            'Register the connector: “meta” is not listed in any scope in PAGE_CONNECTORS (pipeline/services/sync_engine.py), so today no refresh in this app runs it — which is why this card has no sync button.',
+            'Restart the server.'
+          ],
+          envRows: [
+            ['META_ACCESS_TOKEN', 'A Business Manager System User token. Personal tokens will not do.'],
+            ['META_AD_ACCOUNT_ID', 'The ad account, in Meta’s act_XXXXXXXXXX form.']
+          ],
+          syncScope: null,
+          syncNote: 'No refresh in this app runs the Meta connector yet, so there is deliberately no button here that would appear to and do nothing. The “Meta Ads” switch under Social & platform connectors below is a display preference stored with your settings — it does not authenticate anything.'
+        }
+      ];
+
+      const adsCards = ADS_PLATFORMS.map(p => {
+        const primary = connByName[p.connectors[0][0]] || null;
+        const state = adsState(primary);
+        const tone = ADS_TONE[state];
+        const ok = state === 'connected';
+        const bad = state === 'failing';
+        const proven = 'A sync attempt was recorded for ' + p.connectors[0][0] + ', which the engine only reaches after ' + p.cls + ' constructed successfully — so ' + p.envPair + ' were both set at that attempt.';
+        const why = {
+          absent: ['Why it is not connected: no credentials, or never run', 'No sync has ever been logged for ' + p.connectors[0][0] + '. The sync engine skips any connector it cannot construct, and ' + p.cls + ' refuses to construct unless ' + p.envPair + ' are both set — and a skipped connector writes no log row. So the absence of a row means either the credentials are missing, or an Ads sync has simply never been run on this site.'],
+          attempted: ['Why it is not connected: nothing has finished yet', 'A log row exists for ' + p.connectors[0][0] + ' but no run has completed, so there is nothing to report. ' + proven],
+          running: ['A sync is running right now', 'This card updates as soon as the run finishes.'],
+          failing: ['Why it is not connected: credentials are set, the last sync failed', proven + ' The last attempt returned the error below — fix that, not the credentials.'],
+          nodata: ['Why there is no data: credentials are set, the API returned nothing', proven + ' The last sync succeeded and wrote 0 records. That is exactly what an unapproved access level looks like: the token authenticates, the query runs, and the report comes back empty. It also looks like this if the account genuinely had no spend in the window.'],
+          connected: ['Connected', this.fmt(primary ? primary.records : 0) + ' records written by the last sync, at ' + adsTime(primary ? primary.last_sync : null) + '. ' + proven]
+        }[state];
+        return {
+          name: p.name,
+          desc: p.desc,
+          statusLabel: tone.label,
+          statusStyle: adsPill(tone),
+          dotStyle: { width: '9px', height: '9px', borderRadius: '9999px', background: tone.dot, flexShrink: 0 },
+          whyTitle: why[0],
+          whyBody: why[1],
+          whyStyle: {
+            marginTop: '12px', padding: '12px 14px', borderRadius: '8px',
+            background: bad ? '#fff1f2' : (ok ? '#f0fdf4' : '#f8fafc'),
+            border: '1px solid ' + (bad ? '#fecaca' : (ok ? '#bbf7d0' : '#e2e8f0'))
+          },
+          whyTitleStyle: { fontSize: '12.5px', fontWeight: 600, color: bad ? '#b91c1c' : (ok ? '#15803d' : '#334155') },
+          whyBodyStyle: { fontSize: '12px', color: '#475569', lineHeight: 1.55, marginTop: '4px' },
+          hasError: !!(primary && primary.error),
+          errorText: (primary && primary.error) || '',
+          accountLabel: p.accountLabel,
+          accountValue: 'Not returned by the Settings API',
+          accountNote: 'It is configured on the server as ' + p.accountEnv + ' in .env. GET /settings carries no Ads credential fields, so this screen cannot show the real value — it is not being hidden, it is not there.',
+          connectorRows: p.connectors.map(c => {
+            const r = connByName[c[0]] || null;
+            const t = ADS_TONE[adsState(r)];
+            return {
+              name: c[0], desc: c[1],
+              statusLabel: r ? t.label : 'Never run',
+              statusStyle: adsPill(t),
+              meta: r ? (this.fmt(r.records) + ' records · last run ' + adsTime(r.last_sync)) : 'No sync log row exists for this connector'
+            };
+          }),
+          accessTitle: p.accessTitle,
+          accessBody: p.accessBody,
+          showSetup: !ok,
+          steps: ok ? [] : p.steps.map((text, i) => ({ n: String(i + 1), text: text, numStyle: adsStepNum })),
+          envRows: ok ? [] : p.envRows.map(e => ({ name: e[0], purpose: e[1] })),
+          sectionLabelStyle: ADS_SECTION_LABEL,
+          stepsLabel: 'How to connect it',
+          envLabel: 'Environment variables',
+          showSync: !!p.syncScope,
+          syncLabel: syncing ? 'Sync in progress…' : 'Run Ads sync now',
+          syncAria: syncing ? 'A sync is already running' : 'Run the Ads sync now for ' + p.name,
+          syncStyle: {
+            display: 'inline-flex', padding: '8px 16px', background: '#10b981', color: 'white',
+            fontSize: '13px', fontWeight: 600, borderRadius: '8px',
+            cursor: syncing ? 'default' : 'pointer', opacity: syncing ? 0.5 : 1
+          },
+          runSync: () => { if (!syncing && p.syncScope) this.startSync(p.syncScope); },
+          syncNote: p.syncNote
+        };
+      });
+
+      /* Delete-project confirmation. The typed value must equal the project's real domain;
+         the button stays disabled until it does, so the destructive call cannot fire on a
+         near-miss. */
+      const delDomain = data.project.domain || '';
+      const delTyped = (s.delProjText || '').trim();
+      const delArmed = !!delDomain && delTyped.toLowerCase() === delDomain.toLowerCase();
+
       vals.st = {
+        delOpen: !!s.delProjOpen,
+        delDomain: delDomain,
+        delTitle: 'Delete ' + delDomain,
+        delBody: 'This permanently removes ' + delDomain + ', its tracked keywords, and every synced metric for it across 19 tables. Other projects are not affected. This cannot be undone.',
+        delPrompt: 'Type ' + delDomain + ' to confirm',
+        delText: s.delProjText || '',
+        delArmed: delArmed,
+        delBtnLabel: s.delProjBusy ? 'Deleting…' : 'Delete this project',
+        delInputStyle: { width: '100%', boxSizing: 'border-box', fontSize: '14px', padding: '10px 12px', border: '1px solid ' + (delArmed ? '#fca5a5' : '#e2e8f0'), borderRadius: '8px', outline: 'none', fontFamily: 'monospace' },
+        delBtnStyle: { padding: '9px 16px', borderRadius: '8px', fontSize: '13px', fontWeight: 600, color: 'white', background: (delArmed && !s.delProjBusy) ? '#dc2626' : '#fca5a5', cursor: (delArmed && !s.delProjBusy) ? 'pointer' : 'default' },
+
         /* sub-tabs */
         subTabs: subDefs.map(d => ({
           label: d[1], badge: d[2],
@@ -138,19 +418,36 @@
           // connector that hasn't synced yet isn't "broken").
           const ok = c.status === 'success';
           const bad = c.status === 'error';
+          /* `stale_error` means: the last run really did fail, but its cause was a missing
+             credential that IS configured now. Showing the old message as current made the
+             card flatly contradict the value in the Site credentials form above it -- a user
+             who had just saved their GA4 property ID kept reading "No GA4 property
+             configured". Amber, not red: nothing is broken, it simply has not re-run. */
+          const stale = c.status === 'stale_error';
           return {
             name: c.name, last: c.last_sync || 'never', records: this.fmt(c.records) + ' records',
             error: c.error,
+            isStale: stale,
+            staleNote: stale
+              ? 'Fixed since the last run — the credential is saved now. Press Refresh to apply it. (Last run failed: ' + (c.error_was || '').slice(0, 90) + ')'
+              : '',
+            staleStyle: { fontSize: '11.5px', color: '#b45309', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: '6px', padding: '7px 9px', marginTop: '8px', lineHeight: 1.45 },
             cardStyle: bad
               ? { padding: '14px', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '10px' }
-              : { padding: '14px', background: ok ? '#f0fdf4' : '#f8fafc', border: '1px solid ' + (ok ? '#bbf7d0' : '#e2e8f0'), borderRadius: '10px' },
-            dotStyle: { width: '8px', height: '8px', borderRadius: '9999px', background: bad ? '#dc2626' : (ok ? '#22c55e' : '#cbd5e1') },
-            recordsStyle: { fontSize: '12px', color: bad ? '#b91c1c' : (ok ? '#15803d' : '#64748b'), marginTop: '2px' }
+              : stale
+                ? { padding: '14px', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: '10px' }
+                : { padding: '14px', background: ok ? '#f0fdf4' : '#f8fafc', border: '1px solid ' + (ok ? '#bbf7d0' : '#e2e8f0'), borderRadius: '10px' },
+            dotStyle: { width: '8px', height: '8px', borderRadius: '9999px', background: bad ? '#dc2626' : stale ? '#f59e0b' : (ok ? '#22c55e' : '#cbd5e1') },
+            recordsStyle: { fontSize: '12px', color: bad ? '#b91c1c' : stale ? '#b45309' : (ok ? '#15803d' : '#64748b'), marginTop: '2px' }
           };
         }),
         healthLabel: data.connectors.length === 0
           ? 'No sources synced yet.'
-          : (data.connectors.some(c => c.status === 'error') ? 'Some sources need attention.' : 'All healthy.'),
+          : (data.connectors.some(c => c.status === 'error')
+              ? 'Some sources need attention.'
+              : (data.connectors.some(c => c.status === 'stale_error')
+                  ? 'A credential was fixed since the last run — press Refresh to apply it.'
+                  : 'All healthy.')),
         platRows: PLAT.map(p => {
           const on = !!platConn[p[0]]; const tg = toggle(on);
           return {
@@ -162,11 +459,18 @@
             toggle: () => this.togglePlatform(p[0])
           };
         }),
+        adsCards: adsCards,
+        adsIntro: 'Google Ads and Meta Ads credentials live in the server’s .env file, not in this database — so these are status cards, not forms. Each one reads its real SyncLog row and tells you which problem you actually have.',
 
         /* ---- automation: sync + crawl ---- */
-        // data.sync.next_run/.day are honestly null (no scheduler exists yet) -- avoid the
-        // literal "null (null)" string JS string-concatenation would otherwise produce.
-        nextRun: data.sync.next_run ? (data.sync.next_run + ' (' + data.sync.day + ')') : 'not yet scheduled',
+        // A scheduler DOES exist now (`manage.py run_scheduled_syncs`, driven hourly from the
+        // OS task scheduler), and data.sync.next_run/.day come from the very same cadence +
+        // run-history logic that command acts on -- so this date is what will actually happen,
+        // not a parallel guess. They are still null in the two cases where no honest date can
+        // be derived: every module set to `manual`, or no successful run yet to measure a
+        // cadence from. The ternary also avoids the literal "null (null)" that string
+        // concatenation would otherwise produce.
+        nextRun: data.sync.next_run ? (data.sync.next_run + ' (' + data.sync.day + ')') : 'nothing due — every module is set to manual, or nothing has synced yet',
         lastRun: data.sync.last_run || 'never',
         syncRows: SYNC_MODS.map(m => ({
           label: m[1], desc: m[2], value: syncCfg[m[0]] || 'weekly', options: mkOpts(m[3]),
@@ -179,12 +483,39 @@
         crawlSaveLabel: s.crawlSaved ? 'Saved \u2713' : 'Save crawl settings',
 
         /* ---- usage & budget ---- */
-        mtd: this.money(u.month_to_date), budget: this.money(u.budget),
-        budgetPct: Math.min(100, Math.round((u.month_to_date / u.budget) * 100)),
-        projected: this.money(u.est_monthly),
+        // MEASURED. month_to_date is cost_since(1st of this month) -- billed rows only.
+        // A project with NO recorded run anywhere shows an em dash, not $0.00: cost_service
+        // returns 0.0 for "never recorded" and for "measured zero" alike, and printing the
+        // second one's figure for the first would assert a measurement that was never taken.
+        // The two are told apart by the RUN COUNT (u.has_recorded_spend / u.month_runs), which
+        // is the only field that distinguishes them.
+        mtd: u.has_recorded_spend ? usd(u.month_to_date) : '—',
+        mtdStyle: { fontSize: '24px', fontWeight: 600, marginTop: '3px', color: u.has_recorded_spend ? '#0f172a' : '#cbd5e1' },
+        budget: this.money(u.budget),
+        budgetPct: hasCap ? Math.min(100, Math.round((u.month_to_date / capNum) * 100)) : 0,
+        mtdNote: !u.has_recorded_spend
+          ? 'No sync has ever recorded a charge for this project — nothing measured yet, which is not the same as $0.00.'
+          : (u.month_runs
+            ? (plural(u.month_runs, 'billed run') + ' so far in the '
+               + plural(u.days_elapsed, 'day') + ' of this month')
+            : 'Nothing has been billed this month — the spend recorded for this project is all from earlier months.'),
+        // PROJECTED -- the only forecast on this screen. It is always rendered with projTag
+        // and projBasis beside it, and _usage_raw returns 0 with is_projection false rather
+        // than extrapolating from a month with no billed run.
+        projected: usd(u.est_monthly),
+        projIsForecast: !!u.est_monthly_is_projection,
+        noProjection: !u.est_monthly_is_projection,
+        projTag: 'PROJECTED',
+        projTagStyle: { fontSize: '10px', fontWeight: 700, letterSpacing: '0.06em', padding: '2px 7px', borderRadius: '4px', background: '#fffbeb', color: '#b45309', border: '1px solid #fde68a' },
+        projBasis: u.est_monthly_basis || '',
+        projBasisStyle: { fontSize: '11.5px', color: u.est_monthly_is_projection ? '#b45309' : '#94a3b8', lineHeight: 1.5, marginTop: '9px' },
         budgetCap: s.budgetCap, savedBudget: s.savedBudget ? 'Saved \u2713' : '',
         enforceToggle: toggle(!!s.budgetEnforce),
-        capBar: { height: '100%', borderRadius: '9999px', background: overCap ? '#f59e0b' : '#10b981', width: Math.min(100, Math.round((u.est_monthly / s.budgetCap) * 100)) + '%' },
+        hasCap: hasCap, noCap: !hasCap,
+        capNote: hasCap
+          ? ('Bar shows the projected month against your $' + capNum + ' cap.')
+          : 'No cap set, so nothing is being tracked against one. Enter a monthly figure below.',
+        capBar: { height: '100%', borderRadius: '9999px', background: overCap ? '#f59e0b' : '#10b981', width: (hasCap ? Math.min(100, Math.round((u.est_monthly / capNum) * 100)) : 0) + '%' },
         overCap: overCap,
         quotaGa4: bar(q.ga4_tokens_used, q.ga4_tokens_limit, '#6366f1'),
         quotaGa4Label: this.fmt(q.ga4_tokens_used) + ' / ' + this.fmt(q.ga4_tokens_limit) + ' tokens today',
@@ -192,12 +523,79 @@
         quotaAdsLabel: q.ads_ops_used + ' / ' + this.fmt(q.ads_ops_limit) + ' ops/day',
         quotaGsc: bar(q.gsc_queries_used, q.gsc_queries_limit, '#8b5cf6'),
         quotaGscLabel: q.gsc_queries_used + ' / ' + this.fmt(q.gsc_queries_limit) + ' queries/day',
+
+        /* ---- recorded spend: 90-day window ---- */
+        hasCost: !!u.has_recorded_spend,
+        noCost: !u.has_recorded_spend,
+        costTotal: usd(win.total),
+        costWindowLabel: 'Last ' + win.days + ' days \u00b7 ' + win.start + ' \u2192 ' + win.end,
+        costRunsLabel: plural(win.runs, 'billed run') + ' across ' + plural(connCosts.length, 'connector'),
+        // The empty state is deliberately NOT a row of $0.00 figures: no row recorded means
+        // no measurement, which is a different fact from a measured zero.
+        costEmptyTitle: 'No spend recorded yet',
+        costEmptyBody: 'Every DataForSEO response reports what it charged, and each run is '
+          + 'written to connector_costs. Nothing has been recorded for this project in the last '
+          + win.days + ' days \u2014 so this is "not measured yet", not "$0.00". Run a sync and the '
+          + 'real per-connector cost appears here.',
+        costEmptyBtn: syncing ? 'Sync in progress\u2026' : '\u26a1 Run a full sync now',
+        costEmptyBtnStyle: {
+          display: 'inline-flex', marginTop: '18px', padding: '10px 18px', background: '#10b981',
+          color: 'white', fontSize: '13px', fontWeight: 600, borderRadius: '8px',
+          cursor: syncing ? 'default' : 'pointer', opacity: syncing ? 0.5 : 1
+        },
+        costEmptyRun: () => { if (!syncing) this.startSync('all'); },
+        connectorRows: connCosts.map(c => ({
+          name: c.connector,
+          costFmt: usd(c.cost),
+          runsLabel: plural(c.runs, 'run'),
+          // units null => the connector metered nothing; 0 units is also not a denominator.
+          unitsLabel: c.units == null ? 'units not metered'
+            : (this.fmt(c.units) + (c.units === 1 ? ' unit' : ' units')),
+          rateFmt: rate(c.cost_per_unit),
+          rateStyle: { padding: '10px 0', textAlign: 'right', color: c.cost_per_unit == null ? '#cbd5e1' : '#475569' },
+          barStyle: costTrack(c.cost, maxConnCost, '#4f46e5')
+        })),
+        hasUnattributed: (u.unattributed || []).length > 0,
+        unattributedNote: 'Of that, ' + usd(u.unattributed_total) + ' came from connectors no '
+          + 'sync module below owns \u2014 the explicit Domain overview / Live SERP lookups and AI '
+          + 'visibility runs, which are billed when you press their button, not on a schedule. '
+          + 'That is why the module rows sum to ' + usd(u.attributed_total) + ', not the total above.',
+
+        /* ---- recorded spend: month over month ---- */
+        monthRows: monthCosts.map(m => ({
+          label: m.label,
+          costFmt: m.runs ? usd(m.cost) : 'nothing recorded',
+          costStyle: { fontSize: '13px', fontWeight: m.runs ? 600 : 400, color: m.runs ? '#0f172a' : '#cbd5e1' },
+          runsLabel: m.runs ? plural(m.runs, 'run') : '',
+          isPartial: !!m.partial,
+          partialLabel: 'still accruing',
+          barStyle: costTrack(m.cost, maxMonthCost, m.partial ? '#818cf8' : '#4f46e5')
+        })),
+        trendLabel: trendLabel,
+        trendStyle: { fontSize: '12px', color: trendColor, marginTop: '12px', lineHeight: 1.5 },
+
+        /* ---- cost by module ---- */
+        // estFmt carries a MEASUREMENT (90-day recorded spend for that module) when there is
+        // one, and the honest "not yet recorded" note when there is not -- never $0.00. The
+        // column heading in settings.html says "Recorded \u00b7 90 days" for exactly that reason.
         usageRows: u.items.map(item => ({
           module: item.module, cadence: item.cadence,
-          estFmt: item.est == null ? (item.note || '\u2014') : this.money(item.est),
+          estFmt: item.est == null ? (item.note || '\u2014') : usd(item.est),
+          estStyle: { padding: '10px 0', textAlign: 'right', fontWeight: item.recorded ? 600 : 400, color: item.recorded ? '#0f172a' : '#94a3b8' },
+          runsLabel: item.recorded ? plural(item.runs, 'run') : '\u2014',
+          unitsLabel: !item.recorded ? '\u2014'
+            : (item.units == null ? 'units not metered'
+              : (this.fmt(item.units) + (item.units === 1 ? ' unit' : ' units')
+                 + (item.units_mixed ? ' (mixed)' : ''))),
+          rateFmt: item.recorded ? rate(item.cost_per_unit) : '\u2014',
+          rateStyle: { padding: '10px 0', textAlign: 'right', color: item.cost_per_unit == null ? '#cbd5e1' : '#475569' },
+          rateTitle: item.units_mixed
+            ? 'Several connectors feed this module and they meter different things, so a single cost-per-unit would not be a real rate. The per-connector rates are in the breakdown above.'
+            : '',
           canSync: !!scopeFor[item.module] && !syncing,
           run: () => this.startSync(scopeFor[item.module])
         })),
+        moduleTotalLabel: 'Measured from real billed runs \u00b7 attributed total ' + usd(u.attributed_total),
 
         /* ---- alerts & rules + notifications ---- */
         ruleRows: rulesArr.map(r => {

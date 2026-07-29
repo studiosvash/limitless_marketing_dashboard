@@ -25,8 +25,10 @@ These are ordered by how expensive it is to get them wrong.
 **1. Never call an external API from a page-data endpoint.** Pages read SQLite and return
 instantly. The whole product contract rests on this. The three sanctioned exceptions are
 `/api/research`, `/api/domain-overview` and `/api/live-serp` — explicit user lookups, not page
-renders. (One page endpoint does violate this: `/positions` backfills missing keyword volume via
-DataForSEO. It is a known wart, not a precedent to copy.)
+renders. (`/positions` used to violate this by backfilling missing keyword volume via a billable
+DataForSEO call on every render; it was removed on 2026-07-27 — the `dataforseo_keywords`
+connector in the positioning sync scope already writes that data. A keyword with no stored volume
+now reports `null` and is counted in the response's `volume_coverage`.)
 
 **2. Every API view needs `@method_decorator(login_not_required, name="dispatch")`.**
 `LoginRequiredMiddleware` runs before DRF, so without it a token-authenticated request is 302'd
@@ -427,22 +429,48 @@ Each of these is a real bug that was found and fixed. Do not re-introduce them.
 | A 404 from `GET /api/tasks/<id>` | The SPA polls at 500 ms and treats any non-2xx as fatal. Unknown ids must return `{done: true}` |
 | Building a segment list from a different slice than the table | A tab can then show a count with no matching rows. Union the segments into the table set |
 | Dropping an explicit `None` in `_update_django_sync_log` | Stale error text stuck to successful rows forever |
+| Assuming "Refresh all" runs everything | `ALL_CONNECTORS` deliberately **excludes** `google_ads`, `google_ads_search_terms` and `meta`. Only the `ads` scope runs them — check the list before promising a button refreshes something |
+| Taking the audit snapshot before `rebuild_technical_issues` | The snapshot stores that crawl's issue counts, so ordering it first permanently freezes the **previous** crawl's numbers into history |
+| `all([])` is `True` | An empty domain-check list silently scored HTTPS 100/100. Guard the empty case before treating an all-pass as a pass |
+| `import sqlalchemy.dialects.sqlite` | Breaks Postgres outright. Use `pipeline/db/dialect.py` — `upsert_insert()`, `max_batch_size()`. Same for `strftime()` (SQLite-only) and `date_trunc()` (Postgres-only): bucket in Python instead |
+| `PRAGMA table_info` in a migration | A syntax error on Postgres. Use `sqlalchemy.inspect()` to ask the connected dialect what columns exist — see `ensure_site_columns()` |
+| Formatting numbers in a `query_*_raw` / shared helper | `_get_keywords_overview` formatted position as `f"{avg:.0f}"` before any caller saw it, so 8.4 arrived as 8 irrecoverably and the column sorted as text (`"1,234" < "9"`). Return raw numbers; format at the edge |
+| Coercing an absent value to `0` | Zero and unknown are different facts. `None` position, `None` volume, `cost_per_unit: None` when no units were recorded — all deliberate |
+| A live API call in a page-data endpoint | Rate limits, latency, **and money**. `/positions` was billing DataForSEO on every render. Only `/research`, `/domain-overview` and `/live-serp` may call out, because a user pressed a button |
 
 ---
 
 ## 10. Known-broken code — do not copy
 
+**Still broken**
+
 - `apps/dashboard/views_export.py` — references `role_required`, `get_active_period`,
   `_get_top_pages` and friends, none of which are imported or exist. Not routed. **Dead file.**
-- `app.js::clearData()` — reads `this.props.ctx.route.params.id`, which does not exist in this
-  runtime.
-- Position Tracking's delete action calls `window.FuseAPI.delete(...)`; the transport exposes
-  `del`.
 - `apps/dashboard/context_processors.py` — still lists the removed template pages; harmless but
   meaningless now that no Django template renders a dashboard.
-- The email-invite path creates a `User` but never a `UserInvitation`, and emails a login link
-  rather than an accept-invite token link.
-- A stray `print("INCOMING KEYWORDS BATCH:", batch)` in `ProjectKeywordsView.put`.
+
+**Fixed in the 2026-07 pass — listed so nobody reintroduces the shape**
+
+- `app.js::clearData()` read `this.props.ctx.route.params.id`, which does not exist in this
+  runtime, so the handler threw before reaching the API. There is no router ctx on that
+  component; the project id lives in `this.state.projectId`, like every other settings call.
+- Position Tracking's delete action called `window.FuseAPI.delete(...)`; the transport exposes
+  `del`.
+- The email-invite path created a `User` immediately, emailed a **plaintext temporary password**
+  and a plain login link, and never wrote a `UserInvitation` — so invitees never appeared in the
+  pending list and could not be revoked. It now creates the invitation, emails an
+  `#/accept-invite?token=` link, and lets the invitee choose their own password.
+- `.catch(() => {})` on user-initiated mutations, 16 of them in `app.js` alone. The worst had
+  `.catch()` sitting **before** `.then()`, converting every rejection into a resolution: a
+  refused POST still marked rows tracked, wiped three cached tabs, and toasted success.
+- Site Audit's `get_domain_checks()` performed **six live network requests inside a page-data
+  GET** — the only place in the codebase that reached the network while rendering. Its 6-hour
+  cache protected nothing, because only a page view ever wrote that cache.
+- Site Audit's page-detail drawer read `pg3.failed.length`, `pg3.cwv` and `pg3.externalLinks`,
+  none of which ever existed in the payload — clicking any crawled-page row threw a `TypeError`
+  and took the render down.
+- Competitor positions were synthesised from a site-wide average plus an **MD5-derived offset**.
+  Being deterministic, they looked stable and therefore real. An absent cell is the answer.
 
 If you touch any of these, fix them properly rather than extending them.
 

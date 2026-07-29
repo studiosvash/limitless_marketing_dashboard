@@ -15,6 +15,7 @@ from typing import Optional
 
 from sqlalchemy import text as sa_text
 
+from pipeline.db.dialect import is_postgres
 from pipeline.utils.db_connection import get_session
 from pipeline.utils.logger import get_logger
 from pipeline.db.writer import upsert_seo_aggregate
@@ -22,13 +23,27 @@ from pipeline.db.writer import upsert_seo_aggregate
 logger = get_logger("aggregate_service")
 
 
-# SQLite date-grouping expressions per period type.
-# strftime('%Y-%W', ...) gives ISO week-of-year. %Y-%m gives month.
-_PERIOD_EXPR = {
+# Date-grouping expressions per period type, per backend. There is no portable
+# SQL for "truncate to the start of the week/month", so each dialect gets its own
+# literal. Both maps MUST produce the same buckets — a Monday-anchored week and a
+# first-of-month — or the rollups would silently disagree between environments.
+_PERIOD_EXPR_SQLITE = {
     "daily":   "date",
     "weekly":  "DATE(date, '-' || ((strftime('%w', date) + 6) % 7) || ' days')",  # Monday-anchored
     "monthly": "DATE(date, 'start of month')",
 }
+
+# Postgres DATE_TRUNC('week', ...) is already Monday-anchored, so it matches the
+# SQLite expression above without an offset. The ::date casts drop the timestamp
+# DATE_TRUNC returns, keeping the value the same shape the SQLite branch yields.
+_PERIOD_EXPR_POSTGRES = {
+    "daily":   "date",
+    "weekly":  "(DATE_TRUNC('week', date))::date",
+    "monthly": "(DATE_TRUNC('month', date))::date",
+}
+
+# Historical name — some callers/docs reference it; the SQLite map is the original.
+_PERIOD_EXPR = _PERIOD_EXPR_SQLITE
 
 
 def rebuild_seo_aggregates(site_id: str, days_back: int = 365) -> dict:
@@ -46,7 +61,8 @@ def rebuild_seo_aggregates(site_id: str, days_back: int = 365) -> dict:
 
     results: dict = {}
     with get_session() as session:
-        for period_type, period_expr in _PERIOD_EXPR.items():
+        period_exprs = _PERIOD_EXPR_POSTGRES if is_postgres(session) else _PERIOD_EXPR_SQLITE
+        for period_type, period_expr in period_exprs.items():
             rows = session.execute(
                 sa_text(f"""
                     SELECT
@@ -75,7 +91,8 @@ def rebuild_seo_aggregates(site_id: str, days_back: int = 365) -> dict:
             records = []
             for r in rows:
                 period_start_raw = r[0]
-                # SQLite may return string or date depending on driver — normalize.
+                # SQLite may return string or date depending on driver; Postgres
+                # returns a real date object — normalize both to date.
                 if isinstance(period_start_raw, str):
                     try:
                         period_start = date.fromisoformat(period_start_raw[:10])

@@ -18,8 +18,8 @@ from dotenv import load_dotenv
 from googleapiclient.discovery import build
 
 from pipeline.connectors.base import BaseConnector
+from pipeline.db.dialect import max_batch_size, upsert_insert
 from pipeline.db.schema import IndexingStatus
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy import text
 from pipeline.utils.auth import get_google_credentials
 from pipeline.utils.db_connection import get_session
@@ -217,11 +217,12 @@ class URLInspectionConnector(BaseConnector):
         for r in records:
             r.setdefault("site_id", site_id or "")
 
-        BATCH_SIZE = 50
+        insert = upsert_insert(session)
+        BATCH_SIZE = max_batch_size(session, 50)
         total = 0
         for i in range(0, len(records), BATCH_SIZE):
             batch = records[i:i + BATCH_SIZE]
-            stmt = sqlite_insert(IndexingStatus).values(batch)
+            stmt = insert(IndexingStatus).values(batch)
             stmt = stmt.on_conflict_do_update(
                 index_elements=["site_id", "url"],
                 set_={

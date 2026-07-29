@@ -5,7 +5,7 @@ Fetches REAL Core Web Vitals and Lighthouse scores for top pages.
 Uses the free PageSpeed Insights API v5 (requires GOOGLE_API_KEY).
 
 Scans: Top 50 pages by traffic from the pages table.
-Returns: Performance, SEO, Accessibility scores + LCP, CLS, INP, FCP, TTFB.
+Returns: Performance, SEO, Accessibility scores + LCP, CLS, INP, FCP, TTFB, SI, TBT.
 Rate limit: ~400 requests/day free tier. We scan top pages only.
 """
 
@@ -19,8 +19,8 @@ import requests
 from dotenv import load_dotenv
 
 from pipeline.connectors.base import BaseConnector
-from pipeline.db.schema import PageSpeed
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from pipeline.db.dialect import max_batch_size, upsert_insert
+from pipeline.db.schema import PageSpeed, ensure_page_speed_columns
 from sqlalchemy import select, text
 from pipeline.utils.db_connection import get_session
 
@@ -137,6 +137,16 @@ class PageSpeedConnector(BaseConnector):
                 val = a.get("numericValue")
                 return round(val, 4) if val is not None else None
 
+            # Total Blocking Time. `audits["total-blocking-time"].numericValue` is present on
+            # EVERY PSI response (it is a scored performance metric, not an opportunity), so it
+            # is captured here on every run for every page — the only way a site-wide p75 can
+            # be honest. It used to survive only inside `lighthouse_audits`, which stores just
+            # the audits that FAILED, i.e. a sample biased toward the slowest pages.
+            #
+            # Read through the same `audit_ms` helper the other timings use, so a missing or
+            # non-numeric audit yields None rather than a zero that would read as "0 ms of
+            # blocking" — the best possible score.
+
             # Extract detailed audits for Technical Issues (score < 1 or opportunity with savings)
             failed_audits = []
             for audit_id, audit in audits.items():
@@ -166,6 +176,7 @@ class PageSpeedConnector(BaseConnector):
                 "fcp_ms": audit_ms("first-contentful-paint"),
                 "ttfb_ms": audit_ms("server-response-time"),
                 "si_ms": audit_ms("speed-index"),
+                "tbt_ms": audit_ms("total-blocking-time"),
                 "lighthouse_audits": json.dumps(failed_audits) if failed_audits else None,
                 "last_checked": datetime.now(timezone.utc),
             }
@@ -221,14 +232,19 @@ class PageSpeedConnector(BaseConnector):
         if not records:
             return 0
 
+        # `tbt_ms` was added to an already-shipped table; a database created before it has no
+        # such column, and both this INSERT and every later `select(PageSpeed)` would fail.
+        ensure_page_speed_columns(session)
+
         for r in records:
             r.setdefault("site_id", site_id or "")
 
-        BATCH_SIZE = 40
+        insert = upsert_insert(session)
+        BATCH_SIZE = max_batch_size(session, 40)
         total = 0
         for i in range(0, len(records), BATCH_SIZE):
             batch = records[i:i + BATCH_SIZE]
-            stmt = sqlite_insert(PageSpeed).values(batch)
+            stmt = insert(PageSpeed).values(batch)
             stmt = stmt.on_conflict_do_update(
                 index_elements=["site_id", "url", "strategy"],
                 set_={
@@ -242,6 +258,7 @@ class PageSpeedConnector(BaseConnector):
                     "fcp_ms": stmt.excluded.fcp_ms,
                     "ttfb_ms": stmt.excluded.ttfb_ms,
                     "si_ms": stmt.excluded.si_ms,
+                    "tbt_ms": stmt.excluded.tbt_ms,
                     "lighthouse_audits": stmt.excluded.lighthouse_audits,
                     "last_checked": stmt.excluded.last_checked,
                 },
@@ -259,4 +276,4 @@ if __name__ == "__main__":
         r = records[0]
         print(f"  {r['url']}")
         print(f"  Performance: {r['performance_score']}, SEO: {r['seo_score']}")
-        print(f"  LCP: {r['lcp_ms']}ms, CLS: {r['cls']}, FCP: {r['fcp_ms']}ms")
+        print(f"  LCP: {r['lcp_ms']}ms, CLS: {r['cls']}, FCP: {r['fcp_ms']}ms, TBT: {r['tbt_ms']}ms")

@@ -12,15 +12,41 @@
                 <sc-if value="{{ p.hasDelta }}" hint-placeholder-val="{{ false }}"><span style="{{ p.chipStyle }}">{{ p.deltaFmt }}</span></sc-if>
               </div>
               <sc-if value="{{ p.hasSub }}" hint-placeholder-val="{{ false }}"><p style="font-size: 11px; color: #94a3b8; margin: 8px 0 0;">{{ p.sub }}</p></sc-if>
+              <sc-if value="{{ p.src.show }}" hint-placeholder-val="{{ true }}"><div style="margin-top: 8px;"><span style="{{ p.src.style }}" title="{{ p.src.title }}" aria-label="{{ p.src.aria }}">{{ p.src.text }}</span></div></sc-if>
             </div>
           </sc-for>
         </div>
+
+        <sc-if value="{{ ov.hasSignals }}" hint-placeholder-val="{{ true }}">
+          <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
+            <div style="padding: 16px 20px; border-bottom: 1px solid #f1f5f9;">
+              <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;">
+                <h2 style="font-size: 15px; font-weight: 600; margin: 0;">🧠 Decision Signals</h2>
+                <sc-if value="{{ ov.srcSignals.show }}" hint-placeholder-val="{{ true }}"><span style="{{ ov.srcSignals.style }}" title="{{ ov.srcSignals.title }}" aria-label="{{ ov.srcSignals.aria }}">{{ ov.srcSignals.text }}</span></sc-if>
+              </div>
+              <p style="font-size: 12px; color: #94a3b8; margin: 3px 0 0;">Automatically generated from your data · highest-impact changes first</p>
+            </div>
+            <div style="padding: 18px 20px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px;">
+              <sc-for list="{{ ov.signals }}" as="sg" hint-placeholder-count="3">
+                <div style="{{ sg.cardStyle }}">
+                  <div style="display: flex; align-items: center; gap: 7px;">
+                    <span aria-hidden="true" style="font-size: 13px; line-height: 1; flex-shrink: 0;">{{ sg.icon }}</span>
+                    <span style="{{ sg.eyebrowStyle }}">{{ sg.typeLabel }}</span>
+                  </div>
+                  <p style="{{ sg.titleStyle }}">{{ sg.title }}</p>
+                  <p style="{{ sg.detailStyle }}">{{ sg.detail }}</p>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+        </sc-if>
 
         <div>
           <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
             <div style="display: flex; align-items: center; gap: 8px;">
               <h2 style="font-size: 15px; font-weight: 600; margin: 0;">Priority feed</h2>
               <span style="font-size: 12px; color: #94a3b8;">What changed across every module · highest severity first</span>
+              <sc-if value="{{ ov.srcPriority.show }}" hint-placeholder-val="{{ true }}"><span style="{{ ov.srcPriority.style }}" title="{{ ov.srcPriority.title }}" aria-label="{{ ov.srcPriority.aria }}">{{ ov.srcPriority.text }}</span></sc-if>
             </div>
             <span onClick="{{ h.navAlerts }}" style="font-size: 12px; color: #4f46e5; font-weight: 500; cursor: pointer;" style-hover="opacity:0.7">View all in Alerts →</span>
           </div>
@@ -59,6 +85,7 @@
                 </div>
                 <div style="{{ m.statStyle }}">{{ m.stat }}</div>
                 <div style="font-size: 11px; color: #94a3b8; margin-top: 3px;">{{ m.sub }}</div>
+                <sc-if value="{{ m.src.show }}" hint-placeholder-val="{{ true }}"><div style="margin-top: 8px;"><span style="{{ m.src.style }}" title="{{ m.src.title }}" aria-label="{{ m.src.aria }}">{{ m.src.text }}</span></div></sc-if>
               </div>
             </sc-for>
           </div>
@@ -68,7 +95,10 @@
           <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; padding: 20px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
             <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
               <h2 style="font-size: 15px; font-weight: 600; margin: 0;">Traffic trend</h2>
-              <span style="font-size: 12px; color: #94a3b8;">Clicks &amp; impressions · {{ ov.rangeLabel }}</span>
+              <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                <span style="font-size: 12px; color: #94a3b8;">Clicks &amp; impressions · {{ ov.rangeLabel }}</span>
+                <sc-if value="{{ ov.srcTrend.show }}" hint-placeholder-val="{{ true }}"><span style="{{ ov.srcTrend.style }}" title="{{ ov.srcTrend.title }}" aria-label="{{ ov.srcTrend.aria }}">{{ ov.srcTrend.text }}</span></sc-if>
+              </div>
             </div>
             <div style="position: relative; width: 100%; height: 260px; padding: 10px 40px 20px 40px; box-sizing: border-box; font-family: sans-serif;">
               <div style="position: absolute; left: 0; top: 10px; height: 220px; width: 40px; display: flex; flex-direction: column; justify-content: space-between; text-align: right; font-size: 11px; color: #64748b; padding-right: 8px;">
@@ -133,8 +163,86 @@
         </div>
 
         <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
+          <div style="padding: 16px 20px; border-bottom: 1px solid #f1f5f9;">
+            <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;">
+              <h2 style="font-size: 15px; font-weight: 600; margin: 0;">Top keywords</h2>
+              <sc-if value="{{ ov.srcTopKw.show }}" hint-placeholder-val="{{ true }}"><span style="{{ ov.srcTopKw.style }}" title="{{ ov.srcTopKw.title }}" aria-label="{{ ov.srcTopKw.aria }}">{{ ov.srcTopKw.text }}</span></sc-if>
+            </div>
+            <p style="font-size: 12px; color: #94a3b8; margin: 3px 0 0;">Your highest-clicking keywords · position is the average across every captured day</p>
+          </div>
+          <sc-if value="{{ ov.hasTopKeywords }}" hint-placeholder-val="{{ true }}">
+            <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+              <thead><tr style="text-align: left; color: #94a3b8; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;"><th style="font-weight: 500; padding: 10px 20px;">Keyword</th><th style="font-weight: 500; padding: 10px 20px; text-align: center;">Position</th><th style="font-weight: 500; padding: 10px 20px; text-align: right;">Clicks</th><th style="font-weight: 500; padding: 10px 20px; text-align: right;">Impressions</th><th style="font-weight: 500; padding: 10px 20px; text-align: right;">Volume</th></tr></thead>
+              <tbody>
+                <sc-for list="{{ ov.topKeywords }}" as="k" hint-placeholder-count="5">
+                  <tr style="border-top: 1px solid #f1f5f9;">
+                    <td style="padding: 12px 20px; font-weight: 500; color: #334155;">{{ k.keyword }}</td>
+                    <td style="padding: 12px 20px; text-align: center;"><span style="{{ k.posStyle }}" title="Average position across captured days">{{ k.posText }}</span></td>
+                    <td style="padding: 12px 20px; text-align: right; color: #475569;">{{ k.clicksFmt }}</td>
+                    <td style="padding: 12px 20px; text-align: right; color: #475569;">{{ k.imprFmt }}</td>
+                    <td style="{{ k.volStyle }}" title="Monthly search volume — an em dash means no volume has been captured for this keyword">{{ k.volFmt }}</td>
+                  </tr>
+                </sc-for>
+              </tbody>
+            </table>
+          </sc-if>
+          <sc-if value="{{ ov.topKeywordsEmpty }}" hint-placeholder-val="{{ false }}">
+            <div style="padding: 56px 32px; text-align: center;">
+              <div style="font-size: 15px; font-weight: 600; color: #0f172a;">No keyword data yet</div>
+              <p style="font-size: 13px; color: #64748b; margin: 6px auto 16px; max-width: 420px; line-height: 1.5;">Keyword rankings arrive with the keywords sync. Once they land, your top keywords by clicks appear here.</p>
+              <div onClick="{{ ov.onFetchKeywords }}" role="button" aria-label="Fetch keyword data now" style="display: inline-flex; align-items: center; gap: 8px; border-radius: 8px; background: #10b981; color: white; font-size: 14px; font-weight: 600; padding: 10px 20px; cursor: pointer; box-shadow: 0 1px 2px rgba(0,0,0,0.05);" style-hover="background:#059669">⚡ Fetch Keywords Now</div>
+            </div>
+          </sc-if>
+        </div>
+
+        <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
+          <div style="padding: 16px 20px; border-bottom: 1px solid #f1f5f9;">
+            <h2 style="font-size: 15px; font-weight: 600; margin: 0;">Positioning vs Competitors</h2>
+            <p style="font-size: 12px; color: #94a3b8; margin: 3px 0 0;">Averages over captured positions only · a competitor with nothing captured shows no number</p>
+            <sc-if value="{{ ov.srcPo.show }}" hint-placeholder-val="{{ true }}"><div style="margin-top: 8px;"><span style="{{ ov.srcPo.style }}" title="{{ ov.srcPo.title }}" aria-label="{{ ov.srcPo.aria }}">{{ ov.srcPo.text }}</span></div></sc-if>
+          </div>
+          <sc-if value="{{ ov.po.isReady }}" hint-placeholder-val="{{ true }}">
+            <div style="padding: 18px 20px; display: grid; grid-template-columns: 1fr 1fr; gap: 24px;">
+              <div style="border-radius: 8px; border: 1px solid #c7d2fe; background: #eef2ff; padding: 20px; text-align: center;">
+                <div style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: #4f46e5;">Your avg position</div>
+                <div style="{{ ov.po.youValueStyle }}">{{ ov.po.youValue }}</div>
+                <div style="{{ ov.po.youNoteStyle }}">{{ ov.po.youNote }}</div>
+                <div style="font-size: 11px; color: #a5b4fc; margin-top: 10px;">{{ ov.po.capturedAt }}</div>
+              </div>
+              <div>
+                <div style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: #94a3b8; margin-bottom: 10px;">Tracked competitors</div>
+                <div style="display: flex; flex-direction: column; gap: 6px;">
+                  <sc-for list="{{ ov.po.competitors }}" as="c" hint-placeholder-count="3">
+                    <div style="{{ c.rowStyle }}">
+                      <div style="min-width: 0;">
+                        <div style="font-size: 13px; color: #334155; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ c.domain }}</div>
+                        <div style="{{ c.coverageStyle }}">{{ c.coverage }}</div>
+                      </div>
+                      <span style="{{ c.posStyle }}" title="Average of this competitor's captured positions only">{{ c.posText }}</span>
+                    </div>
+                  </sc-for>
+                </div>
+                <sc-if value="{{ ov.po.hasCoverageNote }}" hint-placeholder-val="{{ false }}">
+                  <div style="font-size: 11px; color: #b45309; background: #fffbeb; border: 1px solid #fde68a; border-radius: 6px; padding: 8px 10px; margin-top: 10px; line-height: 1.45;">{{ ov.po.coverageNote }}</div>
+                </sc-if>
+              </div>
+            </div>
+          </sc-if>
+          <sc-if value="{{ ov.po.isSetup }}" hint-placeholder-val="{{ false }}">
+            <div style="padding: 56px 32px; text-align: center;">
+              <div style="font-size: 15px; font-weight: 600; color: #0f172a;">No competitor comparison yet</div>
+              <p style="font-size: 13px; color: #64748b; margin: 6px auto 16px; max-width: 420px; line-height: 1.5;">{{ ov.po.note }}</p>
+              <div onClick="{{ ov.po.onFetch }}" role="button" aria-label="Fetch competitor positions now" style="display: inline-flex; align-items: center; gap: 8px; border-radius: 8px; background: #10b981; color: white; font-size: 14px; font-weight: 600; padding: 10px 20px; cursor: pointer; box-shadow: 0 1px 2px rgba(0,0,0,0.05);" style-hover="background:#059669">⚡ Fetch Positions Now</div>
+            </div>
+          </sc-if>
+        </div>
+
+        <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
           <div style="padding: 16px 20px; border-bottom: 1px solid #f1f5f9; display: flex; align-items: center; justify-content: space-between;">
-            <h2 style="font-size: 15px; font-weight: 600; margin: 0;">Top pages</h2>
+            <div>
+              <h2 style="font-size: 15px; font-weight: 600; margin: 0;">Top pages</h2>
+              <sc-if value="{{ ov.srcTopPages.show }}" hint-placeholder-val="{{ true }}"><div style="margin-top: 6px;"><span style="{{ ov.srcTopPages.style }}" title="{{ ov.srcTopPages.title }}" aria-label="{{ ov.srcTopPages.aria }}">{{ ov.srcTopPages.text }}</span></div></sc-if>
+            </div>
             <span onClick="{{ h.exportTopPages }}" style="font-size: 12px; color: #4f46e5; font-weight: 500; cursor: pointer;" style-hover="opacity:0.7">Export CSV</span>
           </div>
           <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
@@ -151,5 +259,49 @@
             </tbody>
           </table>
         </div>
+
+        <sc-if value="{{ ov.hasTopGa4Pages }}" hint-placeholder-val="{{ true }}">
+          <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
+            <div style="padding: 16px 20px; border-bottom: 1px solid #f1f5f9;">
+              <h2 style="font-size: 15px; font-weight: 600; margin: 0;">Top landing pages (GA4)</h2><sc-if value="{{ ov.srcGa4Pages.show }}" hint-placeholder-val="{{ true }}"><div style="margin-top: 6px;"><span style="{{ ov.srcGa4Pages.style }}" title="{{ ov.srcGa4Pages.title }}" aria-label="{{ ov.srcGa4Pages.aria }}">{{ ov.srcGa4Pages.text }}</span></div></sc-if>
+              <p style="font-size: 12px; color: #94a3b8; margin: 3px 0 0;">Sessions by landing page · fixed last-7-days window — this table ignores the date range selector above</p>
+            </div>
+            <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+              <thead><tr style="text-align: left; color: #94a3b8; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;"><th style="font-weight: 500; padding: 10px 20px;">Page</th><th style="font-weight: 500; padding: 10px 20px;">Top location</th><th style="font-weight: 500; padding: 10px 20px; text-align: right;">Traffic</th></tr></thead>
+              <tbody>
+                <sc-for list="{{ ov.topGa4Pages }}" as="g" hint-placeholder-count="3">
+                  <tr style="border-top: 1px solid #f1f5f9;">
+                    <td style="padding: 12px 20px; font-weight: 500;"><a href="{{ g.url }}" target="_blank" rel="noopener" title="Open live page" style="color: #334155; text-decoration: none;" style-hover="color:#4f46e5;text-decoration:underline">{{ g.url }}</a></td>
+                    <td style="padding: 12px 20px; color: #475569;">{{ g.location }}</td>
+                    <td style="padding: 12px 20px; text-align: right; color: #475569;" title="Sessions in the last 7 days">{{ g.trafficFmt }}</td>
+                  </tr>
+                </sc-for>
+              </tbody>
+            </table>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ ov.hasTopAuditPages }}" hint-placeholder-val="{{ true }}">
+          <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
+            <div style="padding: 16px 20px; border-bottom: 1px solid #f1f5f9;">
+              <h2 style="font-size: 15px; font-weight: 600; margin: 0;">Slowest pages (Site Audit)</h2>
+              <p style="font-size: 12px; color: #94a3b8; margin: 3px 0 0;">Lowest performance scores first — the worst offenders from the latest PageSpeed crawl</p>
+              <sc-if value="{{ ov.srcAuditPages.show }}" hint-placeholder-val="{{ true }}"><div style="margin-top: 8px;"><span style="{{ ov.srcAuditPages.style }}" title="{{ ov.srcAuditPages.title }}" aria-label="{{ ov.srcAuditPages.aria }}">{{ ov.srcAuditPages.text }}</span></div></sc-if>
+            </div>
+            <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+              <thead><tr style="text-align: left; color: #94a3b8; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;"><th style="font-weight: 500; padding: 10px 20px;">Page</th><th style="font-weight: 500; padding: 10px 20px; text-align: right;">Performance</th><th style="font-weight: 500; padding: 10px 20px; text-align: right;">SEO</th><th style="font-weight: 500; padding: 10px 20px; text-align: right;" title="Largest Contentful Paint">LCP</th></tr></thead>
+              <tbody>
+                <sc-for list="{{ ov.topAuditPages }}" as="ap" hint-placeholder-count="3">
+                  <tr style="border-top: 1px solid #f1f5f9;">
+                    <td style="padding: 12px 20px; font-weight: 500;"><a href="{{ ap.url }}" target="_blank" rel="noopener" title="Open live page" style="color: #334155; text-decoration: none;" style-hover="color:#4f46e5;text-decoration:underline">{{ ap.url }}</a></td>
+                    <td style="padding: 12px 20px; text-align: right;"><span style="{{ ap.perfStyle }}" title="Lighthouse performance score (0-100)">{{ ap.perf }}</span></td>
+                    <td style="padding: 12px 20px; text-align: right;"><span style="{{ ap.seoStyle }}" title="Lighthouse SEO score (0-100)">{{ ap.seo }}</span></td>
+                    <td style="padding: 12px 20px; text-align: right;"><span style="{{ ap.lcpStyle }}" title="Largest Contentful Paint">{{ ap.lcpFmt }}</span></td>
+                  </tr>
+                </sc-for>
+              </tbody>
+            </table>
+          </div>
+        </sc-if>
       </div>
       </sc-if>

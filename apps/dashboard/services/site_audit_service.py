@@ -1,17 +1,65 @@
 """Site Audit page — built from the site-health data this system really has:
 
   IndexingStatus (GSC)   -> which pages are indexed / broken / redirected / blocked
-  PageSpeed (Lighthouse) -> per-page performance/SEO/accessibility/best-practices + LCP/CLS
+  PageSpeed (Lighthouse) -> per-page performance/SEO/accessibility/best-practices + LCP/CLS/TBT
   TechnicalIssue         -> the concrete issues found, grouped into checks
+  PageCrawlMeta (OnPage) -> per-page internal / external / inbound link counts + word count
+  AuditSnapshot          -> one row per completed crawl; the history Compare Crawls / Progress read
 
 Everything here is derived from those real rows. Fields with no data source yet stay honestly
-empty ([]), and per-field gaps (e.g. a page's in-link count, which nothing in this pipeline
-measures) are honest zeros -- never invented.
+empty ([]) or None -- never invented.
 
 BUG HISTORY: `score` used to be hardcoded to {"state": "setup"}. The SPA's Site Audit tab gates
 the WHOLE page on exactly that field, so the page could never render anything -- even though
 all the real data above was already sitting in the DB. `score` is now a real derived number.
+
+BUG HISTORY (2026-07): three per-page columns were formulas over unrelated metrics and were
+read by users as measurements:
+
+    "internalLinks": max(5, round(performance_score * 0.4))   # a Lighthouse score, not links
+    "wordCount":     max(300, round(fcp_ms * 1.5))            # milliseconds, not words
+    cwv.tbt          estimated from (speed_index - fcp) or (lcp - fcp)
+
+None of the three had any relationship to what it claimed to measure. They were removed, and
+they are now REAL -- each one measured by the source that actually measures it:
+
+  * `internalLinks` / `wordCount` / `inLinks` <- PageCrawlMeta, written by
+    `pipeline/connectors/dataforseo_onpage.py` from `/v3/on_page/pages`:
+        items[].meta.internal_links_count           -> internal links on the page
+        items[].meta.external_links_count           -> external links on the page
+        items[].meta.inbound_links_count            -> internal links POINTING AT the page
+        items[].meta.content.plain_text_word_count  -> words on the page
+    (OnPage_API_Docs.md L969-L971, L987.) Lighthouse cannot supply these: it has no word-count
+    audit at all, and its `link-text` audit detects generic anchor text, not a link count.
+
+  * `cwv.tbt` <- PageSpeed.tbt_ms, read from `audits["total-blocking-time"].numericValue`,
+    which Lighthouse returns on every run. `lighthouse_audits` is not a substitute (it stores
+    only FAILED audits, so TBT was present on 4 of 75 mobile rows and only for slow pages) and
+    `inp_ms` is not a substitute (different metric, NULL on all 150 rows).
+
+MEASURED vs UNMEASURED (2026-07). Only a sampled subset of crawled pages is ever Lighthouse-
+scored -- `pagespeed.py` scans the top 15 URLs, while `url_inspection` inspects every known
+one. On the live database that is 48 mobile PageSpeed rows against 154 IndexingStatus rows for
+one site. The payload used to give an unmeasured page `score: 0` and `loadTimeMs: 0`, which the
+Statistics tab then averaged and bucketed -- producing "Avg. page score 27 across 152 healthy
+pages" and "Fast (<1.5 s): 152 (100%)". Both were arithmetic over a placeholder, presented as a
+measurement.
+
+The convention this module now applies EVERYWHERE, so the three places that carry a page score
+agree with each other:
+
+    crawledPages[].measured    True only when a mobile PageSpeed row exists for that URL
+    crawledPages[].score       the real performance score, or None when unmeasured
+    crawledPages[].loadTimeMs  the real timing, or None when unmeasured
+    checks[].pages[].score     same rule, same source
+    structure[].avgScore       averaged over MEASURED pages only; None when a folder has none
+    structure[].measuredPages  how many of the folder's pages that average covers
+    crawl.pagesMeasured        the site-wide denominator the UI must state
+
+`None` is deliberate and load-bearing: it is the one value the frontend cannot silently average
+or bucket, so an unmeasured page cannot leak back into an aggregate by accident.
 """
+import json
 import logging
 import socket
 import ssl
@@ -24,7 +72,11 @@ import requests
 from sqlalchemy import func, select
 
 from apps.dashboard.services.mutation_state import get_state, set_state
-from pipeline.db.schema import IndexingStatus, PageSpeed, TechnicalIssue
+from pipeline.db.schema import (
+    AuditSnapshot, IndexingStatus, PageCrawlMeta, PageSpeed, TechnicalIssue,
+    ensure_page_speed_columns,
+)
+from pipeline.db.writer import ensure_tables, upsert_audit_snapshot
 from pipeline.utils.db_connection import get_session
 
 logger = logging.getLogger(__name__)
@@ -213,6 +265,15 @@ def _bare_domain(site_id: str) -> str:
     return domain
 
 
+def _site_id_variants(site_id: str) -> list[str]:
+    """Both spellings of a property id. GSC-sourced tables store `sc-domain:example.com`
+    while other writers store the bare `example.com`; the audit payload has always read
+    across both, and the snapshot history must match it or a site's history would appear
+    empty purely because of which form the sync happened to pass in."""
+    alt = site_id.replace("sc-domain:", "") if site_id.startswith("sc-domain:") else f"sc-domain:{site_id}"
+    return [site_id, alt]
+
+
 def _check_ssl(domain: str) -> dict:
     try:
         ctx = ssl.create_default_context()
@@ -297,17 +358,48 @@ def _check_llms_txt(domain: str) -> dict:
     return {"label": "llms.txt", "detail": "Missing /llms.txt file", "ok": False}
 
 
-def get_domain_checks(site_id: str, force: bool = False) -> list[dict]:
-    """Runs or retrieves cached domain checks (SSL, Sitemap, Robots, HTTP/2, WWW redirect, llms.txt)."""
-    cached = get_state(site_id, "domainChecksCache", None)
-    if not force and cached and isinstance(cached, dict) and "checks" in cached:
-        # 6 hours TTL
-        if time.time() - cached.get("timestamp", 0) < 21600:
-            return cached["checks"]
+_DOMAIN_CHECKS_KEY = "domainChecksCache"
 
+
+def stored_domain_checks(site_id: str) -> list[dict]:
+    """The last domain-check result recorded for this project. **Reads state only — never
+    touches the network.**
+
+    This is what `build_site_audit_response` (a page-data GET) calls. Returns [] when nothing
+    has been recorded yet, which the SPA renders as an explicit "not run yet" state.
+
+    WHY THIS EXISTS: `get_domain_checks()` used to be called straight from
+    `build_site_audit_response`, so opening the Site Audit tab on a cold cache fired six live
+    probes (TLS handshake + five HTTP requests, 3.5 s timeout each) inside the request. That
+    broke the project's first iron rule -- "never call an external API from a page-data
+    endpoint" -- and it was the only place in the codebase that reached the network while
+    rendering. The 6-hour TTL did not prevent it: the cache was only ever written by a page
+    view, so the first load after every deploy, every new project and every 6-hour expiry paid
+    the full latency, and the probes ran against whatever host the site_id happened to name
+    (including inside the test suite -- see `test_site_audit_response.py`, which asserts
+    `domainChecks == []` and failed on any machine with internet).
+    """
+    cached = get_state(site_id, _DOMAIN_CHECKS_KEY, None)
+    if isinstance(cached, dict) and isinstance(cached.get("checks"), list):
+        return cached["checks"]
+    return []
+
+
+def refresh_domain_checks(site_id: str) -> list[dict]:
+    """Probe the domain (SSL, sitemap.xml, robots.txt, HTTP/2, www redirect, llms.txt) and
+    record the result. Returns the checks it stored.
+
+    **SYNC PATH ONLY.** This makes six live network calls; it belongs with every other network
+    call in this system, i.e. behind the Refresh button. Nothing in a page-data path may call
+    it. `pipeline/services/sync_engine.py::_run_post_sync` is the hook — the same one
+    `record_audit_snapshot` documents — and it must run there BEFORE `record_audit_snapshot`
+    so the snapshot's score reflects the checks just taken.
+
+    On failure the previously stored checks are kept; a failed probe never blanks real state.
+    """
     domain = _bare_domain(site_id)
     if not domain:
-        return []
+        return stored_domain_checks(site_id)
 
     try:
         with ThreadPoolExecutor(max_workers=6) as executor:
@@ -326,13 +418,11 @@ def get_domain_checks(site_id: str, force: bool = False) -> list[dict]:
                 f_www.result(),
                 f_llms.result(),
             ]
-        set_state(site_id, "domainChecksCache", {"timestamp": time.time(), "checks": checks})
+        set_state(site_id, _DOMAIN_CHECKS_KEY, {"timestamp": time.time(), "checks": checks})
         return checks
     except Exception as e:
-        logger.error(f"get_domain_checks error: {e}", exc_info=True)
-        if cached and isinstance(cached, dict) and "checks" in cached:
-            return cached["checks"]
-        return []
+        logger.error(f"refresh_domain_checks error: {e}", exc_info=True)
+        return stored_domain_checks(site_id)
 
 
 
@@ -412,6 +502,9 @@ def query_cwv_raw(site_id: str) -> dict:
     """Real LCP/CLS from PageSpeed (mobile)."""
     try:
         with get_session() as session:
+            # `select(PageSpeed)` emits every mapped column including `tbt_ms`, which does not
+            # exist in a database created before it. Reconcile before the first read.
+            ensure_page_speed_columns(session)
             rows = session.execute(
                 select(PageSpeed).where(
                     PageSpeed.site_id == site_id, PageSpeed.strategy == "mobile"
@@ -448,6 +541,9 @@ def site_health_summary(site_id: str) -> dict | None:
     error-severity issues excluding checks the user hid (same rule as audit totals)."""
     try:
         with get_session() as session:
+            # Cheap and idempotent; also the earliest PageSpeed touch on the Overview path,
+            # which reconciles `tbt_ms` before overview_service issues its own select(PageSpeed).
+            ensure_page_speed_columns(session)
             perf_vals = session.execute(
                 select(PageSpeed.performance_score).where(
                     PageSpeed.site_id == site_id, PageSpeed.strategy == "mobile",
@@ -489,14 +585,126 @@ def toggle_audit_check(site_id: str, check_id: str) -> list[str]:
     return hidden
 
 
+def query_audit_snapshots(site_id: str, limit: int = 30) -> list[dict]:
+    """Real audit history, OLDEST FIRST — the exact shape `site_audit.js` reads.
+
+    Compare Crawls indexes `snapshots[i].date/.score/.errors/.warnings/.notices/.pagesCrawled`
+    and diffs `snapshots[i].byCheck[check.id]`; Progress plots the same list left-to-right and
+    labels `snapshots[len-1]` "(latest)". Hence ascending order and these exact camelCase keys.
+
+    Returns [] — never invented rows — until crawls have actually accumulated.
+    """
+    try:
+        with get_session() as session:
+            # The table is provisioned on first use (same pattern as the 2026-06 tables):
+            # an existing analytics DB predates it and there is no migration step.
+            ensure_tables(session, AuditSnapshot)
+            rows = session.execute(
+                select(AuditSnapshot)
+                .where(AuditSnapshot.site_id.in_(_site_id_variants(site_id)))
+                .order_by(AuditSnapshot.captured_at.desc(), AuditSnapshot.id.desc())
+                .limit(max(1, limit))
+            ).scalars().all()
+    except Exception as e:
+        logger.error(f"query_audit_snapshots error: {e}", exc_info=True)
+        return []
+
+    by_date: dict[str, dict] = {}
+    for r in rows:      # newest first, so the first row seen for a date wins
+        captured = r.captured_at
+        day = captured.isoformat() if hasattr(captured, "isoformat") else str(captured)[:10]
+        if day in by_date:
+            continue
+        by_check: dict[str, int] = {}
+        if r.by_check:
+            try:
+                parsed = json.loads(r.by_check)
+                if isinstance(parsed, dict):
+                    by_check = {str(k): int(v or 0) for k, v in parsed.items()}
+            except (ValueError, TypeError):
+                by_check = {}   # a corrupt blob is an empty diff, never a fabricated one
+        by_date[day] = {
+            "date": day,
+            "score": r.score or 0,
+            "errors": r.errors or 0,
+            "warnings": r.warnings or 0,
+            "notices": r.notices or 0,
+            "pagesCrawled": r.pages_crawled or 0,
+            "byCheck": by_check,
+        }
+    return [by_date[d] for d in sorted(by_date)]
+
+
+def record_audit_snapshot(site_id: str, captured_at=None) -> int:
+    """Record what one completed crawl found. Returns 1 if written, 0 if skipped.
+
+    WHERE THIS BELONGS: the sync path, not the page-data path. A snapshot has to mean
+    "a crawl happened", so writing it from `build_site_audit_response` (a GET) would log a
+    point every time somebody opened the tab and turn the Progress chart into a record of
+    page views. `pipeline/services/sync_engine.py::_run_post_sync` is the hook — it already
+    runs the derived-data pass after the audit connectors land, and it runs exactly once per
+    sync. See the call site note in that file.
+
+    The snapshot is taken from `build_site_audit_response` itself rather than from a parallel
+    query, so a stored point can never disagree with the number the page showed at the time.
+
+    Guard: `site_health_summary` returns None when there is no audit data at all, which is the
+    same signal the Overview card uses. Without it a failed/empty sync would write a 0/0/0 row
+    and put a fake cliff on the trend line.
+    """
+    if site_health_summary(site_id) is None:
+        logger.info(f"[site_audit] no audit data for {site_id!r} yet — snapshot not recorded")
+        return 0
+
+    try:
+        payload = build_site_audit_response(site_id)
+    except Exception as e:
+        logger.error(f"record_audit_snapshot: could not build payload for {site_id!r}: {e}", exc_info=True)
+        return 0
+
+    totals = payload.get("totals") or {}
+    crawl = payload.get("crawl") or {}
+    checks = payload.get("checks") or []
+    record = {
+        "site_id": site_id,
+        "captured_at": captured_at or datetime.now(timezone.utc).date(),
+        "score": payload.get("score") or 0,
+        "errors": totals.get("errors", 0),
+        "warnings": totals.get("warnings", 0),
+        "notices": totals.get("notices", 0),
+        "pages_crawled": crawl.get("pagesCrawled", 0),
+        # Per-check counts are the whole point of the Compare tab's fixed/new maths.
+        "by_check": json.dumps({c["id"]: c["count"] for c in checks}, sort_keys=True),
+    }
+
+    try:
+        with get_session() as session:
+            written = upsert_audit_snapshot(session, record)
+    except Exception as e:
+        # A history-logging failure must never fail the sync that produced the data.
+        logger.error(f"record_audit_snapshot: write failed for {site_id!r}: {e}", exc_info=True)
+        return 0
+
+    logger.info(
+        f"[site_audit] snapshot {record['captured_at']} for {site_id!r}: "
+        f"score={record['score']} e/w/n={record['errors']}/{record['warnings']}/{record['notices']} "
+        f"pages={record['pages_crawled']}"
+    )
+    return written
+
+
 def build_site_audit_response(site_id: str) -> dict:
     """Real Site Audit response, derived entirely from IndexingStatus + PageSpeed +
     TechnicalIssue rows across all thematic categories."""
     try:
-        alt_id = site_id.replace("sc-domain:", "") if site_id.startswith("sc-domain:") else f"sc-domain:{site_id}"
-        site_ids = [site_id, alt_id]
+        site_ids = _site_id_variants(site_id)
 
         with get_session() as session:
+            # Both tables post-date the first release: `page_speed.tbt_ms` is a column added to
+            # a shipped table, `page_crawl_meta` is a new table. Reconcile both before reading
+            # so an existing analytics DB does not raise "no such column"/"no such table".
+            ensure_page_speed_columns(session)
+            ensure_tables(session, PageCrawlMeta)
             idx_rows = session.execute(
                 select(IndexingStatus).where(IndexingStatus.site_id.in_(site_ids))
             ).scalars().all()
@@ -508,6 +716,9 @@ def build_site_audit_response(site_id: str) -> dict:
             issue_rows = session.execute(
                 select(TechnicalIssue).where(TechnicalIssue.site_id.in_(site_ids))
             ).scalars().all()
+            meta_rows = session.execute(
+                select(PageCrawlMeta).where(PageCrawlMeta.site_id.in_(site_ids))
+            ).scalars().all()
             last_crawl = session.execute(
                 select(func.max(IndexingStatus.last_crawl_time)).where(
                     IndexingStatus.site_id.in_(site_ids)
@@ -515,11 +726,28 @@ def build_site_audit_response(site_id: str) -> dict:
             ).scalar()
     except Exception as e:
         logger.error(f"build_site_audit_response error: {e}", exc_info=True)
-        idx_rows, ps_rows, issue_rows, last_crawl = [], [], [], None
+        idx_rows, ps_rows, issue_rows, meta_rows, last_crawl = [], [], [], [], None
 
     ps_by_url = {}
     for r in ps_rows:
         ps_by_url.setdefault(r.url, r)
+
+    # Per-page OnPage counts, keyed by URL. A URL with no row here was never crawled by OnPage,
+    # so its link and word counts are unmeasured -- None, not 0.
+    meta_by_url = {}
+    for r in meta_rows:
+        meta_by_url.setdefault(r.url, r)
+
+    def _page_score(url: str):
+        """The page's real mobile Lighthouse performance score, or None when unmeasured.
+
+        One helper for the two places that report a per-page score (`crawledPages[].score` and
+        `checks[].pages[].score`) so they can never disagree about what an unmeasured page is.
+        `performance_score` can itself be NULL on a stored row (PSI returned no performance
+        category), which is equally unmeasured.
+        """
+        ps = ps_by_url.get(url)
+        return ps.performance_score if ps is not None else None
 
     def _avg(field: str) -> int:
         vals = [getattr(r, field) for r in ps_rows if getattr(r, field) is not None]
@@ -556,7 +784,9 @@ def build_site_audit_response(site_id: str) -> dict:
             "hidden": is_hidden,
             "pages": [{
                 "url": i.url,
-                "score": (ps_by_url[i.url].performance_score or 0) if i.url in ps_by_url else 0,
+                # None, not 0, when Lighthouse never scored this page -- same rule as
+                # crawledPages[].score, so the two views of a page cannot disagree.
+                "score": _page_score(i.url),
                 "status": i.description or title,
             } for i in items],
         })
@@ -571,21 +801,38 @@ def build_site_audit_response(site_id: str) -> dict:
     for n, r in enumerate(idx_rows):
         sev = issues_by_url.get(r.url, [])
         ps = ps_by_url.get(r.url)
+        meta = meta_by_url.get(r.url)
+        # A page is "measured" when Lighthouse actually ran against it. `pagespeed.py` samples
+        # the top 15 URLs while `url_inspection` covers every known one, so most crawled pages
+        # are NOT measured -- and an unmeasured page must be excluded from every average and
+        # every distribution bucket rather than counted as a perfect 0 ms / 0 score.
+        load_ms = None
+        if ps is not None:
+            raw_load = ps.ttfb_ms if ps.ttfb_ms is not None else ps.fcp_ms
+            load_ms = round(raw_load) if raw_load is not None else None
         crawled_pages.append({
             "id": n + 1,
             "url": r.url,
-            "score": (ps.performance_score or 0) if ps else 0,
+            "measured": ps is not None,
+            "score": _page_score(r.url),
             "statusCode": _status_code(r),
             "errors": sev.count("error"),
             "warnings": sev.count("warning"),
             "notices": sev.count("notice"),
             "depth": _depth(r.url),
-            "inLinks": 0,
-            "internalLinks": max(5, round((ps.performance_score or 50) * 0.4)) if ps else 15,
-            "wordCount": max(300, round((ps.fcp_ms or 800) * 1.5)) if ps else 600,
-            "loadTimeMs": round(ps.ttfb_ms or ps.fcp_ms or 0) if ps else 0,
+            # Real OnPage measurements (meta.inbound_links_count / meta.internal_links_count /
+            # meta.content.plain_text_word_count). None when this URL was not part of the
+            # OnPage crawl: 0 in-links is a real, different finding (an orphan page), so the
+            # two states must not share a value.
+            "inLinks": meta.inbound_links_count if meta is not None else None,
+            "internalLinks": meta.internal_links_count if meta is not None else None,
+            "externalLinks": meta.external_links_count if meta is not None else None,
+            "wordCount": meta.word_count if meta is not None else None,
+            "loadTimeMs": load_ms,
             "kind": "ok" if _status_code(r) == 200 else ("redirect" if 300 <= _status_code(r) < 400 else "gone"),
         })
+
+    pages_measured = sum(1 for p in crawled_pages if p["measured"])
 
     # ---- folder rollup, computed from the real crawled pages ----
     folders: dict[str, list[dict]] = {}
@@ -593,10 +840,20 @@ def build_site_audit_response(site_id: str) -> dict:
         path = urlparse(p["url"]).path.strip("/")
         folders.setdefault("/" + (path.split("/")[0] if path else ""), []).append(p)
 
+    def _folder_avg_score(group: list[dict]):
+        """Average score over the folder's MEASURED pages, or None when it has none.
+
+        It used to average every page including the unmeasured ones at 0, so a folder with one
+        real 90 and nine never-scored pages reported 9. `pages` still counts the whole folder
+        (that IS how many pages are in it); `measuredPages` says how many the average covers."""
+        scored = [p["score"] for p in group if p["score"] is not None]
+        return round(sum(scored) / len(scored)) if scored else None
+
     structure = [{
         "folder": f,
         "pages": len(group),
-        "avgScore": round(sum(p["score"] for p in group) / len(group)) if group else 0,
+        "measuredPages": sum(1 for p in group if p["score"] is not None),
+        "avgScore": _folder_avg_score(group),
         "errors": sum(p["errors"] for p in group),
         "warnings": sum(p["warnings"] for p in group),
         "notices": sum(p["notices"] for p in group),
@@ -615,8 +872,12 @@ def build_site_audit_response(site_id: str) -> dict:
         started_at = last_crawl.date().isoformat() if hasattr(last_crawl, "date") else str(last_crawl)[:10]
 
     # Calculate thematic category scores so every category filter pill has a score & matches the checks
-    domain_checks = get_domain_checks(site_id)
-    ssl_ok = all(d.get("ok", True) for d in domain_checks if "SSL" in d.get("label", ""))
+    domain_checks = stored_domain_checks(site_id)   # state read; the probes run in the sync path
+    ssl_checks = [d for d in domain_checks if "SSL" in (d.get("label") or "")]
+    # No probe recorded yet -> fall back to the real HTTPS-family issue rows rather than
+    # assuming a pass. `all([])` is True, which silently claimed a clean certificate.
+    ssl_ok = (all(d.get("ok") for d in ssl_checks) if ssl_checks
+              else not (by_type.get("ssl_error") or by_type.get("mixed_content")))
     crawlability_score = round(100 - min(80, (totals["errors"] * 10 + totals["warnings"] * 3)) / max(1, total_pages)) if total_pages else 85
     content_score = round(0.5 * (seo_score or 85) + 0.5 * max(40, 100 - len(by_type.get("missing_title", [])) * 10))
     url_structure_score = round(100 - min(100, len(by_type.get("long_url", [])) * 5 / max(1, total_pages) * 100)) if total_pages else 90
@@ -636,18 +897,18 @@ def build_site_audit_response(site_id: str) -> dict:
         "URL structure": url_structure_score,
     }
 
-    # For TBT / INP, check inp_ms first, or estimate from speed index / LCP-FCP spread
-    inp_vals = [r.inp_ms for r in ps_rows if r.inp_ms is not None]
-    if not inp_vals:
-        est_vals = []
-        for r in ps_rows:
-            if r.si_ms and r.fcp_ms and r.si_ms > r.fcp_ms:
-                est_vals.append(round((r.si_ms - r.fcp_ms) * 0.35, 1))
-            elif r.lcp_ms and r.fcp_ms and r.lcp_ms > r.fcp_ms:
-                est_vals.append(round((r.lcp_ms - r.fcp_ms) * 0.25, 1))
-        inp_vals = est_vals
-
-    tbt_metric = _cwv_metric([v for v in inp_vals if v is not None], 200, 600)
+    # Total Blocking Time, from Lighthouse's own `total-blocking-time` audit via
+    # `PageSpeed.tbt_ms` -- captured on every PSI run by pagespeed.py, so this p75 covers every
+    # measured page rather than the failed-audit subset the `lighthouse_audits` blob holds.
+    # `getattr` is kept deliberately: it keeps this read working against a stored row from
+    # before the column existed (the value is simply NULL there), which is the same case the
+    # p75 must report as "no data" rather than as 0 ms.
+    # `inp_ms` is still NOT substituted: INP is a different metric, it is a field metric a
+    # Lighthouse lab run never returns, and it is null on every stored row. The pre-2026-07
+    # code estimated TBT from (speed_index - fcp) * 0.35 or (lcp - fcp) * 0.25 -- arithmetic
+    # over unrelated timings, presented as a measured vital.
+    tbt_vals = [v for v in (getattr(r, "tbt_ms", None) for r in ps_rows) if v is not None]
+    tbt_metric = _cwv_metric(tbt_vals, 200, 600)
     tbt_metric.update({"unit": "ms", "good_threshold": 200, "poor_threshold": 600})
 
     return {
@@ -655,6 +916,10 @@ def build_site_audit_response(site_id: str) -> dict:
         "crawl": {
             "status": "complete" if total_pages else "never",
             "pagesCrawled": total_pages,
+            # The denominator for every score/load-time aggregate on this page. Lighthouse runs
+            # against a sample, GSC's URL inspection against everything, so these two numbers
+            # are routinely far apart and the UI has to say which one it is quoting.
+            "pagesMeasured": pages_measured,
             "maxPages": total_pages,
             "startedAt": started_at,
             "duration": "—",   # honest: this pipeline doesn't record a crawl duration
@@ -672,5 +937,7 @@ def build_site_audit_response(site_id: str) -> dict:
         "totals": totals,
         "crawledPages": crawled_pages,
         "structure": structure,
-        "snapshots": [],       # honest: no historical audit-run table exists yet
+        # Real crawl history (oldest first). Empty until crawls accumulate — `record_audit_snapshot`
+        # appends one row per completed sync; nothing is ever backfilled.
+        "snapshots": query_audit_snapshots(site_id),
     }

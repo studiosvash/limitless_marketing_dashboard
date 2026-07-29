@@ -1,6 +1,6 @@
 """SEO page data — raw calculators (shared by the old Django view and the new DRF API
 view) plus the old view's presentation formatters. See
-docs/superpowers/specs/2026-07-10-phaseB1-seo-design.md for the field mapping."""
+.claude/api-reference.md for the field mapping."""
 
 from datetime import date
 
@@ -147,6 +147,70 @@ def count_technical_issues(site_id: str, issue_type: str | None = None) -> int:
         return 0
 
 
+def query_technical_issues_raw(site_id: str, limit: int = 15) -> list[dict]:
+    """The technical issues themselves, not just count_technical_issues()'s number.
+
+    Grouped by (issue_type, severity) exactly like alerts_service.query_alert_technical_issues_raw
+    — a site with 400 soft-404s is one problem to fix, not 400 rows to scroll. `limit` caps
+    GROUPS, not underlying rows, so the affected-page counts stay whole.
+
+    The example url/description come from a second lookup keyed on MIN(id) rather than from
+    MAX(url)/MAX(description) aggregates, because two independent aggregates can return values
+    from two different rows — i.e. a URL paired with another page's description. Both queries
+    use only COUNT/MIN/GROUP BY/IN, so they run identically on SQLite and Postgres.
+    """
+    # Reused verbatim from the alerts feed so one issue_type never gets two different human
+    # labels across pages. Do not fork these maps — extend the ones in alerts_service.
+    # Imported inside the function, not at module scope: alerts_service reaches the Django
+    # ORM (mutation_state -> apps.dashboard.models), and this module is otherwise pure
+    # SQLAlchemy, safe to import before the app registry is ready.
+    from apps.dashboard.services.alerts_service import _ISSUE_LABELS, _SEVERITY_RANK
+
+    try:
+        with get_session() as session:
+            groups = session.execute(
+                select(
+                    TechnicalIssue.issue_type,
+                    TechnicalIssue.severity,
+                    func.count(TechnicalIssue.id).label("pages"),
+                    func.min(TechnicalIssue.id).label("example_id"),
+                )
+                .where(TechnicalIssue.site_id == site_id)
+                .group_by(TechnicalIssue.issue_type, TechnicalIssue.severity)
+            ).all()
+            if not groups:
+                return []
+
+            examples = {
+                row.id: row
+                for row in session.execute(
+                    select(TechnicalIssue).where(
+                        TechnicalIssue.id.in_([g.example_id for g in groups])
+                    )
+                ).scalars().all()
+            }
+
+            out = []
+            for g in groups:
+                example = examples.get(g.example_id)
+                issue_type = g.issue_type or ""
+                out.append({
+                    "issue_type": issue_type,
+                    "label": _ISSUE_LABELS.get(issue_type, issue_type.replace("_", " ").title()),
+                    "severity": g.severity or "medium",
+                    "pages": int(g.pages or 0),
+                    "example_url": (example.url if example is not None else "") or "",
+                    "description": (example.description if example is not None else "") or "",
+                })
+            # Worst first, then widest blast radius. Sorted in Python because the severity
+            # ranking is semantic, not alphabetical, and a portable SQL CASE buys nothing here.
+            out.sort(key=lambda i: (_SEVERITY_RANK.get(i["severity"], 9), -i["pages"]))
+            return out[:limit]
+    except Exception as e:
+        import logging; logging.getLogger(__name__).error(f"query_technical_issues_raw error: {e}", exc_info=True)
+        return []
+
+
 def count_quick_win_keywords(site_id: str, start_date: date, end_date: date) -> int:
     """Count of keywords ranking 4-10 (page 1, not yet top-3) with real clicks in the period —
     same 'quick win' rule used elsewhere (e.g. the Keywords page's action buckets)."""
@@ -195,11 +259,12 @@ def format_recent_anomalies(raw_anomalies: list[dict]) -> list[dict]:
 def build_seo_response(site_id: str, curr_start: date, curr_end: date) -> dict:
     """HANDOFF_SPEC.md `seo` view shape — verified against the real fixture's seoView()
     in Limitless marketing dashboard2/app/api.js. See
-    docs/superpowers/specs/2026-07-10-phaseB1-seo-design.md for the field mapping and the
+    .claude/api-reference.md for the field mapping and the
     kpis.critical/total_issues correction."""
     low_ctr_raw = query_low_ctr_pages_raw(site_id, curr_start, curr_end)
     by_dim = query_seo_by_dimension_raw(site_id, curr_start, curr_end)
     anomalies_raw = query_seo_anomalies_raw(site_id)
+    issues_raw = query_technical_issues_raw(site_id)
     critical_count = count_technical_issues(site_id, issue_type="not_found_404")
     total_issue_count = count_technical_issues(site_id)
     quick_win_count = count_quick_win_keywords(site_id, curr_start, curr_end)
@@ -217,6 +282,9 @@ def build_seo_response(site_id: str, curr_start: date, curr_end: date) -> dict:
             for p in low_ctr_raw
         ],
         "countries": by_dim["by_country"],
+        # by_dim already computed this; it used to be dropped on the floor.
+        "devices": by_dim["by_device"],
+        "issues": issues_raw,
         "anomalies": [
             {
                 "id": str(a["id"]),

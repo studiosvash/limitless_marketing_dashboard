@@ -18,6 +18,47 @@ from pipeline.db.schema import Site
 load_dotenv()
 logger = get_logger("site_service")
 
+# Databases whose `sites` table has already been reconciled with the Site model in this
+# process, keyed by connection URL so a test's temp SQLite file never inherits another's
+# result. See _ensure_columns below.
+_COLUMNS_ENSURED: set[str] = set()
+
+
+def _ensure_columns(session) -> None:
+    """Reconcile the `sites` table with the Site model once per process, per database.
+
+    WHY HERE: columns added to `sites` after release (search_engine/device/language) do not
+    exist in a database created before them, and SQLAlchemy selects every mapped column — so
+    the FIRST `select(Site)` against an un-upgraded database fails, not the first write.
+    Running the reconcile from this module means the ordinary boot path repairs itself: the
+    SPA's first call is `GET /api/projects` -> list_sites() -> here, which lands before any
+    slug-scoped view resolves a Site.
+
+    LIMIT, stated plainly: this covers callers that go through site_service or through
+    init_db(). A process that reaches `select(Site)` by another route first (e.g.
+    apps/api/views.resolve_project_or_404, which builds its own query) would still hit the
+    missing column. Running `python manage.py add_project_fields` on SQLite, or any command
+    that calls init_db(), closes that window deterministically; on Postgres, init_db() is the
+    entry point (add_project_fields' own PRAGMA guard is SQLite-only).
+
+    Never raises: a failure here must not turn a page into a 500 when the columns are in fact
+    already present, which is the case for every database created after this change.
+    """
+    try:
+        key = str(session.get_bind().engine.url)
+    except Exception:  # noqa: BLE001 - a bind we cannot name is still worth reconciling once
+        key = "<unknown>"
+    if key in _COLUMNS_ENSURED:
+        return
+    _COLUMNS_ENSURED.add(key)
+    try:
+        from pipeline.db.schema import ensure_site_columns
+        added = ensure_site_columns(session)
+        if added:
+            logger.info(f"[site_service] Added missing sites column(s): {', '.join(added)}")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"[site_service] Could not reconcile sites columns: {exc}")
+
 
 def _bare_domain(value: str) -> str:
     if not value:
@@ -54,6 +95,7 @@ def slugify_unique(session, base: str) -> str:
 
 def list_sites(active_only: bool = True) -> list[Site]:
     with get_session() as session:
+        _ensure_columns(session)
         q = select(Site).order_by(Site.site_url)
         if active_only:
             q = q.where(Site.is_active == 1)
@@ -63,6 +105,7 @@ def list_sites(active_only: bool = True) -> list[Site]:
 
 
 def get_site(session, site_id: Optional[str] = None) -> Optional[Site]:
+    _ensure_columns(session)
     if site_id:
         site = session.execute(
             select(Site).where(Site.site_url == site_id)
@@ -77,6 +120,7 @@ def get_site(session, site_id: Optional[str] = None) -> Optional[Site]:
 
 def get_default_site_id() -> str:
     with get_session() as session:
+        _ensure_columns(session)
         site = session.execute(
             select(Site).where(Site.is_active == 1).order_by(Site.id)
         ).scalars().first()
@@ -96,6 +140,7 @@ def sync_primary_site_from_env() -> None:
     ga4 = os.getenv("GA4_PROPERTY_ID", "").strip() or None
     df_target = _bare_domain(os.getenv("DATAFORSEO_TARGET_DOMAIN", "").strip() or gsc) or None
     with get_session() as session:
+        _ensure_columns(session)
         site = session.execute(
             select(Site).where(Site.site_url == gsc)
         ).scalars().first()
@@ -125,12 +170,21 @@ def sync_primary_site_from_env() -> None:
 
 
 def add_site(site_url, site_name=None, gsc_property=None, ga4_property_id=None,
-             dataforseo_target_domain=None, vertical=None, location="United States") -> int:
+             dataforseo_target_domain=None, vertical=None, location="United States",
+             search_engine="Google", device="Desktop", language="English") -> int:
+    """Register a new site.
+
+    search_engine/device/language are the Position Tracking wizard's "Tracking area" choices.
+    Their defaults match the wizard's own pre-selected options, so a caller that does not pass
+    them stores what the wizard would have shown rather than NULL. They are a recorded
+    preference only — see the note on Site in pipeline/db/schema.py.
+    """
     site_url = (site_url or "").strip()
     if not site_url:
         raise ValueError("site_url is required")
     bare_url = _bare_domain(site_url).lower()
     with get_session() as session:
+        _ensure_columns(session)
         existing_sites = session.execute(select(Site)).scalars().all()
         for s in existing_sites:
             if _bare_domain(s.site_url).lower() == bare_url:
@@ -146,6 +200,9 @@ def add_site(site_url, site_name=None, gsc_property=None, ga4_property_id=None,
             ga4_property_id=ga4_property_id or None,
             dataforseo_target_domain=_bare_domain(dataforseo_target_domain or site_url),
             is_active=1,
+            search_engine=search_engine or "Google",
+            device=device or "Desktop",
+            language=language or "English",
         )
         session.add(site)
         session.flush()
@@ -155,14 +212,20 @@ def add_site(site_url, site_name=None, gsc_property=None, ga4_property_id=None,
 
 
 def update_site(site_id_pk: int, **fields) -> None:
+    # Whitelist, not a blanket setattr: an unknown key must fail loudly rather than be
+    # written onto the ORM object and silently dropped. search_engine/device/language were
+    # added here at the same time as the columns, so the Edit Project modal can actually
+    # persist the three fields it has always collected.
     allowed = {"site_name", "gsc_property", "ga4_property_id", "dataforseo_target_domain",
-               "is_active", "vertical", "location"}
+               "is_active", "vertical", "location",
+               "search_engine", "device", "language"}
     bad = set(fields) - allowed
     if bad:
         raise ValueError(f"Cannot update fields: {bad}. Allowed: {allowed}")
     if "dataforseo_target_domain" in fields:
         fields["dataforseo_target_domain"] = _bare_domain(fields["dataforseo_target_domain"])
     with get_session() as session:
+        _ensure_columns(session)
         site = session.get(Site, site_id_pk)
         if not site:
             raise ValueError(f"Site #{site_id_pk} not found")
@@ -173,6 +236,7 @@ def update_site(site_id_pk: int, **fields) -> None:
 
 def delete_site(site_id_pk: int, hard: bool = False) -> None:
     with get_session() as session:
+        _ensure_columns(session)
         site = session.get(Site, site_id_pk)
         if not site:
             raise ValueError(f"Site #{site_id_pk} not found")

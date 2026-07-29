@@ -18,6 +18,10 @@ import requests
 from dotenv import load_dotenv
 
 from pipeline.connectors.base import BaseConnector
+from pipeline.connectors.dataforseo_cost import extract_cost, record_cost
+# Single home for the location-string fix — see dataforseo_live_serp for the documented
+# DataForSEO `location_name` format and why the SPA's picker value has to be converted.
+from pipeline.connectors.dataforseo_live_serp import normalize_location_name
 from pipeline.utils.retry import with_retry
 from pipeline.utils.date_helpers import yesterday
 from pipeline.utils.db_connection import get_session
@@ -36,6 +40,10 @@ class DataForSEOKeywordsConnector(BaseConnector):
         self.login = os.getenv("DATAFORSEO_LOGIN")
         self.password = os.getenv("DATAFORSEO_PASSWORD")
         self.auth = (self.login, self.password)
+        # USD DataForSEO reported for the current fetch(). fetch() spends across two
+        # endpoints per batch (search_volume + bulk_keyword_difficulty); both land here
+        # and one row is written per run.
+        self._run_cost = 0.0
 
     def _resolve_site_id(self, site_id: Optional[str]) -> str:
         """Pick the right site_id to tag records with."""
@@ -47,9 +55,23 @@ class DataForSEOKeywordsConnector(BaseConnector):
         return site_id or os.getenv("GSC_SITE_URL", "")
 
     def _load_keywords(self, site_id: str = "") -> list[str]:
-        """Load tracked keywords from keywords.txt (skips comments/blanks)."""
+        """Tracked keywords for this site, optionally narrowed to an incremental subset."""
         from pipeline.utils.keywords import load_tracked_keywords
-        return load_tracked_keywords(site_id)
+        keywords = load_tracked_keywords(site_id)
+        # Incremental sync: sync_engine may set `only_keywords` to restrict this run to the
+        # keywords that actually need work (pipeline/utils/keywords.keywords_needing_backfill).
+        # DataForSEO meters per query, so re-querying every tracked keyword to pick up five new
+        # ones is both slow and billable. Absent/empty => full list, so the scheduled sync and
+        # every existing caller behave exactly as before.
+        only = getattr(self, "only_keywords", None)
+        if only:
+            wanted = set(k.strip().lower() for k in only if k and k.strip())
+            subset = [k for k in keywords if (k or "").strip().lower() in wanted]
+            self.logger.info(
+                f"[dataforseo_keywords] incremental run: {len(subset)} of {len(keywords)} tracked keywords"
+            )
+            return subset
+        return keywords
 
     @with_retry(max_retries=3, base_delay=5.0)
     def _fetch_search_volume(self, keywords: list[str]) -> list[dict]:
@@ -71,6 +93,7 @@ class DataForSEOKeywordsConnector(BaseConnector):
         )
         resp.raise_for_status()
         data = resp.json()
+        self._run_cost += extract_cost(data)
         return data.get("tasks", [{}])[0].get("result", [])
 
     @with_retry(max_retries=3, base_delay=5.0)
@@ -93,7 +116,9 @@ class DataForSEOKeywordsConnector(BaseConnector):
                 timeout=30,
             )
             resp.raise_for_status()
-            result = resp.json().get("tasks", [{}])[0].get("result", []) or []
+            payload = resp.json()
+            self._run_cost += extract_cost(payload)
+            result = payload.get("tasks", [{}])[0].get("result", []) or []
         except Exception as exc:
             self.logger.warning(f"[dataforseo_keywords] Keyword-difficulty fetch failed: {exc}")
             return {}
@@ -130,7 +155,9 @@ class DataForSEOKeywordsConnector(BaseConnector):
             timeout=30,
         )
         resp.raise_for_status()
-        return resp.json().get("tasks", [{}])[0].get("result", [{}])[0].get("items", []) or []
+        payload = resp.json()
+        self._run_cost += extract_cost(payload)
+        return payload.get("tasks", [{}])[0].get("result", [{}])[0].get("items", []) or []
 
     @staticmethod
     def _parse_overview_item(item: dict, location_name: str) -> Optional[dict]:
@@ -167,7 +194,8 @@ class DataForSEOKeywordsConnector(BaseConnector):
             "location": location_name,
         }
 
-    def lookup_keywords(self, keywords: list[str], location_name: str = "United States") -> dict:
+    def lookup_keywords(self, keywords: list[str], location_name: str = "United States",
+                        site_id: str = "") -> dict:
         """
         Fetch on-demand keyword metrics for the Keyword Explorer. Read-only: returns the
         data, never writes to the DB. Always returns a dict the view/template can branch on:
@@ -178,6 +206,10 @@ class DataForSEOKeywordsConnector(BaseConnector):
         - rows: keywords DataForSEO returned data for (the 8 Explorer columns).
         - no_data: requested keywords with no result (shown as a note; successful rows still render).
         - status "error": whole-call failure (missing creds, negative balance, network/HTTP).
+
+        `site_id` is optional and purely for cost attribution — the Explorer is a
+        request-scoped lookup and its caller may not have a project in hand. Omitting it
+        still books the spend, just against the unattributed "" site.
         """
         cleaned = []
         seen = set()
@@ -196,12 +228,25 @@ class DataForSEOKeywordsConnector(BaseConnector):
             return {"status": "error", "rows": [], "no_data": cleaned, "location": location_name,
                     "error": "DataForSEO credentials are not configured."}
 
+        # The SPA's location picker (static/spa/us_cities.json) emits "United States - Texas",
+        # which DataForSEO's location_name does not understand — it wants "Texas,United States".
+        # Normalise only what goes to the API; `location_name` stays in its display form for the
+        # response so the UI keeps showing the value the user actually picked.
+        api_location = normalize_location_name(location_name)
+
+        self._run_cost = 0.0
         try:
-            items = self._fetch_keyword_overview(cleaned, location_name)
+            items = self._fetch_keyword_overview(cleaned, api_location)
         except Exception as exc:
             self.logger.warning(f"[dataforseo_keywords] lookup_keywords failed: {exc}")
             return {"status": "error", "rows": [], "no_data": cleaned, "location": location_name,
                     "error": f"Couldn't fetch keyword data: {exc}"}
+        finally:
+            # `units` = keywords submitted — Labs keyword_overview meters per keyword.
+            record_cost(
+                self.name, site_id, self._run_cost, units=len(cleaned),
+                notes=f"labs/keyword_overview lookup ({api_location})",
+            )
 
         rows = []
         returned = set()
@@ -339,12 +384,16 @@ class DataForSEOKeywordsConnector(BaseConnector):
         }
 
     def expand_keywords(self, seeds: list[str], location_name: str = "United States",
-                        limit: int = 100) -> dict:
-        """Keyword Explorer expansion. Read-only — never writes to the DB. Always returns a
+                        limit: int = 100, site_id: str = "") -> dict:
+        """Keyword Explorer expansion. Read-only — never writes analytics rows. Always returns a
         dict the endpoint can branch on:
 
             {"status": "ok"|"error", "location": str, "cost": float,
              "rows": [{kw, volume, kd, cpc, intent, match, monthly, serpFeatures}], "error": str|None}
+
+        The returned `cost` is unchanged (the SPA renders it); it is now ALSO appended to
+        connector_costs so Settings can total it. `site_id` is optional and only attributes
+        that row — see lookup_keywords.
         """
         import re
         import concurrent.futures
@@ -363,6 +412,10 @@ class DataForSEOKeywordsConnector(BaseConnector):
             return {"status": "error", "location": location_name, "cost": 0, "rows": [],
                     "error": "DataForSEO credentials are not configured."}
 
+        # See the note in lookup_keywords: the picker's "Country - Region" form is not a valid
+        # DataForSEO location_name. Normalise for the API, keep the display form in the response.
+        api_location = normalize_location_name(location_name)
+
         question_seeds = []
         for s in cleaned[:2]:
             for q in ["how", "what", "how much", "why", "can", "is", "where", "when", "does"]:
@@ -370,9 +423,9 @@ class DataForSEOKeywordsConnector(BaseConnector):
 
         ideas_payload, related_payload, questions_payload = {}, {}, {}
         with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
-            f_ideas = pool.submit(self._fetch_keyword_ideas, cleaned, location_name, limit)
-            f_related = pool.submit(self._fetch_related_keywords, cleaned[0], location_name, min(limit, 50))
-            f_questions = pool.submit(self._fetch_keyword_suggestions, cleaned, location_name, min(limit, 50))
+            f_ideas = pool.submit(self._fetch_keyword_ideas, cleaned, api_location, limit)
+            f_related = pool.submit(self._fetch_related_keywords, cleaned[0], api_location, min(limit, 50))
+            f_questions = pool.submit(self._fetch_keyword_suggestions, cleaned, api_location, min(limit, 50))
 
             try:
                 ideas_payload = f_ideas.result()
@@ -391,7 +444,14 @@ class DataForSEOKeywordsConnector(BaseConnector):
             except Exception as exc:
                 self.logger.warning(f"[dataforseo_keywords] expand_keywords questions failed: {exc}")
 
-        total_cost = (ideas_payload.get("cost") or 0) + (related_payload.get("cost") or 0) + (questions_payload.get("cost") or 0)
+        # extract_cost sums tasks[].cost and falls back to the top-level total. That matters
+        # for keyword_suggestions, which posts ONE TASK PER SEED — the old top-level-only
+        # read happened to be right, but the per-task rows are the documented source of truth.
+        total_cost = (
+            extract_cost(ideas_payload)
+            + extract_cost(related_payload)
+            + extract_cost(questions_payload)
+        )
 
         seed_phrases = [s.lower().strip() for s in cleaned]
         seed_token_sets = [set(re.findall(r"[a-z0-9]+", p)) for p in seed_phrases]
@@ -427,6 +487,13 @@ class DataForSEOKeywordsConnector(BaseConnector):
                 row["match"] = self._classify_match(row["kw"], seed_phrases, seed_token_sets)
                 rows.append(row)
 
+        # `units` = keyword rows returned. Labs ideas/related/suggestions all meter per
+        # returned keyword, so this is the honest denominator for cost-per-keyword.
+        record_cost(
+            self.name, site_id, total_cost, units=len(rows),
+            notes=f"labs keyword_ideas+related_keywords+keyword_suggestions ({api_location})",
+        )
+
         return {"status": "ok", "location": location_name, "cost": round(float(total_cost), 4),
                 "rows": rows, "error": None}
 
@@ -447,6 +514,7 @@ class DataForSEOKeywordsConnector(BaseConnector):
         self.logger.info(f"[dataforseo_keywords] Fetching metadata for {len(keywords)} keywords (site: {resolved_site_id})")
         tracking_date = yesterday()
         records = []
+        self._run_cost = 0.0
 
         # Process in batches of 1,000 (API limit)
         batch_size = 1000
@@ -475,6 +543,13 @@ class DataForSEOKeywordsConnector(BaseConnector):
             if i + batch_size < len(keywords):
                 time.sleep(5)
 
+        # One row per run. `units` = keywords looked up, which is exactly what both
+        # Keywords Data and Labs bulk_keyword_difficulty meter.
+        record_cost(
+            self.name, resolved_site_id, self._run_cost, units=len(keywords),
+            notes="google_ads/search_volume + labs/bulk_keyword_difficulty",
+        )
+
         self.logger.info(f"[dataforseo_keywords] Fetched metadata for {len(records)} keywords")
         return records
 
@@ -489,10 +564,11 @@ class DataForSEOKeywordsConnector(BaseConnector):
         for r in records:
             r.setdefault("site_id", site_id or "")
 
-        from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+        from pipeline.db.dialect import upsert_insert
         from pipeline.db.schema import KeywordRanking
 
-        stmt = sqlite_insert(KeywordRanking).values(records)
+        insert = upsert_insert(session)
+        stmt = insert(KeywordRanking).values(records)
         stmt = stmt.on_conflict_do_update(
             index_elements=["date", "site_id", "keyword"],
             set_={

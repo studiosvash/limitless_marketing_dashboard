@@ -17,10 +17,10 @@ Refinements vs. the Streamlit MVP schema:
 """
 from sqlalchemy import (
     Column, String, Float, Integer, Date, DateTime, Text,
-    UniqueConstraint, Index,
+    UniqueConstraint, Index, inspect, text,
 )
 from sqlalchemy.engine import Engine
-from sqlalchemy.orm import declarative_base
+from sqlalchemy.orm import Session, declarative_base
 from sqlalchemy.sql import func
 
 Base = declarative_base()
@@ -41,6 +41,23 @@ class Site(Base):
     dataforseo_target_domain = Column(String(255), nullable=True)
     is_active = Column(Integer, default=1, index=True)
     created_at = Column(DateTime, server_default=func.now())
+
+    # --- Tracking preferences (added 2026-07) ---------------------------------------------
+    # The three fields Position Tracking's "Tracking area" wizard step and its Edit modal
+    # have always collected. Before this they had nowhere to go: the wizard's finish handler
+    # never sent them, `sites` had no column for them, and the workspace header printed a
+    # hardcoded "Desktop" no matter what the user picked. They are stored here so the header
+    # can report the user's actual choice.
+    #
+    # THEY ARE A STORED PREFERENCE, NOT YET A SYNC PARAMETER. Both SERP connectors
+    # (dataforseo_serp.py and dataforseo_serp_competitors.py) still post
+    # location_name="United States", language_name="English", device="desktop" as literals,
+    # and neither reads this row. Recording what the user chose is honest; claiming it
+    # changes what gets fetched would not be. See ensure_site_columns() below for how an
+    # existing database acquires these columns.
+    search_engine = Column(String(50), nullable=True, default="Google")
+    device = Column(String(50), nullable=True, default="Desktop")
+    language = Column(String(100), nullable=True, default="English")
 
 
 class SEODaily(Base):
@@ -100,7 +117,19 @@ class KeywordRanking(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     date = Column(Date, nullable=False, index=True)
     site_id = Column(String(255), nullable=False, index=True, default="")
-    keyword = Column(String(500), nullable=False, index=True)
+    # Text, not String(500). A search query has no 500-character limit, and real GSC data
+    # proves it: 115 rows here hold queries up to 1440 chars -- people pasting long
+    # AI-assistant-style prompts into Google ("i am a 25-34 year old event planner, ...")
+    # and long `-filetype:` operator strings. SQLite is dynamically typed and stored them
+    # happily; PostgreSQL enforces the declared width and aborted the 2026-07-27 migration
+    # with StringDataRightTruncation partway through this table.
+    #
+    # Every `keyword` column in this file was widened at the same time (competitor_keyword_
+    # rankings, ai_keyword_data, saved_keywords, keyword_opportunities, and
+    # ad_search_terms.matched_keyword) -- they hold the same kind of value, so each was the
+    # same crash waiting for its turn. Truncating to fit would have silently corrupted real
+    # queries, which this codebase does not do.
+    keyword = Column(Text, nullable=False, index=True)
     position = Column(Integer, nullable=True)
     url = Column(Text, nullable=True)
     clicks = Column(Integer, nullable=True, default=0)
@@ -268,6 +297,18 @@ class PageSpeed(Base):
     fcp_ms = Column(Float, nullable=True)
     ttfb_ms = Column(Float, nullable=True)
     si_ms = Column(Float, nullable=True)
+    # --- Total Blocking Time (added 2026-07) ------------------------------------------------
+    # Lighthouse returns `audits["total-blocking-time"].numericValue` (milliseconds) on EVERY
+    # PSI run. It had nowhere to go, so the Site Audit page's TBT tile had no source.
+    #
+    # `lighthouse_audits` is NOT a substitute and was never one: that blob stores only the
+    # audits that FAILED (`score < 1 or savings > 0`), so on the live database TBT was present
+    # for 4 of 75 mobile rows — and only for pages that scored badly. A p75 over that subset is
+    # a p75 of "the slow pages", not of the site.
+    #
+    # `inp_ms` is NOT a substitute either: INP is a different metric (a field metric a lab
+    # Lighthouse run never returns), and it is NULL on all 150 stored rows.
+    tbt_ms = Column(Float, nullable=True)
     lighthouse_audits = Column(Text, nullable=True)
     last_checked = Column(DateTime, server_default=func.now())
 
@@ -404,7 +445,7 @@ class CompetitorKeywordRanking(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     date = Column(Date, nullable=False, index=True)
     site_id = Column(String(255), nullable=False, index=True, default="")
-    keyword = Column(String(500), nullable=False, index=True)
+    keyword = Column(Text, nullable=False, index=True)
     competitor_domain = Column(String(255), nullable=False, index=True)
     position = Column(Integer, nullable=True)        # rank_absolute; NULL = not in captured depth
     url = Column(Text, nullable=True)                # the competitor's ranking URL
@@ -446,7 +487,7 @@ class AIKeywordData(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     date = Column(Date, nullable=False, index=True)
     site_id = Column(String(255), nullable=False, index=True, default="")
-    keyword = Column(String(500), nullable=False, index=True)
+    keyword = Column(Text, nullable=False, index=True)
     ai_search_volume = Column(Integer, nullable=True)        # current AI search volume rate
     prev_ai_search_volume = Column(Integer, nullable=True)   # previous month (for trend arrow)
     search_volume = Column(Integer, nullable=True)           # classic volume, enriched for context
@@ -475,7 +516,7 @@ class SavedKeyword(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     site_id = Column(String(255), nullable=False, index=True, default="")
-    keyword = Column(String(500), nullable=False, index=True)
+    keyword = Column(Text, nullable=False, index=True)
     location = Column(String(255), nullable=False, default="United States")
     search_volume = Column(Integer, nullable=True)
     keyword_difficulty = Column(Float, nullable=True)
@@ -533,7 +574,7 @@ class KeywordOpportunity(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     site_id = Column(String(255), nullable=False, index=True)
-    keyword = Column(String(500), nullable=False)
+    keyword = Column(Text, nullable=False)
     current_position = Column(Integer, nullable=True)
     search_volume = Column(Integer, nullable=True)
     keyword_difficulty = Column(Float, nullable=True)
@@ -576,6 +617,256 @@ class RiskSignal(Base):
     )
 
 
+# ─────────────────────────────────────────────
+# History & cost tables (2026-07)
+# Added because four screens were fully built over data that was never stored:
+# Site Audit's Compare/Progress tabs, Ads' Search Terms and Attribution tabs, and
+# Settings' cost figures. Each of those previously rendered fabricated or empty data.
+# ─────────────────────────────────────────────
+
+
+class AuditSnapshot(Base):
+    """One row per completed Site Audit crawl — the history the Compare Crawls and Progress
+    sub-tabs read. Those tabs were fully built but permanently empty because nothing recorded
+    a crawl's outcome; `build_site_audit_response` returned `snapshots: []` unconditionally.
+
+    `by_check` is a JSON map of {issue_type: count} so Compare Crawls can diff per check
+    without a second table. Keyed on the DATE, not a timestamp: two crawls on the same day
+    overwrite rather than producing a misleading double point on the trend line.
+    """
+    __tablename__ = "audit_snapshots"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    site_id = Column(String(255), nullable=False, index=True)
+    captured_at = Column(Date, nullable=False, index=True)
+    score = Column(Integer, nullable=True)
+    errors = Column(Integer, default=0)
+    warnings = Column(Integer, default=0)
+    notices = Column(Integer, default=0)
+    pages_crawled = Column(Integer, default=0)
+    by_check = Column(Text, nullable=True)          # JSON: {issue_type: count}
+    created_at = Column(DateTime, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("site_id", "captured_at", name="uq_audit_snapshot_site_date"),
+        Index("ix_audit_snapshot_site_date", "site_id", "captured_at"),
+    )
+
+
+class AdSearchTerm(Base):
+    """Google Ads `search_term_view` rows — the real queries that triggered an ad.
+
+    The Search Terms page (filters, bulk negatives, promote-to-organic) was fully built against
+    a response key that was hardcoded to `[]` because no table existed. The negative-keyword and
+    promote endpoints already work; they simply had nothing to act on.
+    """
+    __tablename__ = "ad_search_terms"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    date = Column(Date, nullable=False, index=True)
+    site_id = Column(String(255), nullable=False, index=True, default="")
+    term = Column(String(500), nullable=False, index=True)
+    matched_keyword = Column(Text, nullable=True)
+    match_type = Column(String(20), nullable=True)      # exact | phrase | broad
+    campaign = Column(String(500), nullable=True)
+    campaign_id = Column(String(100), nullable=True, index=True)
+    impressions = Column(Integer, default=0)
+    clicks = Column(Integer, default=0)
+    cost = Column(Float, default=0.0)
+    conversions = Column(Float, default=0.0)
+
+    __table_args__ = (
+        UniqueConstraint("date", "site_id", "term", "campaign_id",
+                         name="uq_ad_search_term_date_site_term_campaign"),
+        Index("ix_ad_search_term_site_date", "site_id", "date"),
+    )
+
+
+class GA4CampaignDaily(Base):
+    """GA4 key events and revenue broken down by campaign — the GA4 half of the Attribution
+    comparison. Google Ads reports its own last-click attribution; GA4 attributes across all
+    channels, so the two never agree. Showing them side by side is the whole point of that page,
+    and it needs both halves stored per campaign, which nothing did before.
+    """
+    __tablename__ = "ga4_campaign_daily"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    date = Column(Date, nullable=False, index=True)
+    site_id = Column(String(255), nullable=False, index=True, default="")
+    campaign = Column(String(500), nullable=False, index=True)
+    sessions = Column(Integer, default=0)
+    key_events = Column(Integer, default=0)
+    revenue = Column(Float, default=0.0)
+
+    __table_args__ = (
+        UniqueConstraint("date", "site_id", "campaign",
+                         name="uq_ga4_campaign_date_site_campaign"),
+        Index("ix_ga4_campaign_site_date", "site_id", "date"),
+    )
+
+
+class ConnectorCost(Base):
+    """What each connector run actually cost. Every DataForSEO response already carries a real
+    `task.cost` and every one of them was being discarded, which is why Settings' Usage & Budget
+    tab could only show honest zeros and the budget cap could not be enforced.
+
+    One row per (connector, run). `units` is whatever the connector meters — keywords looked up,
+    pages crawled — so cost-per-unit is derivable without a second table.
+    """
+    __tablename__ = "connector_costs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    site_id = Column(String(255), nullable=False, index=True, default="")
+    connector = Column(String(100), nullable=False, index=True)
+    run_at = Column(DateTime, nullable=False, index=True)
+    cost = Column(Float, default=0.0)
+    units = Column(Integer, nullable=True)
+    currency = Column(String(10), default="USD")
+    notes = Column(Text, nullable=True)
+
+    __table_args__ = (
+        Index("ix_connector_cost_site_run", "site_id", "run_at"),
+    )
+
+
+class PageCrawlMeta(Base):
+    """Per-page link and content counts measured by the DataForSEO OnPage crawl.
+
+    `/v3/on_page/pages` returns these on every crawled page and the connector threw the whole
+    `items[].meta` object away, keeping only `items[].checks`. That is why the Site Audit page
+    had no honest source for in-links, internal links or word count — and why a previous
+    version faked them from `performance_score * 0.4` and `fcp_ms * 1.5`.
+
+    WHY A SEPARATE TABLE RATHER THAN COLUMNS ON `pages`:
+      * `pages` is the GSC/CMS *inventory* (2 144 rows on the live DB), written by `gsc_pages`,
+        `sitemap` and the CMS connectors. The OnPage crawl covers a different, smaller URL set,
+        so upserting into `pages` would silently inject crawl-discovered URLs into the
+        inventory that `pagespeed._get_top_pages` and the Pages page both sample from.
+      * These are crawl-scoped measurements with their own freshness (`crawled_at`), not
+        inventory attributes. Keeping them apart means "we have not crawled this page" is
+        representable as a missing row instead of four NULL columns that read as zeros.
+      * No writer coupling: `upsert_pages` derives its update set from the incoming record's
+        keys, so a shared table would work, but two connectors owning disjoint column groups
+        of one row is exactly the coupling the one-concern-per-file rule exists to avoid.
+
+    Nullable everywhere on purpose: OnPage omits a field it could not measure, and a missing
+    measurement must stay NULL so the payload can report None rather than a fabricated 0.
+    """
+    __tablename__ = "page_crawl_meta"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    site_id = Column(String(255), nullable=False, index=True, default="")
+    url = Column(Text, nullable=False, index=True)
+    internal_links_count = Column(Integer, nullable=True)   # meta.internal_links_count
+    external_links_count = Column(Integer, nullable=True)   # meta.external_links_count
+    inbound_links_count = Column(Integer, nullable=True)    # meta.inbound_links_count
+    word_count = Column(Integer, nullable=True)             # meta.content.plain_text_word_count
+    crawled_at = Column(DateTime, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("site_id", "url", name="uq_page_crawl_meta_site_url"),
+    )
+
+
+# ─────────────────────────────────────────────
+# Columns added to an ALREADY-SHIPPED table
+# ─────────────────────────────────────────────
+#
+# `Base.metadata.create_all` only creates MISSING TABLES. It will never add a column to a
+# table that already exists, so every column added to `sites` after the first release needs
+# an explicit ALTER against live databases.
+#
+# WHY THIS IS NOT A COPY OF apps/sync/management/commands/add_project_fields.py: that command
+# guards each ALTER with `PRAGMA table_info(sites)`, which is SQLite-only syntax — Postgres
+# rejects it as a syntax error, so the command cannot even be run there, and this project now
+# supports both backends (config/settings/base.py picks Postgres when POSTGRES_DB is set).
+# `sqlalchemy.inspect()` asks the same question through whichever dialect is connected, and
+# `ALTER TABLE t ADD COLUMN c <type> DEFAULT '<v>'` is accepted verbatim by SQLite 3.2+ and
+# PostgreSQL 11+, backfilling existing rows with the default in that one statement on both.
+#
+# (name, SQL type, default) — every value below is a module constant. Nothing user-supplied
+# is ever interpolated into the DDL string. `default=None` emits no DEFAULT clause, which is
+# what a nullable measurement wants: an existing row that was never measured must read NULL,
+# never a backfilled number that would look like a real reading.
+_SITES_ADDED_COLUMNS = (
+    ("search_engine", "VARCHAR(50)", "Google"),
+    ("device", "VARCHAR(50)", "Desktop"),
+    ("language", "VARCHAR(100)", "English"),
+)
+
+# `page_speed.tbt_ms` — see the PageSpeed model for why this is a real column and not a value
+# dug out of the `lighthouse_audits` blob.
+_PAGE_SPEED_ADDED_COLUMNS = (
+    ("tbt_ms", "FLOAT", None),
+)
+
+
+def _alter_missing_columns(conn, table: str, specs) -> list[str]:
+    """Add each missing column of `table` on the given Connection. Returns the names added.
+
+    `sqlalchemy.inspect()` asks "does this column exist?" through whichever dialect is
+    connected, unlike the SQLite-only `PRAGMA table_info` the legacy management command uses,
+    and `ALTER TABLE t ADD COLUMN c <type> [DEFAULT '<v>']` is accepted verbatim by SQLite 3.2+
+    and PostgreSQL 11+.
+    """
+    inspector = inspect(conn)
+    if not inspector.has_table(table):
+        return []  # brand-new database: create_all() has already built it in full
+    existing = {c["name"] for c in inspector.get_columns(table)}
+    added = []
+    for name, sql_type, default in specs:
+        if name in existing:
+            continue
+        suffix = "" if default is None else f" DEFAULT '{default}'"
+        conn.execute(text(f"""ALTER TABLE {table} ADD COLUMN "{name}" {sql_type}{suffix}"""))
+        added.append(name)
+    return added
+
+
+def _run_alter(session_or_engine, table: str, specs) -> list[str]:
+    """Apply `_alter_missing_columns` to a Session (joining its transaction) or an Engine."""
+    if isinstance(session_or_engine, Session):
+        return _alter_missing_columns(session_or_engine.connection(), table, specs)
+    with session_or_engine.begin() as conn:
+        return _alter_missing_columns(conn, table, specs)
+
+
+def ensure_site_columns(session_or_engine) -> list[str]:
+    """Bring an existing `sites` table up to date with the Site model. Idempotent.
+
+    Safe to call on every backend and on a database that is already current (it inspects
+    first and issues nothing when there is nothing to add). Accepts a Session (uses its
+    connection, so the ALTER joins the caller's transaction) or an Engine.
+
+    Returns the list of column names actually added, so callers can log a real event
+    instead of announcing work that did not happen.
+    """
+    return _run_alter(session_or_engine, "sites", _SITES_ADDED_COLUMNS)
+
+
+def ensure_page_speed_columns(session_or_engine) -> list[str]:
+    """Bring an existing `page_speed` table up to date with the PageSpeed model. Idempotent.
+
+    Same contract as `ensure_site_columns`, and needed for the same reason: SQLAlchemy selects
+    every mapped column, so the FIRST `select(PageSpeed)` against a database created before
+    `tbt_ms` existed fails with "no such column" — the read breaks before any write does.
+
+    Callers: `init_db` (the migration entry point), `writer.upsert_page_speed` (every sync) and
+    `site_audit_service` (every Site Audit page load). Stated limit, exactly as
+    `site_service._ensure_columns` states its own: a process whose very first PageSpeed query
+    comes from somewhere else — `overview_service`, `technical_issues_service` — still hits the
+    missing column until one of those three paths has run once. Any `init_db()` call closes
+    that window deterministically on both backends.
+    """
+    return _run_alter(session_or_engine, "page_speed", _PAGE_SPEED_ADDED_COLUMNS)
+
+
 def init_db(engine: Engine) -> None:
-    """Create all analytics tables if they don't exist. Safe to call repeatedly."""
+    """Create all analytics tables if they don't exist, then reconcile columns added later.
+
+    Safe to call repeatedly. The reconcile steps are what make this usable as a migration entry
+    point on an existing database: create_all cannot add a column, the ensure_* helpers can.
+    """
     Base.metadata.create_all(engine)
+    ensure_site_columns(engine)
+    ensure_page_speed_columns(engine)

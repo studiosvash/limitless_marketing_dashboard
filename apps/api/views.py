@@ -24,7 +24,8 @@ from pipeline.db.schema import (
 from apps.dashboard.services.overview_service import (
     get_kpi_raw, build_kpis_api, build_top_pages_api, query_daily_traffic_raw,
     range_to_period_dates, get_ai_summary_text, parse_ai_summary, build_summary_lists,
-    build_pillars, build_modules, build_priority_feed, query_top_ga4_pages_weekly_raw, query_top_audit_pages_raw
+    build_pillars, build_modules, build_priority_feed, query_top_ga4_pages_weekly_raw, query_top_audit_pages_raw,
+    build_top_keywords_api, build_positioning_overview
 )
 from apps.dashboard.services.decision_engine import generate_signals, generate_ad_overlap_signals
 from apps.dashboard.services.keywords_service import build_keywords_response
@@ -35,7 +36,10 @@ from apps.dashboard.services.backlinks_service import build_backlinks_response
 from apps.dashboard.services.site_audit_service import build_site_audit_response
 from apps.dashboard.services.offsite_service import build_offsite_response
 from apps.dashboard.services.ads_service import build_ads_response
-from apps.dashboard.services.ai_service import build_ai_response
+from apps.dashboard.services.ai_service import (
+    build_ai_response, inspect_question, run_prompt_checks,
+)
+from pipeline.services.ai_visibility_service import connectable_platforms
 from apps.dashboard.services.settings_service import build_settings_response, apply_settings_update
 from apps.dashboard.models import AITarget, AIPromptList, AIPrompt
 from apps.dashboard.services.shared_queries import (
@@ -150,6 +154,7 @@ class ProjectListCreateView(APIView):
         return Response(body, status=status.HTTP_201_CREATED)
 
 
+@method_decorator(login_not_required, name="dispatch")
 class ProjectDetailView(APIView):
     def delete(self, request, slug):
         site = resolve_project_or_404(slug)
@@ -216,6 +221,18 @@ class ProjectOverviewView(APIView):
             "signals": signals,
             "trend": trend,
             "summary": summary,
+            # Already computed above for top3_count / the Keywords module card and then
+            # discarded — the approved Overview design has a Top keywords table that had
+            # nothing to read. Shape (shared_queries._get_keywords_overview): <=5 rows of
+            # {keyword, position, clicks, impressions, volume}.
+            # Passed through build_top_keywords_api so the rows carry raw numbers like
+            # every other value in this response, instead of _get_keywords_overview's
+            # old-Django-template display strings ("1,234"/"N/A"/"—").
+            "topKeywords": build_top_keywords_api(keywords_overview),
+            # Positioning vs Competitors summary card. Aggregated from the same competitor
+            # grid the Positioning page renders per keyword; competitors with no captured
+            # positions report state "none" and no average rather than a plausible number.
+            "positioningOverview": build_positioning_overview(site_id),
             "topPages": top_pages,
             "topGa4Pages": top_ga4_pages,
             "topAuditPages": top_audit_pages,
@@ -302,8 +319,12 @@ class ProjectKeywordsView(APIView):
         site_id = site.site_url
         location = request.data.get("location") or site.location or "United States"
         batch = request.data.get("keywords")
-        print("INCOMING KEYWORDS BATCH:", batch)
-        
+        # Kept as a debug signal (the batch is what the SPA actually sent, which is the first
+        # thing you want when a save looks wrong) but routed through the module logger rather
+        # than print(): a bare print wrote user keyword data to stdout on every save and
+        # bypassed the logging config entirely, so it could be neither filtered nor routed.
+        logger.debug("Incoming tracked-keyword batch for %s: %s", slug, batch)
+
         if not isinstance(batch, list):
             return Response({"detail": "keywords list required"}, status=400)
             
@@ -390,9 +411,10 @@ class ProjectAIActionView(APIView):
     first-party mutation handlers by `action` path segment. Every handler persists to our own
     DB (never an external API) and returns a minimal ack; the SPA always re-fetches
     ProjectAIView after any mutation, so no handler needs to echo authoritative state back.
-    `run`/`inspect` (and any other unmapped action) fall through to a clean 400 -- those call
-    external LLM Responses/scraper APIs this codebase has no connector for (explicitly out of
-    scope this phase), and a clear 4xx is preferable to a 404 or an unhandled crash."""
+    `run` and `inspect` are the two handlers that spend money: they call a live answer engine
+    through pipeline/services/ai_visibility_service and persist what really came back. They are
+    reachable ONLY from this POST -- never from ProjectAIView's GET -- because one check is a
+    real charge. Any other unmapped action still falls through to a clean 400."""
 
     def post(self, request, slug, action):
         site_id = resolve_project_or_404(slug).site_url
@@ -414,7 +436,13 @@ class ProjectAIActionView(APIView):
         )
         for text in data.get("prompts", []):
             if text and text.strip():
-                AIPrompt.objects.create(site_url=site_id, text=text.strip())
+                # Seed the engines this build actually has a connector for, so "Run now" does
+                # something on a freshly set-up project. `connectable_platforms()` (not
+                # `connected_platforms()`) deliberately ignores whether the key is set right
+                # now: which engines a prompt tracks must not depend on which env vars happened
+                # to be present the moment setup ran.
+                AIPrompt.objects.create(site_url=site_id, text=text.strip(),
+                                        tracked_models=connectable_platforms())
         return Response({})
 
     def _handle_targets(self, request, site_id):
@@ -482,10 +510,46 @@ class ProjectAIActionView(APIView):
             return Response({})
         return Response({"detail": f"Unknown list op: {op}"}, status=400)
 
+    def _handle_run(self, request, site_id):
+        """Run tracked prompts against their tracked answer engines, for real.
+
+        Scope comes from the body, matching what the SPA sends: `{promptId}` for one row's
+        "Run now", `{listId}` for "Run <list> now", `{}` for "Run all now". Costs real money,
+        which is why it is a POST the user pressed and never part of the page GET."""
+        prompt_id = request.data.get("promptId")
+        list_id = request.data.get("listId")
+        qs = AIPrompt.objects.filter(site_url=site_id)
+        if prompt_id is not None:
+            qs = qs.filter(id=prompt_id)
+            if not qs.exists():
+                # Same false-success reasoning as _handle_prompts_config: telling the SPA "ran"
+                # for a prompt that does not exist here is worse than a clean 404.
+                return Response({"detail": "Prompt not found"}, status=404)
+        elif list_id is not None:
+            qs = qs.filter(list_id=list_id)
+        return Response(run_prompt_checks(site_id, list(qs)))
+
+    def _handle_inspect(self, request, site_id):
+        """One ad-hoc answer-engine check for the Answer Inspector. Returns the stored history
+        entry itself -- the SPA renders the response directly and then re-fetches."""
+        outcome = inspect_question(
+            site_id, request.data.get("question"), request.data.get("promptId")
+        )
+        if outcome.get("ok"):
+            return Response(outcome["entry"])
+        # 503 (not 200 with an empty shell) when the engine simply isn't reachable: a 200 would
+        # let the UI render "you are not mentioned" for an answer that was never requested.
+        status_code = 503 if outcome.get("notConnected") else 400
+        return Response({"detail": outcome.get("reason")}, status=status_code)
+
 
 def check_owner_admin(user):
+    """Fail closed: an anonymous caller is never Owner/Admin. Every view that calls this is
+    decorated `login_not_required` (so LoginRequiredMiddleware doesn't 302 token requests)
+    but still inherits DRF's default IsAuthenticated, so a real request always arrives with
+    an authenticated user -- returning True for AnonymousUser only ever opened a hole."""
     if not user or not user.is_authenticated:
-        return True
+        return False
     if user.id == 1 or user.username.lower() in ("founder", "owner"):
         return True
     profile = getattr(user, "profile", None)
@@ -495,9 +559,10 @@ def check_owner_admin(user):
 
 
 def check_owner_only(user):
-    """Strict check: only Owner role (or user.id==1 / founder) can invite new users."""
+    """Strict check: only Owner role (or user.id==1 / founder) can invite new users.
+    Fail closed for anonymous callers -- see check_owner_admin above for why that is safe."""
     if not user or not user.is_authenticated:
-        return True
+        return False
     if user.id == 1 or getattr(user, "username", "").lower() in ("founder", "owner"):
         return True
     profile = getattr(user, "profile", None)
@@ -511,7 +576,7 @@ class ProjectSettingsView(APIView):
     real+honestly-defaulted response from `build_settings_response`; PUT routes a partial
     body's top-level key(s) to `apply_settings_update`, which returns a clean 400 (never a
     false-success 200) for `team`/`security` -- the two groups this phase explicitly does not
-    persist (see docs/superpowers/specs/2026-07-13-phaseE-settings-design.md)."""
+    persist (see .claude/api-reference.md)."""
 
     def get(self, request, slug):
         site_id = resolve_project_or_404(slug).site_url
@@ -631,39 +696,41 @@ class ProjectInviteView(APIView):
         # Remove any previous unaccepted invitation for this email so we can send a fresh one
         UserInvitation.objects.filter(email__iexact=email, is_accepted=False).delete()
 
-        temp_password = secrets.token_urlsafe(10)
-        username = email.split('@')[0]
-        if User.objects.filter(username=username).exists():
-            username = f"{username}_{secrets.token_hex(2)}"
-
         invited_by_user = request.user if (request.user and request.user.is_authenticated) else User.objects.filter(id=1).first()
         if not invited_by_user:
             invited_by_user = User.objects.first()
 
-        from django.db import transaction
-        from apps.accounts.models import UserProfile
+        # Token flow, NOT account-creation-plus-emailed-password. The previous version created
+        # the User here and mailed a plaintext temporary password, which (a) put a credential in
+        # an unencrypted channel, and (b) never wrote a UserInvitation row -- so the invite was
+        # invisible to GET /invite, to Settings -> Pending invitations, and to the resend and
+        # revoke endpoints, all of which query that table. The account is now created by
+        # AuthInviteAcceptView once the invitee sets their own username and password.
         try:
-            with transaction.atomic():
-                user = User.objects.create_user(username=username, email=email, password=temp_password)
-                profile, _ = UserProfile.objects.get_or_create(user=user)
-                profile.role = role
-                profile.save(update_fields=["role"])
+            invitation = UserInvitation.objects.create(
+                email=email,
+                role=role,
+                invited_by=invited_by_user,
+                token=secrets.token_urlsafe(32),
+                expires_at=timezone.now() + datetime.timedelta(hours=48),
+                is_accepted=False,
+            )
         except Exception as e:
-            return Response({"detail": f"Failed to create user: {str(e)}"}, status=500)
+            return Response({"detail": f"Failed to create invitation: {str(e)}"}, status=500)
 
         frontend_url = getattr(settings, "FRONTEND_URL", "http://localhost:8000")
-        login_link = f"{frontend_url.rstrip('/')}/login/"
+        # Same link shape ProjectInviteResendView already sends, so both paths land on the
+        # accept-invite modal the SPA opens from the #/accept-invite route.
+        invite_link = f"{frontend_url.rstrip('/')}/#/accept-invite?token={invitation.token}"
 
         subject = f"Invitation to join Limitless Marketing Dashboard ({role})"
         message = (
             f"Hello,\n\n"
             f"You have been invited by {invited_by_user.username if invited_by_user else 'Owner'} to join "
             f"the Limitless Marketing Dashboard as an {role}.\n\n"
-            f"Your account has been created. Please log in using your email address and the temporary password below:\n\n"
-            f"Email: {email}\n"
-            f"Password: {temp_password}\n\n"
-            f"Login here: {login_link}\n\n"
-            f"Once logged in, you can change your password from the Settings page.\n\n"
+            f"Click the link below to choose your own username and password (valid for 48 hours):\n"
+            f"{invite_link}\n\n"
+            f"If you weren't expecting this invitation you can ignore this email.\n\n"
             f"Best regards,\nLimitless Team"
         )
         from_email = getattr(settings, "DEFAULT_FROM_EMAIL", "Limitless Dashboard <no-reply@fusehealth.com>")
@@ -674,7 +741,12 @@ class ProjectInviteView(APIView):
         except Exception as e:
             logger.warning(f"Could not deliver email via SMTP ({e}).")
 
-        return Response({"ok": True})
+        # `id` is what the caller needs to resend or revoke this invitation without a
+        # second round-trip; the SPA's pending-invitations list and the test suite both
+        # read it. The token is deliberately NOT returned -- it belongs only in the email.
+        return Response({"ok": True, "id": invitation.id, "email": invitation.email,
+                         "role": invitation.role,
+                         "expires_at": invitation.expires_at.isoformat()})
 
     def delete(self, request, slug, invite_id):
         if not check_owner_only(request.user):
@@ -860,7 +932,10 @@ class ProjectSyncView(APIView):
         site_id = resolve_project_or_404(slug).site_url
         scope = request.data.get("scope", "all")
         
-        if scope != "positions":
+        # These scopes run DataForSEO connectors only, so they must NOT be gated on Search
+        # Console / GA4 credentials -- requiring them would block a positions refresh for a
+        # project that legitimately has no GSC property connected.
+        if scope not in ("positions", "positions_new"):
             try:
                 from pipeline.connectors.gsc_property import resolve_gsc_property
                 resolve_gsc_property(site_id, site_id)
@@ -925,21 +1000,50 @@ class DomainOverviewView(APIView):
         
         target = request.data.get("target") or ""
         location = request.data.get("location") or "United States"
-        
+        slug = request.data.get("project") or ""
+
         if not target:
             return Response({"detail": "Target URL is required"}, status=400)
-            
+
+        # Resolve the project up front so the metered call can be attributed to it. Without a
+        # site_id the DataForSEO spend lands on an unattributed "" row and Settings' cost
+        # breakdown under-reports whichever project actually ran the lookup.
+        cost_site_id = ""
+        if slug:
+            try:
+                cost_site_id = resolve_project_or_404(slug).site_url
+            except Http404:
+                raise
+
         cache_key = f"domain_overview_{target}_{location}"
-        cached_data = cache.get(cache_key)
-        if cached_data:
-            return Response(cached_data)
-            
-        connector = DataForSEODomainOverviewConnector()
-        result = connector.get_domain_overview(target, location)
-        
-        if result.get("status") == "ok":
-            cache.set(cache_key, result, 60 * 60 * 24) # 24 hours caching
-            
+        result = cache.get(cache_key)
+        if result is None:
+            connector = DataForSEODomainOverviewConnector()
+            result = connector.get_domain_overview(target, location, site_id=cost_site_id)
+            if result.get("status") == "ok":
+                cache.set(cache_key, result, 60 * 60 * 24)  # 24 hours
+
+        # `tracked` is applied AFTER the cache read, never stored in it: the DataForSEO payload
+        # is identical for every project, but which of those keywords you already track is not.
+        # Baking it into the cached blob would show project A's tracking state to project B.
+        # Without a `project` the flag is simply absent -- the UI then shows Track on every row,
+        # which is harmless because save_keywords upserts.
+        if slug and result.get("status") == "ok" and result.get("keywords"):
+            try:
+                from pipeline.services.saved_keyword_service import list_saved_keywords
+                site_id = resolve_project_or_404(slug).site_url
+                tracked = {(k.get("keyword") or "").strip().lower()
+                           for k in list_saved_keywords(site_id)}
+                result = {**result, "keywords": [
+                    {**row, "tracked": (row.get("keyword") or "").strip().lower() in tracked}
+                    for row in result["keywords"]
+                ]}
+            except Http404:
+                raise
+            except Exception as e:
+                # A tracking-state lookup must never break the research result itself.
+                logger.warning(f"domain-overview tracked-flag lookup failed: {e}")
+
         return Response(result)
 
 
@@ -951,17 +1055,36 @@ class LiveSERPView(APIView):
         
         keyword = request.data.get("keyword") or ""
         location = request.data.get("location") or "United States"
-        
+
+        # Attribute this call's DataForSEO charge to the project that made it. Without this,
+        # every live SERP lookup wrote a connector_costs row with site_id="" -- real money that
+        # no project's Usage & Budget panel could ever show. (Verified in the 2026-07-27
+        # Postgres data: 3 of 5 recorded charges had an empty site_id.)
+        #
+        # `project` is OPTIONAL and resolved leniently on purpose: a live SERP lookup is a
+        # global query that does not need a project to be meaningful, so a missing or unknown
+        # slug must not 404 a working feature. It only costs the row its attribution.
+        site_id = ""
+        slug = request.data.get("project") or ""
+        if slug:
+            try:
+                site_id = resolve_project_or_404(slug).site_url
+            except Http404:
+                logger.warning("live-serp: unknown project %r; cost will be unattributed", slug)
+
         if not keyword:
             return Response({"detail": "Keyword is required"}, status=400)
-            
+
+        # Cache key deliberately excludes site_id: a SERP for a keyword+location is the same
+        # result whoever asked, so sharing it across projects avoids paying twice. Note this
+        # means a cache HIT records no cost at all, which is correct -- no API call was made.
         cache_key = f"live_serp_{keyword}_{location}"
         cached_data = cache.get(cache_key)
         if cached_data:
             return Response(cached_data)
-            
+
         connector = DataForSEOLiveSERPConnector()
-        result = connector.get_live_serp(keyword, location)
+        result = connector.get_live_serp(keyword, location, site_id=site_id)
         
         if result.get("status") == "ok":
             cache.set(cache_key, result, 60 * 60 * 24) # 24 hours caching
@@ -1006,6 +1129,60 @@ class AlertAckView(APIView):
         for site_id in sites:
             ack_alert(site_id, alert_id)
         return Response({"ok": True})
+
+
+@method_decorator(login_not_required, name="dispatch")
+class AlertBatchAckView(APIView):
+    """POST /api/alerts/ack {ids: [...], project?: <slug>} -> {ok, acknowledged: [...],
+    failed: [{id, detail}]}.
+
+    'Acknowledge all' used to mean one POST per unacknowledged row -- ~104 requests from a
+    single click on a real feed, each re-reading and rewriting the same alertAcks list. This
+    takes the whole list in one request and still reports a PER-ID outcome, so a partial
+    failure stays visible and retryable instead of collapsing into one boolean.
+
+    `project` scopes the ack to one site (the SPA always knows which project it is showing);
+    without it the ack is recorded for every active project, matching AlertAckView, because
+    feed ids embed no site. AlertAckView is unchanged and still serves single-row acks."""
+
+    MAX_IDS = 500  # keeps the mirror UPDATE's bound parameters well under SQLite's ~999 cap
+
+    def post(self, request):
+        from apps.dashboard.services.alerts_service import ack_alerts
+
+        ids = request.data.get("ids")
+        if not isinstance(ids, list) or not ids:
+            return Response({"detail": "ids must be a non-empty list of alert ids."}, status=400)
+        if len(ids) > self.MAX_IDS:
+            return Response(
+                {"detail": f"Too many alerts in one request (max {self.MAX_IDS})."}, status=400
+            )
+
+        slug = request.query_params.get("project") or request.data.get("project")
+        if slug:
+            sites = [resolve_project_or_404(slug).site_url]
+        else:
+            sites = [s.site_url for s in list_sites(active_only=True)]
+
+        if not sites:
+            return Response({"detail": "No active project to acknowledge against."}, status=400)
+
+        # With no `project` the same ids are acked against several sites. An id is only
+        # reported acknowledged if EVERY site it was written to accepted it -- reporting
+        # success while one site silently dropped it is exactly the invisible partial
+        # failure this endpoint exists to prevent.
+        failures: dict[str, dict] = {}
+        accepted: list[str] = []
+        for site_id in sites:
+            result = ack_alerts(site_id, ids)
+            for item in result["failed"]:
+                failures.setdefault(str(item["id"]), item)
+            for alert_id in result["acknowledged"]:
+                if alert_id not in accepted:
+                    accepted.append(alert_id)
+        acknowledged = [a for a in accepted if a not in failures]
+        failed = list(failures.values())
+        return Response({"ok": not failed, "acknowledged": acknowledged, "failed": failed})
 
 
 @method_decorator(login_not_required, name="dispatch")

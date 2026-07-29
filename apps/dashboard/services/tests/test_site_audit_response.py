@@ -156,12 +156,28 @@ class BuildSiteAuditResponseTests(TestCase):
         self._seed_real_site()
         response = build_site_audit_response(self.site_id)
 
-        self.assertEqual(response["domainChecks"], [])   # no SSL/robots/sitemap probe exists
-        self.assertEqual(response["snapshots"], [])      # no audit-history table exists
-        # PageSpeed stores INP, not TBT -- never substitute a different metric.
+        # The SSL/robots/sitemap probes now run in the sync path (refresh_domain_checks), not in
+        # this GET, and nothing has been synced here -- so there is no stored result to show.
+        self.assertEqual(response["domainChecks"], [])
+        self.assertEqual(response["snapshots"], [])      # no crawl has been recorded for this site
+
+        # TBT comes from the real PageSpeed.tbt_ms column now. This fixture seeds no value for
+        # it, so the honest answer is None. It must NEVER be estimated from a paint-timing
+        # spread, and INP must never be substituted -- that is a different metric.
         self.assertIsNone(response["cwv"]["tbt"]["p75"])
-        # nothing measures internal in-links
-        self.assertTrue(all(p["inLinks"] == 0 for p in response["crawledPages"]))
+
+        # In-links, internal links and word count come from DataForSEO OnPage's per-page `meta`
+        # (inbound_links_count / internal_links_count / plain_text_word_count), stored in
+        # PageCrawlMeta. This fixture seeds no crawl meta, so all three must be None.
+        #
+        # This assertion used to read `p["inLinks"] == 0`, back when nothing measured in-links
+        # and the payload hardcoded a zero. That zero WAS the fabrication this test exists to
+        # catch: it asserted "we measured zero in-links" when the truth was "we never looked".
+        # Zero and unknown are different facts, so the honest value is None.
+        for p in response["crawledPages"]:
+            self.assertIsNone(p["inLinks"], f"{p['url']} reported in-links with no crawl meta")
+            self.assertIsNone(p["internalLinks"])
+            self.assertIsNone(p["wordCount"])
 
     def test_empty_db_returns_zeros_and_none_p75_not_crash(self):
         """Empty-DB case (no IndexingStatus/PageSpeed rows at all): assert breakdown is all zeros

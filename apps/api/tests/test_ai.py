@@ -1,5 +1,7 @@
+import os
 import tempfile
 from pathlib import Path
+from unittest import mock
 
 from django.contrib.auth import get_user_model
 from django.test import override_settings
@@ -339,21 +341,272 @@ class AIListsActionTests(APITestCase):
         self.assertTrue(AIPromptList.objects.filter(id=other_list.id, name="Not yours").exists())
 
 
-class AIUnimplementedActionTests(APITestCase):
+class AIRunInspectValidationTests(APITestCase):
+    """run/inspect are implemented now (they call a live answer engine), so the old
+    "unimplemented -> 400" expectation for `run` no longer describes the contract: the SPA's
+    "Run all now" button really does post an empty body, and the honest answer to "run all"
+    with nothing to run is a 200 saying zero prompts ran -- not a 400. Nothing here may reach
+    the network: no OPENAI_API_KEY is set under test, so every platform is not_connected."""
+
     def setUp(self):
         self.client_auth = _bootstrap_ai_test_env(self)
 
-    def test_run_is_a_clean_400_not_a_crash(self):
+    def test_run_with_empty_body_and_no_prompts_runs_nothing(self):
         resp = self.client_auth.post("/api/projects/fusehealth/ai/run", {}, format="json")
-        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["ran"], 0)
+        self.assertEqual(resp.json()["checked"], 0)
+        self.assertEqual(resp.json()["cost"], 0.0)
 
-    def test_inspect_is_a_clean_400_not_a_crash(self):
+    def test_run_with_unknown_prompt_id_is_a_clean_404_not_a_false_success(self):
+        resp = self.client_auth.post(
+            "/api/projects/fusehealth/ai/run", {"promptId": 999999}, format="json"
+        )
+        self.assertEqual(resp.status_code, 404)
+
+    def test_run_cross_project_prompt_id_is_404(self):
+        other = AIPrompt.objects.create(site_url="https://other-project.com", text="not yours")
+        resp = self.client_auth.post(
+            "/api/projects/fusehealth/ai/run", {"promptId": other.id}, format="json"
+        )
+        self.assertEqual(resp.status_code, 404)
+
+    def test_inspect_without_a_question_is_a_clean_400(self):
         resp = self.client_auth.post("/api/projects/fusehealth/ai/inspect", {}, format="json")
         self.assertEqual(resp.status_code, 400)
 
     def test_totally_unknown_action_is_a_clean_400(self):
         resp = self.client_auth.post("/api/projects/fusehealth/ai/frobnicate", {}, format="json")
         self.assertEqual(resp.status_code, 400)
+
+
+ANSWER_CITED = """Top IV therapy clinics in Austin:
+
+1. FuseHealth — mobile drips, same-day booking.
+2. Acme Wellness — downtown walk-in clinic.
+
+All are licensed."""
+
+ANSWER_ABSENT = "Check your state's licensing directory for accredited providers."
+
+
+def _openai_response(text, prompt_tokens=120, completion_tokens=80):
+    """A stubbed OpenAI chat-completions response. The real API is NEVER called from a test:
+    a check is a real charge."""
+    resp = mock.Mock()
+    resp.raise_for_status.return_value = None
+    resp.json.return_value = {
+        "choices": [{"message": {"content": text}}],
+        "usage": {"prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens,
+                  "total_tokens": prompt_tokens + completion_tokens},
+    }
+    return resp
+
+
+EXPECTED_COST = round(120 / 1_000_000 * 0.15 + 80 / 1_000_000 * 0.60, 6)
+
+
+@mock.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=False)
+class AIRunPersistenceTests(APITestCase):
+    """"Run now" must persist a real observed result and it must come back on the next GET --
+    the whole point of the button. OpenAI is stubbed; nothing here reaches the network."""
+
+    def setUp(self):
+        self.client_auth = _bootstrap_ai_test_env(self)
+        AITarget.objects.create(site_url=SITE_URL, brand="FuseHealth",
+                                competitors=["Acme Wellness"], setup_done=True)
+        self.prompt = AIPrompt.objects.create(
+            site_url=SITE_URL, text="best iv therapy in austin", tracked_models=["chatgpt"],
+        )
+
+    @mock.patch("pipeline.services.ai_visibility_service.requests.post")
+    def test_run_persists_a_real_result_visible_on_the_next_get(self, post):
+        post.return_value = _openai_response(ANSWER_CITED)
+
+        resp = self.client_auth.post(
+            "/api/projects/fusehealth/ai/run", {"promptId": self.prompt.id}, format="json"
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["ran"], 1)
+        self.assertEqual(resp.json()["checked"], 1)
+        self.assertEqual(resp.json()["cost"], EXPECTED_COST)
+
+        body = self.client_auth.get("/api/projects/fusehealth/ai").json()
+        pr = body["prompts"][0]
+        self.assertEqual(pr["results"]["chatgpt"]["verdict"], "cited")
+        self.assertTrue(pr["results"]["chatgpt"]["cited"])
+        self.assertEqual(pr["results"]["chatgpt"]["position"], 1)
+        self.assertIsNotNone(pr["lastRun"])
+        # The competitor really named in the answer, at its real rank.
+        self.assertEqual(pr["results"]["chatgpt"]["competitors"][0]["name"], "Acme Wellness")
+
+        # The answer is archived for the Answer Inspector, in the shape it reads.
+        self.assertEqual(len(body["history"]), 1)
+        entry = body["history"][0]
+        self.assertEqual(entry["verdict"], "cited")
+        self.assertEqual(entry["question"], "best iv therapy in austin")
+        self.assertEqual(entry["scrape"]["model"], "gpt-4o-mini")
+        self.assertEqual(entry["scrape"]["citations"], [])
+        self.assertTrue(any(p["hit"] for p in entry["scrape"]["paragraphs"]))
+
+        # Real spend was recorded and is read back as real money, not an estimate.
+        self.assertEqual(body["budget"]["spent"], EXPECTED_COST)
+        self.assertEqual(body["costs"]["model"], EXPECTED_COST)
+        self.assertEqual(body["kpis"]["mentions"], 1)
+        self.assertEqual(body["kpis"]["prompt_coverage"], {"cited": 1, "total": 1})
+
+    @mock.patch("pipeline.services.ai_visibility_service.requests.post")
+    def test_absent_answer_is_recorded_as_absent_not_dropped(self, post):
+        post.return_value = _openai_response(ANSWER_ABSENT)
+        self.client_auth.post("/api/projects/fusehealth/ai/run",
+                              {"promptId": self.prompt.id}, format="json")
+        body = self.client_auth.get("/api/projects/fusehealth/ai").json()
+        cell = body["prompts"][0]["results"]["chatgpt"]
+        self.assertEqual(cell["verdict"], "absent")
+        self.assertFalse(cell["mentioned"])
+        self.assertEqual(body["kpis"]["mentions"], 0)
+        self.assertEqual(body["kpis"]["prompt_coverage"], {"cited": 0, "total": 1})
+
+    @mock.patch("pipeline.services.ai_visibility_service.requests.post")
+    def test_unconnected_engine_is_recorded_as_not_connected_never_simulated(self, post):
+        post.return_value = _openai_response(ANSWER_CITED)
+        self.prompt.tracked_models = ["chatgpt", "claude", "perplexity"]
+        self.prompt.save()
+
+        resp = self.client_auth.post("/api/projects/fusehealth/ai/run",
+                                     {"promptId": self.prompt.id}, format="json")
+        # Only the one connected engine was actually called.
+        self.assertEqual(post.call_count, 1)
+        self.assertEqual(resp.json()["checked"], 1)
+        self.assertEqual(resp.json()["notConnected"], ["claude", "perplexity"])
+
+        results = self.client_auth.get("/api/projects/fusehealth/ai").json()["prompts"][0]["results"]
+        for pid in ("claude", "perplexity"):
+            self.assertEqual(results[pid]["state"], "not_connected")
+            self.assertIsNone(results[pid]["verdict"])
+            self.assertFalse(results[pid]["mentioned"])
+            self.assertEqual(results[pid]["cost"], 0.0)
+
+    @mock.patch("pipeline.services.ai_visibility_service.requests.post")
+    def test_run_without_a_brand_spends_nothing(self, post):
+        AITarget.objects.filter(site_url=SITE_URL).update(brand="")
+        resp = self.client_auth.post("/api/projects/fusehealth/ai/run",
+                                     {"promptId": self.prompt.id}, format="json")
+        post.assert_not_called()
+        self.assertEqual(resp.json()["checked"], 0)
+        self.assertEqual(resp.json()["cost"], 0.0)
+        self.assertIn("brand", resp.json()["detail"].lower())
+
+    @mock.patch("pipeline.services.ai_visibility_service.requests.post")
+    def test_run_all_covers_every_prompt_in_the_project_only(self, post):
+        post.return_value = _openai_response(ANSWER_CITED)
+        AIPrompt.objects.create(site_url=SITE_URL, text="second prompt",
+                                tracked_models=["chatgpt"])
+        AIPrompt.objects.create(site_url="https://other-project.com", text="not ours",
+                                tracked_models=["chatgpt"])
+
+        resp = self.client_auth.post("/api/projects/fusehealth/ai/run", {}, format="json")
+        self.assertEqual(resp.json()["ran"], 2)
+        self.assertEqual(post.call_count, 2)
+
+    @mock.patch("pipeline.services.ai_visibility_service.requests.post")
+    def test_run_by_list_scopes_to_that_list(self, post):
+        post.return_value = _openai_response(ANSWER_CITED)
+        plist = AIPromptList.objects.create(site_url=SITE_URL, name="Branded")
+        AIPrompt.objects.create(site_url=SITE_URL, list=plist, text="in the list",
+                                tracked_models=["chatgpt"])
+
+        resp = self.client_auth.post("/api/projects/fusehealth/ai/run",
+                                     {"listId": plist.id}, format="json")
+        self.assertEqual(resp.json()["ran"], 1)
+        self.assertEqual(post.call_count, 1)
+
+
+class AIRunWithoutApiKeyTests(APITestCase):
+    """Without OPENAI_API_KEY the whole feature degrades honestly -- exactly as
+    ai_summary_service skips -- rather than simulating an answer."""
+
+    def setUp(self):
+        self.client_auth = _bootstrap_ai_test_env(self)
+        AITarget.objects.create(site_url=SITE_URL, brand="FuseHealth", setup_done=True)
+        self.prompt = AIPrompt.objects.create(site_url=SITE_URL, text="best iv therapy",
+                                              tracked_models=["chatgpt"])
+
+    @mock.patch.dict(os.environ, {"OPENAI_API_KEY": ""}, clear=False)
+    @mock.patch("pipeline.services.ai_visibility_service.requests.post")
+    def test_run_makes_no_call_and_reports_why(self, post):
+        resp = self.client_auth.post("/api/projects/fusehealth/ai/run",
+                                     {"promptId": self.prompt.id}, format="json")
+        post.assert_not_called()
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["checked"], 0)
+        self.assertEqual(resp.json()["cost"], 0.0)
+        self.assertIn("OPENAI_API_KEY", resp.json()["detail"])
+
+        body = self.client_auth.get("/api/projects/fusehealth/ai").json()
+        self.assertEqual(body["history"], [])
+        self.assertEqual(body["budget"]["spent"], 0)
+        self.assertIsNone(body["costs"]["model"])
+        self.assertEqual(body["prompts"][0]["results"]["chatgpt"]["state"], "not_connected")
+        self.assertIsNone(body["prompts"][0]["lastRun"])
+
+    @mock.patch.dict(os.environ, {"OPENAI_API_KEY": ""}, clear=False)
+    @mock.patch("pipeline.services.ai_visibility_service.requests.post")
+    def test_inspect_is_503_not_a_fabricated_answer(self, post):
+        resp = self.client_auth.post("/api/projects/fusehealth/ai/inspect",
+                                     {"question": "best iv therapy"}, format="json")
+        post.assert_not_called()
+        self.assertEqual(resp.status_code, 503)
+        self.assertIn("OPENAI_API_KEY", resp.json()["detail"])
+
+
+@mock.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=False)
+class AIInspectPersistenceTests(APITestCase):
+    def setUp(self):
+        self.client_auth = _bootstrap_ai_test_env(self)
+        AITarget.objects.create(site_url=SITE_URL, brand="FuseHealth",
+                                competitors=["Acme Wellness"], setup_done=True)
+
+    @mock.patch("pipeline.services.ai_visibility_service.requests.post")
+    def test_inspect_returns_the_entry_and_stores_it_in_history(self, post):
+        post.return_value = _openai_response(ANSWER_CITED)
+        resp = self.client_auth.post(
+            "/api/projects/fusehealth/ai/inspect",
+            {"question": "best iv therapy in austin", "promptId": None}, format="json",
+        )
+        self.assertEqual(resp.status_code, 200)
+        entry = resp.json()
+        self.assertEqual(entry["verdict"], "cited")
+        self.assertEqual(entry["position"], 1)
+        self.assertEqual(entry["cost"], EXPECTED_COST)
+        self.assertEqual(entry["scrape"]["citations"], [])
+
+        body = self.client_auth.get("/api/projects/fusehealth/ai").json()
+        self.assertEqual(len(body["history"]), 1)
+        self.assertEqual(body["history"][0]["question"], "best iv therapy in austin")
+        self.assertEqual(body["costs"]["inspect"], EXPECTED_COST)
+        self.assertEqual(body["budget"]["spent"], EXPECTED_COST)
+
+    @mock.patch("pipeline.services.ai_visibility_service.requests.post")
+    def test_inspecting_a_tracked_prompt_also_updates_its_row(self, post):
+        post.return_value = _openai_response(ANSWER_CITED)
+        prompt = AIPrompt.objects.create(site_url=SITE_URL, text="best iv therapy in austin",
+                                         tracked_models=["chatgpt"])
+        self.client_auth.post(
+            "/api/projects/fusehealth/ai/inspect",
+            {"question": prompt.text, "promptId": prompt.id}, format="json",
+        )
+        pr = self.client_auth.get("/api/projects/fusehealth/ai").json()["prompts"][0]
+        self.assertEqual(pr["results"]["chatgpt"]["verdict"], "cited")
+        self.assertIsNotNone(pr["lastRun"])
+
+    @mock.patch("pipeline.services.ai_visibility_service.requests.post")
+    def test_provider_failure_is_a_400_not_a_fabricated_entry(self, post):
+        post.side_effect = RuntimeError("connection reset")
+        resp = self.client_auth.post("/api/projects/fusehealth/ai/inspect",
+                                     {"question": "best iv therapy"}, format="json")
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(self.client_auth.get("/api/projects/fusehealth/ai").json()["history"], [])
 
 
 class AIMutationAuthAndSlugTests(APITestCase):

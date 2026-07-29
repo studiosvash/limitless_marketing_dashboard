@@ -15,9 +15,34 @@
         vals.off = { setup: true };
         return vals;
       }
-      off.cadence = data.syncMeta.cadence;
-      off.tokens = (data.syncMeta.ga4_tokens_used + ' / ' + this.fmt(data.syncMeta.ga4_tokens_limit) + ' GA4 tokens');
-      off.tokensEmpty = false;
+      /* This banner used to read syncMeta.cadence, .ga4_tokens_used and .ga4_tokens_limit.
+         build_offsite_response has never returned any of the three, so it rendered the literal
+         "undefined · undefined / 0 GA4 tokens" on every load. GA4 API token quota is not
+         tracked anywhere in this codebase, so there is no real number to print -- the token
+         half is gone rather than replaced with an invented counter, and `tokensEmpty` stays
+         true so its <sc-if> never opens.
+
+         `lastUpdated` is now a real ISO timestamp of the last SUCCESSFUL ga4 sync (it used to
+         be the engagement-rate percentage, under a key the UI renders as a date). Null means
+         GA4 has genuinely never synced, and the banner says exactly that. */
+      const ga4At = data.syncMeta.lastUpdated;
+      const ga4Bad = data.syncMeta.lastStatus === 'error';
+      off.cadence = ga4At
+        ? ('GA4 data as of ' + ga4At.slice(0, 10) + ' ' + ga4At.slice(11, 16)
+           + (ga4Bad ? ' — the last refresh failed, so this may be older than it looks' : ''))
+        : 'GA4 has never synced for this project';
+      off.tokens = '';
+      off.tokensEmpty = true;
+      /* The dot was hardcoded green, so "never synced" would have sat beside a healthy
+         indicator. Grey it when there is nothing to be healthy about. */
+      off.dotStyle = { width: '6px', height: '6px', borderRadius: '9999px', background: !ga4At ? '#cbd5e1' : ga4Bad ? '#dc2626' : '#10b981' };
+      /* Off-site is genuinely mixed. Sessions/engagement/revenue are GA4; the referring-
+         domain list is DataForSEO Backlinks. They sync on different schedules, so they get
+         separate badges rather than one that would be wrong for half the page. */
+      off.srcGa4 = this.srcBadge(['ga4']);
+      off.srcRefDomains = this.srcBadge(['dataforseo_backlinks']);
+      off.srcSocial = this.srcBadge(['ga4'],
+        'Sessions are GA4. On-platform impressions need each platform own API and no platform connector is wired.');
       off.rangeLabel = s.range === '7d' ? 'last 7 days' : s.range === '90d' ? 'last 90 days' : 'last 30 days';
       off.kpis = [
         kpiCard('Off-site sessions', this.fmt(t.sessions), chip(pctD(t.sessions, pv.sessions)), 'vs. previous period'),
@@ -59,11 +84,16 @@
       off.offKeyEvents = this.fmt(Math.round(offCh.reduce((a, c) => a + c.keyEvents, 0)));
 
       /* LinkedIn spotlight */
-      const li = data.social.find(x => x.platform === 'LinkedIn') || { impressions: 0, sessions: 0, keyEvents: 0, revenue: 0 };
+      const li = data.social.find(x => x.platform === 'LinkedIn') || { impressions: null, sessions: 0, keyEvents: 0, revenue: 0 };
       const liConnected = !!(data.connectors && data.connectors.linkedin);
+      // impressions === null means "no platform connector has ever reported this".
+      // That is independent of the Settings toggle, so the dash and the caption key
+      // off the value itself — a connected toggle must never turn a missing number
+      // into a printed 0.
+      const liImpr = li.impressions == null ? null : li.impressions;
       off.li = {
-        impressions: liConnected ? this.fmt(li.impressions || 0) : '—', sessions: this.fmt(li.sessions),
-        ctr: liConnected && li.impressions ? +(li.sessions / li.impressions * 100).toFixed(1) + '%' : '—',
+        impressions: liImpr == null ? '—' : this.fmt(liImpr), sessions: this.fmt(li.sessions),
+        ctr: liImpr ? +(li.sessions / liImpr * 100).toFixed(1) + '%' : '—',
         keyEvents: this.fmt(Math.round(li.keyEvents)), revenue: this.money(li.revenue),
         connected: liConnected,
         badgeLabel: liConnected ? 'Connected' : 'Not connected',
@@ -71,7 +101,7 @@
           ? { marginLeft: 'auto', fontSize: '10px', fontWeight: 600, color: '#059669', background: '#ecfdf5', padding: '3px 8px', borderRadius: '9999px' }
           : { marginLeft: 'auto', fontSize: '10px', fontWeight: 600, color: '#4f46e5', background: '#eef2ff', padding: '3px 8px', borderRadius: '9999px', cursor: 'pointer', textDecoration: 'underline' },
         subtitle: liConnected ? 'Connector live · impressions + click-throughs' : 'Connector not set up yet (click badge to connect in Settings)',
-        imprCaption: liConnected ? 'from LinkedIn API' : 'connector needed'
+        imprCaption: liImpr == null ? 'connector needed' : 'from LinkedIn API'
       };
 
       /* social table */
@@ -79,7 +109,9 @@
       off.social = data.social.map(r => ({
         platform: r.platform, source: r.source, channel: r.channel,
         connected: r.connected, notConnected: !r.connected,
-        imprFmt: r.connected && r.impressions != null ? this.fmt(r.impressions) : '—',
+        // Keyed off the value, not the toggle: a missing impression count stays a
+        // dash even when the platform is marked connected in Settings.
+        imprFmt: r.impressions != null ? this.fmt(r.impressions) : '—',
         sessFmt: this.fmt(r.sessions), engFmt: Math.round(r.engagedRate * 100) + '%',
         keyFmt: this.fmt(Math.round(r.keyEvents)), revFmt: this.money(r.revenue),
         badge: r.platform.slice(0, 1),
@@ -90,18 +122,41 @@
       const refRows = this.sortRows(data.referrers.slice(), s.offSort);
       off.sort = { sessions: this.mkSortHandler('offSort', 'sessions'), keyEvents: this.mkSortHandler('offSort', 'keyEvents'), revenue: this.mkSortHandler('offSort', 'revenue') };
       off.arrow = { sessions: this.arrow(s.offSort, 'sessions'), keyEvents: this.arrow(s.offSort, 'keyEvents'), revenue: this.arrow(s.offSort, 'revenue') };
+      /* No onTrack / canTrack / tracked. The "Track" control here fired
+         notify('… added to backlink tracking on next sync') and wrote nothing; its
+         companion "Tracked link" badge read `r.tracked`, which this service has never
+         returned, so the badge could not light up even in the same render. Removed
+         (control + badge + handler) on 2026-07-27 rather than rebuilt, because there is
+         no honest thing for it to do:
+
+           - It cannot mean "start collecting this domain". dataforseo_backlinks fetches
+             the target's whole profile in one call (limit 1000, ordered by rank) and takes
+             no per-domain input, so every row in this table is already synced every run.
+             That is the opposite of SavedKeyword, where Track is real precisely because an
+             untracked keyword is genuinely never sent to the paid per-keyword endpoints.
+           - It cannot mean "add to tracked_competitors". That table drives the Positioning
+             competitor grid (SERP rank share); a site that links to us is not a site we
+             compete with, and filing it there would corrupt that page.
+           - A ProjectSettings pin was the only remaining option, and a pin that merely
+             reorders a 20-row table that is already sortable on sessions, key events and
+             revenue is a bookmark wearing the word "Track" — a third, weaker meaning of
+             "tracked" next to the two the product already defines. Quieter, still a lie.
+
+         If a real need appears later it is a watchlist feeding a lost-link alert, which is
+         an alerts_service feature, not a button on this table. */
       off.referrers = refRows.map(r => ({
-        domain: r.domain, rank: r.rank, tracked: r.tracked, canTrack: !r.tracked,
-        rankStyle: { fontWeight: 600, color: r.rank >= 70 ? '#059669' : r.rank >= 40 ? '#2563eb' : '#64748b' },
-        sessFmt: this.fmt(r.sessions), engFmt: Math.round(r.engagedRate * 100) + '%',
+        domain: r.domain, rank: r.authorityScore,
+        rankStyle: { fontWeight: 600, color: r.authorityScore >= 70 ? '#059669' : r.authorityScore >= 40 ? '#2563eb' : '#64748b' },
+        sessFmt: this.fmt(r.sessions), engFmt: (r.engagementRate || 0) + '%',
         keyFmt: this.fmt(Math.round(r.keyEvents)), revFmt: this.money(r.revenue),
-        href: 'https://' + r.domain,
-        onTrack: () => this.notify('"' + r.domain + '" flagged — added to backlink tracking on next sync')
+        href: 'https://' + r.domain
       }));
 
       /* landing pages */
       off.landing = data.landingPages.map(r => ({
-        url: r.url, topSource: r.topSource,
+        // topSource is '' when the driving channel was never measured — show a dash,
+        // not a guessed channel name.
+        url: r.url, topSource: r.topSource || '—',
         sessFmt: this.fmt(r.sessions), engFmt: Math.round(r.engagedRate * 100) + '%',
         keyFmt: this.fmt(Math.round(r.keyEvents))
       }));

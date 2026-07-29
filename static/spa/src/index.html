@@ -25,6 +25,91 @@
     @media (prefers-reduced-motion: reduce) {
       *, *::before, *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; }
     }
+
+    /* ==================================================================
+       MOBILE  (task 5.11)
+
+       DESKTOP SAFETY. Everything below lives inside `@media (max-width: 900px)`.
+       A max-width query cannot match a viewport wider than 900px, so no rule here
+       can alter desktop rendering — that is a guarantee of the cascade, not a
+       promise to be careful. Nothing outside this block was touched.
+
+       WHY ATTRIBUTE SELECTORS AND !important. This SPA computes every style in JS
+       and emits it as an inline `style="…"`. Inline styles beat stylesheet rules,
+       so a normal selector would silently lose. Matching on the inline text
+       (`[style*="repeat("]`) and forcing with !important is the only way to reach
+       them without rewriting every view model — and it is confined to phones.
+
+       WHAT IS DELIBERATELY NOT FLATTENED. Grids whose columns are pixel widths
+       (`1.6fr 80px 100px …`) are data ROWS, not card layouts. Collapsing them to
+       one column would stack every cell vertically and destroy the row. Those keep
+       their columns and get a horizontal scroll instead — sideways scrolling on a
+       table is normal; a shredded table is not.
+       ================================================================== */
+    @media (max-width: 900px) {
+      /* Root shell: side-by-side → stacked, and let the page scroll.
+         The desktop shell is `height:100vh; display:flex` with its own inner
+         scrollers, which traps content once the sidebar is stacked above it.
+         The runtime replaces <x-dc> with `<div id="dc-root">` (support.js:164-166),
+         so the app shell is `#dc-root > div` — NOT `body > div`, which is the
+         wrapper itself and carries none of these styles. The [style*=…] selector is
+         a belt-and-braces fallback in case that mount id ever changes. */
+      #dc-root > div,
+      body > div[style*="height: 100vh"] { height: auto !important; min-height: 100vh; display: block !important; }
+
+      /* Sidebar: fixed 240px rail → full-width block at the top.
+         The nav stays VERTICAL. It contains expandable groups (SEO, Ads) whose
+         children render underneath their parent, so forcing it horizontal would
+         tear those groups apart. Instead it keeps its structure and is capped at
+         40vh with its own scroll, so a 14-item tree cannot push the actual page
+         content off the bottom of the screen. No hamburger, so no new JS state
+         that could fall out of sync with the router. */
+      aside { width: 100% !important; flex-shrink: 1 !important; border-right: none !important; border-bottom: 1px solid #e2e8f0; }
+      aside nav { max-height: 40vh !important; overflow-y: auto !important; -webkit-overflow-scrolling: touch; }
+
+      /* Card grids → one column. Only fraction-based layouts: these are card decks
+         (KPI strips, module tiles, two-up panels), which read fine stacked. */
+      [style*="grid-template-columns: repeat("],
+      [style*="grid-template-columns: 1fr 1fr"],
+      [style*="grid-template-columns: 2fr 1fr"],
+      [style*="grid-template-columns: 1fr 2fr"],
+      [style*="grid-template-columns: 3fr 1fr"],
+      [style*="grid-template-columns: 1.6fr 1fr"] { grid-template-columns: 1fr !important; }
+
+      /* Tables: keep every column, scroll the table sideways inside its card. */
+      table { display: block !important; width: 100% !important; overflow-x: auto !important; -webkit-overflow-scrolling: touch; }
+      table thead, table tbody, table tr { display: table !important; width: 100% !important; table-layout: fixed; }
+
+      /* Pixel-column data grids (the sc-for "tables"): same treatment — the row
+         keeps its shape, the container scrolls. */
+      [style*="grid-template-columns"][style*="px"] { overflow-x: auto !important; -webkit-overflow-scrolling: touch; }
+
+      /* Topbar: allow wrapping instead of squeezing controls off-screen. */
+      header, [data-topbar] { height: auto !important; flex-wrap: wrap !important; row-gap: 8px; padding-top: 10px !important; padding-bottom: 10px !important; }
+
+      /* Charts and SVGs must not force horizontal page scroll. */
+      svg { max-width: 100% !important; height: auto; }
+
+      /* Modals/drawers: full-width with a little breathing room. */
+      [style*="max-width: 420px"], [style*="max-width: 480px"], [style*="max-width: 520px"],
+      [style*="max-width: 560px"], [style*="max-width: 620px"], [style*="max-width: 640px"] { max-width: 100% !important; }
+
+      /* Generous side padding on desktop cards wastes scarce phone width. */
+      [style*="padding: 20px 24px"], [style*="padding: 24px"] { padding: 16px !important; }
+
+      /* iOS zooms the page when a focused input is under 16px. Raising the floor
+         to 16px stops that jump without changing how anything looks on desktop. */
+      input, select, textarea { font-size: 16px !important; }
+
+      /* The page body must never scroll sideways — wide content scrolls in its own
+         container (rules above), not the whole document. */
+      html, body { overflow-x: hidden !important; }
+    }
+
+    /* Narrow phones: two-up KPI strips would be ~140px per tile. */
+    @media (max-width: 560px) {
+      [style*="minmax(220px"] { grid-template-columns: 1fr !important; }
+    }
   </style>
   <script src="/static/spa/app/fixtures.js"></script>
   <script src="/static/spa/app/api.js"></script>
@@ -127,7 +212,7 @@
           </span>
           <span>Off-site = sessions attributed to <b style="color:#475569;">Referral</b> + <b style="color:#475569;">Organic Social/Video</b> — the click-throughs your links, PR &amp; social earn.</span>
           <span style="margin-left: auto; display: inline-flex; align-items: center; gap: 6px;">
-            <span style="width:6px;height:6px;border-radius:9999px;background:#10b981;"></span> {{ off.cadence }}<sc-if value="{{ !off.tokensEmpty }}" hint-placeholder-val="{{ true }}"> · {{ off.tokens }}</sc-if>
+            <span style="{{ off.dotStyle }}"></span> {{ off.cadence }}<sc-if value="{{ !off.tokensEmpty }}" hint-placeholder-val="{{ true }}"> · {{ off.tokens }}</sc-if>
           </span>
         </div>
 
@@ -149,7 +234,7 @@
         <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); padding: 18px 20px;">
           <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;">
             <div>
-              <h2 style="font-size: 15px; font-weight: 600; margin: 0;">Off-site organic sessions</h2>
+              <h2 style="font-size: 15px; font-weight: 600; margin: 0;">Off-site organic sessions</h2><sc-if value="{{ off.srcGa4.show }}" hint-placeholder-val="{{ true }}"><div style="margin-top: 6px;"><span style="{{ off.srcGa4.style }}" title="{{ off.srcGa4.title }}" aria-label="{{ off.srcGa4.aria }}">{{ off.srcGa4.text }}</span></div></sc-if>
               <p style="font-size: 12px; color: #94a3b8; margin: 3px 0 0;">Referral + organic social/video · {{ off.rangeLabel }}</p>
             </div>
             <div style="display: flex; align-items: center; gap: 16px; font-size: 12px; color: #64748b;">
@@ -169,7 +254,7 @@
         <!-- channel mix + LinkedIn spotlight -->
         <div style="display: grid; grid-template-columns: 1.15fr 0.85fr; gap: 16px;">
           <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); padding: 18px 20px;">
-            <h2 style="font-size: 15px; font-weight: 600; margin: 0 0 2px;">Channel mix</h2>
+            <h2 style="font-size: 15px; font-weight: 600; margin: 0 0 2px;">Channel mix</h2><sc-if value="{{ off.srcGa4.show }}" hint-placeholder-val="{{ true }}"><div style="margin-top: 6px;"><span style="{{ off.srcGa4.style }}" title="{{ off.srcGa4.title }}" aria-label="{{ off.srcGa4.aria }}">{{ off.srcGa4.text }}</span></div></sc-if>
             <p style="font-size: 12px; color: #94a3b8; margin: 0 0 16px;">All sessions by GA4 default channel group — off-site channels highlighted</p>
             <div style="display: flex; flex-direction: column; gap: 12px;">
               <sc-for list="{{ off.channels }}" as="c" hint-placeholder-count="6">
@@ -211,7 +296,7 @@
         <!-- social platform breakdown -->
         <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
           <div style="padding: 16px 20px; border-bottom: 1px solid #f1f5f9; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;">
-            <div><h2 style="font-size: 15px; font-weight: 600; margin: 0;">Social &amp; video platforms</h2><p style="font-size: 12px; color: #94a3b8; margin: 3px 0 0;">Organic social/video sessions by source · impressions need each platform's connector</p></div>
+            <div><h2 style="font-size: 15px; font-weight: 600; margin: 0;">Social &amp; video platforms</h2><p style="font-size: 12px; color: #94a3b8; margin: 3px 0 0;">Organic social/video sessions by source · impressions need each platform's connector</p><sc-if value="{{ off.srcSocial.show }}" hint-placeholder-val="{{ true }}"><div style="margin-top: 6px;"><span style="{{ off.srcSocial.style }}" title="{{ off.srcSocial.title }}" aria-label="{{ off.srcSocial.aria }}">{{ off.srcSocial.text }}</span></div></sc-if></div>
             <span onClick="{{ h.exportSocial }}" style="font-size: 12px; color: #4f46e5; font-weight: 500; cursor: pointer;" style-hover="opacity:0.7">Export CSV</span>
           </div>
           <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
@@ -249,7 +334,7 @@
         <!-- top referring domains -->
         <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
           <div style="padding: 16px 20px; border-bottom: 1px solid #f1f5f9; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;">
-            <div><h2 style="font-size: 15px; font-weight: 600; margin: 0;">Top referring domains</h2><p style="font-size: 12px; color: #94a3b8; margin: 3px 0 0;">Sites sending you referral traffic — your off-site links paying off</p></div>
+            <div><h2 style="font-size: 15px; font-weight: 600; margin: 0;">Top referring domains</h2><p style="font-size: 12px; color: #94a3b8; margin: 3px 0 0;">Sites sending you referral traffic — your off-site links paying off</p><sc-if value="{{ off.srcRefDomains.show }}" hint-placeholder-val="{{ true }}"><div style="margin-top: 6px;"><span style="{{ off.srcRefDomains.style }}" title="{{ off.srcRefDomains.title }}" aria-label="{{ off.srcRefDomains.aria }}">{{ off.srcRefDomains.text }}</span></div></sc-if></div>
             <span onClick="{{ h.exportReferrers }}" style="font-size: 12px; color: #4f46e5; font-weight: 500; cursor: pointer;" style-hover="opacity:0.7">Export CSV</span>
           </div>
           <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
@@ -268,7 +353,6 @@
                   <td style="padding: 12px 20px;">
                     <div style="display: flex; align-items: center; gap: 8px;">
                       <span style="font-weight: 500; color: #334155;">{{ r.domain }}</span>
-                      <sc-if value="{{ r.tracked }}" hint-placeholder-val="{{ false }}"><span style="font-size: 10px; font-weight: 600; color: #4338ca; background: #eef2ff; padding: 1px 6px; border-radius: 4px;">Tracked link</span></sc-if>
                     </div>
                   </td>
                   <td style="padding: 12px 10px; text-align: right;"><span style="{{ r.rankStyle }}">{{ r.rank }}</span></td>
@@ -277,7 +361,6 @@
                   <td style="padding: 12px 10px; text-align: right; color: #475569;">{{ r.keyFmt }}</td>
                   <td style="padding: 12px 10px; text-align: right; color: #475569;">{{ r.revFmt }}</td>
                   <td style="padding: 12px 20px; text-align: right; white-space: nowrap;">
-                    <sc-if value="{{ r.canTrack }}" hint-placeholder-val="{{ true }}"><span onClick="{{ r.onTrack }}" style="font-size: 12px; color: #4f46e5; font-weight: 500; cursor: pointer; margin-right: 12px;" style-hover="opacity:0.7">Track</span></sc-if>
                     <a href="{{ r.href }}" target="_blank" rel="noopener" style="display: inline-flex; color: #94a3b8;" style-hover="color:#4f46e5"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6M15 3h6v6M10 14L21 3"/></svg></a>
                   </td>
                 </tr>
@@ -288,7 +371,7 @@
 
         <!-- landing pages -->
         <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
-          <div style="padding: 16px 20px; border-bottom: 1px solid #f1f5f9;"><h2 style="font-size: 15px; font-weight: 600; margin: 0;">Where off-site traffic lands</h2><p style="font-size: 12px; color: #94a3b8; margin: 3px 0 0;">Pages that referral &amp; social visitors enter on</p></div>
+          <div style="padding: 16px 20px; border-bottom: 1px solid #f1f5f9;"><h2 style="font-size: 15px; font-weight: 600; margin: 0;">Where off-site traffic lands</h2><sc-if value="{{ off.srcGa4.show }}" hint-placeholder-val="{{ true }}"><div style="margin-top: 6px;"><span style="{{ off.srcGa4.style }}" title="{{ off.srcGa4.title }}" aria-label="{{ off.srcGa4.aria }}">{{ off.srcGa4.text }}</span></div></sc-if><p style="font-size: 12px; color: #94a3b8; margin: 3px 0 0;">Pages that referral &amp; social visitors enter on</p></div>
           <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
             <thead><tr style="text-align: left; color: #94a3b8; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; background: #f8fafc; border-bottom: 1px solid #f1f5f9;">
               <th style="font-weight: 500; padding: 10px 20px;">Landing page</th>
@@ -452,7 +535,7 @@
         <sc-if value="{{ trm.setup }}" hint-placeholder-val="{{ false }}">
         <div style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 56px 32px; text-align: center; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
           <div style="font-size: 15px; font-weight: 600; color: #0f172a; margin-bottom: 6px;">No Search Terms Synced Yet</div>
-          <div style="font-size: 13px; color: #64748b; max-width: 420px; margin: 0 auto 20px;">We haven't synced Google Ads search terms for this domain into the database yet. Click below to fetch current search terms right now.</div>
+          <div style="font-size: 13px; color: #64748b; max-width: 420px; margin: 0 auto 20px;">We haven't synced Google Ads search terms for this domain into the database yet. Click below to fetch current search terms right now.</div><sc-if value="{{ trm.src.show }}" hint-placeholder-val="{{ true }}"><div style="margin-top: 0;"><span style="{{ trm.src.style }}" title="{{ trm.src.title }}" aria-label="{{ trm.src.aria }}">{{ trm.src.text }}</span></div></sc-if><div style="height:14px;"></div>
           <div onClick="{{ h.refreshPage }}" style="display: inline-flex; align-items: center; gap: 8px; border-radius: 8px; background: #10b981; color: white; font-size: 14px; font-weight: 600; padding: 10px 20px; cursor: pointer; box-shadow: 0 1px 2px rgba(0,0,0,0.05);" style-hover="background:#059669">⚡ Fetch Search Terms Now</div>
         </div>
         </sc-if>
@@ -601,14 +684,14 @@
         <sc-if value="{{ att.setup }}" hint-placeholder-val="{{ false }}">
         <div style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 56px 32px; text-align: center; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
           <div style="font-size: 15px; font-weight: 600; color: #0f172a; margin-bottom: 6px;">No Attribution Data Synced Yet</div>
-          <div style="font-size: 13px; color: #64748b; max-width: 420px; margin: 0 auto 20px;">We haven't synced cross-channel attribution metrics for this domain into the database yet. Click below to fetch current attribution right now.</div>
+          <div style="font-size: 13px; color: #64748b; max-width: 420px; margin: 0 auto 20px;">We haven't synced cross-channel attribution metrics for this domain into the database yet. Click below to fetch current attribution right now.</div><sc-if value="{{ att.src.show }}" hint-placeholder-val="{{ true }}"><div style="margin-top: 0;"><span style="{{ att.src.style }}" title="{{ att.src.title }}" aria-label="{{ att.src.aria }}">{{ att.src.text }}</span></div></sc-if><div style="height:14px;"></div>
           <div onClick="{{ h.refreshPage }}" style="display: inline-flex; align-items: center; gap: 8px; border-radius: 8px; background: #10b981; color: white; font-size: 14px; font-weight: 600; padding: 10px 20px; cursor: pointer; box-shadow: 0 1px 2px rgba(0,0,0,0.05);" style-hover="background:#059669">⚡ Fetch Attribution Now</div>
         </div>
         </sc-if>
         <sc-if value="{{ !att.setup }}" hint-placeholder-val="{{ true }}">
         <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
           <div style="padding: 16px 20px; border-bottom: 1px solid #f1f5f9; display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;">
-            <div><h2 style="font-size: 15px; font-weight: 600; margin: 0;">Google Ads vs. GA4</h2><p style="font-size: 12px; color: #94a3b8; margin: 4px 0 0; max-width: 620px;">The two columns will never match: Google Ads credits its own last click (and view-through), GA4 uses data-driven attribution across all channels. Gaps beyond ±25% are flagged — they usually mean tracking issues, not performance changes.</p></div>
+            <div><sc-if value="{{ att.src.show }}" hint-placeholder-val="{{ true }}"><div style="margin-top: 0;"><span style="{{ att.src.style }}" title="{{ att.src.title }}" aria-label="{{ att.src.aria }}">{{ att.src.text }}</span></div></sc-if><h2 style="font-size: 15px; font-weight: 600; margin: 6px 0 0;">Google Ads vs. GA4</h2><p style="font-size: 12px; color: #94a3b8; margin: 4px 0 0; max-width: 620px;">The two columns will never match: Google Ads credits its own last click (and view-through), GA4 uses data-driven attribution across all channels. Gaps beyond ±25% are flagged — they usually mean tracking issues, not performance changes.</p></div>
             <div style="display: flex; gap: 20px; font-size: 12px;">
               <span style="display: inline-flex; align-items: center; gap: 6px; color: #64748b;"><span style="width: 10px; height: 6px; border-radius: 3px; background: #4f46e5;"></span>Google Ads: <b style="color: #0f172a; font-weight: 700;">{{ att.totals.ads }}</b></span>
               <span style="display: inline-flex; align-items: center; gap: 6px; color: #64748b;"><span style="width: 10px; height: 6px; border-radius: 3px; background: #10b981;"></span>GA4: <b style="color: #0f172a; font-weight: 700;">{{ att.totals.ga4 }}</b></span>

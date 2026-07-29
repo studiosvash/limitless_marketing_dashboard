@@ -36,6 +36,53 @@
           </sc-if>
         </div>
 
+        <div data-nc-root="" style="position: relative;">
+          <div onClick="{{ h.ncToggle }}" role="button" aria-haspopup="true" aria-expanded="{{ ncOpen }}" aria-label="{{ ncAria }}" title="Notifications" style="{{ ncTriggerStyle }}" style-hover="border-color:#cbd5e1">
+            <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15 17h5l-1.4-1.4a2 2 0 01-.6-1.4V11a6 6 0 10-12 0v3.2a2 2 0 01-.6 1.4L4 17h5m6 0H9m6 0v1a3 3 0 11-6 0v-1"></path></svg>
+            <sc-if value="{{ hasUnacked }}" hint-placeholder-val="{{ true }}">
+              <span role="presentation" aria-hidden="true" style="{{ ncBadgeStyle }}">{{ ncBadgeText }}</span>
+            </sc-if>
+          </div>
+          <sc-if value="{{ ncOpen }}" hint-placeholder-val="{{ false }}">
+            <div role="region" aria-label="Notifications" style="position: absolute; top: 40px; right: 0; z-index: 30; width: 380px; background: white; border: 1px solid #e2e8f0; border-radius: 10px; box-shadow: 0 16px 40px rgba(15,23,42,0.18); overflow: hidden;">
+              <div style="display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-bottom: 1px solid #f1f5f9;">
+                <span style="font-size: 13px; font-weight: 600; color: #0f172a;">Notifications</span>
+                <span style="font-size: 11px; color: #94a3b8;">{{ ncCountText }}</span>
+                <sc-if value="{{ ncCanAckAll }}" hint-placeholder-val="{{ true }}">
+                  <span onClick="{{ h.ncAckAll }}" role="button" aria-label="Acknowledge all unread alerts" title="Mark every unread alert as acknowledged" style="margin-left: auto; font-size: 12px; font-weight: 500; color: #4f46e5; cursor: pointer;" style-hover="opacity:0.7">Acknowledge all</span>
+                </sc-if>
+              </div>
+              <div style="max-height: 340px; overflow-y: auto;">
+                <sc-for list="{{ ncItems }}" as="n" hint-placeholder-count="3">
+                  <div onClick="{{ n.onClick }}" role="button" aria-label="{{ n.aria }}" style="{{ n.rowStyle }}" style-hover="background:#f8fafc">
+                    <span role="presentation" aria-hidden="true" style="{{ n.sevDotStyle }}"></span>
+                    <div role="presentation" style="min-width: 0; flex: 1;">
+                      <div role="presentation" style="display: flex; align-items: center; gap: 8px;">
+                        <span role="presentation" style="{{ n.moduleStyle }}">{{ n.moduleLabel }}</span>
+                        <span role="presentation" style="font-size: 11px; color: #94a3b8;">{{ n.timeFmt }}</span>
+                      </div>
+                      <div role="presentation" style="font-size: 13px; font-weight: 500; color: #1e293b; margin-top: 3px; line-height: 1.35;">{{ n.title }}</div>
+                    </div>
+                    <span role="presentation" aria-hidden="true" style="color: #cbd5e1; font-size: 14px; flex-shrink: 0; align-self: center;">→</span>
+                  </div>
+                </sc-for>
+                <sc-if value="{{ ncEmpty }}" hint-placeholder-val="{{ false }}">
+                  <div style="padding: 32px 20px; text-align: center;">
+                    <div style="font-size: 13px; font-weight: 600; color: #334155;">You’re all caught up</div>
+                    <div style="font-size: 12px; color: #64748b; margin-top: 4px;">Nothing needs your attention right now.</div>
+                  </div>
+                </sc-if>
+              </div>
+              <div style="display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-top: 1px solid #f1f5f9;">
+                <sc-if value="{{ ncHasMore }}" hint-placeholder-val="{{ true }}">
+                  <span style="font-size: 11px; color: #94a3b8;">{{ ncMoreText }}</span>
+                </sc-if>
+                <span onClick="{{ h.ncViewAll }}" role="button" aria-label="View all alerts" style="margin-left: auto; font-size: 12px; font-weight: 600; color: #4f46e5; cursor: pointer;" style-hover="opacity:0.7">View all in Alerts →</span>
+              </div>
+            </div>
+          </sc-if>
+        </div>
+
         <div style="display: flex; align-items: center; font-size: 13px; border-radius: 8px; border: 1px solid #e2e8f0; background: white; overflow: hidden;">
           <div style="{{ rangeStyle.d7 }}" onClick="{{ h.range7 }}">7d</div>
           <div style="{{ rangeStyle.d30 }}" onClick="{{ h.range30 }}">30d</div>

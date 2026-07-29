@@ -35,6 +35,9 @@ urlpatterns = [
     path("projects/<slug:slug>/ads/budget", views.AdsBudgetView.as_view(), name="ads-budget"),
     path("projects/<slug:slug>/ads/negatives", views.AdsNegativesView.as_view(), name="ads-negatives"),
     path("projects/<slug:slug>/ads/promote", views.AdsPromoteView.as_view(), name="ads-promote"),
+    # Batch route first: "alerts/ack" and "alerts/<alert_id>/ack" have different segment
+    # counts so they cannot collide, but the specific-before-generic order documents intent.
+    path("alerts/ack", views.AlertBatchAckView.as_view(), name="alert-ack-batch"),
     path("alerts/<str:alert_id>/ack", views.AlertAckView.as_view(), name="alert-ack"),
     # Refresh / Sync
     path("projects/<slug:slug>/sync", views.ProjectSyncView.as_view(), name="project-sync"),

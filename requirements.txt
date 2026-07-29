@@ -16,6 +16,13 @@ pandas>=2.0.0
 plotly>=5.20.0
 SQLAlchemy>=2.0.0           # analytics DB (fusehealth.db) — reused pipeline
 
+# --- PostgreSQL (optional) ----------------------------------------------------
+# Only needed when POSTGRES_DB is set in the environment. With it unset the app
+# runs on SQLite and this driver is never imported. psycopg 3 is the driver
+# Django 6 uses for "django.db.backends.postgresql", and SQLAlchemy reaches it
+# through the "postgresql+psycopg://" dialect — one driver serves both layers.
+psycopg[binary]>=3.2
+
 # --- HTTP / parsing -----------------------------------------------------------
 requests>=2.31.0
 lxml>=5.1.0
@@ -31,3 +38,9 @@ google-auth-httplib2>=0.2.0
 google-api-python-client>=2.125.0
 google-analytics-data>=0.18.0
 google-ads>=24.0.0          # used once Google Ads credentials are provisioned
+
+# --- Error monitoring (optional) ----------------------------------------------
+# Only imported when SENTRY_DSN is set (see config/settings/base.py). ~14 external API
+# integrations run inside a background sync thread; without this a failed connector is
+# only a line in a rotating log file.
+sentry-sdk[django]>=2.0

@@ -25,6 +25,7 @@ import requests
 from dotenv import load_dotenv
 
 from pipeline.connectors.base import BaseConnector
+from pipeline.connectors.dataforseo_cost import extract_cost, record_cost
 from pipeline.utils.retry import with_retry
 from pipeline.utils.date_helpers import yesterday
 from pipeline.utils.db_connection import get_session
@@ -50,6 +51,9 @@ class DataForSEOAIKeywordsConnector(BaseConnector):
                 "DATAFORSEO_PASSWORD in .env."
             )
         self.auth = (self.login, self.password)
+        # USD DataForSEO reported for the current fetch(), summed across the
+        # 1000-keyword batches and written as one row per run.
+        self._run_cost = 0.0
 
     def _resolve_site_id(self, site_id: Optional[str]) -> str:
         from pipeline.services.site_service import get_site
@@ -80,6 +84,8 @@ class DataForSEOAIKeywordsConnector(BaseConnector):
         resp = requests.post(ENDPOINT, auth=self.auth, json=payload, timeout=60)
         resp.raise_for_status()
         data = resp.json()
+        # AI Optimization uses the same envelope: read the charge before any early return.
+        self._run_cost += extract_cost(data)
 
         tasks = data.get("tasks") or []
         if not tasks:
@@ -140,10 +146,19 @@ class DataForSEOAIKeywordsConnector(BaseConnector):
 
         tracking_date = yesterday()
         records: list[dict] = []
-        for i in range(0, len(keywords), MAX_KEYWORDS_PER_CALL):
-            batch = keywords[i:i + MAX_KEYWORDS_PER_CALL]
-            items = self._call(batch)
-            records.extend(self._normalize(items, tracking_date, resolved_site_id))
+        self._run_cost = 0.0
+        try:
+            for i in range(0, len(keywords), MAX_KEYWORDS_PER_CALL):
+                batch = keywords[i:i + MAX_KEYWORDS_PER_CALL]
+                items = self._call(batch)
+                records.extend(self._normalize(items, tracking_date, resolved_site_id))
+        finally:
+            # `units` = keywords submitted — AI Keyword Data meters per keyword, and a
+            # later batch failing must not lose the earlier batches already billed.
+            record_cost(
+                self.name, resolved_site_id, self._run_cost, units=len(keywords),
+                notes="ai_optimization/ai_keyword_data/keywords_search_volume live",
+            )
 
         self.logger.info(
             f"[dataforseo_ai_keywords] Fetched AI volume for {len(records)} keywords "

@@ -24,6 +24,7 @@ import requests
 from dotenv import load_dotenv
 
 from pipeline.connectors.base import BaseConnector
+from pipeline.connectors.dataforseo_cost import extract_cost, record_cost
 from pipeline.utils.retry import with_retry
 from pipeline.utils.date_helpers import iso, yesterday
 from pipeline.utils.db_connection import get_session
@@ -47,6 +48,9 @@ class DataForSEOSerpCompetitorsConnector(BaseConnector):
                 "DATAFORSEO_PASSWORD in .env."
             )
         self.auth = (self.login, self.password)
+        # USD DataForSEO reported for the current fetch() — accumulated across the
+        # task_post batches and task_get polls, written once per run in fetch().
+        self._run_cost = 0.0
 
     @staticmethod
     def _strip(domain: str) -> str:
@@ -75,8 +79,20 @@ class DataForSEOSerpCompetitorsConnector(BaseConnector):
             self.logger.warning(
                 "[dataforseo_serp_competitors] No keywords in keywords.txt — nothing to track."
             )
+        # Incremental sync: sync_engine may set `only_keywords` to restrict this run to the
+        # keywords that actually need work (see pipeline/utils/keywords.keywords_needing_
+        # backfill). DataForSEO meters per query, so re-querying every tracked keyword to
+        # pick up five new ones is both slow and billable. Absent/empty => full list, so
+        # the scheduled sync and every existing caller behave exactly as before.
+        only = getattr(self, "only_keywords", None)
+        if only:
+            wanted = set(k.strip().lower() for k in only if k and k.strip())
+            subset = [k for k in keywords if (k or "").strip().lower() in wanted]
+            self.logger.info(
+                f"[dataforseo_serp_competitors] incremental run: {len(subset)} of {len(keywords)} tracked keywords"
+            )
+            return subset
         return keywords
-
     @with_retry(max_retries=3, base_delay=5.0)
     def _submit_tasks(self, keywords: list[str]) -> list[str]:
         """
@@ -108,6 +124,8 @@ class DataForSEOSerpCompetitorsConnector(BaseConnector):
             )
             resp.raise_for_status()
             data = resp.json()
+            # Standard Queue bills at task_post — the charge is already on this envelope.
+            self._run_cost += extract_cost(data)
             for task in data.get("tasks", []):
                 if task.get("id"):
                     task_ids.append(task["id"])
@@ -140,7 +158,10 @@ class DataForSEOSerpCompetitorsConnector(BaseConnector):
                         auth=self.auth, timeout=20,
                     )
                     resp.raise_for_status()
-                    task_data = resp.json().get("tasks", [{}])[0]
+                    payload = resp.json()
+                    # Usually 0 on the Standard Queue, but record whatever it reports.
+                    self._run_cost += extract_cost(payload)
+                    task_data = payload.get("tasks", [{}])[0]
                     status_code = task_data.get("status_code", 0)
                     if status_code == 20000:
                         records.extend(
@@ -224,12 +245,22 @@ class DataForSEOSerpCompetitorsConnector(BaseConnector):
             f"[dataforseo_serp_competitors] Tracking {len(competitors)} competitors "
             f"across {len(keywords)} keywords for {resolved_site_id!r}"
         )
-        task_ids = self._submit_tasks(keywords)
-        if not task_ids:
-            self.logger.error("[dataforseo_serp_competitors] No task IDs returned.")
-            return []
+        self._run_cost = 0.0
+        try:
+            task_ids = self._submit_tasks(keywords)
+            if not task_ids:
+                self.logger.error("[dataforseo_serp_competitors] No task IDs returned.")
+                return []
 
-        records = self._poll_and_fetch(task_ids, competitors, resolved_site_id)
+            records = self._poll_and_fetch(task_ids, competitors, resolved_site_id)
+        finally:
+            # `units` = SERP queries posted — the same $0.0006/query meter as
+            # dataforseo_serp, paid separately because this run captures full results
+            # (no `target`/`stop_crawl_on_match`) so every competitor stays visible.
+            record_cost(
+                self.name, resolved_site_id, self._run_cost, units=len(keywords),
+                notes=f"serp/google/organic task_post+task_get, {len(competitors)} competitors",
+            )
         self.logger.info(
             f"[dataforseo_serp_competitors] Captured {len(records)} competitor ranking rows"
         )

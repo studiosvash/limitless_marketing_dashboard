@@ -7,9 +7,24 @@
     addSiteOpen: false, addSiteDomain: '', addSiteName: '', addSiteError: null, addSiteBusy: false,
     range: '30d',
     cache: {}, loading: true, error: null, chartHoverIndex: null,
+    /* Real SyncLog rows ({name, status, records, last_sync, error}) for the selected project,
+       read from GET /api/projects/<id>/settings -> `connectors`. Kept OUT of `cache` on
+       purpose: fetchTab('settings') re-seeds every Settings draft as a side effect, and a
+       badge refresh must never throw away an unsaved edit in the Settings tab. `syncLogFor`
+       pins the rows to the project they were read for, so switching sites never shows the
+       previous site's freshness. See srcBadge(). */
+    syncLog: null, syncLogFor: null,
+    ncOpen: false,
     sync: { active: false, progress: 0, step: '', cost: 0 },
     freshness: 'Weekly · Mon',
-    doQuery: '', doData: null, doLoading: false, doError: null,
+    doQuery: '', doData: null, doLoading: false, doError: null, doSel: [], doTracked: [],
+    /* Domain Overview "send to Position Tracking" destination picker. The lookup is for an
+       ARBITRARY domain — usually a competitor's — so the project the keywords belong in is
+       frequently NOT the one currently selected in the topbar. Sending silently to
+       state.projectId filed competitor keywords into whatever project happened to be open.
+       doPickRows holds the pending rows until a destination is confirmed. */
+    doPickOpen: false, doPickRows: null, doPickPid: null,
+    delProjOpen: false, delProjText: '', delProjBusy: false,
     explorerQ: '', explorerLoc: 'United States', research: null, researching: false,
     matchType: 'broad', selectedKws: [], sendOpen: false, exportOpen: false, sendSub: null, newListName: '', kwLists: [], toast: null, showLists: false,
     resVolMin: 0, resKdMin: 0, resKdMax: 100, resIntents: [], resIncl: '', resExcl: '', resOpenFilter: null, resGroup: null, resGroupMode: 'number', resDrawer: null,
@@ -69,6 +84,18 @@
     };
     window.addEventListener('hashchange', this._onHash);
     this.installA11y();
+    /* Outside-click dismissal for the topbar notification centre. Escape is already
+       handled by installA11y's single keydown listener (_onEsc, extended there rather
+       than duplicated); this is a different event type, so it needs its own listener.
+       Anything inside [data-nc-root] is the bell's own trigger or panel — clicking it
+       must not self-dismiss, otherwise the trigger would close what it just opened. */
+    this._onDocClick = (e) => {
+      if (!this._alive || !this.state.ncOpen) return;
+      const t = e.target;
+      if (t && t.closest && t.closest('[data-nc-root]')) return;
+      this.setState({ ncOpen: false });
+    };
+    document.addEventListener('click', this._onDocClick);
     const wait = () => {
       if (!this._alive) return;
       if (window.FuseAPI && window.FuseFixtures) this.boot(); else setTimeout(wait, 40);
@@ -82,6 +109,7 @@
     if (this._a11yObs) this._a11yObs.disconnect();
     document.removeEventListener('keydown', this._onKeyAct);
     document.removeEventListener('keydown', this._onEsc);
+    document.removeEventListener('click', this._onDocClick);
   }
 
   /* ---------- accessibility: keyboard operability for all clickable UI ---------- */
@@ -104,8 +132,8 @@
     this._onEsc = (e) => {
       if (e.key !== 'Escape') return;
       const s = this.state;
-      if (s.addSiteOpen || s.negMenuFor || s.sendOpen || s.exportOpen) {
-        this.setState({ addSiteOpen: false, negMenuFor: null, sendOpen: false, exportOpen: false });
+      if (s.addSiteOpen || s.negMenuFor || s.sendOpen || s.exportOpen || s.ncOpen) {
+        this.setState({ addSiteOpen: false, negMenuFor: null, sendOpen: false, exportOpen: false, ncOpen: false });
       }
     };
     document.addEventListener('keydown', this._onEsc);
@@ -182,10 +210,23 @@
         this.setState({ projectId: ps[0].id });
         this.fetchTab(tab, ps[0].id, range, false);
         if (tab !== 'alerts') this.fetchTab('alerts', ps[0].id, range, false);
+        this.loadSyncLog(ps[0].id);
       }
-    }).catch(() => {});
+    }).catch(err => {
+      /* The site switcher, the "add site" duplicate check and every project-scoped label
+         are built from this list. If it never arrives the user is stranded on whichever
+         project was remembered, with no visible reason — so this one gets a toast even
+         though nobody pressed a button. */
+      if (!this._alive) return;
+      this.notify(this.errText(err, 'Could not load your site list'));
+    });
     this.fetchTab(tab, pid, range, false);
     if (tab !== 'alerts') this.fetchTab('alerts', pid, range, false);
+    this.loadSyncLog(pid);
+    /* Deliberately silent: this is a boot-time prefetch of a static autocomplete file for the
+       Position Tracking location box, which positioning.js already falls back to a short
+       built-in country list for when `allUsCities` is absent. Nothing the user asked for has
+       failed, and a toast about a city list on every page load would be pure noise. */
     fetch('/static/spa/us_cities.json').then(r => r.json()).then(locs => { this.setState({ allUsCities: locs }); }).catch(() => {});
   }
 
@@ -235,9 +276,32 @@
       .catch(e => { if (this._alive) this.setState({ loading: false, error: (e && e.message) || 'Request failed' }); });
   }
 
+  /* Loads the per-connector SyncLog rows that every "Data source" badge is built from.
+     Deliberately NOT fetchTab('settings'): that path seeds wsDraft/notifDraft/teamDraft/…
+     from the response, so re-running it after every sync would silently discard a half-typed
+     Settings form. This writes one isolated state slot and nothing else.
+
+     Silent on failure by design — nobody pressed a button, and the consequence of a failure
+     is simply that no badge renders (srcBadge() returns show:false). A toast about a
+     provenance lookup would be noise, and a badge built from a failed read would be a guess. */
+  loadSyncLog(pid) {
+    pid = pid || this.state.projectId;
+    window.FuseAPI.get('/api/projects/' + pid + '/settings')
+      .then(d => {
+        if (!this._alive) return;
+        this.setState({ syncLog: (d && d.connectors) || [], syncLogFor: pid });
+      })
+      .catch(() => { if (this._alive) this.setState({ syncLog: null, syncLogFor: pid }); });
+  }
+
   fetchLiveSerp(kw, location) {
     this.setState({ ptSerpKw: kw, ptSerpLoading: true, ptSerpData: null, ptSerpError: null });
-    window.FuseAPI.post('/api/live-serp', { keyword: kw, location })
+    /* `project` is sent so the backend can attribute this call's DataForSEO charge to the
+       right project. Without it every live SERP lookup wrote a connector_costs row with an
+       empty site_id — real money no project's Usage & Budget panel could ever show. The
+       backend resolves it leniently, so a missing project degrades attribution, not the
+       lookup itself. */
+    window.FuseAPI.post('/api/live-serp', { keyword: kw, location, project: this.state.projectId })
       .then(res => {
         if (!this._alive || this.state.ptSerpKw !== kw) return;
         if (res.error) {
@@ -293,6 +357,7 @@
     try { if (('#' + snap.tab) !== location.hash) history.replaceState(null, '', '#' + snap.tab); } catch (e) {}
     this.fetchTab(snap.tab, snap.projectId, this.state.range, false);
     if (pidChanged && snap.tab !== 'alerts') this.fetchTab('alerts', snap.projectId, this.state.range, false);
+    if (pidChanged) { this.setState({ syncLog: null, syncLogFor: snap.projectId }); this.loadSyncLog(snap.projectId); }
     setTimeout(() => { this._navApplying = false; }, 0);
   }
   histBack() { if (this._hist && this._histIdx > 0) this.applyNav(this._histIdx - 1); }
@@ -338,6 +403,11 @@
     this.setState({ projectId: pid, research: null, kwSeg: null, blFilter: 'all', alFilter: 'all', crawlCfg: null, crawlSaved: false, auPage: null, rules: null, termCampaign: null, cmpSearch: '', cmpOpenId: null, editBudgetId: null });
     this.fetchTab(this.state.tab, pid, this.state.range, false);
     if (this.state.tab !== 'alerts') this.fetchTab('alerts', pid, this.state.range, false);
+    /* Freshness is per-project, so it has to be re-read here — otherwise every Data source
+       badge would keep showing the previous site's sync dates. syncLogFor guards the window
+       between the switch and the response landing. */
+    this.setState({ syncLog: null, syncLogFor: pid });
+    this.loadSyncLog(pid);
     if (this.state.tab !== 'settings') { /* creds/prefs re-seed on next settings visit */ }
     this.setState({ credsFor: null, prefsFor: null });
   }
@@ -363,9 +433,16 @@
     const _startPolling = (t) => {
       if (!this._alive) return;
       this.setState({ sync: { active: true, scope: activeScope, progress: 0.02, step: (t.steps && t.steps[0]) || 'Starting…', cost: t.est_cost || 0, projectId: pid, startTime: Date.now() } });
+      /* This poll runs twice a second. A toast per failed tick would be a stream of
+         identical notifications, so single failures are absorbed (the task endpoint can
+         blip mid-sync) and only a sustained outage — POLL_GIVE_UP consecutive failures,
+         ~3s — stops the progress bar and reports it, exactly once. */
+      const POLL_GIVE_UP = 6;
+      let pollFails = 0;
       this._iv = setInterval(() => {
         window.FuseAPI.get('/api/tasks/' + t.task_id).then(st => {
           if (!this._alive) { clearInterval(this._iv); return; }
+          pollFails = 0;
           if (st.done) {
             clearInterval(this._iv); this._iv = null;
             this.setState(s => {
@@ -375,14 +452,29 @@
             });
             this.fetchTab(this.state.tab, pid, this.state.range, true);
             if (this.state.tab !== 'alerts') this.fetchTab('alerts', pid, this.state.range, false);
+            /* The whole point of a refresh is that the freshness changed — re-read the
+               SyncLog rows so every Data source badge moves with the data it describes
+               (including a connector whose run failed inside an otherwise "Done" sync). */
+            this.loadSyncLog(pid);
             const proj = this.state.projects.find(p => p.id === pid) || {};
             const dom = proj.domain || pid;
-            const scopeNotif = { audit: 'Crawl complete — Site Audit refreshed for ' + dom, positions: 'Positioning data refreshed for ' + dom, positioning: 'Positioning data refreshed for ' + dom, keywords: 'Keywords data refreshed for ' + dom, backlinks: 'Backlinks data refreshed for ' + dom, ads: 'Ads data refreshed for ' + dom, ai: 'AI Optimization data refreshed for ' + dom, overview: 'Overview data refreshed for ' + dom, seo: 'SEO data refreshed for ' + dom };
+            const scopeNotif = { audit: 'Crawl complete — Site Audit refreshed for ' + dom, positions: 'Positioning data refreshed for ' + dom, positions_new: 'New keywords measured for ' + dom, positioning_new: 'New keywords measured for ' + dom, positioning: 'Positioning data refreshed for ' + dom, keywords: 'Keywords data refreshed for ' + dom, backlinks: 'Backlinks data refreshed for ' + dom, ads: 'Ads data refreshed for ' + dom, ai: 'AI Optimization data refreshed for ' + dom, overview: 'Overview data refreshed for ' + dom, seo: 'SEO data refreshed for ' + dom };
             this.notify(scopeNotif[activeScope] || (activeScope === 'all' ? ('All modules refreshed for ' + dom) : (activeScope + ' refreshed for ' + dom)));
           } else {
             this.setState({ sync: { active: true, scope: activeScope, progress: st.progress, step: st.step, cost: t.est_cost || 0, projectId: pid, startTime: this.state.sync.startTime } });
           }
-        }).catch(() => {});
+        }).catch(err => {
+          if (!this._alive) { clearInterval(this._iv); return; }
+          pollFails++;
+          if (pollFails < POLL_GIVE_UP) return;
+          clearInterval(this._iv); this._iv = null;
+          /* The sync itself may well still be running server-side — we have only lost sight
+             of it — so the message says that instead of claiming the refresh failed, and the
+             progress bar is cleared rather than left frozen at whatever % it reached. */
+          this.setState({ sync: { active: false, scope: null, progress: 0, step: '', cost: t.est_cost || 0, projectId: null, startTime: null } });
+          const why = (err && err.detail) ? ' (' + err.detail + ')' : '';
+          this.notify('Lost track of the refresh' + why + ' — the sync may still be running. Reload the page to check.');
+        });
       }, 500);
     };
 
@@ -404,15 +496,31 @@
     this.setState({ researching: true, selectedKws: [], sendOpen: false, exportOpen: false, sendSub: null });
     window.FuseAPI.post('/api/research', { project: this.state.projectId, keywords: q.split(','), location: this.state.explorerLoc })
       .then(r => { if (this._alive) { r.seeds = q.toLowerCase(); this.setState({ researching: false, research: r, matchType: 'broad', resGroup: null, resDrawer: null, resVolMin: 0, resKdMin: 0, resKdMax: 100, resIntents: [], resIncl: '', resExcl: '', resOpenFilter: null }); this.pushNav({ research: r }); } })
-      .catch(() => { if (this._alive) this.setState({ researching: false, error: 'Research request failed' }); });
+      .catch(err => { if (this._alive) this.setState({ researching: false, error: this.errText(err, 'Keyword research request failed') }); });
   }
 
   /* ---------- domain overview ---------- */
+
+  /* The market a Domain Overview is read in. Single source of truth: the *project's*
+     own location (projects[].location), which is exactly what positioning.js feeds the
+     live-SERP drawer (ptWs.location = proj.location || 'United States'). Domain Overview
+     previously used state.explorerLoc — the Keyword Explorer's dropdown — so clicking
+     "Analyze" on a SERP result silently re-ran the lookup in a different market than the
+     SERP the user was looking at. The project location wins because Position Tracking,
+     the SERP drawer and the tracked-keyword writes (`site.location` server-side) are all
+     already keyed to it; the explorer dropdown is a transient, per-search control. */
+  doLocation() {
+    const p = (this.state.projects || []).find(x => x.id === this.state.projectId) || {};
+    return p.location || 'United States';
+  }
+
   runDomainOverview() {
     const q = this.state.doQuery.trim();
     if (!q || this.state.doLoading) return;
-    this.setState({ doLoading: true, doError: null });
-    window.FuseAPI.post('/api/domain-overview', { target: q, location: this.state.explorerLoc || 'United States' })
+    this.setState({ doLoading: true, doError: null, doSel: [] });
+    /* `project` lets the backend mark which returned keywords this project already tracks.
+       Without it every row would offer Track even for keywords already on the list. */
+    window.FuseAPI.post('/api/domain-overview', { target: q, location: this.doLocation(), project: this.state.projectId })
       .then(r => { if (this._alive) this.setState({ doLoading: false, doData: r, doError: r.error }); })
       .catch(e => { if (this._alive) this.setState({ doLoading: false, doError: 'Failed to fetch domain overview: ' + e }); });
   }
@@ -423,6 +531,86 @@
       this.go('domain_overview');
       this.runDomainOverview();
     });
+  }
+
+  /* keys the session-local "tracked from this screen" set by project, so switching
+     projects never carries a mark across */
+  doTrackKey(pid, kw) { return pid + '\u0000' + kw; }
+
+  /* rows currently ticked in the Domain Overview keyword table, in sendKwsToTracking's
+     expected shape ({kw, volume, kd, cpc, intent}). The ranked-keywords endpoint carries
+     no keyword-difficulty figure, so `kd` is deliberately left absent rather than zeroed. */
+  doSelectedRows() {
+    const sel = this.state.doSel || [];
+    if (!sel.length) return [];
+    const kws = (this.state.doData && this.state.doData.keywords) || [];
+    return kws.filter(k => sel.indexOf(k.keyword) >= 0)
+      .map(k => ({ kw: k.keyword, volume: k.volume, cpc: k.cpc, intent: k.intent }));
+  }
+
+  /* Entry point for BOTH the per-row "+ Track" and the bulk "Track selected (N)".
+     It does not send anything itself — it asks where to send first.
+
+     Why: Domain Overview looks up an arbitrary domain, typically a competitor's. The
+     keywords it returns usually belong in a DIFFERENT project from the one selected in
+     the topbar (looking up eventstaff.com while the premierstaff.com project is open is
+     the normal case, not an edge case). Sending to state.projectId silently filed them
+     into whatever happened to be open, with only a toast naming the project afterwards.
+
+     One project configured => no choice to make, so no dialog; it sends straight through.
+     Asking would be pure friction with a single possible answer. */
+  trackDomainOverviewKws(rows) {
+    if (!rows || !rows.length) return;
+    const projects = this.state.projects || [];
+    if (projects.length > 1) {
+      this.setState({
+        doPickOpen: true,
+        doPickRows: rows,
+        /* Default to the active project: it is the most likely answer and keeps the
+           one-project behaviour familiar. The user still has to confirm. */
+        doPickPid: this.state.projectId
+      });
+      return;
+    }
+    this.doSendTrackedKws(rows, this.state.projectId);
+  }
+
+  doPickCancel() { this.setState({ doPickOpen: false, doPickRows: null, doPickPid: null }); }
+  doPickSet(pid) { this.setState({ doPickPid: pid }); }
+  doPickConfirm() {
+    const rows = this.state.doPickRows;
+    const pid = this.state.doPickPid;
+    if (!rows || !rows.length || !pid) { this.doPickCancel(); return; }
+    this.setState({ doPickOpen: false, doPickRows: null, doPickPid: null });
+    this.doSendTrackedKws(rows, pid);
+  }
+
+  /* Reuses sendKwsToTracking for the POST + cache invalidation + refetch + toast, and
+     only adds what is specific to this screen: clearing the selection and remembering
+     which rows this session sent. `pid` is the CONFIRMED destination, which may differ
+     from the active project — every mark and every cache key below uses it, not
+     state.projectId, or a keyword sent to project B would show as tracked under A. */
+  doSendTrackedKws(rows, pid) {
+    if (!rows || !rows.length || !pid) return;
+    const sent = this.sendKwsToTracking(pid, rows);
+    this.setState(st => {
+      const marks = (st.doTracked || []).slice();
+      rows.forEach(r => {
+        const key = this.doTrackKey(pid, r.kw);
+        if (marks.indexOf(key) < 0) marks.push(key);
+      });
+      return { doSel: [], doTracked: marks };
+    });
+    /* The "Tracked" mark above is optimistic. sendKwsToTracking reports the outcome (and
+       toasts the reason on failure), so a refused write takes its mark back instead of
+       leaving the row claiming to be tracked when nothing was stored. */
+    if (sent && sent.then) {
+      sent.then(ok => {
+        if (!this._alive || ok) return;
+        const keys = rows.map(r => this.doTrackKey(pid, r.kw));
+        this.setState(st => ({ doTracked: (st.doTracked || []).filter(k => keys.indexOf(k) < 0) }));
+      });
+    }
   }
 
   // rows visible under the current match-type tab + filters (server-side over the cached expansion set in prod)
@@ -486,8 +674,13 @@
     const payload = {
       keywords: rows.map(r => ({ kw: r.kw, volume: r.volume, kd: r.kd, cpc: r.cpc, intent: r.intent }))
     };
-    window.FuseAPI.post('/api/projects/' + pid + '/keywords', payload).catch(() => {}).then(() => {
-      if (!this._alive) return;
+    /* The .catch() used to sit BEFORE this .then(), which converted every rejection into a
+       resolution: a POST the server had refused still marked the rows tracked, threw away the
+       cached keyword/positioning tabs and toasted "N keywords sent to Position Tracking".
+       The success path now runs only on success. Resolves true/false so callers that mark
+       rows optimistically (trackDomainOverviewKws) can undo the mark. */
+    return window.FuseAPI.post('/api/projects/' + pid + '/keywords', payload).then(() => {
+      if (!this._alive) return true;
       this.setState(s => {
         const trackSet = new Set(rows.map(r => r.kw));
         const research = s.research ? Object.assign({}, s.research, {
@@ -504,9 +697,17 @@
       if (['keywords', 'positioning', 'overview'].includes(this.state.tab)) {
         this.fetchTab(this.state.tab, pid, this.state.range, true);
       }
+      /* Deliberately silent: the keywords were already saved and the user has been told so.
+         This is only a background re-read to refresh the per-project keyword counts in the
+         switcher; if it fails the counts are stale until the next load, which is not worth
+         contradicting the success toast the user just received. */
       window.FuseAPI.get('/api/projects').then(ps => { if (this._alive) this.setState({ projects: ps }); }).catch(() => {});
       const proj = (this.state.projects.find(p => p.id === pid) || {}).domain || 'project';
       this.notify(rows.length + ' keyword' + (rows.length === 1 ? '' : 's') + ' sent to Position Tracking · ' + proj);
+      return true;
+    }).catch(err => {
+      if (this._alive) this.notify(this.errText(err, 'Could not send those keywords to Position Tracking'));
+      return false;
     });
   }
 
@@ -594,7 +795,7 @@
     const next = c.status === 'enabled' ? 'paused' : 'enabled';
     window.FuseAPI.post('/api/projects/' + pid + '/ads/status', { campaignId: c.id, status: next })
       .then(() => { if (!this._alive) return; this.notify('"' + c.name + '" ' + (next === 'enabled' ? 'enabled — resumes serving on next sync' : 'paused')); this.adsInvalidate(pid); })
-      .catch(() => this.notify('Could not update campaign'));
+      .catch(err => { if (this._alive) this.notify(this.errText(err, 'Could not update that campaign')); });
   }
   saveBudget(c) {
     const pid = this.state.projectId;
@@ -602,7 +803,7 @@
     if (!v || v <= 0 || Math.round(v) === c.budget_daily) { this.setState({ editBudgetId: null }); return; }
     window.FuseAPI.post('/api/projects/' + pid + '/ads/budget', { campaignId: c.id, budgetDaily: v })
       .then(r => { if (!this._alive) return; this.setState({ editBudgetId: null }); this.notify('Daily budget for "' + c.name + '" set to $' + r.budgetDaily); this.adsInvalidate(pid); })
-      .catch(() => { if (this._alive) { this.setState({ editBudgetId: null }); this.notify('Could not update budget'); } });
+      .catch(err => { if (this._alive) { this.setState({ editBudgetId: null }); this.notify(this.errText(err, 'Could not update that budget')); } });
   }
   addNegative(t, matchType) {
     const pid = this.state.projectId;
@@ -610,23 +811,64 @@
     this.setState({ negMenuFor: null });
     window.FuseAPI.post('/api/projects/' + pid + '/ads/negatives', { term: t.term, matchType: mt, campaignId: t.campaignId })
       .then(() => { if (!this._alive) return; this.notify('"' + t.term + '" added as a ' + mt + '-match negative — written back to Google Ads on next sync'); this.adsInvalidate(pid); })
-      .catch(() => this.notify('Could not add negative'));
+      .catch(err => { if (this._alive) this.notify(this.errText(err, 'Could not add that negative')); });
+  }
+
+  /* One press of a bulk button must produce one message, never one per row — but a plain
+     Promise.all rejects on the first failure and reports nothing about the requests that
+     already succeeded, so the user is told "could not add negatives" while some of them were
+     in fact written. Each request is therefore settled on its own (Promise.allSettled is
+     ES2020; this file targets ES2017, hence the two-argument .then), and the batch reports:
+       all ok      → the original success line;
+       none ok     → the server's reason, once;
+       partial     → how many landed, and the rows that failed stay selected so the button can
+                     simply be pressed again for exactly those.
+     The ads cache is invalidated whenever at least one write landed, because the tab is now
+     out of date either way. */
+  bulkSettle(results) {
+    const failed = results.filter(r => !r.ok);
+    return { failed: failed, okCount: results.length - failed.length, total: results.length };
   }
 
   bulkNegatives(list, matchType) {
     const pid = this.state.projectId;
     if (!list.length) return;
-    Promise.all(list.map(t => window.FuseAPI.post('/api/projects/' + pid + '/ads/negatives', { term: t.term, matchType: matchType || 'phrase', campaignId: t.campaignId })))
-      .then(() => { if (!this._alive) return; this.notify(list.length + ' negative keyword' + (list.length === 1 ? '' : 's') + ' queued — written back via CampaignCriterionService on next sync'); this.setState({ trmSel: [] }); this.adsInvalidate(pid); })
-      .catch(() => this.notify('Could not add negatives'));
+    const mt = matchType || 'phrase';
+    Promise.all(list.map(t => window.FuseAPI.post('/api/projects/' + pid + '/ads/negatives', { term: t.term, matchType: mt, campaignId: t.campaignId })
+      .then(function () { return { ok: true, t: t }; }, function (err) { return { ok: false, t: t, err: err }; })))
+      .then(results => {
+        if (!this._alive) return;
+        const r = this.bulkSettle(results);
+        if (r.okCount) this.adsInvalidate(pid);
+        this.setState({ trmSel: r.failed.map(x => x.t.id) });
+        if (!r.failed.length) {
+          this.notify(r.total + ' negative keyword' + (r.total === 1 ? '' : 's') + ' queued — written back via CampaignCriterionService on next sync');
+        } else if (!r.okCount) {
+          this.notify(this.errText(r.failed[0].err, 'Could not add those negatives'));
+        } else {
+          this.notify(r.okCount + ' of ' + r.total + ' negatives queued. ' + r.failed.length + ' failed — still selected, try again.');
+        }
+      });
   }
 
   bulkPromote(list) {
     const pid = this.state.projectId;
     if (!list.length) return;
-    Promise.all(list.map(t => window.FuseAPI.post('/api/projects/' + pid + '/ads/promote', { term: t.term })))
-      .then(() => { if (!this._alive) return; this.notify(list.length + ' term' + (list.length === 1 ? '' : 's') + ' added to organic keyword tracking'); this.setState({ trmSel: [] }); this.adsInvalidate(pid); })
-      .catch(() => this.notify('Could not add keywords'));
+    Promise.all(list.map(t => window.FuseAPI.post('/api/projects/' + pid + '/ads/promote', { term: t.term })
+      .then(function () { return { ok: true, t: t }; }, function (err) { return { ok: false, t: t, err: err }; })))
+      .then(results => {
+        if (!this._alive) return;
+        const r = this.bulkSettle(results);
+        if (r.okCount) this.adsInvalidate(pid);
+        this.setState({ trmSel: r.failed.map(x => x.t.id) });
+        if (!r.failed.length) {
+          this.notify(r.total + ' term' + (r.total === 1 ? '' : 's') + ' added to organic keyword tracking');
+        } else if (!r.okCount) {
+          this.notify(this.errText(r.failed[0].err, 'Could not add those keywords'));
+        } else {
+          this.notify(r.okCount + ' of ' + r.total + ' terms added. ' + r.failed.length + ' failed — still selected, try again.');
+        }
+      });
   }
   promoteTerm(t) {
     const pid = this.state.projectId;
@@ -637,10 +879,34 @@
         this.setState(s => { const cache = {}; Object.keys(s.cache).forEach(k => { if (k.indexOf(pid + ':') !== 0) cache[k] = s.cache[k]; }); return { cache }; });
         this.fetchTab(this.state.tab, pid, this.state.range, true);
       })
-      .catch(() => this.notify('Could not add keyword'));
+      .catch(err => { if (this._alive) this.notify(this.errText(err, 'Could not add that keyword')); });
   }
 
   notify(msg) { this.setState({ toast: msg }); clearTimeout(this._nt); this._nt = setTimeout(() => { if (this._alive) this.setState({ toast: null }); }, 2600); }
+
+  /* Turns a rejected FuseAPI promise into one sentence a non-technical user can act on.
+     Three cases, because they need different words:
+       - server said no  → err.detail is already human-readable (DRF `detail`), use it verbatim;
+       - transport died  → fetch() rejects with "Failed to fetch" / "NetworkError", which tells
+                           the user nothing, so the caller's fallback + "couldn't reach the
+                           server" is substituted;
+       - sentinel        → 'not_yet_available' is the API saying the deployment has no such
+                           feature (settings_service._SECURITY_REFUSED); say that plainly.
+     `fallback` must name the action that failed ("Could not save crawl settings"), never be
+     a generic "Error". */
+  errText(err, fallback) {
+    const raw = (err && (err.detail || err.message)) || '';
+    if (raw === 'not_yet_available') return 'Not available in this deployment — nothing was saved.';
+    if (!raw || /failed to fetch|networkerror|network request failed|load failed/i.test(raw)) {
+      return fallback + ' — could not reach the server. Check your connection and try again.';
+    }
+    /* api.js's last resort when the error body carries no `detail`: "API 500 /api/…". That is
+       a URL and a number, i.e. nothing a user can act on, so it becomes the named action plus
+       the status code. */
+    const m = /^API (\d{3}) \//.exec(raw);
+    if (m) return fallback + ' — the server rejected it (error ' + m[1] + ').';
+    return raw;
+  }
 
   /* ---------- clipboard & bulk QoL helpers ---------- */
   copyText(txt, msg) {
@@ -674,8 +940,46 @@
     if (!d) return;
     const un = d.feed.filter(f => !f.acknowledged);
     if (!un.length) return;
-    un.forEach(f => this.ackAlert(f.id));
-    this.notify(un.length + ' alert' + (un.length === 1 ? '' : 's') + ' acknowledged');
+    const pid = this.state.projectId;
+    const ids = un.map(f => f.id);
+    /* One button press gets one request and one message.
+       History, so neither half is undone by accident:
+         - It first fired N requests AND announced success immediately, before any had
+           answered — "12 alerts acknowledged" appeared even when all twelve were refused.
+         - That was fixed by settling every request and reporting once, which was correct but
+           still meant one POST per row: ~104 requests from a single click on a real feed.
+       So the reporting stays exactly as it was — all-ok, all-failed (with the server's
+       reason), or a partial count naming how many did not save — but it is now driven by a
+       single POST /api/alerts/ack that returns a per-id outcome. Only the ids the server
+       confirms are marked acknowledged locally; the rest stay unacknowledged and retryable.
+       ackAlert() is untouched and still serves the per-row Acknowledge button. */
+    window.FuseAPI.post('/api/alerts/ack', { ids: ids, project: pid }).then(res => {
+      if (!this._alive) return;
+      const acked = (res && res.acknowledged) || [];
+      const failed = (res && res.failed) || [];
+      if (acked.length) {
+        const ackedSet = {};
+        acked.forEach(id => { ackedSet[id] = true; });
+        this.setState(s => {
+          const k = this.key('alerts', pid, s.range);
+          const cur = s.cache[k];
+          if (!cur) return {};
+          const cache = Object.assign({}, s.cache);
+          cache[k] = { feed: cur.feed.map(f => ackedSet[f.id] ? Object.assign({}, f, { acknowledged: true }) : f) };
+          return { cache };
+        });
+      }
+      if (!failed.length) {
+        this.notify(acked.length + ' alert' + (acked.length === 1 ? '' : 's') + ' acknowledged');
+      } else if (!acked.length) {
+        this.notify(this.errText({ detail: failed[0].detail }, 'Could not acknowledge these alerts'));
+      } else {
+        this.notify(acked.length + ' of ' + ids.length + ' alerts acknowledged — ' + failed.length + ' could not be saved. Try those again.');
+      }
+    }).catch(err => {
+      if (!this._alive) return;
+      this.notify(this.errText(err, 'Could not acknowledge these alerts'));
+    });
   }
 
   /* ---------- crawl settings ---------- */
@@ -691,12 +995,21 @@
   editRule(ruleId, patch) {
     const data = this.state.cache[this.key('settings')];
     const base = this.state.rules || (data && data.alertRules) || [];
+    /* The last state the server confirmed — what the switch must snap back to if the debounced
+       save is refused. `base` alone is not enough: it is the local draft, which may already
+       contain earlier edits from the same 600 ms window that were never persisted either. */
+    const persisted = (data && data.alertRules) || base;
     const next = base.map(r => r.id === ruleId ? Object.assign({}, r, patch) : r);
     this.setState({ rules: next });
     clearTimeout(this._rt);
     this._rt = setTimeout(() => {
       window.FuseAPI.put('/api/projects/' + this.state.projectId + '/settings', { alertRules: next })
-        .then(() => { if (this._alive) this.notify('Alert rules updated'); }).catch(() => {});
+        .then(() => { if (this._alive) this.notify('Alert rules updated'); })
+        .catch(err => {
+          if (!this._alive) return;
+          this.setState({ rules: persisted });
+          this.notify(this.errText(err, 'Could not save the alert rule'));
+        });
     }, 600);
   }
 
@@ -707,14 +1020,29 @@
       if (!this._alive) return;
       this.setState({ crawlSaved: true });
       this.notify('Crawl settings saved — applies to the next crawl');
-    }).catch(() => {});
+    }).catch(err => {
+      if (!this._alive) return;
+      /* keep the button on "Save" rather than flipping it to "Saved ✓" for a write that
+         never landed — st.crawlSaveLabel is driven off this flag */
+      this.setState({ crawlSaved: false });
+      this.notify(this.errText(err, 'Could not save crawl settings'));
+    });
   }
 
   /* ---------- alerts ---------- */
-  ackAlert(id) {
+  /* ackAlert(id, opts) — the SINGLE-row path, used by each row's Acknowledge button in
+   * alerts.js. Bulk acknowledgement no longer goes through here: ackAllAlerts() sends one
+   * batch POST instead of calling this N times.
+   *   opts.silent – suppress the failure toast. No current caller passes it (it existed for
+   *                 the old fan-out ackAllAlerts); kept so a future caller that wants to
+   *                 report its own aggregate result can still silence per-row toasts.
+   * Always resolves (never rejects) to {ok:true} / {ok:false, err}, so the callers in
+   * alerts.js can keep ignoring the return value without producing an unhandled rejection. */
+  ackAlert(id, opts) {
     const pid = this.state.projectId;
-    window.FuseAPI.post('/api/alerts/' + id + '/ack', {}).then(() => {
-      if (!this._alive) return;
+    const silent = !!(opts && opts.silent);
+    return window.FuseAPI.post('/api/alerts/' + id + '/ack', {}).then(() => {
+      if (!this._alive) return { ok: true };
       this.setState(s => {
         const k = this.key('alerts', pid, s.range);
         const cur = s.cache[k];
@@ -723,7 +1051,11 @@
         cache[k] = { feed: cur.feed.map(f => f.id === id ? Object.assign({}, f, { acknowledged: true }) : f) };
         return { cache };
       });
-    }).catch(() => {});
+      return { ok: true };
+    }).catch(err => {
+      if (this._alive && !silent) this.notify(this.errText(err, 'Could not acknowledge this alert'));
+      return { ok: false, err: err };
+    });
   }
 
   /* ---------- settings ---------- */
@@ -735,35 +1067,63 @@
       if (!this._alive) return;
       this.setState({ credsSaved: true });
       setTimeout(() => { if (this._alive) this.setState({ credsSaved: false }); }, 1800);
-    }).catch(() => {});
+    }).catch(err => {
+      if (!this._alive) return;
+      /* the button must not read "Saved ✓" for credentials the server rejected — a wrong GSC
+         property that looks saved is the difference between "no data yet" and "misconfigured" */
+      this.setState({ credsSaved: false });
+      this.notify(this.errText(err, 'Could not save these credentials'));
+    });
   }
 
   togglePref(keyName) {
-    const prefs = Object.assign({}, this.state.prefs || {});
+    const prev = this.state.prefs;
+    const prefs = Object.assign({}, prev || {});
     prefs[keyName] = !prefs[keyName];
     this.setState({ prefs });
-    window.FuseAPI.put('/api/projects/' + this.state.projectId + '/settings', { prefs }).catch(() => {});
+    window.FuseAPI.put('/api/projects/' + this.state.projectId + '/settings', { prefs }).catch(err => {
+      if (!this._alive) return;
+      /* optimistic switch — put it back, otherwise the user believes they turned email
+         alerts on and simply never receives any */
+      this.setState({ prefs: prev });
+      this.notify(this.errText(err, 'Could not save that preference'));
+    });
   }
 
   /* ---------- extended settings ---------- */
-  putSettings(body, msg, flag) {
+  /* `revert` (optional) is state to restore when the server refuses the change. Without it a
+     rejected save leaves the toggle looking ON while nothing was stored — the Security tab did
+     exactly that for 2FA, SSO, session-revoke and token-create, all of which the API returns a
+     400 for. Swallowing the error here was the single line that made every one of those
+     controls appear to work. */
+  putSettings(body, msg, flag, revert) {
     window.FuseAPI.put('/api/projects/' + this.state.projectId + '/settings', body).then(() => {
       if (!this._alive) return;
       if (flag) { this.setState({ [flag]: true }); setTimeout(() => { if (this._alive) this.setState({ [flag]: false }); }, 1800); }
       if (msg) this.notify(msg);
-    }).catch(() => {});
+    }).catch(err => {
+      if (!this._alive) return;
+      if (revert) this.setState(revert);
+      var detail = (err && (err.detail || err.message)) || 'Could not save';
+      this.notify(detail === 'not_yet_available'
+        ? 'Not available in this deployment — nothing was saved.'
+        : detail);
+    });
   }
   editWs(patch) { this.setState(s => ({ wsDraft: Object.assign({}, s.wsDraft, patch), savedWs: false })); }
   saveWs() { this.putSettings({ workspace: this.state.wsDraft }, 'Workspace saved', 'savedWs'); }
   clearData() {
     if (window.confirm("Are you sure you want to permanently delete all synced analytics data for this project? This action cannot be undone.")) {
-      const pid = this.props.ctx.route.params.id || window.activeProject;
+      /* There is no router ctx on this component — the active project lives in
+         state, same as every other settings call in this file. */
+      const pid = this.state.projectId;
       window.FuseAPI.del('/api/projects/' + pid + '/data')
         .then(() => {
+          if (!this._alive) return;
           this.notify("Data cleared successfully. Reloading...");
           setTimeout(() => window.location.reload(), 1500);
         })
-        .catch(e => this.notify("Failed to clear data: " + (e.message || "Unknown error")));
+        .catch(e => { if (this._alive) this.notify("Failed to clear data: " + (e.message || "Unknown error")); });
     }
   }
   editNotif(patch) { this.setState(s => ({ notifDraft: Object.assign({}, s.notifDraft, patch), savedNotif: false })); }
@@ -941,33 +1301,47 @@
         this.notify(msg);
       });
   }
+  /* Each of these four sets state optimistically and then asks the server. The API refuses
+     twofa/sso/sessions/tokens (none of them are backed by anything real — see
+     settings_service._SECURITY_REFUSED), so every one passes its pre-change draft as `revert`.
+     Without that the switch stays visually ON after a refusal and the UI claims a security
+     control the deployment does not have. */
   toggle2fa() {
-    const sec = Object.assign({}, this.state.secDraft, { twofa: !this.state.secDraft.twofa });
+    const prev = this.state.secDraft;
+    const sec = Object.assign({}, prev, { twofa: !prev.twofa });
     this.setState({ secDraft: sec });
-    this.putSettings({ security: sec }, sec.twofa ? 'Two-factor enabled' : 'Two-factor disabled');
+    this.putSettings({ security: sec }, sec.twofa ? 'Two-factor enabled' : 'Two-factor disabled', null, { secDraft: prev });
   }
   toggleSso() {
-    const sec = Object.assign({}, this.state.secDraft, { sso: !this.state.secDraft.sso });
+    const prev = this.state.secDraft;
+    const sec = Object.assign({}, prev, { sso: !prev.sso });
     this.setState({ secDraft: sec });
-    this.putSettings({ security: sec }, sec.sso ? 'SSO enabled' : 'SSO disabled');
+    this.putSettings({ security: sec }, sec.sso ? 'SSO enabled' : 'SSO disabled', null, { secDraft: prev });
   }
   revokeSession(id) {
-    const sec = Object.assign({}, this.state.secDraft, { sessions: this.state.secDraft.sessions.filter(x => x.id !== id) });
+    const prev = this.state.secDraft;
+    const sec = Object.assign({}, prev, { sessions: prev.sessions.filter(x => x.id !== id) });
     this.setState({ secDraft: sec });
-    this.putSettings({ security: sec }, 'Session revoked');
+    this.putSettings({ security: sec }, 'Session revoked', null, { secDraft: prev });
   }
   revokeToken(id) {
-    const sec = Object.assign({}, this.state.secDraft, { tokens: this.state.secDraft.tokens.filter(x => x.id !== id) });
+    const prev = this.state.secDraft;
+    const sec = Object.assign({}, prev, { tokens: prev.tokens.filter(x => x.id !== id) });
     this.setState({ secDraft: sec });
-    this.putSettings({ security: sec }, 'Token revoked');
+    this.putSettings({ security: sec }, 'Token revoked', null, { secDraft: prev });
   }
   createToken() {
     const name = (this.state.newTokenName || '').trim();
     if (!name) { this.notify('Name the token first'); return; }
+    /* The prefix is a made-up string that authenticates nothing — real API tokens come from
+       DRF's authtoken, one per user. The server refuses this, so the optimistic row is
+       reverted rather than left sitting in the table looking like a usable credential. */
+    const prev = this.state.secDraft;
+    const prevName = this.state.newTokenName;
     const tok = { id: 'tk' + Date.now().toString(36), name, prefix: 'lm_live_' + Math.random().toString(36).slice(2, 6), created: new Date().toISOString().slice(0, 10), last_used: null };
-    const sec = Object.assign({}, this.state.secDraft, { tokens: this.state.secDraft.tokens.concat([tok]) });
+    const sec = Object.assign({}, prev, { tokens: prev.tokens.concat([tok]) });
     this.setState({ secDraft: sec, newTokenName: '' });
-    this.putSettings({ security: sec }, 'API token created — copy it now');
+    this.putSettings({ security: sec }, 'API token created — copy it now', null, { secDraft: prev, newTokenName: prevName });
   }
   changePassword() {
     const s = this.state;
@@ -1002,11 +1376,6 @@
   }
 
   /* ---------- formatting helpers ---------- */
-  blHash(str) {
-    let h = 1779033703 ^ str.length;
-    for (let i = 0; i < str.length; i++) { h = Math.imul(h ^ str.charCodeAt(i), 3432918353); h = (h << 13) | (h >>> 19); }
-    return function () { h = Math.imul(h ^ (h >>> 16), 2246822507); h = Math.imul(h ^ (h >>> 13), 3266489909); return ((h ^= h >>> 16) >>> 0) / 4294967296; };
-  }
   fmt(n) {
     if (n == null) return '—';
     if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
@@ -1014,6 +1383,30 @@
     return n.toLocaleString('en-US');
   }
   money(n) { return '$' + (n == null ? '0.00' : Number(n).toFixed(2)); }
+  /* Alert timestamps arrive as date-only ISO strings ("2026-07-24" — see
+     alerts_service.build_alerts_response). Appending T00:00:00 forces local-midnight
+     parsing; a bare "YYYY-MM-DD" is parsed as UTC by spec, which shifts the day for
+     anyone west of Greenwich and would show "yesterday" for today's alerts. Anything
+     unparseable is returned verbatim rather than guessed at. */
+  relTime(ts) {
+    if (!ts) return '';
+    const raw = String(ts);
+    const d = new Date(raw.length <= 10 ? raw + 'T00:00:00' : raw);
+    const t = d.getTime();
+    if (isNaN(t)) return raw;
+    const diff = Date.now() - t;
+    if (diff < 60000) return 'just now';
+    const mins = Math.floor(diff / 60000);
+    if (mins < 60) return mins + 'm ago';
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return hrs + 'h ago';
+    const days = Math.floor(hrs / 24);
+    if (days === 1) return 'yesterday';
+    if (days < 7) return days + 'd ago';
+    if (days < 35) return Math.floor(days / 7) + 'w ago';
+    if (days < 365) return Math.floor(days / 30) + 'mo ago';
+    return Math.floor(days / 365) + 'y ago';
+  }
   posBadge(p) {
     const base = { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', minWidth: '28px', height: '24px', borderRadius: '4px', fontSize: '12px', fontWeight: 600 };
     if (p == null) return Object.assign(base, { background: 'transparent', color: '#cbd5e1' });
@@ -1068,7 +1461,10 @@
       if (!this._alive) return;
       this.setState({ auOpen: null });
       this.fetchTab('pages', pid, this.state.range, true);
-    }).catch(() => {});
+    }).catch(err => {
+      if (!this._alive) return;
+      this.notify(this.errText(err, 'Could not hide that check'));
+    });
   }
 
   sortRows(rows, sort) {
@@ -1080,6 +1476,204 @@
     });
   }
   arrow(sort, keyName) { return sort.key === keyName ? (sort.dir === -1 ? ' ↓' : ' ↑') : ''; }
+
+  /* ================= Data source badges =================================================
+     Every metric surface has to answer two questions without the user asking anyone:
+       1. where did this number come from?  ->  GSC · GA4 · DataForSEO · Lighthouse · Google Ads
+       2. how old is it?                    ->  the last run of the connector(s) behind it
+
+     There is deliberately NO "estimated" tier. A number that was not measured does not get a
+     badge admitting it — it is not on screen at all. If a surface has no connector that can
+     honestly be named, that is a finding to report, not a badge to invent.
+
+     Freshness comes from the real `SyncLog` rows (apps/sync/models.py) that
+     settings_service.query_connectors_raw already returns on GET /settings, loaded into
+     state.syncLog by loadSyncLog(). Three properties of those rows matter and are easy to
+     get wrong:
+
+       * `last_sync` is the last RUN, not the last SUCCESS. pipeline/connectors/base.py writes
+         it for BOTH "success" and "error". So when the last run failed, the data on screen is
+         OLDER than that date, and the badge has to say so instead of printing the date alone.
+         Off-site's own banner already words it exactly this way; these badges match it.
+       * status "running" sets `last_sync` back to null, so a connector that is mid-sync must
+         not be reported as "never synced".
+       * the real status vocabulary is never|running|success|error — never "ok".
+
+     A surface fed by more than one connector (Site Audit's health score is 60% Lighthouse +
+     40% GSC URL Inspection; Off-site joins GA4 sessions with DataForSEO referring domains) is
+     reported as the union of its sources and the age of its OLDEST input — a card is only as
+     fresh as the stalest thing in it — and it names which half is failing or missing rather
+     than averaging the problem away.                                                        */
+
+  /* brand shown in the badge (deduped) */
+  get SRC_LABEL() {
+    return {
+      gsc: 'GSC', gsc_keywords: 'GSC', gsc_pages: 'GSC', url_inspection: 'GSC',
+      ga4: 'GA4',
+      pagespeed: 'Lighthouse',
+      dataforseo_serp: 'DataForSEO', dataforseo_keywords: 'DataForSEO',
+      dataforseo_backlinks: 'DataForSEO', dataforseo_onpage: 'DataForSEO',
+      dataforseo_labs_competitors: 'DataForSEO', dataforseo_serp_competitors: 'DataForSEO',
+      dataforseo_ai_keywords: 'DataForSEO',
+      google_ads: 'Google Ads', google_ads_search_terms: 'Google Ads',
+      sitemap: 'Sitemap', meta: 'Meta', linkedin: 'LinkedIn'
+    };
+  }
+  /* short precise name, used only when one part of a mixed source is the problem */
+  get SRC_PART() {
+    return {
+      gsc: 'GSC search', gsc_keywords: 'GSC queries', gsc_pages: 'GSC pages',
+      url_inspection: 'GSC indexing', ga4: 'GA4', pagespeed: 'Lighthouse',
+      dataforseo_serp: 'DataForSEO SERP', dataforseo_keywords: 'DataForSEO volume',
+      dataforseo_backlinks: 'DataForSEO backlinks', dataforseo_onpage: 'DataForSEO OnPage',
+      dataforseo_labs_competitors: 'DataForSEO competitors',
+      dataforseo_serp_competitors: 'DataForSEO competitor SERP',
+      dataforseo_ai_keywords: 'DataForSEO AI keywords',
+      google_ads: 'Google Ads', google_ads_search_terms: 'Google Ads search terms',
+      sitemap: 'Sitemap', meta: 'Meta', linkedin: 'LinkedIn'
+    };
+  }
+  /* full name, used in the title attribute */
+  get SRC_FULL() {
+    return {
+      gsc: 'Google Search Console — Search Analytics',
+      gsc_keywords: 'Google Search Console — query report',
+      gsc_pages: 'Google Search Console — page report',
+      url_inspection: 'Google Search Console — URL Inspection API',
+      ga4: 'Google Analytics 4',
+      pagespeed: 'Google PageSpeed Insights (Lighthouse)',
+      dataforseo_serp: 'DataForSEO — SERP positions',
+      dataforseo_keywords: 'DataForSEO — search volume & CPC',
+      dataforseo_backlinks: 'DataForSEO — backlink profile',
+      dataforseo_onpage: 'DataForSEO — OnPage crawl',
+      dataforseo_labs_competitors: 'DataForSEO Labs — competitor domains',
+      dataforseo_serp_competitors: 'DataForSEO — competitor SERP positions',
+      dataforseo_ai_keywords: 'DataForSEO — AI keyword data',
+      google_ads: 'Google Ads',
+      google_ads_search_terms: 'Google Ads — search term report',
+      sitemap: 'Sitemap crawl', meta: 'Meta', linkedin: 'LinkedIn'
+    };
+  }
+  /* One generic threshold rather than a per-connector guess. It is a UI policy, not a claim
+     about the data: "this has not been refreshed in over a fortnight". The exact timestamp is
+     always in the title, so nothing is hidden behind the word. */
+  get SRC_STALE_DAYS() { return 14; }
+
+  srcStyle(state) {
+    const base = {
+      display: 'inline-flex', alignItems: 'center', gap: '5px', flexShrink: 0,
+      fontSize: '10.5px', fontWeight: 600, letterSpacing: '0.02em',
+      padding: '2px 7px', borderRadius: '4px', whiteSpace: 'nowrap',
+      border: '1px solid #e2e8f0', background: '#f8fafc', color: '#64748b',
+      /* NOT `pointer`: a11ySweep() promotes every pointer-cursor leaf to role="button", and
+         this badge is not a control. `help` signals the title tooltip without doing that. */
+      cursor: 'help'
+    };
+    if (state === 'stale') return Object.assign(base, { border: '1px solid #fef3c7', background: '#fffbeb', color: '#b45309' });
+    if (state === 'failed') return Object.assign(base, { border: '1px solid #fecaca', background: '#fef2f2', color: '#b91c1c' });
+    if (state === 'never') return Object.assign(base, { border: '1px solid #e2e8f0', background: '#f1f5f9', color: '#94a3b8' });
+    if (state === 'running') return Object.assign(base, { border: '1px solid #bfdbfe', background: '#eff6ff', color: '#1d4ed8' });
+    if (state === 'live') return Object.assign(base, { border: '1px solid #bfdbfe', background: '#eff6ff', color: '#1d4ed8' });
+    return base;
+  }
+
+  /* `note` (optional) is appended to the tooltip for a surface that needs one sentence of
+     provenance the connector list alone cannot carry — e.g. "this half only appears once the
+     Ads connector has run". It never changes the visible text or the state. */
+  srcBadge(connectors, note) {
+    /* Every branch returns a fully-populated object: a template reading {{ x.src.text }} must
+       never be able to print `undefined`. `show:false` hides it via its own <sc-if>. */
+    const hidden = { show: false, state: 'none', text: '', title: '', aria: '', style: { display: 'none' } };
+    if (!connectors || !connectors.length) return hidden;
+    const st = this.state;
+    /* No rows yet (first paint, or the read failed) — no badge, rather than a made-up date. */
+    if (!st.syncLog || !st.syncLog.length || st.syncLogFor !== st.projectId) return hidden;
+
+    const by = {};
+    for (let i = 0; i < st.syncLog.length; i++) by[st.syncLog[i].name] = st.syncLog[i];
+
+    const LBL = this.SRC_LABEL, PART = this.SRC_PART, FULL = this.SRC_FULL;
+    const labels = [], failed = [], never = [], running = [], detail = [];
+    let oldestMs = null, okCount = 0;
+
+    for (let i = 0; i < connectors.length; i++) {
+      const nm = connectors[i];
+      const lbl = LBL[nm] || nm, part = PART[nm] || nm, full = FULL[nm] || nm;
+      if (labels.indexOf(lbl) < 0) labels.push(lbl);
+      const row = by[nm];
+      if (row && row.status === 'running') {
+        if (running.indexOf(part) < 0) running.push(part);
+        detail.push(full + ': refreshing now');
+        continue;
+      }
+      if (!row || !row.last_sync) {
+        if (never.indexOf(part) < 0) never.push(part);
+        detail.push(full + ': never synced');
+        continue;
+      }
+      const raw = String(row.last_sync);
+      const stamp = raw.slice(0, 10) + ' ' + raw.slice(11, 16);
+      if (row.status === 'error') {
+        if (failed.indexOf(part) < 0) failed.push(part);
+        detail.push(full + ': last run ' + stamp + ' FAILED' + (row.error ? ' (' + row.error + ')' : '')
+          + ' — the figures shown are older than this date');
+      } else {
+        okCount++;
+        detail.push(full + ': last synced ' + stamp
+          + (row.records == null ? '' : ' · ' + row.records + ' records'));
+        const t = new Date(raw).getTime();
+        if (!isNaN(t) && (oldestMs === null || t < oldestMs)) oldestMs = t;
+      }
+    }
+
+    const name = labels.join(' + ');
+    const total = connectors.length;
+    let state, tail;
+    if (failed.length) {
+      /* Worst first: a failed run means the number is older than any date we could print. */
+      state = 'failed';
+      tail = failed.length === total ? 'last refresh failed' : failed.join(' + ') + ' refresh failed';
+    } else if (never.length === total) {
+      state = 'never'; tail = 'never synced';
+    } else if (never.length) {
+      state = 'never'; tail = never.join(' + ') + ' never synced';
+    } else if (running.length) {
+      state = 'running'; tail = running.length === total ? 'refreshing now' : running.join(' + ') + ' refreshing';
+    } else if (!okCount || oldestMs === null) {
+      state = 'never'; tail = 'never synced';
+    } else {
+      const ageDays = Math.floor((Date.now() - oldestMs) / 86400000);
+      state = ageDays > this.SRC_STALE_DAYS ? 'stale' : 'fresh';
+      /* relTime() is the app's existing "how old" vocabulary ("3d ago", "6w ago") — a plain
+         date does not tell a non-expert that 40-day-old data is a problem. */
+      tail = this.relTime(new Date(oldestMs).toISOString());
+      if (state === 'stale') tail = tail + ' · stale';
+    }
+
+    const many = labels.length > 1;
+    return {
+      show: true, state: state,
+      text: name + ' · ' + tail,
+      title: (many ? 'This card is built from ' + total + ' sources and is only as fresh as the oldest. ' : '')
+        + detail.join('  ·  ') + (note ? '  ·  ' + note : ''),
+      aria: 'Data source: ' + name + ', ' + tail,
+      style: this.srcStyle(state)
+    };
+  }
+
+  /* The three sanctioned live lookups (/api/research, /api/domain-overview, /api/live-serp)
+     have no SyncLog row by construction — they ran because the user pressed a button, so
+     "how old is it" is answered by the press itself, not by a sync date. */
+  srcLive(label, what) {
+    return {
+      show: true, state: 'live',
+      text: label + ' · live',
+      title: 'Fetched live from ' + label + ' when you ran this ' + (what || 'lookup')
+        + '. Nothing here is stored or scheduled, so it is as of this moment.',
+      aria: 'Data source: ' + label + ', fetched live just now',
+      style: this.srcStyle('live')
+    };
+  }
   mkSortHandler(stateKey, keyName) {
     return () => this.setState(s => {
       const cur = s[stateKey];
@@ -1089,6 +1683,11 @@
 
   /* ---------- AI Optimization actions ---------- */
   aiPost(action, body) { return window.FuseAPI.post('/api/projects/' + this.state.projectId + '/ai/' + action, body || {}); }
+  /* Deliberately silent. Every caller is a mutation that has already succeeded and already
+     told the user so; this is only the re-read that pulls the new server state into the cache.
+     A second, contradictory toast for a failed background refresh would be noise the user did
+     not ask for, and the database-first contract already says a stale screen is acceptable —
+     the AI tab keeps showing the last saved data until the next visit or refresh. */
   aiReload() {
     const pid = this.state.projectId;
     const k = this.key('ai', pid, this.state.range);
@@ -1115,7 +1714,13 @@
         this.aiReload();
         this.notify('AI tracking configured — ' + texts.length + ' prompt' + (texts.length === 1 ? '' : 's') + ' on the weekly schedule');
       })
-      .catch(() => { if (this._alive) this.setState({ aiWizBusy: false }); });
+      .catch(err => {
+        if (!this._alive) return;
+        /* clears the spinner AND says why — the wizard used to just come back to life with no
+           explanation, looking like the user had mis-clicked Finish */
+        this.setState({ aiWizBusy: false });
+        this.notify(this.errText(err, 'Could not save your AI tracking setup'));
+      });
   }
   aiSaveTargets(d) {
     const s = this.state;
@@ -1128,7 +1733,11 @@
         this.setState({ aiTgOpen: false, aiWizBrand: null, aiWizAliases: null, aiWizComps: null, aiWizCompInput: '' });
         this.aiReload();
         this.notify('Tracked targets updated');
-      }).catch(() => {});
+      }).catch(err => {
+        if (!this._alive) return;
+        /* the targets drawer stays open with the user's edits intact so they can retry */
+        this.notify(this.errText(err, 'Could not save the tracked targets'));
+      });
   }
   aiAddPrompts(texts, listId, after) {
     if (!texts.length) return;
@@ -1138,7 +1747,12 @@
         this.aiReload();
         this.notify(r.added + ' prompt' + (r.added === 1 ? '' : 's') + ' added — first run on the weekly schedule');
         if (after) after();
-      }).catch(() => {});
+      }).catch(err => {
+        if (!this._alive) return;
+        /* `after` is deliberately NOT run: it clears the composer / closes the picker, which
+           would throw away text the user now has to re-type */
+        this.notify(this.errText(err, 'Could not add ' + (texts.length === 1 ? 'that prompt' : 'those prompts')));
+      });
   }
   aiRun(body) {
     this.aiPost('run', body)
@@ -1146,7 +1760,12 @@
         if (!this._alive) return;
         this.aiReload();
         this.notify('Ran ' + r.ran + ' prompt' + (r.ran === 1 ? '' : 's') + ' across LLMs · ' + this.money(r.cost));
-      }).catch(() => {});
+      }).catch(err => {
+        if (!this._alive) return;
+        /* a run costs money and takes time — silence here reads as "nothing happened yet",
+           and the user presses it again */
+        this.notify(this.errText(err, 'Could not run the prompts'));
+      });
   }
   aiInspect(question, promptId) {
     question = (question || '').trim();
@@ -1159,7 +1778,11 @@
         this.aiReload();
         this.notify('Inspection saved to History · ' + this.money(e.cost));
       })
-      .catch(() => { if (this._alive) this.setState({ aiInspecting: false }); });
+      .catch(err => {
+        if (!this._alive) return;
+        this.setState({ aiInspecting: false });
+        this.notify(this.errText(err, 'Could not run that inspection'));
+      });
   }
   aiExplore() {
     const q = this.state.aiExpQ.trim();
@@ -1167,11 +1790,21 @@
     this.setState({ aiExploring: true, aiExpSel: [], aiExpAddOpen: false });
     window.FuseAPI.post('/api/prompt-research', { project: this.state.projectId, seeds: q.split(',') })
       .then(r => { if (this._alive) this.setState({ aiExploring: false, aiExp: r }); })
-      .catch(() => { if (this._alive) this.setState({ aiExploring: false }); });
+      .catch(err => {
+        if (!this._alive) return;
+        this.setState({ aiExploring: false });
+        this.notify(this.errText(err, 'Could not explore prompt ideas'));
+      });
   }
   aiListOp(op, id, name, after) {
     this.aiPost('lists', { op, id, name })
-      .then(() => { if (!this._alive) return; this.aiReload(); if (after) after(); }).catch(() => {});
+      .then(() => { if (!this._alive) return; this.aiReload(); if (after) after(); })
+      .catch(err => {
+        if (!this._alive) return;
+        /* op is 'create' | 'rename' | 'delete'; naming it tells the user which of the three
+           list controls did nothing. `after` is skipped so the name they typed survives. */
+        this.notify(this.errText(err, 'Could not ' + op + ' the prompt list'));
+      });
   }
 
   /* ---------- renderVals ---------- */
@@ -1244,7 +1877,12 @@
 
     const data = s.cache[this.key(tab)];
     const alertsData = s.cache[this.key('alerts')];
-    const unacked = alertsData ? alertsData.feed.filter(f => !f.acknowledged && f.severity !== 'info').length : 0;
+    /* The single definition of "unread" in this app: unacknowledged and not merely
+       informational. The sidebar's Alerts badge (vals.hasUnacked / vals.unackedCount),
+       the topbar bell badge and the notification centre's list all derive from this one
+       array — there must never be a second, subtly different predicate. */
+    const unackedFeed = alertsData ? alertsData.feed.filter(f => !f.acknowledged && f.severity !== 'info') : [];
+    const unacked = unackedFeed.length;
 
     const h = {
       logout: () => { try { localStorage.clear(); sessionStorage.clear(); } catch (e) {} window.location.href = '/logout/'; },
@@ -1255,6 +1893,20 @@
       doInput: e => this.setState({ doQuery: e.target.value }),
       doKey: e => { if (e.key === 'Enter') this.runDomainOverview(); },
       runDomainOverview: () => this.runDomainOverview(),
+      doToggleRow: kw => this.setState(st => {
+        const sel = st.doSel || [];
+        return { doSel: sel.indexOf(kw) >= 0 ? sel.filter(k => k !== kw) : sel.concat([kw]) };
+      }),
+      doToggleAll: () => {
+        const vis = ((this.state.doData && this.state.doData.keywords) || []).map(k => k.keyword);
+        const sel = this.state.doSel || [];
+        const allOn = vis.length > 0 && vis.every(k => sel.indexOf(k) >= 0);
+        this.setState({ doSel: allOn ? [] : vis });
+      },
+      doClearSel: () => this.setState({ doSel: [] }),
+      doPickCancel: () => this.doPickCancel(),
+      doPickConfirm: () => this.doPickConfirm(),
+      doTrackSelected: () => this.trackDomainOverviewKws(this.doSelectedRows()),
       fetchLiveSerp: (kw, loc) => this.fetchLiveSerp(kw, loc),
       analyzeUrlInDomainOverview: url => this.analyzeUrlInDomainOverview(url), navAlerts: () => this.go('alerts'), navSettings: () => { if (this.state.userRole !== 'Analyst') this.go('settings'); else this.notify('Settings require Owner or Admin access.'); },
       goConnections: () => { if (this.state.userRole === 'Analyst') { this.notify('Connecting social platforms requires Owner or Admin access.'); } else { this.setState({ tab: 'settings', settingsSub: 'connections' }); this.pushNav({ tab: 'settings', settingsSub: 'connections' }); } },
@@ -1269,6 +1921,14 @@
       addSiteSubmit: () => this.addSiteSubmit(),
       range7: () => this.setRange('7d'), range30: () => this.setRange('30d'), range90: () => this.setRange('90d'),
       refreshPage: () => { if (pageScope) this.startSync(pageScope); },
+      /* Incremental positions refresh. The full 'positions' scope re-queries EVERY tracked
+         keyword against every competitor, which is what makes picking up a handful of newly
+         tracked keywords take minutes and cost DataForSEO credits. 'positions_new' runs the
+         same connectors narrowed to keywords that have never been measured. If none are
+         outstanding the backend finishes immediately rather than falling through to a full
+         run -- 'nothing new' and 'everything' must not be the same outcome. */
+      refreshNewKeywords: () => this.startSync('positions_new'),
+
       refreshAll: () => this.startSync('all'),
       retry: () => this.fetchTab(tab, s.projectId, s.range, true),
       explorerInput: e => this.setState({ explorerQ: e.target.value }),
@@ -1320,9 +1980,13 @@
       copyKws: () => this.copySelectedKws(),
       copySummary: () => this.copySummary(),
       ackAll: () => this.ackAllAlerts(),
+      /* notification centre (topbar bell) — in-dashboard only, no Slack, no email */
+      ncToggle: () => this.setState(st => ({ ncOpen: !st.ncOpen, addSiteOpen: false })),
+      ncAckAll: () => this.ackAllAlerts(),
+      ncViewAll: () => { this.setState({ ncOpen: false }); this.go('alerts'); },
       exportTopPages: () => { const d = s.cache[this.key('overview')]; if (d) this.downloadCsv(project.domain + '-top-pages.csv', [['page', 'url'], ['clicks', 'clicks'], ['impressions', 'impressions'], ['ctr', 'ctr']], d.topPages); },
       exportKeywords: () => { const d = s.cache[this.key('keywords')]; if (d) this.downloadCsv(project.domain + '-keywords.csv', [['keyword', 'kw'], ['intent', 'intent'], ['position', 'pos'], ['volume', 'volume'], ['kd', 'kd'], ['cpc', 'cpc'], ['clicks', 'clicks'], ['url', 'url']], d.keywords); },
-      exportBacklinks: () => { const d = s.cache[this.key('backlinks')]; if (d) this.downloadCsv(project.domain + '-backlinks.csv', [['domain', 'domain'], ['anchor', 'anchor'], ['type', 'type'], ['status', 'status'], ['rank', 'rank'], ['first_seen', 'firstSeen'], ['target', 'target']], d.links); },
+      exportBacklinks: () => { const d = s.cache[this.key('backlinks')]; if (d) this.downloadCsv(project.domain + '-backlinks.csv', [['domain', 'domain'], ['anchor', 'anchor'], ['status', 'status'], ['dofollow', 'dofollow'], ['rank', 'rank'], ['first_seen', 'firstSeen'], ['target', 'target']], d.links); },
       exportReferrers: () => { const d = s.cache[this.key('offsite')]; if (d) this.downloadCsv(project.domain + '-referring-domains.csv', [['domain', 'domain'], ['domain_rank', 'rank'], ['sessions', 'sessions'], ['engaged_sessions', 'engagedSessions'], ['engagement_rate', 'engagedRate'], ['key_events', 'keyEvents'], ['revenue', 'revenue'], ['tracked_as_backlink', 'tracked']], d.referrers); },
       exportSocial: () => { const d = s.cache[this.key('offsite')]; if (d) this.downloadCsv(project.domain + '-off-site-social.csv', [['platform', 'platform'], ['source', 'source'], ['channel', 'channel'], ['impressions', 'impressions'], ['sessions', 'sessions'], ['engagement_rate', 'engagedRate'], ['key_events', 'keyEvents'], ['revenue', 'revenue']], d.social); },
       exportPages: () => { const d = s.cache[this.key('pages')]; if (d) this.downloadCsv(project.domain + '-crawled-pages.csv', [['url', 'url'], ['score', 'score'], ['status', 'statusCode'], ['errors', 'errors'], ['warnings', 'warnings'], ['notices', 'notices'], ['depth', 'depth'], ['in_links', 'inLinks'], ['load_ms', 'loadTimeMs']], d.crawledPages); },
@@ -1348,7 +2012,45 @@
       wsWeek: e => this.editWs({ week_start: e.target.value }),
       saveWs: () => this.saveWs(),
       transferOwner: () => this.notify('Ownership transfer requires email confirmation'),
-      deleteWorkspace: () => this.notify('Type the workspace name to confirm deletion'),
+      /* Was a stub: it toasted "Type the workspace name to confirm deletion" and did nothing
+         -- there was no field to type into and no endpoint behind it. Scoped to the CURRENT
+         project (2026-07-28, product owner's decision): the old "removes all projects" label
+         promised a workspace-wide wipe that no endpoint implements, and building an
+         irreversible delete-everything button was not wanted. */
+      deleteProjectOpen: () => this.setState({ delProjOpen: true, delProjText: '' }),
+      deleteProjectClose: () => this.setState({ delProjOpen: false, delProjText: '' }),
+      deleteProjectType: e => this.setState({ delProjText: e.target.value }),
+      deleteProjectConfirm: () => {
+        const pid = this.state.projectId;
+        const proj = (this.state.projects || []).find(p => p.id === pid);
+        const domain = (proj && proj.domain) || '';
+        /* Typed name must match exactly. This is the only guard on an irreversible action,
+           so it is checked here against the REAL domain, not against whatever the field
+           happened to be seeded with. */
+        if (!domain || (this.state.delProjText || '').trim().toLowerCase() !== domain.toLowerCase()) {
+          this.notify('Type ' + (domain || 'the project domain') + ' exactly to confirm');
+          return;
+        }
+        if (this.state.delProjBusy) return;
+        this.setState({ delProjBusy: true });
+        /* Data first, then the project row. If the second call fails the analytics are gone
+           but the project remains -- recoverable by re-syncing. The reverse order would
+           orphan every analytics row under a site_id nothing can reach. */
+        window.FuseAPI.del('/api/projects/' + pid + '/data')
+          .then(() => window.FuseAPI.del('/api/projects/' + pid))
+          .then(() => {
+            if (!this._alive) return;
+            const left = (this.state.projects || []).filter(p => p.id !== pid);
+            this.setState({ delProjOpen: false, delProjBusy: false, delProjText: '', projects: left, cache: {} });
+            this.notify(domain + ' deleted');
+            if (left.length) this.setProject(left[0].id); else window.location.reload();
+          })
+          .catch(err => {
+            if (!this._alive) return;
+            this.setState({ delProjBusy: false });
+            this.notify(this.errText(err, 'Could not delete ' + domain));
+          });
+      },
       inviteEmail: e => this.setState({ inviteEmail: e.target.value }),
       inviteUsername: e => this.setState({ inviteUsername: e.target.value }),
       invitePassword: e => this.setState({ invitePassword: e.target.value }),
@@ -1428,7 +2130,14 @@
         username: s.acceptUsername || '',
         password: s.acceptPassword || '',
         error: s.acceptError || null,
-        success: s.acceptSuccess || null
+        success: s.acceptSuccess || null,
+        /* Pre-computed: the modal used `{{ !acceptInvite.error && !acceptInvite.success }}`,
+           and the dc-runtime resolver has no `&&` (support.js resolve() handles parens,
+           ===/!==/==/!=, a leading `!`, true/false and paths -- nothing else). It parsed
+           that as `!resolve("acceptInvite.error && !acceptInvite.success")`, which is an
+           unknown path, so `!undefined` -> TRUE. The signup form therefore rendered even
+           on an invalid-token error and after a successful activation. */
+        showForm: !s.acceptError && !s.acceptSuccess
       } : null,
       userInitials: uCfg.initials, userName: uCfg.username, userRole: uCfg.role, canManageSettings,
       brandName: project.name || 'FuseHealth',
@@ -1497,6 +2206,74 @@
         onSendPt: () => this.sendListToTracking(l.id),
         keywords: l.keywords.map(kw => ({ kw, onRemove: () => this.removeKwFromList(l.id, kw) }))
       }));
+    }
+
+    /* ---------- notification centre (topbar bell) ----------
+       In-dashboard only: no Slack, no email. Reads the alerts tab's already-prefetched
+       cache (boot() and every completed sync refresh it), so opening the bell never
+       touches the network — the database-first contract holds. Computed here, above the
+       `if (s.loading || s.error || !data) return vals` guard, because the topbar renders
+       on every screen including the loading and error states. */
+    {
+      const NC_LIMIT = 8;
+      /* Mirrors overview_service._KIND_MODULE_MAP exactly (same six kinds, same
+         General/alerts fallback) so a row in the bell lands on the same screen as the
+         identical row in Overview's priority feed. Labels double as keys into the fixed
+         module colours in design.md §4 — do not re-word them. */
+      const ncKindModule = {
+        anomaly: { label: 'SEO', target: 'seo' },
+        ranking: { label: 'Positions', target: 'positioning' },
+        backlink: { label: 'Backlinks', target: 'backlinks' },
+        technical: { label: 'Site Audit', target: 'pages' },
+        ads: { label: 'Ads', target: 'ads' },
+        system: { label: 'System', target: 'alerts' }
+      };
+      const ncModColor = { SEO: '#4f46e5', Positions: '#0891b2', Backlinks: '#7c3aed', 'Site Audit': '#dc2626', Ads: '#059669', System: '#64748b', General: '#64748b' };
+      const ncSevColor = { high: '#dc2626', medium: '#d97706', info: '#94a3b8' };
+      const ncSevRank = { high: 0, medium: 1, info: 2, low: 3 };
+      const ncRank = f => (ncSevRank[f.severity] == null ? 9 : ncSevRank[f.severity]);
+      /* Same order the server builds Overview's priority feed with (overview_service
+         .build_priority_feed): two stable passes — newest ts first, then highest
+         severity first — so the two lists never disagree about what matters most. */
+      const ncSorted = unackedFeed.slice()
+        .sort((a, b) => (a.ts < b.ts ? 1 : (a.ts > b.ts ? -1 : 0)))
+        .sort((a, b) => ncRank(a) - ncRank(b));
+      const ncShown = ncSorted.slice(0, NC_LIMIT);
+      const ncOn = s.ncOpen;
+
+      vals.ncOpen = ncOn;
+      vals.ncTriggerStyle = {
+        position: 'relative', display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+        width: '32px', height: '32px', borderRadius: '8px',
+        border: '1px solid ' + (ncOn ? '#c7d2fe' : '#e2e8f0'),
+        background: ncOn ? '#eef2ff' : 'white',
+        color: ncOn ? '#4338ca' : '#475569',
+        cursor: 'pointer'
+      };
+      vals.ncBadgeStyle = { position: 'absolute', top: '-6px', right: '-6px', minWidth: '16px', height: '16px', padding: '0 4px', borderRadius: '9999px', background: '#dc2626', color: 'white', fontSize: '10px', fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', border: '2px solid white' };
+      vals.ncBadgeText = unacked > 99 ? '99+' : String(unacked);
+      /* The badge digits are aria-hidden, so the count has to live in the label. */
+      vals.ncAria = unacked === 0
+        ? 'Notifications — no unread alerts'
+        : 'Notifications — ' + unacked + ' unread alert' + (unacked === 1 ? '' : 's');
+      vals.ncCountText = unacked === 0 ? 'Nothing unread' : unacked + ' unread';
+      vals.ncEmpty = ncShown.length === 0;
+      vals.ncCanAckAll = ncShown.length > 0;
+      vals.ncHasMore = ncSorted.length > ncShown.length;
+      vals.ncMoreText = 'Showing ' + ncShown.length + ' of ' + ncSorted.length;
+      vals.ncItems = ncShown.map((f, i) => {
+        const mod = ncKindModule[f.kind] || { label: 'General', target: 'alerts' };
+        const modC = ncModColor[mod.label] || '#64748b';
+        const rel = this.relTime(f.ts);
+        return {
+          title: f.title, timeFmt: rel, moduleLabel: mod.label,
+          aria: f.title + ' — ' + mod.label + ', ' + rel,
+          sevDotStyle: { width: '8px', height: '8px', borderRadius: '9999px', background: ncSevColor[f.severity] || '#94a3b8', marginTop: '5px', flexShrink: 0 },
+          moduleStyle: { fontSize: '10px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', color: modC, background: modC + '14', padding: '2px 7px', borderRadius: '4px' },
+          rowStyle: { display: 'flex', gap: '10px', alignItems: 'flex-start', padding: '11px 14px', cursor: 'pointer', borderTop: i === 0 ? 'none' : '1px solid #f1f5f9' },
+          onClick: () => { this.setState({ ncOpen: false }); this.go(mod.target); }
+        };
+      });
     }
 
     /* research results (visible on keywords tab regardless of loading) */

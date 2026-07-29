@@ -4,6 +4,12 @@ pipeline/connectors/google_ads.py — Google Ads connector.
 Fetches: daily campaign spend, clicks, impressions, conversions per campaign.
 Writes to: ad_metrics_daily table (platform='google').
 
+Auth lives here and ONLY here for every Google Ads resource: `_build_service()` is the
+single place that assembles the SDK credentials dict and returns a GoogleAdsService.
+Sibling connectors (see google_ads_search_terms.py) subclass this class so they inherit
+the same credential validation in `__init__` and the same client construction — there is
+deliberately no second auth path to keep in sync.
+
 REQUIRES Standard Access (apply at https://developers.google.com/google-ads/api/docs/access-levels)
 Basic Access: 15,000 operations/day. Standard: unlimited for most use cases.
 Rate limit: 2 QPS — enforced by the SDK automatically.
@@ -40,16 +46,12 @@ class GoogleAdsConnector(BaseConnector):
                 "Also ensure Standard Access has been approved."
             )
 
-    @with_retry(max_retries=3, base_delay=5.0)
-    def fetch(self, site_id: Optional[str] = None, days: int = 90) -> list[dict]:
-        """
-        Fetch campaign metrics for the past N days.
+    def _build_service(self):
+        """Construct the GoogleAdsService client. The ONLY place credentials are assembled.
 
-        Uses GAQL (Google Ads Query Language) to retrieve:
-        campaign name, date, spend, clicks, impressions, conversions.
-
-        Returns:
-            List of dicts for ad_metrics_daily table.
+        Subclasses (search-term connector) call this rather than rebuilding the dict, so a
+        change to the auth model — e.g. a switch to a service-account or a different token
+        source — lands in exactly one place.
         """
         try:
             from google.ads.googleads.client import GoogleAdsClient
@@ -70,7 +72,20 @@ class GoogleAdsConnector(BaseConnector):
             credentials["login_customer_id"] = self.login_customer_id
 
         client = GoogleAdsClient.load_from_dict(credentials)
-        service = client.get_service("GoogleAdsService")
+        return client.get_service("GoogleAdsService")
+
+    @with_retry(max_retries=3, base_delay=5.0)
+    def fetch(self, site_id: Optional[str] = None, days: int = 90) -> list[dict]:
+        """
+        Fetch campaign metrics for the past N days.
+
+        Uses GAQL (Google Ads Query Language) to retrieve:
+        campaign name, date, spend, clicks, impressions, conversions, conversion value.
+
+        Returns:
+            List of dicts for ad_metrics_daily table.
+        """
+        service = self._build_service()
 
         start_date = iso(days_ago(days))
         end_date = iso(days_ago(1))
@@ -85,6 +100,7 @@ class GoogleAdsConnector(BaseConnector):
                 metrics.clicks,
                 metrics.impressions,
                 metrics.conversions,
+                metrics.conversions_value,
                 segments.date
             FROM campaign
             WHERE
@@ -101,6 +117,15 @@ class GoogleAdsConnector(BaseConnector):
             spend_usd = row.metrics.cost_micros / 1_000_000
             conversions = int(row.metrics.conversions)
             clicks = int(row.metrics.clicks)
+            conv_value = float(getattr(row.metrics, "conversions_value", 0.0) or 0.0)
+
+            # roas is the ONLY place ad_metrics_daily can carry conversion value, and it is
+            # nullable precisely so "we don't know" stays distinguishable from "the return
+            # was zero". An account with no conversion-value tracking reports
+            # conversions_value == 0 for every row: that is *unknown*, not a 0x return, so
+            # it stays None. The Attribution table reconstructs ads_value as spend * roas
+            # and therefore also stays honestly None for those accounts.
+            roas = (conv_value / spend_usd) if (spend_usd > 0 and conv_value > 0) else None
 
             records.append({
                 "date": date.fromisoformat(row.segments.date),
@@ -111,7 +136,7 @@ class GoogleAdsConnector(BaseConnector):
                 "clicks": clicks,
                 "impressions": int(row.metrics.impressions),
                 "conversions": conversions,
-                "roas": None,  # Unknown until conversion_value tracking is added (don't store fake 0)
+                "roas": round(roas, 6) if roas is not None else None,
             })
 
         self.logger.info(f"[google_ads] Fetched {len(records)} campaign-day records")

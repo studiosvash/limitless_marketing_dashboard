@@ -10,7 +10,13 @@ import requests
 from dotenv import load_dotenv
 
 from pipeline.connectors.base import BaseConnector
+from pipeline.connectors.dataforseo_cost import extract_cost, record_cost
 from pipeline.utils.retry import with_retry
+# Single shared implementation of the DataForSEO `location_name` normaliser. It is
+# defined in the live-SERP connector (where the SERP API docs specify the format) and
+# imported here so the two connectors cannot drift apart. The DataForSEO Labs endpoint
+# used below takes the same `location_name` field with the same convention.
+from pipeline.connectors.dataforseo_live_serp import normalize_location_name
 
 load_dotenv()
 
@@ -27,9 +33,15 @@ class DataForSEODomainOverviewConnector(BaseConnector):
         self.auth = (self.login, self.password)
 
     @with_retry(max_retries=2, base_delay=3.0)
-    def get_domain_overview(self, target_url: str, location_name: str = "United States", limit: int = 50) -> dict:
+    def get_domain_overview(self, target_url: str, location_name: str = "United States",
+                            limit: int = 50, site_id: str = "") -> dict:
         """
         Fetch domain overview metrics and top organic keywords for a domain or specific URL.
+
+        `site_id` is optional and only attributes the connector_costs row this call writes.
+        This is a request-scoped lookup (the Domain Overview drawer), and its API view calls
+        it without a project in hand, so the spend is booked against the unattributed ""
+        site unless a caller passes one. The returned `cost` field is unchanged.
         """
         if not self.login or not self.password:
             return {"status": "error", "error": "DataForSEO credentials are not configured."}
@@ -37,6 +49,9 @@ class DataForSEODomainOverviewConnector(BaseConnector):
         target_url = target_url.strip().lower()
         if not target_url:
             return {"status": "error", "error": "Target URL cannot be empty."}
+
+        # The UI sends "United States - Texas"; DataForSEO wants "Texas,United States".
+        location_name = normalize_location_name(location_name)
 
         # Ensure scheme for urlparse
         if not target_url.startswith("http://") and not target_url.startswith("https://"):
@@ -79,22 +94,34 @@ class DataForSEODomainOverviewConnector(BaseConnector):
             self.logger.warning(f"[dataforseo_domain_overview] Failed to fetch ranked keywords: {exc}")
             return {"status": "error", "error": f"Failed to fetch data: {exc}"}
 
+        # The live Labs call is already billed by the time we get here. Read the charge off
+        # the envelope up front so the early returns below still book what was spent.
+        run_cost = extract_cost(data)
+
         tasks = data.get("tasks", [])
         if not tasks:
+            record_cost(self.name, site_id, run_cost, units=0,
+                        notes=f"labs/ranked_keywords live for {domain} (no tasks)")
             return {"status": "error", "error": "No tasks returned from DataForSEO."}
-            
+
         task = tasks[0]
         if task.get("status_code") != 20000:
+            record_cost(self.name, site_id, run_cost, units=0,
+                        notes=f"labs/ranked_keywords live for {domain} (status {task.get('status_code')})")
             return {"status": "error", "error": f"DataForSEO error: {task.get('status_message')}"}
-            
+
         results = task.get("result", [])
         if not results:
+            record_cost(self.name, site_id, run_cost, units=0,
+                        notes=f"labs/ranked_keywords live for {domain} (no result)")
             return {"status": "ok", "metrics": {}, "keywords": []}
-            
+
         result = results[0]
         if not result:
+            record_cost(self.name, site_id, run_cost, units=0,
+                        notes=f"labs/ranked_keywords live for {domain} (empty result)")
             return {"status": "ok", "metrics": {}, "keywords": []}
-            
+
         metrics = result.get("metrics") or {}
         metrics_raw = metrics.get("organic", {}) or {}
         
@@ -125,6 +152,11 @@ class DataForSEODomainOverviewConnector(BaseConnector):
                 "traffic": round(serp_elem.get("etv", 0) or 0, 2),
                 "url": serp_elem.get("url", "")
             })
+
+        # `units` = ranked keyword rows returned — Labs ranked_keywords meters per returned
+        # keyword, so cost/units is the true per-keyword price of this lookup.
+        record_cost(self.name, site_id, run_cost, units=len(keywords),
+                    notes=f"labs/ranked_keywords live for {domain}{path if path != '/' else ''}")
 
         return {
             "status": "ok",

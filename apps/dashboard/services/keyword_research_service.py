@@ -98,7 +98,7 @@ def run_keyword_research(site_id: str, keywords: list[str], location: str) -> di
     try:
         from pipeline.connectors.dataforseo_keywords import DataForSEOKeywordsConnector
         connector = DataForSEOKeywordsConnector()
-        result = connector.expand_keywords(cleaned, location, limit=100)
+        result = connector.expand_keywords(cleaned, location, limit=100, site_id=site_id)
     except Exception as e:
         logger.error(f"run_keyword_research expand error: {e}", exc_info=True)
         result = {"status": "error", "rows": [], "cost": 0, "error": f"Keyword data source error: {e}"}
@@ -110,7 +110,7 @@ def run_keyword_research(site_id: str, keywords: list[str], location: str) -> di
         rows = [_enrich_expanded_row(r, tracked) for r in (result.get("rows") or [])]
     else:
         try:
-            fallback = connector.lookup_keywords(cleaned, location)
+            fallback = connector.lookup_keywords(cleaned, location, site_id=site_id)
             if fallback.get("status") == "ok":
                 rows = [_to_spa_row(r, tracked) for r in (fallback.get("rows") or [])]
                 return {"rows": rows, "cost": 0, "location": location, "status": "ok"}
@@ -122,7 +122,7 @@ def run_keyword_research(site_id: str, keywords: list[str], location: str) -> di
         missing_seeds = [k for k in cleaned if k.lower() not in expanded_kws]
         if missing_seeds:
             try:
-                fallback = connector.lookup_keywords(missing_seeds, location)
+                fallback = connector.lookup_keywords(missing_seeds, location, site_id=site_id)
                 for r in (fallback.get("rows") or []):
                     kw_lower = (r.get("keyword") or "").lower()
                     if kw_lower and kw_lower not in expanded_kws:

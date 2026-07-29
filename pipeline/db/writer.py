@@ -3,6 +3,9 @@ pipeline/db/writer.py — All write operations (upsert helpers) for every analyt
 
 Rules:
 - Always upsert (on_conflict_do_update) — never blind INSERT.
+- Take the `insert` construct and the batch size from pipeline.db.dialect, never
+  from a hardcoded dialect import: the same writer runs against SQLite (dev/tests)
+  and Postgres (prod), and the ON CONFLICT construct differs between them.
 - Never call these from Django views directly — only from connectors and pipeline tasks.
 - sync_log and refresh_job writes are handled by Django (apps.sync.SyncLog), NOT here.
 
@@ -16,8 +19,8 @@ from typing import Optional
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
+from pipeline.db.dialect import max_batch_size, upsert_insert
 from pipeline.db.schema import (
     Base,
     SEODaily, KeywordRanking, Page, AdMetricDaily,
@@ -27,6 +30,8 @@ from pipeline.db.schema import (
     Anomaly, ComparativeMetrics,
     CompetitorKeywordRanking, TrackedCompetitor, AIKeywordData,
     SavedKeyword, BacklinksSnapshot,
+    AuditSnapshot, AdSearchTerm, GA4CampaignDaily, ConnectorCost,
+    PageCrawlMeta, ensure_page_speed_columns,
 )
 from pipeline.utils.logger import get_logger
 
@@ -78,13 +83,14 @@ def upsert_seo_daily(session: Session, records: list[dict], site_id: Optional[st
         r.setdefault("device", None)
         r.setdefault("landing_page", None)
 
-    BATCH_SIZE = 60
+    insert = upsert_insert(session)
+    BATCH_SIZE = max_batch_size(session, 60)
     _upsert_keys = ("date", "site_id", "country", "device", "landing_page")
     update_cols = [k for k in records[0] if k not in _upsert_keys]
     total_written = 0
     for i in range(0, len(records), BATCH_SIZE):
         batch = records[i:i + BATCH_SIZE]
-        stmt = sqlite_insert(SEODaily).values(batch)
+        stmt = insert(SEODaily).values(batch)
         stmt = stmt.on_conflict_do_update(
             index_elements=list(_upsert_keys),
             set_={k: stmt.excluded[k] for k in update_cols},
@@ -110,13 +116,14 @@ def upsert_keyword_rankings(session: Session, records: list[dict], site_id: Opti
     for r in records:
         r.setdefault("site_id", "")
 
-    BATCH_SIZE = 80
+    insert = upsert_insert(session)
+    BATCH_SIZE = max_batch_size(session, 80)
     _upsert_keys = ("date", "site_id", "keyword")
     update_cols = [k for k in records[0] if k not in _upsert_keys]
     total = 0
     for i in range(0, len(records), BATCH_SIZE):
         batch = records[i:i + BATCH_SIZE]
-        stmt = sqlite_insert(KeywordRanking).values(batch)
+        stmt = insert(KeywordRanking).values(batch)
         stmt = stmt.on_conflict_do_update(
             index_elements=list(_upsert_keys),
             set_={
@@ -142,13 +149,14 @@ def upsert_pages(session: Session, records: list[dict], site_id: Optional[str] =
     for r in records:
         r.setdefault("site_id", "")
 
-    BATCH_SIZE = 80
+    insert = upsert_insert(session)
+    BATCH_SIZE = max_batch_size(session, 80)
     _upsert_keys = ("site_id", "url")
     update_cols = [k for k in records[0] if k not in _upsert_keys]
     total = 0
     for i in range(0, len(records), BATCH_SIZE):
         batch = records[i:i + BATCH_SIZE]
-        stmt = sqlite_insert(Page).values(batch)
+        stmt = insert(Page).values(batch)
         stmt = stmt.on_conflict_do_update(
             index_elements=list(_upsert_keys),
             set_={k: stmt.excluded[k] for k in update_cols},
@@ -171,13 +179,14 @@ def upsert_ad_metrics(session: Session, records: list[dict], site_id: Optional[s
     for r in records:
         r.setdefault("site_id", "")
 
-    BATCH_SIZE = 80
+    insert = upsert_insert(session)
+    BATCH_SIZE = max_batch_size(session, 80)
     _upsert_keys = ("date", "site_id", "platform", "campaign")
     update_cols = [k for k in records[0] if k not in _upsert_keys]
     total = 0
     for i in range(0, len(records), BATCH_SIZE):
         batch = records[i:i + BATCH_SIZE]
-        stmt = sqlite_insert(AdMetricDaily).values(batch)
+        stmt = insert(AdMetricDaily).values(batch)
         stmt = stmt.on_conflict_do_update(
             index_elements=list(_upsert_keys),
             set_={k: stmt.excluded[k] for k in update_cols},
@@ -200,13 +209,14 @@ def upsert_backlinks(session: Session, records: list[dict], site_id: Optional[st
     for r in records:
         r.setdefault("site_id", "")
 
-    BATCH_SIZE = 80
+    insert = upsert_insert(session)
+    BATCH_SIZE = max_batch_size(session, 80)
     _upsert_keys = ("site_id", "referring_domain", "target_url")
     update_cols = [k for k in records[0] if k not in _upsert_keys]
     total = 0
     for i in range(0, len(records), BATCH_SIZE):
         batch = records[i:i + BATCH_SIZE]
-        stmt = sqlite_insert(Backlink).values(batch)
+        stmt = insert(Backlink).values(batch)
         stmt = stmt.on_conflict_do_update(
             index_elements=list(_upsert_keys),
             set_={k: stmt.excluded[k] for k in update_cols},
@@ -229,13 +239,14 @@ def upsert_competitor_visibility(session: Session, records: list[dict], site_id:
     for r in records:
         r.setdefault("site_id", "")
 
-    BATCH_SIZE = 80
+    insert = upsert_insert(session)
+    BATCH_SIZE = max_batch_size(session, 80)
     _upsert_keys = ("date", "site_id", "competitor_domain")
     update_cols = [k for k in records[0] if k not in _upsert_keys]
     total = 0
     for i in range(0, len(records), BATCH_SIZE):
         batch = records[i:i + BATCH_SIZE]
-        stmt = sqlite_insert(CompetitorVisibility).values(batch)
+        stmt = insert(CompetitorVisibility).values(batch)
         stmt = stmt.on_conflict_do_update(
             index_elements=list(_upsert_keys),
             set_={k: stmt.excluded[k] for k in update_cols},
@@ -258,13 +269,14 @@ def upsert_competitor_domains(session: Session, records: list[dict], site_id: Op
     for r in records:
         r.setdefault("site_id", "")
 
-    BATCH_SIZE = 80
+    insert = upsert_insert(session)
+    BATCH_SIZE = max_batch_size(session, 80)
     _upsert_keys = ("site_id", "competitor_domain")
     update_cols = [k for k in records[0] if k not in _upsert_keys]
     total = 0
     for i in range(0, len(records), BATCH_SIZE):
         batch = records[i:i + BATCH_SIZE]
-        stmt = sqlite_insert(CompetitorDomain).values(batch)
+        stmt = insert(CompetitorDomain).values(batch)
         stmt = stmt.on_conflict_do_update(
             index_elements=list(_upsert_keys),
             set_={k: stmt.excluded[k] for k in update_cols},
@@ -285,13 +297,14 @@ def upsert_technical_issues(session: Session, records: list[dict], site_id: Opti
     _ensure_site_id(records, site_id)
     for r in records:
         r.setdefault("site_id", "")
-    BATCH_SIZE = 80
+    insert = upsert_insert(session)
+    BATCH_SIZE = max_batch_size(session, 80)
     _upsert_keys = ("site_id", "url", "issue_type")
     update_cols = [k for k in records[0] if k not in _upsert_keys]
     total = 0
     for i in range(0, len(records), BATCH_SIZE):
         batch = records[i:i + BATCH_SIZE]
-        stmt = sqlite_insert(TechnicalIssue).values(batch)
+        stmt = insert(TechnicalIssue).values(batch)
         stmt = stmt.on_conflict_do_update(
             index_elements=list(_upsert_keys),
             set_={k: stmt.excluded[k] for k in update_cols},
@@ -310,17 +323,23 @@ def upsert_page_speed(session: Session, records: list[dict], site_id: Optional[s
     if not records:
         return 0
 
+    # `tbt_ms` was added to an already-shipped table, so a database created before it has no
+    # such column and both the INSERT and every later `select(PageSpeed)` would fail.
+    ensure_page_speed_columns(session)
     _ensure_site_id(records, site_id)
     for r in records:
         r.setdefault("site_id", "")
 
-    BATCH_SIZE = 80
+    insert = upsert_insert(session)
+    # 60, not 80: page_speed is 15 columns wide now, and 80 rows would bind 1 200 parameters —
+    # past SQLite's ~999 ceiling. 60 x 15 = 900.
+    BATCH_SIZE = max_batch_size(session, 60)
     _upsert_keys = ("site_id", "url", "strategy")
     update_cols = [k for k in records[0] if k not in _upsert_keys]
     total = 0
     for i in range(0, len(records), BATCH_SIZE):
         batch = records[i:i + BATCH_SIZE]
-        stmt = sqlite_insert(PageSpeed).values(batch)
+        stmt = insert(PageSpeed).values(batch)
         stmt = stmt.on_conflict_do_update(
             index_elements=list(_upsert_keys),
             set_={k: stmt.excluded[k] for k in update_cols},
@@ -343,13 +362,14 @@ def upsert_indexing_status(session: Session, records: list[dict], site_id: Optio
     for r in records:
         r.setdefault("site_id", "")
 
-    BATCH_SIZE = 80
+    insert = upsert_insert(session)
+    BATCH_SIZE = max_batch_size(session, 80)
     _upsert_keys = ("site_id", "url")
     update_cols = [k for k in records[0] if k not in _upsert_keys]
     total = 0
     for i in range(0, len(records), BATCH_SIZE):
         batch = records[i:i + BATCH_SIZE]
-        stmt = sqlite_insert(IndexingStatus).values(batch)
+        stmt = insert(IndexingStatus).values(batch)
         stmt = stmt.on_conflict_do_update(
             index_elements=list(_upsert_keys),
             set_={k: stmt.excluded[k] for k in update_cols},
@@ -366,7 +386,8 @@ def upsert_indexing_status(session: Session, records: list[dict], site_id: Optio
 def upsert_ai_summary(session: Session, week_start: date, summary_text: str,
                       model: str = "", site_id: str = "") -> None:
     """Upsert AI summary for a given (week_start, site_id)."""
-    stmt = sqlite_insert(AISummary).values(
+    insert = upsert_insert(session)
+    stmt = insert(AISummary).values(
         week_start=week_start,
         site_id=site_id or "",
         summary_text=summary_text,
@@ -393,11 +414,12 @@ def upsert_seo_aggregate(session: Session, records: list[dict]) -> int:
     if not records:
         return 0
     update_cols = [k for k in records[0] if k not in ("site_id", "period_type", "period_start")]
-    BATCH_SIZE = 60
+    insert = upsert_insert(session)
+    BATCH_SIZE = max_batch_size(session, 60)
     total = 0
     for i in range(0, len(records), BATCH_SIZE):
         batch = records[i:i + BATCH_SIZE]
-        stmt = sqlite_insert(SEOAggregate).values(batch)
+        stmt = insert(SEOAggregate).values(batch)
         stmt = stmt.on_conflict_do_update(
             index_elements=["site_id", "period_type", "period_start"],
             set_={k: stmt.excluded[k] for k in update_cols},
@@ -418,7 +440,8 @@ def upsert_anomaly(session: Session, records: list[dict], site_id: Optional[str]
     _ensure_site_id(records, site_id)
     for r in records:
         r.setdefault("site_id", "")
-    stmt = sqlite_insert(Anomaly).values(records)
+    insert = upsert_insert(session)
+    stmt = insert(Anomaly).values(records)
     stmt = stmt.on_conflict_do_update(
         index_elements=["date", "site_id", "metric_type"],
         set_={k: stmt.excluded[k] for k in records[0] if k not in ("date", "site_id", "metric_type")},
@@ -438,7 +461,8 @@ def upsert_comparative_metrics(session: Session, records: list[dict], site_id: O
     _ensure_site_id(records, site_id)
     for r in records:
         r.setdefault("site_id", "")
-    stmt = sqlite_insert(ComparativeMetrics).values(records)
+    insert = upsert_insert(session)
+    stmt = insert(ComparativeMetrics).values(records)
     stmt = stmt.on_conflict_do_update(
         index_elements=["site_id", "metric_type", "week_start"],
         set_={k: stmt.excluded[k] for k in records[0] if k not in ("site_id", "metric_type", "week_start")},
@@ -461,13 +485,14 @@ def upsert_competitor_keyword_rankings(session: Session, records: list[dict], si
     for r in records:
         r.setdefault("site_id", "")
 
-    BATCH_SIZE = 60
+    insert = upsert_insert(session)
+    BATCH_SIZE = max_batch_size(session, 60)
     _upsert_keys = ("date", "site_id", "keyword", "competitor_domain")
     update_cols = [k for k in records[0] if k not in _upsert_keys]
     total = 0
     for i in range(0, len(records), BATCH_SIZE):
         batch = records[i:i + BATCH_SIZE]
-        stmt = sqlite_insert(CompetitorKeywordRanking).values(batch)
+        stmt = insert(CompetitorKeywordRanking).values(batch)
         stmt = stmt.on_conflict_do_update(
             index_elements=list(_upsert_keys),
             set_={k: stmt.excluded[k] for k in update_cols},
@@ -492,13 +517,14 @@ def upsert_ai_keyword_data(session: Session, records: list[dict], site_id: Optio
     for r in records:
         r.setdefault("site_id", "")
 
-    BATCH_SIZE = 80
+    insert = upsert_insert(session)
+    BATCH_SIZE = max_batch_size(session, 80)
     _upsert_keys = ("date", "site_id", "keyword")
     update_cols = [k for k in records[0] if k not in _upsert_keys]
     total = 0
     for i in range(0, len(records), BATCH_SIZE):
         batch = records[i:i + BATCH_SIZE]
-        stmt = sqlite_insert(AIKeywordData).values(batch)
+        stmt = insert(AIKeywordData).values(batch)
         stmt = stmt.on_conflict_do_update(
             index_elements=list(_upsert_keys),
             set_={
@@ -528,13 +554,14 @@ def upsert_saved_keywords(session: Session, records: list[dict], site_id: Option
         r.setdefault("site_id", "")
         r.setdefault("location", "United States")
 
-    BATCH_SIZE = 80
+    insert = upsert_insert(session)
+    BATCH_SIZE = max_batch_size(session, 80)
     _upsert_keys = ("site_id", "keyword", "location")
     update_cols = [k for k in records[0] if k not in _upsert_keys and k != "id"]
     total = 0
     for i in range(0, len(records), BATCH_SIZE):
         batch = records[i:i + BATCH_SIZE]
-        stmt = sqlite_insert(SavedKeyword).values(batch)
+        stmt = insert(SavedKeyword).values(batch)
         stmt = stmt.on_conflict_do_update(
             index_elements=list(_upsert_keys),
             set_={k: stmt.excluded[k] for k in update_cols},
@@ -552,7 +579,8 @@ def upsert_saved_keywords(session: Session, records: list[dict], site_id: Option
 def save_backlinks_snapshot(session: Session, site_id: str, payload_json: str) -> None:
     """Overwrite the stored Backlinks payload for a site (one row per site_id)."""
     ensure_tables(session, BacklinksSnapshot)
-    stmt = sqlite_insert(BacklinksSnapshot).values(
+    insert = upsert_insert(session)
+    stmt = insert(BacklinksSnapshot).values(
         site_id=site_id or "", fetched_at=datetime.now(timezone.utc), payload=payload_json,
     )
     stmt = stmt.on_conflict_do_update(
@@ -568,3 +596,161 @@ def get_backlinks_snapshot(session: Session, site_id: str):
     ensure_tables(session, BacklinksSnapshot)
     row = session.get(BacklinksSnapshot, site_id or "")
     return (row.fetched_at, row.payload) if row else None
+
+
+# ─────────────────────────────────────────────
+# History & cost tables (2026-07)
+# These back four screens that were built over data nothing ever stored:
+# Site Audit Compare/Progress, Ads Search Terms, Ads Attribution, Settings cost.
+# All four use ensure_tables() so they self-provision on an existing database
+# without a migration, exactly like the 2026-06 competitor/AI tables did.
+# ─────────────────────────────────────────────
+
+def upsert_audit_snapshot(session: Session, record: dict) -> int:
+    """Record one completed Site Audit crawl. Unique on (site_id, captured_at), so a second
+    crawl on the same day updates rather than adding a misleading second trend point."""
+    if not record:
+        return 0
+    ensure_tables(session, AuditSnapshot)
+    insert = upsert_insert(session)
+    stmt = insert(AuditSnapshot).values(record)
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["site_id", "captured_at"],
+        set_={
+            "score": stmt.excluded.score,
+            "errors": stmt.excluded.errors,
+            "warnings": stmt.excluded.warnings,
+            "notices": stmt.excluded.notices,
+            "pages_crawled": stmt.excluded.pages_crawled,
+            "by_check": stmt.excluded.by_check,
+        },
+    )
+    session.execute(stmt)
+    logger.debug(f"[writer] audit_snapshots: upserted {record.get('site_id')}")
+    return 1
+
+
+def upsert_ad_search_terms(session: Session, records: list[dict], site_id: Optional[str] = None) -> int:
+    """Upsert Google Ads search-term rows. Unique on (date, site_id, term, campaign_id)."""
+    if not records:
+        return 0
+    ensure_tables(session, AdSearchTerm)
+    _ensure_site_id(records, site_id)
+    for r in records:
+        r.setdefault("campaign_id", None)
+    insert = upsert_insert(session)
+    total = 0
+    batch_size = max_batch_size(session, 80)
+    for i in range(0, len(records), batch_size):
+        batch = records[i:i + batch_size]
+        stmt = insert(AdSearchTerm).values(batch)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["date", "site_id", "term", "campaign_id"],
+            set_={
+                "matched_keyword": stmt.excluded.matched_keyword,
+                "match_type": stmt.excluded.match_type,
+                "campaign": stmt.excluded.campaign,
+                "impressions": stmt.excluded.impressions,
+                "clicks": stmt.excluded.clicks,
+                "cost": stmt.excluded.cost,
+                "conversions": stmt.excluded.conversions,
+            },
+        )
+        session.execute(stmt)
+        total += len(batch)
+    logger.debug(f"[writer] ad_search_terms: upserted {total} rows")
+    return total
+
+
+def upsert_ga4_campaign_daily(session: Session, records: list[dict], site_id: Optional[str] = None) -> int:
+    """Upsert GA4 per-campaign key events / revenue. Unique on (date, site_id, campaign)."""
+    if not records:
+        return 0
+    ensure_tables(session, GA4CampaignDaily)
+    _ensure_site_id(records, site_id)
+    insert = upsert_insert(session)
+    total = 0
+    batch_size = max_batch_size(session, 80)
+    for i in range(0, len(records), batch_size):
+        batch = records[i:i + batch_size]
+        stmt = insert(GA4CampaignDaily).values(batch)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["date", "site_id", "campaign"],
+            set_={
+                "sessions": stmt.excluded.sessions,
+                "key_events": stmt.excluded.key_events,
+                "revenue": stmt.excluded.revenue,
+            },
+        )
+        session.execute(stmt)
+        total += len(batch)
+    logger.debug(f"[writer] ga4_campaign_daily: upserted {total} rows")
+    return total
+
+
+def upsert_page_crawl_meta(session: Session, records: list[dict], site_id: Optional[str] = None) -> int:
+    """Upsert per-page OnPage link/word counts. Unique on (site_id, url).
+
+    `func.coalesce(excluded.col, existing.col)` rather than a plain overwrite: OnPage omits a
+    field it could not measure on a given crawl, and a re-crawl that returns NULL for
+    `inbound_links_count` must not erase the number the previous crawl really measured. That is
+    the same rule `upsert_keyword_rankings` applies for the same reason.
+
+    `crawled_at` IS overwritten unconditionally — it is the freshness of the row, not a
+    measurement, so the newest crawl always wins.
+    """
+    if not records:
+        return 0
+    # Self-provisions on an existing database, like the 2026-06 competitor/AI tables.
+    ensure_tables(session, PageCrawlMeta)
+    _ensure_site_id(records, site_id)
+    for r in records:
+        r.setdefault("site_id", "")
+
+    insert = upsert_insert(session)
+    # 7 columns -> 80 rows binds 560 parameters, inside SQLite's ~999 ceiling.
+    BATCH_SIZE = max_batch_size(session, 80)
+    _upsert_keys = ("site_id", "url")
+    _always_overwrite = ("crawled_at",)
+    update_cols = [k for k in records[0] if k not in _upsert_keys and k != "id"]
+    total = 0
+    for i in range(0, len(records), BATCH_SIZE):
+        batch = records[i:i + BATCH_SIZE]
+        stmt = insert(PageCrawlMeta).values(batch)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=list(_upsert_keys),
+            set_={
+                k: (stmt.excluded[k] if k in _always_overwrite
+                    else func.coalesce(stmt.excluded[k], getattr(PageCrawlMeta, k)))
+                for k in update_cols
+            },
+        )
+        session.execute(stmt)
+        total += len(batch)
+    logger.debug(f"[writer] page_crawl_meta: upserted {total} rows")
+    return total
+
+
+def insert_connector_cost(session: Session, site_id: str, connector: str, cost: float,
+                          units: Optional[int] = None, notes: Optional[str] = None) -> int:
+    """Append one connector-run cost. Deliberately an INSERT, not an upsert: every run is a
+    separate spend event, and collapsing them would make the 90-day total wrong. Never raises —
+    a cost-logging failure must not fail the sync that produced the data."""
+    try:
+        ensure_tables(session, ConnectorCost)
+        session.execute(
+            ConnectorCost.__table__.insert(),
+            [{
+                "site_id": site_id or "",
+                "connector": connector,
+                "run_at": datetime.now(timezone.utc),
+                "cost": float(cost or 0.0),
+                "units": units,
+                "currency": "USD",
+                "notes": notes,
+            }],
+        )
+        return 1
+    except Exception as exc:
+        logger.warning(f"[writer] connector_costs: could not record cost for {connector}: {exc}")
+        return 0

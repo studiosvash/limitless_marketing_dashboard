@@ -21,6 +21,7 @@ import requests
 from dotenv import load_dotenv
 
 from pipeline.connectors.base import BaseConnector
+from pipeline.connectors.dataforseo_cost import extract_cost, record_cost
 from pipeline.utils.retry import with_retry
 from pipeline.utils.date_helpers import iso, yesterday
 from pipeline.utils.db_connection import get_session
@@ -47,6 +48,9 @@ class DataForSEOSERPConnector(BaseConnector):
         self.auth = (self.login, self.password)
         # Env-level fallback if no Site row defines a target domain.
         self._default_target = self._strip(os.getenv("DATAFORSEO_TARGET_DOMAIN", ""))
+        # USD DataForSEO reported for the current fetch(). Accumulated across the
+        # task_post batches and the task_get polls, written once per run in fetch().
+        self._run_cost = 0.0
 
     @staticmethod
     def _strip(domain: str) -> str:
@@ -78,8 +82,20 @@ class DataForSEOSERPConnector(BaseConnector):
             self.logger.warning(
                 "[dataforseo_serp] No keywords in keywords.txt — nothing will be tracked."
             )
+        # Incremental sync: sync_engine may set `only_keywords` to restrict this run to the
+        # keywords that actually need work (see pipeline/utils/keywords.keywords_needing_
+        # backfill). DataForSEO meters per query, so re-querying every tracked keyword to
+        # pick up five new ones is both slow and billable. Absent/empty => full list, so
+        # the scheduled sync and every existing caller behave exactly as before.
+        only = getattr(self, "only_keywords", None)
+        if only:
+            wanted = set(k.strip().lower() for k in only if k and k.strip())
+            subset = [k for k in keywords if (k or "").strip().lower() in wanted]
+            self.logger.info(
+                f"[dataforseo_serp] incremental run: {len(subset)} of {len(keywords)} tracked keywords"
+            )
+            return subset
         return keywords
-
     @with_retry(max_retries=3, base_delay=5.0)
     def _submit_tasks(self, keywords: list[str], target_domain: str) -> list[str]:
         """
@@ -120,6 +136,10 @@ class DataForSEOSERPConnector(BaseConnector):
             )
             resp.raise_for_status()
             data = resp.json()
+
+            # Standard Queue bills at task_post; the charge for this batch of task
+            # submissions is on the envelope we already have.
+            self._run_cost += extract_cost(data)
 
             # Extract task IDs from response
             for task in data.get("tasks", []):
@@ -172,6 +192,10 @@ class DataForSEOSERPConnector(BaseConnector):
                     )
                     resp.raise_for_status()
                     data = resp.json()
+
+                    # Usually 0 (the Standard Queue charged at task_post) but retrieval
+                    # is billable on some endpoints, so take whatever it reports.
+                    self._run_cost += extract_cost(data)
 
                     task_data = data.get("tasks", [{}])[0]
                     status_code = task_data.get("status_code", 0)
@@ -267,13 +291,23 @@ class DataForSEOSERPConnector(BaseConnector):
             return []
 
         self.logger.info(f"[dataforseo_serp] Tracking {len(keywords)} keywords for {target_domain}")
-        task_ids = self._submit_tasks(keywords, target_domain)
+        self._run_cost = 0.0
+        try:
+            task_ids = self._submit_tasks(keywords, target_domain)
 
-        if not task_ids:
-            self.logger.error("[dataforseo_serp] No task IDs returned from submission.")
-            return []
+            if not task_ids:
+                self.logger.error("[dataforseo_serp] No task IDs returned from submission.")
+                return []
 
-        records = self._poll_and_fetch(task_ids, target_domain, resolved_site_id)
+            records = self._poll_and_fetch(task_ids, target_domain, resolved_site_id)
+        finally:
+            # One row per run. `units` = SERP queries posted: what this endpoint meters
+            # ($0.0006/query on the Standard Queue). Recorded in `finally` so a run that
+            # blew up mid-poll still books the queries it already paid for.
+            record_cost(
+                self.name, resolved_site_id, self._run_cost, units=len(keywords),
+                notes=f"serp/google/organic task_post+task_get for {target_domain}",
+            )
         self.logger.info(f"[dataforseo_serp] Retrieved {len(records)} ranking records for {target_domain}")
         return records
 

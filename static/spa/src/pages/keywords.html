@@ -9,6 +9,7 @@
         </div>
         </sc-if>
         <sc-if value="{{ !kw.setup }}" hint-placeholder-val="{{ true }}">
+        <sc-if value="{{ kw.srcKpis.show }}" hint-placeholder-val="{{ true }}"><div style="margin-top: 0;"><span style="{{ kw.srcKpis.style }}" title="{{ kw.srcKpis.title }}" aria-label="{{ kw.srcKpis.aria }}">{{ kw.srcKpis.text }}</span></div></sc-if>
 
 
 
@@ -20,7 +21,7 @@
         <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
           <div style="padding: 16px 20px; border-bottom: 1px solid #f1f5f9; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;">
             <div>
-              <h2 style="font-size: 15px; font-weight: 600; margin: 0; display: flex; align-items: center; gap: 8px;">Keyword Explorer</h2>
+              <h2 style="font-size: 15px; font-weight: 600; margin: 0; display: flex; align-items: center; gap: 8px;">Keyword Explorer</h2><sc-if value="{{ kw.srcExplorer.show }}" hint-placeholder-val="{{ true }}"><div style="margin-top: 6px;"><span style="{{ kw.srcExplorer.style }}" title="{{ kw.srcExplorer.title }}" aria-label="{{ kw.srcExplorer.aria }}">{{ kw.srcExplorer.text }}</span></div></sc-if>
               <p style="font-size: 12px; color: #94a3b8; margin: 4px 0 0;">Research keywords on demand (comma-separate seeds) — one metered expansion per search (~$0.01–0.13), then filters &amp; groups run free on the cached set.</p>
             </div>
             <div style="display: flex; align-items: center; gap: 8px; flex-shrink: 0;">
@@ -261,7 +262,7 @@
 
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px;">
           <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; padding: 20px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
-            <h2 style="font-size: 15px; font-weight: 600; margin: 0 0 16px;">Search Intent Distribution</h2>
+            <h2 style="font-size: 15px; font-weight: 600; margin: 0 0 6px;">Search Intent Distribution</h2><sc-if value="{{ kw.srcIntent.show }}" hint-placeholder-val="{{ true }}"><div style="margin-top: 0;"><span style="{{ kw.srcIntent.style }}" title="{{ kw.srcIntent.title }}" aria-label="{{ kw.srcIntent.aria }}">{{ kw.srcIntent.text }}</span></div></sc-if><div style="height:10px;"></div>
             <div style="display: flex; flex-direction: column; gap: 12px;">
               <sc-for list="{{ kw.intentRows }}" as="r" hint-placeholder-count="4">
                 <div style="display: flex; align-items: center; gap: 12px;">
@@ -274,7 +275,7 @@
             </div>
           </div>
           <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; padding: 20px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
-            <h2 style="font-size: 15px; font-weight: 600; margin: 0 0 16px;">Keyword Difficulty Distribution</h2>
+            <h2 style="font-size: 15px; font-weight: 600; margin: 0 0 6px;">Keyword Difficulty Distribution</h2><sc-if value="{{ kw.srcKd.show }}" hint-placeholder-val="{{ true }}"><div style="margin-top: 0;"><span style="{{ kw.srcKd.style }}" title="{{ kw.srcKd.title }}" aria-label="{{ kw.srcKd.aria }}">{{ kw.srcKd.text }}</span></div></sc-if><div style="height:10px;"></div>
             <div style="display: flex; flex-direction: column; gap: 12px;">
               <sc-for list="{{ kw.kdRows }}" as="r" hint-placeholder-count="3">
                 <div style="display: flex; align-items: center; gap: 12px;">
@@ -285,6 +286,79 @@
                 </div>
               </sc-for>
             </div>
+          </div>
+        </div>
+
+        <!-- segment tabs + contextual hint -->
+        <div style="display: flex; flex-direction: column; gap: 16px;">
+          <div role="group" aria-label="Keyword segment filters" style="display: flex; align-items: center; gap: 24px; flex-wrap: wrap; box-shadow: inset 0 -1px 0 #e2e8f0;">
+            <sc-for list="{{ kw.tabs }}" as="t" hint-placeholder-count="5">
+              <span onClick="{{ t.click }}" role="button" style="{{ t.style }}" style-hover="color:#334155">{{ t.label }}</span>
+            </sc-for>
+          </div>
+
+          <sc-if value="{{ kw.hasHint }}" hint-placeholder-val="{{ true }}">
+            <div style="display: flex; align-items: flex-start; gap: 14px; padding: 18px 20px; background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 10px;">
+              <span aria-hidden="true" style="width: 32px; height: 32px; border-radius: 8px; background: #dbeafe; display: flex; align-items: center; justify-content: center; font-size: 15px; flex-shrink: 0;">💡</span>
+              <div style="min-width: 0;">
+                <div style="font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: #1d4ed8; margin-bottom: 6px;">What this segment means</div>
+                <div style="font-size: 14px; line-height: 1.55; color: #334155;">{{ kw.hintText }}</div>
+                <div style="font-size: 13px; font-weight: 600; color: #1d4ed8; margin-top: 10px;">Recommended action — {{ kw.hintAction }}</div>
+              </div>
+            </div>
+          </sc-if>
+        </div>
+
+        <!-- all keywords table -->
+        <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
+          <div style="padding: 16px 20px; border-bottom: 1px solid #f1f5f9;">
+            <h2 style="font-size: 15px; font-weight: 600; margin: 0;">{{ kw.tableTitle }}<span style="font-size: 12px; font-weight: 500; color: #94a3b8; margin-left: 8px;">{{ kw.rowCountLabel }}</span></h2><sc-if value="{{ kw.srcTable.show }}" hint-placeholder-val="{{ true }}"><div style="margin-top: 6px;"><span style="{{ kw.srcTable.style }}" title="{{ kw.srcTable.title }}" aria-label="{{ kw.srcTable.aria }}">{{ kw.srcTable.text }}</span></div></sc-if>
+            <p style="font-size: 12px; color: #94a3b8; margin: 4px 0 0;">Sort by position, volume, difficulty or clicks to decide what to work on next.</p>
+          </div>
+          <div style="overflow-x: auto;">
+            <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+              <thead>
+                <tr style="text-align: left; background: #f8fafc; border-bottom: 1px solid #f1f5f9; color: #64748b; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;">
+                  <th style="font-weight: 600; padding: 12px 20px;">Keyword</th>
+                  <th style="font-weight: 600; padding: 12px;">Intent</th>
+                  <th onClick="{{ sortKw.pos }}" role="button" aria-label="Sort by position" style="font-weight: 600; padding: 12px; text-align: center; cursor: pointer;">Position{{ kwArrow.pos }}</th>
+                  <th style="font-weight: 600; padding: 12px; text-align: center;" title="Change since the last weekly sync">Δ</th>
+                  <th onClick="{{ sortKw.volume }}" role="button" aria-label="Sort by search volume" style="font-weight: 600; padding: 12px; text-align: right; cursor: pointer;">Volume{{ kwArrow.volume }}</th>
+                  <th style="font-weight: 600; padding: 12px; text-align: center;" title="12-month search volume trend">Trend</th>
+                  <th onClick="{{ sortKw.kd }}" role="button" aria-label="Sort by keyword difficulty" style="font-weight: 600; padding: 12px; text-align: center; cursor: pointer;" title="Keyword Difficulty">KD%{{ kwArrow.kd }}</th>
+                  <th onClick="{{ sortKw.clicks }}" role="button" aria-label="Sort by clicks" style="font-weight: 600; padding: 12px; text-align: right; cursor: pointer;">Clicks{{ kwArrow.clicks }}</th>
+                  <th style="font-weight: 600; padding: 12px 20px;">Ranking URL</th>
+                </tr>
+              </thead>
+              <tbody>
+                <sc-for list="{{ kw.rows }}" as="r" hint-placeholder-count="5">
+                  <tr style="border-top: 1px solid #f1f5f9;" style-hover="background:#f8fafc">
+                    <td style="padding: 12px 20px; font-weight: 600; color: #334155; max-width: 240px;"><span title="{{ r.kw }}">{{ r.kw }}</span><sc-if value="{{ r.isManual }}" hint-placeholder-val="{{ false }}"><span title="Added manually, not discovered by a sync" style="margin-left: 7px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: #64748b; background: #f1f5f9; padding: 2px 6px; border-radius: 4px;">manual</span></sc-if></td>
+                    <td style="padding: 12px;"><span style="{{ r.intentStyle }}">{{ r.intentLabel }}</span></td>
+                    <td style="padding: 12px; text-align: center;"><span style="{{ r.posStyle }}">{{ r.posText }}</span></td>
+                    <td style="padding: 12px; text-align: center;"><span style="{{ r.deltaStyle }}">{{ r.deltaFmt }}</span></td>
+                    <td style="padding: 12px; text-align: right; color: #475569;">{{ r.volFmt }}</td>
+                    <td style="padding: 12px;"><span style="display: flex; justify-content: center;"><svg width="46" height="16" viewBox="0 0 46 16" fill="none" preserveAspectRatio="none"><polyline points="{{ r.spark }}" fill="none" stroke="{{ r.sparkColor }}" stroke-width="1.5"></polyline></svg></span></td>
+                    <td style="padding: 12px; text-align: center;">
+                      <div style="display: flex; align-items: center; justify-content: center; gap: 6px;">
+                        <div style="width: 28px; height: 6px; border-radius: 3px; background: #f1f5f9; overflow: hidden;"><div style="{{ r.kdBarStyle }}"></div></div>
+                        <span style="font-size: 12px; color: #64748b;">{{ r.kd }}</span>
+                      </div>
+                    </td>
+                    <td style="padding: 12px; text-align: right; font-weight: 600; color: #334155;">{{ r.clicksFmt }}</td>
+                    <td style="padding: 12px 20px; color: #64748b; font-size: 12px; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="{{ r.url }}">{{ r.url }}</td>
+                  </tr>
+                </sc-for>
+                <sc-if value="{{ kw.rows.length === 0 }}" hint-placeholder-val="{{ false }}">
+                  <tr>
+                    <td colspan="9" style="padding: 40px 20px; text-align: center;">
+                      <div style="font-size: 15px; font-weight: 600; color: #334155;">Nothing here</div>
+                      <div style="font-size: 13px; color: #94a3b8; margin-top: 4px;">No keywords match this segment.</div>
+                    </td>
+                  </tr>
+                </sc-if>
+              </tbody>
+            </table>
           </div>
         </div>
 

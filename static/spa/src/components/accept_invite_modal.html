@@ -28,7 +28,7 @@
             </div>
           </sc-if>
 
-          <sc-if value="{{ !acceptInvite.error && !acceptInvite.success }}" hint-placeholder-val="{{ true }}">
+          <sc-if value="{{ acceptInvite.showForm }}" hint-placeholder-val="{{ true }}">
             <div style="padding: 14px 16px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; margin-bottom: 20px; font-size: 13px; color: #334155;">
               You have been invited by <b style="color: #0f172a;">{{ acceptInvite.invitedBy }}</b> to join as an <b style="color: #4f46e5;">{{ acceptInvite.role }}</b>.
             </div>

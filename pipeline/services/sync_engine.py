@@ -32,8 +32,16 @@ PAGE_CONNECTORS: dict[str, list[str]] = {
     # moment credentials are valid; with no credentials the connector factory returns None and
     # the run records a clean "skipped/error" for that connector instead of silently doing
     # nothing.
-    "ads":         ["google_ads", "ga4"],
+    # `google_ads_search_terms` feeds the Search Terms tab and `ga4` now also writes
+    # GA4CampaignDaily, which is the GA4 half of the Attribution comparison. All three are
+    # needed for the Ads section to be complete; with no Google Ads credentials the two
+    # Google Ads connectors simply fail to construct and the run records a clean skip.
+    "ads":         ["google_ads", "google_ads_search_terms", "ga4"],
     "keywords":    ["gsc_keywords", "dataforseo_ai_keywords"],
+    # NOTE: the SPA maps its "pages" tab to the "audit" scope, so this key is currently
+    # unreachable from the UI. It is kept deliberately: it is the only page key that runs
+    # `gsc_pages` (which refreshes the `pages` inventory that url_inspection/pagespeed
+    # sample from), and it is still reachable via the sync API by key.
     "pages":       ["gsc_pages", "url_inspection", "pagespeed"],
     "backlinks":   ["dataforseo_backlinks"],
     "insights":    [],                    # no connectors — data entered by user
@@ -41,10 +49,36 @@ PAGE_CONNECTORS: dict[str, list[str]] = {
     "settings":    [],                    # no data to sync
     # Positioning per-page refresh captures domain SERP positions, keyword metrics, and competitor ranks.
     "positioning": ["gsc_keywords", "dataforseo_serp", "dataforseo_keywords", "dataforseo_labs_competitors", "dataforseo_serp_competitors"],
+    # Incremental variant of "positioning". Same per-keyword connectors, but restricted at run
+    # time to the keywords that have never been measured (see _INCREMENTAL_SCOPES below).
+    # Deliberately EXCLUDES gsc_keywords (a whole-account report, not per-keyword, so filtering
+    # it saves nothing) and dataforseo_labs_competitors (discovers competitor DOMAINS for the
+    # site, which has nothing to do with which keywords are new).
+    "positioning_new": ["dataforseo_serp", "dataforseo_keywords", "dataforseo_serp_competitors"],
     # AI visibility / AI-keyword volume refresh (DataForSEO AI Optimization API).
     "ai":          ["dataforseo_ai_keywords"],
-    # Site-audit crawl (DataForSEO OnPage) -- distinct from the "pages" GSC/PageSpeed refresh.
-    "audit":       ["dataforseo_onpage"],
+    # Site audit. The page's payload (apps/dashboard/services/site_audit_service.py) is built
+    # from THREE tables, not one:
+    #     IndexingStatus  <- url_inspection      (indexing breakdown, crawled pages, last crawl)
+    #     PageSpeed       <- pagespeed           (Core Web Vitals, category scores)
+    #     TechnicalIssue  <- dataforseo_onpage   (+ derived rows from technical_issues_service)
+    # The health score is literally `60% * avg mobile Lighthouse performance + 40% * share
+    # indexed`, i.e. entirely from the first two. With only `dataforseo_onpage` in scope,
+    # "Re-crawl now" could never move the score, the CWV tiles, the crawled-page list or the
+    # indexing breakdown. All three connectors now run.
+    #
+    # Order matters. `gsc_pages` runs FIRST because it refreshes the `pages` inventory that
+    # url_inspection and pagespeed both sample (`SELECT url FROM pages`) — without it those two
+    # re-inspect a stale URL list and a newly published page is never audited. The long-polling
+    # paid OnPage crawl goes LAST: if it times out, the score, vitals, crawled-page list and
+    # indexing breakdown have already been written.
+    "audit":       ["gsc_pages", "url_inspection", "pagespeed", "dataforseo_onpage"],
+}
+
+# Scopes whose connectors should be narrowed to the keywords that still need measuring.
+# Maps scope -> the connectors that accept an `only_keywords` subset.
+_INCREMENTAL_SCOPES: dict[str, tuple[str, ...]] = {
+    "positioning_new": ("dataforseo_serp", "dataforseo_keywords", "dataforseo_serp_competitors"),
 }
 
 ALL_CONNECTORS: list[str] = [
@@ -96,6 +130,10 @@ def _get_connector(name: str):
         "dataforseo_ai_keywords":      ("pipeline.connectors.dataforseo_ai_keywords",      "DataForSEOAIKeywordsConnector"),
         # Credentials-missing connectors — in map for future use.
         "google_ads":  ("pipeline.connectors.google_ads",  "GoogleAdsConnector"),
+        # Separate from google_ads on purpose: search_term_view is a different GAQL resource
+        # with its own grain and its own reporting restrictions, so it can 403 independently.
+        # One connector = one table = one SyncLog row = you can tell which half broke.
+        "google_ads_search_terms": ("pipeline.connectors.google_ads_search_terms", "GoogleAdsSearchTermsConnector"),
         "meta":        ("pipeline.connectors.meta",        "MetaConnector"),
         "linkedin":    ("pipeline.connectors.linkedin",    "LinkedInConnector"),
         "webflow":     ("pipeline.connectors.webflow",     "WebflowConnector"),
@@ -120,6 +158,22 @@ def _get_connector(name: str):
 # Post-sync aggregate rebuild
 # ---------------------------------------------------------------------------
 
+# Connectors whose output the derived technical-issue rebuild reads:
+#   gsc / ga4       -> SEODaily (long_url) and the Page inventory
+#   gsc_pages       -> Page (missing_title / title_too_long / duplicate_titles / orphaned)
+#   url_inspection  -> IndexingStatus (404 / crawled-not-indexed / redirect / robots)
+#   pagespeed       -> PageSpeed (performance, SEO, accessibility, best-practices, Lighthouse)
+# `dataforseo_onpage` is deliberately absent: it writes TechnicalIssue rows directly and feeds
+# nothing the derived pass reads, so it is not a reason to recompute.
+_TECHNICAL_ISSUE_INPUTS = ("gsc", "ga4", "gsc_pages", "url_inspection", "pagespeed")
+
+# Connectors that constitute a Site Audit crawl. Any of them landing means "a crawl happened",
+# which is the only thing that may write an AuditSnapshot. The page-data endpoint must never
+# write one: build_site_audit_response is a GET, so a snapshot there would chart page views
+# rather than crawls, and two "crawls" 30 seconds apart would show a zero delta.
+_AUDIT_SNAPSHOT_INPUTS = ("url_inspection", "pagespeed", "dataforseo_onpage")
+
+
 def _run_post_sync(site_url: str, connectors_run: list[str]) -> None:
     """
     Trigger aggregate rebuild if SEO data was refreshed.
@@ -142,7 +196,13 @@ def _run_post_sync(site_url: str, connectors_run: list[str]) -> None:
         except Exception as exc:
             logger.warning(f"[sync_engine] Anomaly detection failed for {site_url!r}: {exc}")
 
-        # Derive lightweight technical issues from owned data (no external API).
+    # Derive lightweight technical issues from owned data (no external API).
+    # Gated separately from the aggregate/anomaly block above: those two are SEODaily
+    # rollups and genuinely only make sense after gsc/ga4, but the derived issues also
+    # come from IndexingStatus and PageSpeed. Under the old gsc/ga4-only gate the Site
+    # Audit scope (url_inspection + pagespeed + dataforseo_onpage) refreshed those two
+    # tables and then never recomputed the issues that read them.
+    if any(c in connectors_run for c in _TECHNICAL_ISSUE_INPUTS):
         try:
             from pipeline.services.technical_issues_service import rebuild_technical_issues
             logger.info(f"[sync_engine] Rebuilding technical issues for {site_url!r}")
@@ -150,6 +210,41 @@ def _run_post_sync(site_url: str, connectors_run: list[str]) -> None:
             logger.info(f"[sync_engine] Technical issues: wrote {n} for {site_url!r}")
         except Exception as exc:
             logger.warning(f"[sync_engine] Technical issue rebuild failed for {site_url!r}: {exc}")
+
+    # Domain checks (SSL handshake, /sitemap.xml, /robots.txt, HTTP/2, www consolidation,
+    # /llms.txt). These are SIX LIVE NETWORK REQUESTS, so they belong here with every other
+    # outbound call and not in a page-data GET.
+    #
+    # They used to run inside build_site_audit_response(). The 6-hour cache did not save it:
+    # nothing but a page view ever WROTE that cache, so the first Site Audit load for every new
+    # project, after every deploy, and once every 6 hours thereafter paid a TLS handshake plus
+    # five HTTP fetches (3.5 s timeouts each) before the page could render -- the one place in
+    # this codebase that reached the network while rendering, in direct violation of the
+    # database-first contract. The GET now reads stored state via stored_domain_checks().
+    #
+    # Ordering: BEFORE the snapshot block below, because the snapshot is built from the full
+    # site-audit payload and should capture this crawl's checks, not the previous crawl's.
+    if any(c in connectors_run for c in _AUDIT_SNAPSHOT_INPUTS):
+        try:
+            from apps.dashboard.services.site_audit_service import refresh_domain_checks
+            checks = refresh_domain_checks(site_url)
+            logger.info(f"[sync_engine] Domain checks for {site_url!r}: {len(checks)} check(s)")
+        except Exception as exc:
+            logger.warning(f"[sync_engine] Domain checks failed for {site_url!r}: {exc}")
+
+    # Record this crawl's outcome so Compare Crawls / Progress have history to read.
+    # MUST run AFTER the technical-issue rebuild above: the snapshot stores the issue counts,
+    # so taking it first would permanently store the PREVIOUS crawl's numbers.
+    # Keyed on the date — a second sync the same day updates the row rather than adding a
+    # second point, and record_audit_snapshot() refuses to write at all when there is no audit
+    # data, so a failed sync never puts a fake cliff on the trend line.
+    if any(c in connectors_run for c in _AUDIT_SNAPSHOT_INPUTS):
+        try:
+            from apps.dashboard.services.site_audit_service import record_audit_snapshot
+            written = record_audit_snapshot(site_url)
+            logger.info(f"[sync_engine] Audit snapshot for {site_url!r}: {written} row(s)")
+        except Exception as exc:
+            logger.warning(f"[sync_engine] Audit snapshot failed for {site_url!r}: {exc}")
 
     # Run AI Summary Generation last (needs updated technical issues & aggregates)
     if any(c in connectors_run for c in ("gsc", "ga4", "gsc_pages", "url_inspection")):
@@ -203,6 +298,13 @@ def sync_all(site_url: str, run_id: int) -> dict:
             completed += 1
             RefreshRun.objects.filter(pk=run_id).update(completed_count=completed)
             continue
+
+        # Narrow this run to the keywords that actually need measuring, for scopes that ask
+        # for it. `incremental_kws` is computed ONCE before the loop; if it came back empty
+        # the scope is skipped entirely rather than silently running the full list, because
+        # "nothing new" and "everything" must not be the same outcome.
+        if incremental_kws is not None and name in _INCREMENTAL_SCOPES.get(page, ()):
+            connector.only_keywords = incremental_kws
 
         try:
             result = connector.sync(site_id=site_url)
@@ -297,6 +399,24 @@ def sync_page(page: str, site_url: str, run_id: int) -> dict:
         total_count=total,
         status=RefreshStatus.RUNNING,
     )
+
+    # Resolve the incremental keyword subset once, before any connector runs.
+    incremental_kws = None
+    if page in _INCREMENTAL_SCOPES:
+        from pipeline.utils.keywords import keywords_needing_backfill
+        incremental_kws = keywords_needing_backfill(site_url)
+        if not incremental_kws:
+            # Nothing outstanding. Finishing here is the point of the scope: falling through
+            # would re-query every tracked keyword, which is the expensive full sync the user
+            # was trying to avoid.
+            logger.info(f"[sync_engine] {page!r}: no keywords need backfill for {site_url!r} — nothing to do")
+            RefreshRun.objects.filter(pk=run_id).update(
+                status=RefreshStatus.SUCCESS, completed_count=total, total_count=total,
+                finished_at=timezone.now(), records_written=0,
+            )
+            return {"completed": total, "total": total, "records_written": 0, "errors": [],
+                    "note": "no keywords needed backfill"}
+        logger.info(f"[sync_engine] {page!r}: narrowing to {len(incremental_kws)} keyword(s) needing backfill")
 
     for name in connector_names:
         logger.info(f"[sync_engine] [{completed + 1}/{total}] Running connector: {name!r}")

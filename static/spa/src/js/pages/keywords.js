@@ -33,10 +33,31 @@
       ];
       const kwSetup = !data || !data.kpis || data.kpis.state === 'setup' || (data.kpis.total === 0 && (!data.keywords || !data.keywords.length));
       if (kwSetup) {
-        vals.kw = { setup: true, total: 0, avgPos: 0, totalVolume: 0, totalClicks: 0, intentRows: [], kdRows: [], tabs: [], rows: [] };
+        /* Setup state: no measured numbers on screen, so no badge to attach to them. The
+           Explorer still works (it is a live lookup), so it keeps its own. */
+        vals.kw = { setup: true, total: 0, avgPos: 0, totalVolume: 0, totalClicks: 0, intentRows: [], kdRows: [], tabs: [], rows: [], rowCountLabel: '',
+          srcIntent: this.srcBadge(null), srcKd: this.srcBadge(null), srcTable: this.srcBadge(null),
+          srcKpis: this.srcBadge(null), srcExplorer: this.srcLive('DataForSEO', 'keyword lookup') };
         return vals;
       }
+      /* Provenance. `build_keywords_response` runs the keyword-intelligence pipeline over
+         `keyword_rankings` restricted to tracked keywords. That table's `position` is written
+         by EITHER gsc_keywords OR dataforseo_serp and the row does not record which, so both
+         are named; `search_volume`/`kd`/`cpc` come from dataforseo_keywords. One badge for the
+         whole screen would be wrong, because the distributions and the table do not share a
+         source with the KPI strip. */
+      const KW_TABLE_SRC = ['gsc_keywords', 'dataforseo_serp', 'dataforseo_keywords'];
+      const srcTable = this.srcBadge(KW_TABLE_SRC);
       vals.kw = {
+        /* Intent and difficulty are DataForSEO Labs attributes of the keyword itself, not
+           anything GSC measures — so they are attributed to that connector alone. */
+        srcIntent: this.srcBadge(['dataforseo_keywords']),
+        srcKd: this.srcBadge(['dataforseo_keywords']),
+        srcTable: srcTable,
+        srcKpis: this.srcBadge(KW_TABLE_SRC),
+        /* The Explorer calls /api/research on a button press — one of the three sanctioned
+           live lookups, so it has no SyncLog row and "how old is it" is answered by the press. */
+        srcExplorer: this.srcLive('DataForSEO', 'keyword lookup'),
         total: data.kpis.total, avgPos: data.kpis.avg_pos,
         totalVolume: this.fmt(data.kpis.total_volume), totalClicks: this.fmt(data.kpis.total_clicks),
         intentRows: intentDefs.map(d => ({
@@ -59,6 +80,10 @@
         })),
         hasHint: !!active.hint, hintText: active.hint || '', hintAction: active.action || '',
         tableTitle: s.kwSeg ? active.label.replace(/^[^ ]+ /, '') + ' Keywords' : 'All Keywords',
+        // Count of the rows actually rendered, NOT data.kpis.total. With a segment tab
+        // active the portfolio total would overstate what the user is looking at, and a
+        // header number that disagrees with the table under it reads as a bug.
+        rowCountLabel: rows.length + (rows.length === 1 ? ' keyword' : ' keywords'),
         rows: rows.map(k => {
           const iv = this.intentView(k.intent);
           let deltaFmt = '—', deltaColor = '#cbd5e1';

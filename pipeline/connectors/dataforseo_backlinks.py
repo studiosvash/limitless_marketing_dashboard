@@ -9,6 +9,7 @@ import requests
 from dotenv import load_dotenv
 
 from pipeline.connectors.base import BaseConnector
+from pipeline.connectors.dataforseo_cost import extract_cost, record_cost
 from pipeline.utils.retry import with_retry
 from pipeline.db.writer import upsert_backlinks
 
@@ -65,24 +66,40 @@ class DataForSEOBacklinksConnector(BaseConnector):
         resp.raise_for_status()
         data = resp.json()
 
+        # The live Backlinks call is already billed by the time we parse it. Read the
+        # charge off the envelope before any of the early returns below, so a failed or
+        # empty task still books what it cost.
+        run_cost = extract_cost(data)
+
         tasks = data.get("tasks", [])
         if not tasks:
             self.logger.warning("[dataforseo_backlinks] No tasks returned in response.")
+            record_cost(self.name, site_id, run_cost, units=0,
+                        notes=f"backlinks/backlinks live for {target} (no tasks)")
             return []
 
         task = tasks[0]
         status_code = task.get("status_code")
         if status_code != 20000:
             self.logger.error(f"[dataforseo_backlinks] Task failed with status: {status_code} - {task.get('status_message')}")
+            record_cost(self.name, site_id, run_cost, units=0,
+                        notes=f"backlinks/backlinks live for {target} (status {status_code})")
             return []
 
         result = task.get("result", [])
         if not result:
             self.logger.warning("[dataforseo_backlinks] Empty result returned.")
+            record_cost(self.name, site_id, run_cost, units=0,
+                        notes=f"backlinks/backlinks live for {target} (empty result)")
             return []
 
         items = result[0].get("items", [])
         self.logger.info(f"[dataforseo_backlinks] Retrieved {len(items)} raw backlinks items.")
+
+        # `units` = backlink rows returned — the Backlinks API meters per returned row
+        # (this call requests limit=1000), so cost/units is the real price per backlink.
+        record_cost(self.name, site_id, run_cost, units=len(items),
+                    notes=f"backlinks/backlinks live for {target}")
 
         records = []
         for item in items:

@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 from sqlalchemy import select
 
 from pipeline.connectors.base import BaseConnector
+from pipeline.connectors.dataforseo_cost import extract_cost, record_cost
 from pipeline.utils.retry import with_retry
 from pipeline.utils.db_connection import get_session
 from pipeline.db.writer import upsert_keyword_rankings
@@ -38,6 +39,9 @@ class DataForSEOOpportunitiesConnector(BaseConnector):
                 "[dataforseo_opportunities] Missing DATAFORSEO_LOGIN or DATAFORSEO_PASSWORD in .env."
             )
         self.auth = (self.login, self.password)
+        # USD DataForSEO reported for the current fetch() — one ranked_keywords call per
+        # top competitor, summed into a single row per run.
+        self._run_cost = 0.0
 
     def _resolve(self, site_id: Optional[str]) -> tuple[str, str]:
         """Return (site_url_for_db, bare_target_domain)."""
@@ -66,6 +70,8 @@ class DataForSEOOpportunitiesConnector(BaseConnector):
         resp = requests.post(ENDPOINT, auth=self.auth, json=payload, timeout=45)
         resp.raise_for_status()
         data = resp.json()
+        # Read the charge before any early return — a non-20000 task is still billable.
+        self._run_cost += extract_cost(data)
 
         tasks = data.get("tasks") or []
         if not tasks:
@@ -111,9 +117,12 @@ class DataForSEOOpportunitiesConnector(BaseConnector):
         # 2. Fetch keywords for each competitor
         records = []
         seen_keywords = set()
+        self._run_cost = 0.0
+        keyword_rows_returned = 0
 
         for comp in top_competitors:
             items = self._fetch_competitor_keywords(comp, limit=30)
+            keyword_rows_returned += len(items)
             for item in items:
                 keyword_data = item.get("keyword_data") or {}
                 keyword = keyword_data.get("keyword")
@@ -145,6 +154,14 @@ class DataForSEOOpportunitiesConnector(BaseConnector):
                     "cpc": keyword_info.get("cpc") or 0.0,
                     "intent": intent,
                 })
+
+        # One row per run, summing the ranked_keywords call made per competitor.
+        # `units` = keyword rows returned across those calls, which is what Labs
+        # ranked_keywords meters (not the number of competitors queried).
+        record_cost(
+            self.name, resolved_site_id, self._run_cost, units=keyword_rows_returned,
+            notes=f"labs/ranked_keywords live x{len(top_competitors)} competitors",
+        )
 
         self.logger.info(
             f"[dataforseo_opportunities] Discovered {len(records)} keyword opportunities for {target}"

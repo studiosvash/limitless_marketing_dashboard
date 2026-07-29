@@ -18,7 +18,7 @@ Every issue is backed by concrete, checkable metrics.
 import json
 import re
 from urllib.parse import urlparse
-from sqlalchemy import select, func, delete
+from sqlalchemy import select, func, delete, or_
 
 from pipeline.db.schema import IndexingStatus, SEODaily, TechnicalIssue, PageSpeed, Page
 from pipeline.db.writer import upsert_technical_issues
@@ -28,6 +28,62 @@ from pipeline.utils.logger import get_logger
 logger = get_logger("technical_issues_service")
 
 URL_PATH_MAX = 70
+
+# ---------------------------------------------------------------------------
+# What this service is allowed to delete.
+#
+# `technical_issues` has TWO producers:
+#   * this service (derived from IndexingStatus / PageSpeed / Page / SEODaily), and
+#   * the `dataforseo_onpage` connector (a paid crawl, written straight to the table).
+#
+# The rebuild below used to open with an unconditional
+# `DELETE FROM technical_issues WHERE site_id = :sid`, which meant every
+# `Refresh all` threw away the OnPage crawl results the user had just paid for —
+# `_run_post_sync` runs after all connectors, so the wipe always landed last.
+#
+# The fix is to make the delete claim-scoped: this service only removes rows whose
+# issue_type it can itself produce, so "resolved issues don't linger" still holds
+# for derived checks while connector-written rows survive untouched.
+#
+# Keep this catalog in sync with every `_add(...)` call in rebuild_technical_issues().
+# ---------------------------------------------------------------------------
+
+DERIVED_ISSUE_TYPES: frozenset[str] = frozenset({
+    # 1) Indexing & Crawlability — produced by _coverage_issue()
+    "not_found_404",
+    "crawled_not_indexed",
+    "page_with_redirect",
+    "blocked_by_robots",
+    # 2) Performance / SEO / Accessibility / Best Practices — produced from PageSpeed
+    "slow_load",
+    "huge_page_size",
+    "uncompressed_pages",
+    "unminified_resources",
+    "low_performance_score",
+    "low_seo_score",
+    "low_accessibility_score",
+    "missing_alt_tags",
+    "low_best_practices_score",
+    "no_structured_data",
+    # 3) Content & SEO — produced from the Page inventory
+    "missing_title",
+    "title_too_long",
+    "missing_description",
+    "orphaned_pages",
+    "duplicate_titles",
+    # 4) URL structure — produced from SEODaily landing pages
+    "long_url",
+})
+
+# Dynamic Lighthouse audits are emitted as `lh:<Category>:<Title>`, so they cannot be
+# enumerated up front — they are claimed by prefix instead.
+DERIVED_ISSUE_TYPE_PREFIXES: tuple[str, ...] = ("lh:",)
+
+# Rows per DELETE ... WHERE url IN (...) statement. SQLite caps bound parameters per
+# statement, so the scanned-URL list is deleted in chunks; the value is well inside
+# both SQLite's and Postgres' limits and the statement itself is plain Core SQL that
+# both dialects accept.
+_DELETE_URL_CHUNK = 400
 
 
 def _coverage_issue(coverage: str) -> tuple[str, str, str] | None:
@@ -52,10 +108,54 @@ def _coverage_issue(coverage: str) -> tuple[str, str, str] | None:
     return None
 
 
+def _derived_issue_type_filter():
+    """SQL predicate matching only the issue_type values this service produces.
+
+    Built from DERIVED_ISSUE_TYPES plus a LIKE for each dynamic prefix. Both `IN (...)`
+    and `LIKE 'lh:%'` are plain SQL that SQLite and PostgreSQL accept identically, and
+    the prefixes contain no `%`/`_` so no LIKE escaping is needed.
+    """
+    return or_(
+        TechnicalIssue.issue_type.in_(sorted(DERIVED_ISSUE_TYPES)),
+        *[TechnicalIssue.issue_type.like(f"{prefix}%") for prefix in DERIVED_ISSUE_TYPE_PREFIXES],
+    )
+
+
+def _clear_derived_issues(session, site_id: str, scanned_urls: set[str]) -> None:
+    """Remove this service's own previous output so resolved derived issues don't linger.
+
+    Deliberately scoped twice over, so a rebuild can never destroy what it did not write:
+
+      * by issue_type — only the types listed in DERIVED_ISSUE_TYPES (or carrying a
+        DERIVED_ISSUE_TYPE_PREFIXES prefix) are candidates. Anything the
+        `dataforseo_onpage` connector wrote under its own DataForSEO check name
+        (`no_h1_tag`, `is_4xx_code`, `duplicate_title_tag`, …) is never matched.
+      * by url — only URLs this rebuild actually looked at. A URL the derived pass has
+        no data for cannot have had its issues "resolved", so its rows stay put; this
+        is what protects OnPage findings on crawled pages that GSC/PageSpeed never saw.
+
+    Issued in chunks because SQLite caps bound parameters per statement.
+    """
+    if not scanned_urls:
+        return
+    urls = sorted(scanned_urls)
+    type_filter = _derived_issue_type_filter()
+    for i in range(0, len(urls), _DELETE_URL_CHUNK):
+        session.execute(
+            delete(TechnicalIssue).where(
+                TechnicalIssue.site_id == site_id,
+                TechnicalIssue.url.in_(urls[i:i + _DELETE_URL_CHUNK]),
+                type_filter,
+            )
+        )
+
+
 def rebuild_technical_issues(site_id: str) -> int:
     """Recompute the technical_issues table for one site across all thematic categories. Returns rows written."""
     records: list[dict] = []
     seen: set[tuple[str, str]] = set()
+    # Every URL this pass inspected — the only URLs whose derived rows it may clear.
+    scanned_urls: set[str] = set()
 
     def _add(url: str, issue_type: str, severity: str, description: str):
         if not url:
@@ -82,6 +182,8 @@ def rebuild_technical_issues(site_id: str) -> int:
             .where(IndexingStatus.site_id.in_(site_ids))
         ).all()
         for url, coverage in idx_rows:
+            if url:
+                scanned_urls.add(url)
             mapped = _coverage_issue(coverage)
             if mapped and url:
                 issue_type, severity, desc = mapped
@@ -97,6 +199,7 @@ def rebuild_technical_issues(site_id: str) -> int:
             url = ps.url
             if not url:
                 continue
+            scanned_urls.add(url)
 
             lcp = (ps.lcp_ms or 0) / 1000.0
             fcp = (ps.fcp_ms or 0) / 1000.0
@@ -185,6 +288,7 @@ def rebuild_technical_issues(site_id: str) -> int:
             url = p.url
             if not url:
                 continue
+            scanned_urls.add(url)
             title = (p.title or p.meta_title or "").strip()
             desc = (p.meta_description or "").strip()
 
@@ -223,13 +327,16 @@ def rebuild_technical_issues(site_id: str) -> int:
         for (url,) in url_rows:
             if not url:
                 continue
+            scanned_urls.add(url)
             path = urlparse(url).path or "/"
             if len(path) > URL_PATH_MAX:
                 _add(url, "long_url", "low",
                      f"URL path length ({len(path)} chars) exceeds {URL_PATH_MAX}. Shorter paths are cleaner and easier to read.")
 
-        # Replace the previous set so resolved issues don't linger.
-        session.execute(delete(TechnicalIssue).where(TechnicalIssue.site_id == site_id))
+        # Replace the previous set so resolved issues don't linger — but only OUR set.
+        # Rows written by the `dataforseo_onpage` connector share this table and are a
+        # paid crawl result; a blanket delete here wiped them on every `Refresh all`.
+        _clear_derived_issues(session, site_id, scanned_urls)
         written = upsert_technical_issues(session, records, site_id=site_id)
         session.commit()
 

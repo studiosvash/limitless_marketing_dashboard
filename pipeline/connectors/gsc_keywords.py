@@ -196,7 +196,7 @@ class GSCKeywordsConnector(BaseConnector):
         if not records:
             return 0
 
-        from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+        from pipeline.db.dialect import max_batch_size, upsert_insert
 
         # Clean records: keep all schema fields including GSC engagement metrics
         clean_records = []
@@ -220,11 +220,12 @@ class GSCKeywordsConnector(BaseConnector):
             })
 
         # Batch insert to avoid SQLite "too many SQL variables" error
-        BATCH_SIZE = 80
+        insert = upsert_insert(session)
+        BATCH_SIZE = max_batch_size(session, 80)
         total_written = 0
         for i in range(0, len(clean_records), BATCH_SIZE):
             batch = clean_records[i:i + BATCH_SIZE]
-            stmt = sqlite_insert(KeywordRanking).values(batch)
+            stmt = insert(KeywordRanking).values(batch)
             stmt = stmt.on_conflict_do_update(
                 index_elements=["date", "site_id", "keyword"],
                 set_={

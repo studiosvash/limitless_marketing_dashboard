@@ -1,17 +1,44 @@
-"""AI Optimization page — comprehensive calculations deriving AI search visibility,
-suggestions, keyword tracking, and share of voice across real analytics and technical issue tables."""
+"""AI Optimization page — assembles the response from things that really exist.
+
+Three real sources, and nothing else:
+
+1. **First-party ORM data** — `AITarget` / `AIPromptList` / `AIPrompt` (targets, lists, prompts,
+   `setupDone`).
+2. **`AIKeywordData`** (analytics DB) — reshaped into `aiKeywords`.
+3. **Stored answer-engine checks** — what `pipeline/services/ai_visibility_service.check_prompt`
+   actually observed, written by the `run`/`inspect` actions in `apps/api/views.py` and read back
+   here as `prompts[].results`, `prompts[].lastRun`, `history`, and the `kpis` counts. Their real
+   USD cost is read back out of the `connector_costs` table.
+
+Everything with no source is `0` / `None` / `[]` and stays that way. `sov`, `trend`, `topPages`,
+`topDomains` and `suggestions` are the honest empties: share-of-voice and a trend line need a
+scheduled run history over a stable prompt set (this feature is manual-run only, so there is no
+comparable series yet); cited *pages* and cited *domains* need a web-search-enabled provider that
+returns verified sources, which is not connected (see `ai_visibility_service`'s module docstring);
+and a real prompt-suggestion engine does not exist. A plausible-looking number in any of those
+slots is worse than a visible gap.
+"""
 import json
 import logging
-from datetime import date, timedelta
+from datetime import datetime, timedelta, timezone
+
 from sqlalchemy import func, select
 
-from apps.dashboard.models import AITarget, AIPromptList, AIPrompt
-from pipeline.db.schema import AIKeywordData, KeywordRanking, SEODaily, TechnicalIssue, PageSpeed
+from apps.dashboard.models import AITarget, AIPromptList, AIPrompt, ProjectSettings
+from apps.dashboard.services.mutation_state import get_state, set_state
+from pipeline.db.schema import AIKeywordData, ConnectorCost
+from pipeline.db.writer import ensure_tables, insert_connector_cost
+from pipeline.services.ai_visibility_service import (
+    check_prompt, connected_platforms, is_platform_connected, not_connected_result,
+    not_connected_reason, platform_name,
+)
 from pipeline.utils.db_connection import get_session
-from pipeline.services.competitor_service import get_tracked_competitors
 
 logger = logging.getLogger(__name__)
 
+# The SPA reads pl2.name (not .label) off both mentionPlatforms and llmPlatforms, and treats
+# llmPlatforms as the SAME {id,name,color} object shape as mentionPlatforms (pl2.id/.name/.color
+# are all dereferenced against it) -- not a bare id string.
 MENTION_PLATFORMS = [
     {"id": "chatgpt", "name": "ChatGPT", "color": "#10a37f"},
     {"id": "claude", "name": "Claude", "color": "#d97757"},
@@ -19,76 +46,96 @@ MENTION_PLATFORMS = [
     {"id": "perplexity", "name": "Perplexity", "color": "#20808d"},
 ]
 
+# ── Where a run is stored ────────────────────────────────────────────────────────────────────
+# The ProjectSettings JSON blob, via mutation_state.get_state/set_state — the same mechanism
+# alert acks, hidden audit checks and ads overrides already use. Chosen because a new Django
+# model + migration would have to land in apps/dashboard/models.py, which this change does not
+# own; these keys are distinct from every group name settings_service routes, so a Settings PUT
+# cannot clobber them.
+#
+# The limits of a JSON blob are real and are accepted deliberately, not overlooked:
+#   * the whole blob is read and rewritten on every access — no partial update, no index, so
+#     history is capped at MAX_HISTORY entries and only the LATEST result per (prompt, platform)
+#     is kept. Older runs are dropped, not archived;
+#   * two concurrent runs are last-write-wins (acceptable at 2-3 internal users, not beyond);
+#   * you cannot query it — "every check where a competitor outranked us" needs a table scan in
+#     Python, so trend/share-of-voice over time stay out of scope until a real table exists.
+# The follow-up is a proper `AIRunResult` model (site_url, prompt_id, platform, checked_at,
+# verdict, position, cost, answer) in apps/dashboard/models.py; see the report.
+RESULTS_KEY = "aiPromptResults"   # {"<prompt_id>": {"results": {...}, "lastRun": iso}}
+HISTORY_KEY = "aiRunHistory"      # [entry, ...] newest first
+MAX_HISTORY = 50
+
+# connector_costs.connector values this page writes and reads back.
+COST_CONNECTOR_RUN = "ai_visibility_run"
+COST_CONNECTOR_INSPECT = "ai_visibility_inspect"
+AI_COST_CONNECTORS = (COST_CONNECTOR_RUN, COST_CONNECTOR_INSPECT)
+
 
 def _resolve_site_ids(site_id: str) -> list[str]:
+    """Both spellings of a Search Console property: analytics rows may be keyed either with or
+    without the `sc-domain:` prefix depending on which connector wrote them."""
     alt_id = site_id.replace("sc-domain:", "") if site_id.startswith("sc-domain:") else f"sc-domain:{site_id}"
     return [site_id, alt_id]
 
 
 def query_ai_keywords_raw(site_id: str) -> list[dict]:
-    """Real AIKeywordData reshape plus intelligent fallback to high-value KeywordRanking rows."""
+    """Real reshape of AIKeywordData for the latest captured snapshot date.
+
+    AIKeywordData rows are captured as one full snapshot per sync date, so "latest date" is the
+    correct notion of current state, not a per-keyword max-date dedup.
+
+    `mentions`/`gap` are ALWAYS 0/False: they describe answer-engine mentions of a *keyword*,
+    which nothing in this codebase measures (the visibility checker measures mentions of a
+    *brand* in a *prompt's* answer — a different thing). Deriving them from search volume, as
+    an earlier revision did, invented a signal.
+    """
     site_ids = _resolve_site_ids(site_id)
-    out = []
     try:
         with get_session() as session:
             latest = session.execute(
                 select(func.max(AIKeywordData.date)).where(AIKeywordData.site_id.in_(site_ids))
             ).scalar()
-            if latest:
-                rows = session.execute(
-                    select(AIKeywordData)
-                    .where(AIKeywordData.site_id.in_(site_ids), AIKeywordData.date == latest)
-                ).scalars().all()
-                for r in rows:
-                    ai_vol = r.ai_search_volume or 0
-                    g_vol = r.search_volume or 0
-                    try:
-                        monthly = json.loads(r.trend) if r.trend else []
-                    except (ValueError, TypeError):
-                        monthly = []
-                    ordered = sorted(monthly, key=lambda m: (m.get("year") or 0, m.get("month") or 0))
-                    trend = [int(m["ai_search_volume"]) if m.get("ai_search_volume") is not None else 0 for m in ordered]
-                    if len(trend) < 12:
-                        trend = [0] * (12 - len(trend)) + trend
-                    out.append({
-                        "kw": r.keyword,
-                        "aiVolume": ai_vol,
-                        "gVolume": g_vol,
-                        "ratio": round(ai_vol / g_vol * 100) if g_vol else None,
-                        "intent": r.intent or "",
-                        "trend": trend[-12:],
-                        "mentions": max(1, round((ai_vol or 100) * 0.12)),
-                        "gap": False,
-                    })
+            if latest is None:
+                return []
+            rows = session.execute(
+                select(AIKeywordData)
+                .where(AIKeywordData.site_id.in_(site_ids), AIKeywordData.date == latest)
+            ).scalars().all()
     except Exception as e:
         logger.error(f"query_ai_keywords_raw error: {e}", exc_info=True)
+        return []
 
-    if not out:
-        # Fallback: derive AI interest metrics from real top KeywordRanking rows
+    out = []
+    for r in rows:
+        ai_vol = r.ai_search_volume or 0
+        g_vol = r.search_volume or 0
         try:
-            with get_session() as session:
-                kws = session.execute(
-                    select(KeywordRanking)
-                    .where(KeywordRanking.site_id.in_(site_ids))
-                    .order_by(KeywordRanking.clicks.desc().nullslast())
-                    .limit(25)
-                ).scalars().all()
-                for i, k in enumerate(kws):
-                    g_vol = k.search_volume or max(50, (k.impressions or 10) * 12)
-                    ai_vol = round(g_vol * (0.25 - min(0.18, i * 0.006)))
-                    out.append({
-                        "kw": k.keyword,
-                        "aiVolume": ai_vol,
-                        "gVolume": g_vol,
-                        "ratio": round(ai_vol / max(1, g_vol) * 100),
-                        "intent": k.intent or "informational",
-                        "trend": [round(ai_vol * (0.8 + 0.04 * idx)) for idx in range(12)],
-                        "mentions": max(1, round(ai_vol * 0.15)),
-                        "gap": i % 4 == 3,
-                    })
-        except Exception as e:
-            logger.error(f"query_ai_keywords_raw fallback error: {e}", exc_info=True)
-
+            monthly = json.loads(r.trend) if r.trend else []
+        except (ValueError, TypeError):
+            monthly = []
+        # trend is stored as a list of {year, month, ai_search_volume} objects (see
+        # pipeline/connectors/dataforseo_ai_keywords.py::_normalize), not a flat list of
+        # numbers -- flatten + sort chronologically before handing it to the SPA's sparkline,
+        # which expects trend[11] to be the most recent month.
+        ordered = sorted(monthly, key=lambda m: (m.get("year") or 0, m.get("month") or 0))
+        trend = [int(m["ai_search_volume"]) if m.get("ai_search_volume") is not None else 0 for m in ordered]
+        if len(trend) < 12:
+            # Pad at the START with zeros so the most-recent real month stays last (index 11).
+            trend = [0] * (12 - len(trend)) + trend
+        out.append({
+            "kw": r.keyword,
+            "aiVolume": ai_vol,
+            "gVolume": g_vol,
+            # None (not a fabricated 0%) when there's no Google-volume denominator to compare
+            # against -- g_vol == 0 means "no signal," not "0% AI share." A flat 0% would
+            # misleadingly read as "no AI interest."
+            "ratio": round(ai_vol / g_vol * 100) if g_vol else None,
+            "intent": r.intent or "",
+            "trend": trend[-12:],
+            "mentions": 0,   # honest -- nothing measures per-keyword answer-engine mentions
+            "gap": False,    # honest -- same
+        })
     return out
 
 
@@ -98,17 +145,349 @@ def _target_dict(t: "AITarget | None") -> dict:
     return {"brand": t.brand, "aliases": t.aliases, "competitors": t.competitors}
 
 
-def build_ai_response(site_id: str) -> dict:
-    """API-shaped AI Optimization response with complete data calculation across all tabs."""
+# ─────────────────────────────────────────────
+# Stored checks (written by the run/inspect actions)
+# ─────────────────────────────────────────────
+
+def get_prompt_results(site_id: str) -> dict:
+    """`{"<prompt_id>": {"results": {platform: result}, "lastRun": iso}}` — only checks that
+    really happened. `{}` before the first run."""
+    stored = get_state(site_id, RESULTS_KEY, {})
+    return stored if isinstance(stored, dict) else {}
+
+
+def get_run_history(site_id: str) -> list:
+    """Inspector/history entries, newest first. `[]` before the first run."""
+    stored = get_state(site_id, HISTORY_KEY, [])
+    return stored if isinstance(stored, list) else []
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _cell(result: dict) -> dict:
+    """The part of a check the Prompts table needs, stored per (prompt, platform).
+
+    The answer text and its paragraph split are deliberately NOT kept here — they are large and
+    they live once, in the history entry, which is what the Answer Inspector opens.
+    """
+    return {
+        "state": result.get("state"),
+        "platform": result.get("platform"),
+        "platformName": result.get("platformName"),
+        "model": result.get("model"),
+        "verdict": result.get("verdict"),
+        "mentioned": bool(result.get("mentioned")),
+        "cited": bool(result.get("cited")),
+        "position": result.get("position"),
+        "snippet": result.get("snippet") or "",
+        "competitors": result.get("competitors") or [],
+        "cost": result.get("cost"),
+        "error": result.get("error"),
+        "checkedAt": result.get("checkedAt"),
+    }
+
+
+def _history_entry(result: dict, question: str, prompt_id) -> dict:
+    """One archived answer, in the shape the Answer Inspector and History tab read
+    (`e.ts/.question/.verdict/.position/.cost` and `e.scrape.{model,location,paragraphs,
+    citations}`)."""
+    return {
+        "id": f"{result.get('platform')}-{result.get('checkedAt') or _now_iso()}-{prompt_id or 'adhoc'}",
+        "ts": result.get("checkedAt") or _now_iso(),
+        "question": question,
+        "promptId": prompt_id,
+        "platform": result.get("platform"),
+        "platformName": result.get("platformName"),
+        "verdict": result.get("verdict"),
+        "position": result.get("position"),
+        "mentioned": bool(result.get("mentioned")),
+        "cited": bool(result.get("cited")),
+        "snippet": result.get("snippet") or "",
+        "competitors": result.get("competitors") or [],
+        "cost": result.get("cost"),
+        "scrape": {
+            "model": result.get("model"),
+            # Real: no geo-targeting is applied to the request, so there is no location to name.
+            "location": "No location targeting",
+            "paragraphs": result.get("paragraphs") or [],
+            # Always empty — the chat-completions API returns prose, not verified sources.
+            "citations": [],
+        },
+    }
+
+
+def _record_spend(site_id: str, connector: str, cost: float, units: int, notes: str) -> None:
+    """Append the real USD this action spent to `connector_costs`. Never raises: losing a cost
+    row must not lose the results the user already paid for."""
+    if not units:
+        return
+    try:
+        with get_session() as session:
+            insert_connector_cost(session, site_id, connector, cost, units=units, notes=notes)
+    except Exception as exc:
+        logger.warning(f"ai_service: could not record {connector} spend: {exc}")
+
+
+def _target_for_run(site_id: str):
+    target = AITarget.objects.filter(site_url=site_id).first()
+    brand = (target.brand or "").strip() if target else ""
+    aliases = (target.aliases or []) if target else []
+    competitors = (target.competitors or []) if target else []
+    return brand, aliases, competitors
+
+
+def run_prompt_checks(site_id: str, prompts: list) -> dict:
+    """Ask every tracked answer engine each of `prompts`, for real, and persist what came back.
+
+    Spends money — only ever reached from the explicit "Run now" user action, never from a GET.
+    Returns `{"ran", "checked", "cost", "skipped", "notConnected", "detail"}`; `ran`/`cost` are
+    the two keys the SPA's notification reads.
+    """
+    brand, aliases, competitors = _target_for_run(site_id)
+    if not brand:
+        return {"ran": 0, "checked": 0, "cost": 0.0, "skipped": len(prompts),
+                "notConnected": [], "detail": "Set your brand under Targets before running checks."}
+
+    stored = get_prompt_results(site_id)
+    history = get_run_history(site_id)
+
+    checked = 0
+    total_cost = 0.0
+    cost_unknown = 0
+    skipped = 0
+    not_connected: set[str] = set()
+    new_entries: list[dict] = []
+
+    for prompt in prompts:
+        platforms = list(prompt.tracked_models or [])
+        if not platforms:
+            skipped += 1
+            continue
+        entry = stored.get(str(prompt.id))
+        if not isinstance(entry, dict):
+            entry = {"results": {}, "lastRun": None}
+        results = entry.get("results")
+        if not isinstance(results, dict):
+            results = {}
+
+        ran_any = False
+        for platform in platforms:
+            if not is_platform_connected(platform):
+                # Recorded as an explicit not_connected cell, never as a verdict. Nothing is
+                # called and nothing is charged.
+                results[platform] = _cell(not_connected_result(platform))
+                not_connected.add(platform)
+                continue
+            result = check_prompt(prompt.text, brand, aliases, competitors, platform=platform)
+            results[platform] = _cell(result)
+            if not result.get("ok"):
+                continue
+            ran_any = True
+            checked += 1
+            if result.get("cost") is None:
+                cost_unknown += 1
+            else:
+                total_cost += float(result["cost"])
+            new_entries.append(_history_entry(result, prompt.text, prompt.id))
+
+        entry["results"] = results
+        if ran_any:
+            entry["lastRun"] = _now_iso()
+        stored[str(prompt.id)] = entry
+
+    set_state(site_id, RESULTS_KEY, stored)
+    if new_entries:
+        set_state(site_id, HISTORY_KEY, (new_entries[::-1] + history)[:MAX_HISTORY])
+
+    notes = f"{checked} check(s) across {len(prompts)} prompt(s)"
+    if cost_unknown:
+        notes += f"; {cost_unknown} with no usage block (cost unknown)"
+    _record_spend(site_id, COST_CONNECTOR_RUN, round(total_cost, 6), checked, notes)
+
+    detail = None
+    if not checked:
+        if not_connected:
+            detail = "; ".join(sorted(not_connected_reason(p) for p in not_connected))
+        elif skipped:
+            detail = "No answer engines are selected on these prompts."
+    return {
+        "ran": len(prompts),
+        "checked": checked,
+        "cost": round(total_cost, 6),
+        "skipped": skipped,
+        "notConnected": sorted(not_connected),
+        "detail": detail,
+    }
+
+
+def inspect_question(site_id: str, question: str, prompt_id=None) -> dict:
+    """One ad-hoc answer-engine check for the Answer Inspector.
+
+    Returns `{"ok": True, "entry": <history entry>}` on a real check, or
+    `{"ok": False, "reason": ...}` when it could not honestly be performed. Spends money — only
+    reached from the explicit "Inspect now" user action.
+    """
+    question = (question or "").strip()
+    if not question:
+        return {"ok": False, "reason": "Enter a question to inspect."}
+
+    brand, aliases, competitors = _target_for_run(site_id)
+    if not brand:
+        return {"ok": False, "reason": "Set your brand under Targets before inspecting an answer."}
+
+    available = connected_platforms()
+    if not available:
+        # Exactly the ai_summary_service degradation: no key, no call, and say so.
+        return {"ok": False, "reason": not_connected_reason("chatgpt"), "notConnected": True}
+
+    platform = available[0]
+    result = check_prompt(question, brand, aliases, competitors, platform=platform)
+    if not result.get("ok"):
+        return {"ok": False, "reason": result.get("error") or f"{platform_name(platform)} check failed."}
+
+    entry = _history_entry(result, question, prompt_id)
+    history = get_run_history(site_id)
+    set_state(site_id, HISTORY_KEY, ([entry] + history)[:MAX_HISTORY])
+
+    if prompt_id is not None:
+        # An inspection of a tracked prompt's own text is a real observation of that prompt —
+        # reflect it in the Prompts table too, rather than throwing the result away.
+        stored = get_prompt_results(site_id)
+        pentry = stored.get(str(prompt_id))
+        if not isinstance(pentry, dict):
+            pentry = {"results": {}, "lastRun": None}
+        results = pentry.get("results")
+        if not isinstance(results, dict):
+            results = {}
+        results[platform] = _cell(result)
+        pentry["results"] = results
+        pentry["lastRun"] = _now_iso()
+        stored[str(prompt_id)] = pentry
+        set_state(site_id, RESULTS_KEY, stored)
+
+    cost = result.get("cost")
+    _record_spend(site_id, COST_CONNECTOR_INSPECT, float(cost or 0.0), 1,
+                  f"answer inspector · {result.get('model')}"
+                  + ("" if cost is not None else " · no usage block (cost unknown)"))
+    return {"ok": True, "entry": entry}
+
+
+# ─────────────────────────────────────────────
+# Real spend (connector_costs)
+# ─────────────────────────────────────────────
+
+def _cost_rows(site_id: str) -> list:
+    """(connector, run_at, cost, units) for this page's own spend events. [] on any failure —
+    a cost read must never take the page down, and [] renders as an honest zero."""
     site_ids = _resolve_site_ids(site_id)
+    try:
+        with get_session() as session:
+            # Self-provision: a database created before connector_costs existed must not raise
+            # "no such table" on first read. Same pattern as cost_service.
+            ensure_tables(session, ConnectorCost)
+            return list(session.execute(
+                select(ConnectorCost.connector, ConnectorCost.run_at,
+                       ConnectorCost.cost, ConnectorCost.units)
+                .where(ConnectorCost.site_id.in_(site_ids))
+                .where(ConnectorCost.connector.in_(AI_COST_CONNECTORS))
+            ).all())
+    except Exception as exc:
+        logger.error(f"ai_service: could not read connector_costs: {exc}", exc_info=True)
+        return []
+
+
+def _as_naive_utc(value):
+    """connector_costs.run_at is a plain DateTime column: SQLite hands back naive values and
+    Postgres would compare an aware bound parameter against a naive column. One code path for
+    both — filtering happens in Python here, so this only normalises what came back."""
+    if value is None:
+        return None
+    if getattr(value, "tzinfo", None) is not None:
+        return value.astimezone(timezone.utc).replace(tzinfo=None)
+    return value
+
+
+def _spend(site_id: str) -> dict:
+    """Real recorded spend on answer-engine checks, and the real mean cost of one check.
+
+    Every figure comes from `connector_costs` rows this page's own actions inserted. No rows
+    means every figure is 0 / None — never an estimate of what a check "should" cost.
+    """
+    rows = _cost_rows(site_id)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    week_start = now - timedelta(days=7)
+
+    spent_month = 0.0
+    spent_week = 0.0
+    totals = {c: {"cost": 0.0, "units": 0} for c in AI_COST_CONNECTORS}
+    for connector, run_at, cost, units in rows:
+        cost = float(cost or 0.0)
+        run_at = _as_naive_utc(run_at)
+        if connector in totals:
+            totals[connector]["cost"] += cost
+            totals[connector]["units"] += int(units or 0)
+        if run_at is not None and run_at >= month_start:
+            spent_month += cost
+        if run_at is not None and run_at >= week_start:
+            spent_week += cost
+
+    def per_unit(connector):
+        agg = totals[connector]
+        if not agg["units"]:
+            return None  # unknown, not zero and not a guess
+        return round(agg["cost"] / agg["units"], 6)
+
+    return {
+        "spent_month": round(spent_month, 6),
+        "spent_week": round(spent_week, 6),
+        "per_run_check": per_unit(COST_CONNECTOR_RUN),
+        "per_inspect": per_unit(COST_CONNECTOR_INSPECT),
+    }
+
+
+def _budget_cap(site_id: str) -> float:
+    """The user's own configured cap from Settings → Usage & Budget. 0 when never configured —
+    that is the real stored default, not a stand-in for a plan allowance we don't know."""
+    obj = ProjectSettings.objects.filter(site_url=site_id).first()
+    if obj is None:
+        return 0
+    try:
+        return (obj.data.get("budget") or {}).get("cap", 0) or 0
+    except AttributeError:
+        return 0
+
+
+# ─────────────────────────────────────────────
+# Response
+# ─────────────────────────────────────────────
+
+def build_ai_response(site_id: str) -> dict:
+    """API-shaped AI Optimization response.
+
+    Never calls an answer engine: a check costs money, so it only ever happens on the explicit
+    `run`/`inspect` user action. This function reads back what those actions stored.
+    """
     target = AITarget.objects.filter(site_url=site_id).first()
     lists = list(AIPromptList.objects.filter(site_url=site_id).values("id", "name"))
-    prompts_qs = AIPrompt.objects.filter(site_url=site_id).select_related(None)
-    prompts = [
-        {
+    prompts_qs = AIPrompt.objects.filter(site_url=site_id)
+
+    stored = get_prompt_results(site_id)
+    prompts = []
+    for p in prompts_qs:
+        entry = stored.get(str(p.id)) or {}
+        results = entry.get("results") or {}
+        prompts.append({
             "id": p.id,
             "text": p.text,
             "listId": p.list_id,
+            # The SPA reads pr.cfg.models/.cadence/.country/.city (a nested object), not a flat
+            # pr.models -- without this, pr.cfg.models.length crashes once any prompt exists.
+            # "weekly" is a real system-wide constant (the only cadence this feature is designed
+            # for); country/city/webSearch are honestly empty/false since no per-prompt
+            # geo-targeting or web-search toggle is persisted yet.
             "cfg": {
                 "models": p.tracked_models,
                 "cadence": "weekly",
@@ -116,127 +495,64 @@ def build_ai_response(site_id: str) -> dict:
                 "city": "",
                 "webSearch": False,
             },
-            "results": {},
-            "lastRun": None,
-        }
-        for p in prompts_qs
-    ]
-
-    ai_keywords = query_ai_keywords_raw(site_id)
-    total_ai_vol = sum(k.get("aiVolume", 0) for k in ai_keywords)
-    mentions_count = sum(k.get("mentions", 0) for k in ai_keywords)
-
-    # Calculate real data-driven AI optimization suggestions from TechnicalIssue & Keyword tables
-    suggestions = []
-    try:
-        with get_session() as session:
-            issues = session.execute(
-                select(TechnicalIssue).where(TechnicalIssue.site_id.in_(site_ids))
-            ).scalars().all()
-            issue_types = set(i.issue_type for i in issues)
-            if "missing_description" in issue_types:
-                suggestions.append({
-                    "id": "ai-sug-desc",
-                    "text": "Optimize meta descriptions for AI snippets",
-                    "category": "recommendation",
-                    "aiVolume": 14500,
-                })
-            if "missing_alt_tags" in issue_types:
-                suggestions.append({
-                    "id": "ai-sug-alt",
-                    "text": "Annotate key diagrams with descriptive alt text",
-                    "category": "recommendation",
-                    "aiVolume": 8200,
-                })
-            if "slow_load" in issue_types or "huge_page_size" in issue_types:
-                suggestions.append({
-                    "id": "ai-sug-speed",
-                    "text": "Optimize TTFB for AI scraper bots",
-                    "category": "recommendation",
-                    "aiVolume": 5400,
-                })
-    except Exception:
-        pass
-
-    if not suggestions:
-        suggestions.append({
-            "id": "ai-sug-faq",
-            "text": "Implement FAQ schema and direct question headers",
-            "category": "recommendation",
-            "aiVolume": 21000,
+            # Real observed results keyed by platform id -- {} until this prompt is actually run.
+            "results": results if isinstance(results, dict) else {},
+            "lastRun": entry.get("lastRun"),
         })
 
-    suggestions.extend([
-        {"id": "ai-sug-comp1", "text": "What is the best alternative to [Brand]?", "category": "comparison", "aiVolume": 8400},
-        {"id": "ai-sug-cost", "text": "How much does [Brand] cost per month?", "category": "cost", "aiVolume": 3200},
-        {"id": "ai-sug-loc", "text": "Best [Industry] services near me", "category": "local", "aiVolume": 12500},
-        {"id": "ai-sug-vs", "text": "[Brand] vs [Competitor] pros and cons", "category": "comparison", "aiVolume": 6100},
-        {"id": "ai-sug-q", "text": "How to solve [Core Problem] with [Brand]", "category": "question", "aiVolume": 4800},
-    ])
+    history = get_run_history(site_id)
+    spend = _spend(site_id)
 
-    # Derive Share of Voice (sov) and competitor comparison
-    competitors = get_tracked_competitors(site_id)
-    our_sov = min(88, max(24, round(mentions_count * 2.5)))
-    main_domain = site_id.replace("sc-domain:", "")
-    sov_rows = [{"domain": main_domain, "sov": our_sov, "share": our_sov, "mentions": mentions_count, "trend": "+4.2%", "isYou": True, "isComp": False}]
-    for idx, c in enumerate(competitors[:4]):
-        c_name = c if isinstance(c, str) else c.get("domain", f"comp-{idx}")
-        comp_sov = max(5, round(our_sov * (1.1 - idx * 0.25)))
-        sov_rows.append({"domain": c_name, "sov": comp_sov, "share": comp_sov, "mentions": max(1, round(mentions_count * (comp_sov / max(1, our_sov)))), "trend": f"{'+' if idx%2==0 else '-'}{1.2 + idx*0.8}%", "isYou": False, "isComp": True})
-
-    # Derive top cited pages and domains from SEODaily top landing pages
-    top_pages = []
-    top_domains = []
-    try:
-        with get_session() as session:
-            pages_db = session.execute(
-                select(SEODaily.landing_page, func.sum(SEODaily.sessions).label("s"))
-                .where(SEODaily.site_id.in_(site_ids), SEODaily.landing_page.isnot(None))
-                .group_by(SEODaily.landing_page)
-                .order_by(func.sum(SEODaily.sessions).desc())
-                .limit(10)
-            ).all()
-            for i, p in enumerate(pages_db):
-                m_count = max(1, round((mentions_count or 25) * (0.35 - i * 0.03)))
-                top_pages.append({
-                    "url": p.landing_page,
-                    "mentions": m_count,
-                    "impressions": m_count * 18,
-                    "platforms": ["ChatGPT", "Claude", "Perplexity"][:max(1, 3 - i % 3)],
-                    "change": f"+{5 - i%4}%",
-                })
-    except Exception:
-        pass
-
-    # Derive historical monthly trend
-    trend = []
-    for i in range(6):
-        base_mentions = max(1, round(mentions_count * (0.65 + i * 0.07)))
-        trend_obj = {
-            "date": (date.today().replace(day=1) - timedelta(days=(5-i)*30)).isoformat()[:7], 
-            "mentions": base_mentions, 
-            "sov": max(10, round(our_sov * (0.75 + i * 0.05)))
-        }
-        for plat in MENTION_PLATFORMS:
-            trend_obj[plat["id"]] = round(base_mentions * (0.3 + (hash(plat["id"] + str(i)) % 40) / 100))
-        trend.append(trend_obj)
+    # KPIs counted off real stored checks, nothing else.
+    mentions = 0
+    cited_prompts = 0
+    for pr in prompts:
+        hit_cited = False
+        for res in pr["results"].values():
+            if not isinstance(res, dict):
+                continue
+            if res.get("mentioned"):
+                mentions += 1
+            if res.get("cited"):
+                hit_cited = True
+        if hit_cited:
+            cited_prompts += 1
 
     return {
-        "setupDone": True,
+        "setupDone": bool(target and target.setup_done),
         "targets": _target_dict(target),
-        "budget": {"cap": 500, "spent": 142, "weekly_est": 35},
-        "costs": {"model": 118.5, "inspect": 23.5},
-        "next_run": (date.today() + timedelta(days=3)).isoformat(),
+        "budget": {
+            # cap: the user's own configured cap. spent: real recorded answer-engine spend this
+            # calendar month. weekly_est: real recorded spend over the trailing 7 days (an
+            # observed figure, not a projection).
+            "cap": _budget_cap(site_id),
+            "spent": spend["spent_month"],
+            "weekly_est": spend["spent_week"],
+        },
+        # Real mean USD cost of one check, computed from recorded spend / recorded checks.
+        # None until at least one real check has been paid for -- the price of a call is not
+        # something to guess at in the UI.
+        "costs": {"model": spend["per_run_check"], "inspect": spend["per_inspect"]},
+        # No scheduler runs these prompts (they are manual-only), so there is no next run.
+        "next_run": None,
         "mentionPlatforms": MENTION_PLATFORMS,
+        # Same {id,name,color} object shape as mentionPlatforms -- the SPA uses llmPlatforms
+        # (aliased "llm") for the Prompts table's model-column headers/dots/coverage counts.
         "llmPlatforms": MENTION_PLATFORMS,
-        "sov": {"you": our_sov, "delta": round(our_sov * 0.08, 1), "rows": sov_rows},
-        "kpis": {"mentions": mentions_count, "impressions": total_ai_vol, "cited_pages": len(top_pages) or 12, "prompt_coverage": {"cited": len(prompts), "total": len(prompts) or 5}},
-        "trend": trend,
-        "topPages": top_pages,
-        "topDomains": sov_rows,
+        # Honest empties -- see the module docstring for why each has no real source.
+        "sov": {"you": 0, "delta": 0, "rows": []},
+        "kpis": {
+            "mentions": mentions,
+            "impressions": 0,          # nothing measures answer-engine impressions
+            "cited_pages": 0,          # needs verified sources; no web-search provider connected
+            "prompt_coverage": {"cited": cited_prompts, "total": len(prompts)},
+        },
+        "trend": [],
+        "topPages": [],
+        "topDomains": [],
         "lists": lists,
         "prompts": prompts,
-        "suggestions": suggestions,
-        "aiKeywords": ai_keywords,
-        "history": [],
+        "suggestions": [],
+        "aiKeywords": query_ai_keywords_raw(site_id),
+        "history": history,
     }
