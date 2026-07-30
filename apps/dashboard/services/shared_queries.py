@@ -562,12 +562,33 @@ def _get_competitor_grid(site_id: str, limit: int = 100) -> dict:
                        func.lower(CompetitorKeywordRanking.keyword).in_(tracked_lower))
             ).all()
 
+            # Your own two latest dates are picked independently of `both` (the competitor
+            # sync's dates). The two syncs are billed and run separately, so a day where
+            # dataforseo_serp captured nothing usable for your domain (every row written with
+            # position=NULL -- e.g. a failed/partial run) must not blank out the whole "you"
+            # column just because dataforseo_serp_competitors happened to run that same day.
+            # Picking the latest dates that actually have a captured position surfaces the
+            # real, most recent data instead of an empty read caused by an unrelated sync's
+            # calendar.
+            your_dates = session.execute(
+                select(KeywordRanking.date)
+                .where(KeywordRanking.site_id == site_id,
+                       KeywordRanking.position.isnot(None),
+                       func.lower(KeywordRanking.keyword).in_(tracked_lower))
+                .group_by(KeywordRanking.date)
+                .order_by(KeywordRanking.date.desc())
+                .limit(2)
+            ).scalars().all()
+            your_latest = your_dates[0] if your_dates else None
+            your_prev = your_dates[1] if len(your_dates) > 1 else None
+            your_both = [d for d in (your_latest, your_prev) if d is not None]
+
             your_rows = session.execute(
                 select(KeywordRanking.keyword, KeywordRanking.date,
                        func.avg(KeywordRanking.position).label("pos"),
                        # max() only to satisfy the GROUP BY; one keyword/date has one URL.
                        func.max(KeywordRanking.url).label("url"))
-                .where(KeywordRanking.site_id == site_id, KeywordRanking.date.in_(both),
+                .where(KeywordRanking.site_id == site_id, KeywordRanking.date.in_(your_both),
                        func.lower(KeywordRanking.keyword).in_(tracked_lower))
                 .group_by(KeywordRanking.keyword, KeywordRanking.date)
             ).all()
@@ -598,7 +619,7 @@ def _get_competitor_grid(site_id: str, limit: int = 100) -> dict:
         for r in your_rows:
             slot = your_cell.setdefault(r.keyword, {})
             pos = round(r.pos, 0) if r.pos is not None else None
-            key = "latest" if r.date == latest else "prev"
+            key = "latest" if r.date == your_latest else "prev"
             slot[key] = int(pos) if pos is not None else None
             if key == "latest":
                 slot["url"] = r.url or ""

@@ -12,9 +12,9 @@ Each invocation:
   2. reads every active Site and its `syncConfig` cadences;
   3. starts at most ONE due module per site, through the existing start_sync_run().
 
-WHY at most one per site: start_sync_run() spawns a background thread per run and the
-connectors are rate-limited and metered. Firing five modules at once would run five threads
-against the same DataForSEO account, and the SPA's progress bar tracks a single task id. The
+WHY at most one per site: start_sync_run() spawns a process per run and the connectors are
+rate-limited and metered. Firing five modules at once would run five processes against the same
+DataForSEO account, and the SPA's progress bar tracks a single task id. The
 most-overdue module wins the slot and the rest are picked up on the following ticks -- with an
 hourly tick, a full backlog drains within hours, which is well inside every supported cadence.
 

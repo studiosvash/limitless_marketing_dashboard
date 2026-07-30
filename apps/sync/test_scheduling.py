@@ -194,6 +194,68 @@ class ReapOrphanedRunsTests(TestCase):
         self.assertFalse(scheduling.is_sync_running(SITE))
 
 
+class PidAwareReapTests(TestCase):
+    """The sync now runs as its own process (RefreshRun.pid), so a dead pid is direct evidence
+    a run is orphaned -- it no longer has to wait out the full RUN_TIMEOUT (2h) to be cleared.
+    This is what makes 'refresh-all survives navigating away or reloading the page' also mean
+    'a genuinely killed run gets noticed promptly' rather than trading one silent-hang failure
+    mode for another."""
+
+    def _run_with_pid(self, pid, age=timedelta(minutes=10)):
+        run = make_run(SITE, "all", RefreshStatus.RUNNING, age)
+        RefreshRun.objects.filter(pk=run.pk).update(pid=pid)
+        run.refresh_from_db()
+        return run
+
+    @mock.patch.object(scheduling, "_process_alive", return_value=False)
+    def test_dead_pid_is_reaped_well_before_the_timeout(self, _mock_alive):
+        run = self._run_with_pid(pid=99999)  # 10 minutes old -- nowhere near RUN_TIMEOUT (2h)
+        reaped = scheduling.reap_orphaned_runs()
+        self.assertEqual([r.pk for r in reaped], [run.pk])
+        run.refresh_from_db()
+        self.assertEqual(run.status, RefreshStatus.ERROR)
+        self.assertIn(str(run.pid), run.error_message)
+        self.assertIn("no longer running", run.error_message)
+
+    @mock.patch.object(scheduling, "_process_alive", return_value=True)
+    def test_live_pid_is_never_reaped_even_if_old(self, _mock_alive):
+        run = self._run_with_pid(pid=1, age=timedelta(hours=1, minutes=50))  # under RUN_TIMEOUT
+        self.assertEqual(scheduling.reap_orphaned_runs(), [])
+        run.refresh_from_db()
+        self.assertEqual(run.status, RefreshStatus.RUNNING)
+
+    @mock.patch.object(scheduling, "_process_alive", return_value=True)
+    def test_a_run_past_the_timeout_is_still_reaped_even_with_a_live_pid(self, _mock_alive):
+        """The pid check is a faster path to the SAME conclusion, not a replacement for the
+        timeout: a live-but-permanently-wedged process must still eventually be cleared."""
+        run = self._run_with_pid(pid=1, age=scheduling.RUN_TIMEOUT + timedelta(minutes=1))
+        reaped = scheduling.reap_orphaned_runs()
+        self.assertEqual([r.pk for r in reaped], [run.pk])
+        run.refresh_from_db()
+        self.assertEqual(run.status, RefreshStatus.ERROR)
+        self.assertIn("server restart", run.error_message)  # the timeout message, not the pid one
+
+    @mock.patch.object(scheduling, "_process_alive", return_value=False)
+    def test_a_freshly_spawned_run_is_not_pid_checked_during_the_grace_period(self, mock_alive):
+        """start_sync_run() creates the row, THEN spawns the process and writes the pid back --
+        so a row can briefly have pid=None (or, under a slow spawn, a pid the OS hasn't
+        scheduled yet) moments after creation. PID_GRACE stops the reaper from treating that
+        normal startup window as evidence of death."""
+        run = self._run_with_pid(pid=99999, age=scheduling.PID_GRACE - timedelta(seconds=30))
+        self.assertEqual(scheduling.reap_orphaned_runs(), [])
+        mock_alive.assert_not_called()
+        run.refresh_from_db()
+        self.assertEqual(run.status, RefreshStatus.RUNNING)
+
+    def test_a_run_with_no_pid_falls_back_to_the_timeout_untouched(self):
+        """Rows created before the pid column existed, or caught exactly mid-spawn, must not be
+        treated as dead just because pid is unknown -- NULL means unknown, never dead."""
+        run = self._run_with_pid(pid=None, age=timedelta(minutes=30))
+        self.assertEqual(scheduling.reap_orphaned_runs(), [])
+        run.refresh_from_db()
+        self.assertEqual(run.status, RefreshStatus.RUNNING)
+
+
 class RunScheduledSyncsCommandTests(TestCase):
     """The command is exercised with start_sync_run patched out -- it spawns a thread that
     calls real connectors, which a test must never do."""

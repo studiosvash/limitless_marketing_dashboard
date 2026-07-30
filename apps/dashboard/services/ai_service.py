@@ -66,6 +66,14 @@ RESULTS_KEY = "aiPromptResults"   # {"<prompt_id>": {"results": {...}, "lastRun"
 HISTORY_KEY = "aiRunHistory"      # [entry, ...] newest first
 MAX_HISTORY = 50
 
+# Per-prompt cadence/country/city/webSearch. AIPrompt has no columns for these -- adding them
+# would need a migration this change does not own -- so they live in the same JSON blob as
+# RESULTS_KEY/HISTORY_KEY, keyed by prompt id like RESULTS_KEY is. Before this existed,
+# `prompts-config` accepted the fields and silently discarded them: the modal showed a Save
+# button for values that were never actually persisted.
+PROMPT_CFG_KEY = "aiPromptCfg"    # {"<prompt_id>": {"cadence": "weekly", "country": "", ...}}
+DEFAULT_PROMPT_CFG = {"cadence": "weekly", "country": "", "city": "", "webSearch": False}
+
 # connector_costs.connector values this page writes and reads back.
 COST_CONNECTOR_RUN = "ai_visibility_run"
 COST_CONNECTOR_INSPECT = "ai_visibility_inspect"
@@ -93,6 +101,11 @@ def query_ai_keywords_raw(site_id: str) -> list[dict]:
     site_ids = _resolve_site_ids(site_id)
     try:
         with get_session() as session:
+            # _cost_rows already self-provisions its table this way; this query didn't, so a
+            # database created before ai_keyword_data existed raised here, was caught below, and
+            # silently reported zero AI keywords with only a log line -- indistinguishable from
+            # "this project genuinely has none."
+            ensure_tables(session, AIKeywordData)
             latest = session.execute(
                 select(func.max(AIKeywordData.date)).where(AIKeywordData.site_id.in_(site_ids))
             ).scalar()
@@ -160,6 +173,36 @@ def get_run_history(site_id: str) -> list:
     """Inspector/history entries, newest first. `[]` before the first run."""
     stored = get_state(site_id, HISTORY_KEY, [])
     return stored if isinstance(stored, list) else []
+
+
+def get_prompt_cfg(site_id: str, prompt_id) -> dict:
+    """cadence/country/city/webSearch for one prompt, defaulted when never configured."""
+    stored = get_state(site_id, PROMPT_CFG_KEY, {})
+    if not isinstance(stored, dict):
+        return dict(DEFAULT_PROMPT_CFG)
+    saved = stored.get(str(prompt_id))
+    return {**DEFAULT_PROMPT_CFG, **saved} if isinstance(saved, dict) else dict(DEFAULT_PROMPT_CFG)
+
+
+def set_prompt_cfg(site_id: str, prompt_id, cadence=None, country=None, city=None, web_search=None) -> None:
+    """Persist whichever of the four extra fields the caller actually sent, leaving the rest of
+    this prompt's stored config untouched -- the same "only touch what was sent" rule that fixed
+    the credentials save silently blanking dataforseo_target_domain (see settings_service)."""
+    stored = get_state(site_id, PROMPT_CFG_KEY, {})
+    if not isinstance(stored, dict):
+        stored = {}
+    key = str(prompt_id)
+    current = {**DEFAULT_PROMPT_CFG, **stored.get(key, {})}
+    if cadence is not None:
+        current["cadence"] = cadence
+    if country is not None:
+        current["country"] = country
+    if city is not None:
+        current["city"] = city
+    if web_search is not None:
+        current["webSearch"] = bool(web_search)
+    stored[key] = current
+    set_state(site_id, PROMPT_CFG_KEY, stored)
 
 
 def _now_iso() -> str:
@@ -479,21 +522,22 @@ def build_ai_response(site_id: str) -> dict:
     for p in prompts_qs:
         entry = stored.get(str(p.id)) or {}
         results = entry.get("results") or {}
+        prompt_cfg = get_prompt_cfg(site_id, p.id)
         prompts.append({
             "id": p.id,
             "text": p.text,
             "listId": p.list_id,
             # The SPA reads pr.cfg.models/.cadence/.country/.city (a nested object), not a flat
             # pr.models -- without this, pr.cfg.models.length crashes once any prompt exists.
-            # "weekly" is a real system-wide constant (the only cadence this feature is designed
-            # for); country/city/webSearch are honestly empty/false since no per-prompt
-            # geo-targeting or web-search toggle is persisted yet.
+            # cadence/country/city/webSearch now round-trip through PROMPT_CFG_KEY (see
+            # get_prompt_cfg/set_prompt_cfg) -- the modal used to accept and silently discard
+            # them, so "Save" looked like it worked while nothing but `models`/`listId` landed.
             "cfg": {
                 "models": p.tracked_models,
-                "cadence": "weekly",
-                "country": "",
-                "city": "",
-                "webSearch": False,
+                "cadence": prompt_cfg["cadence"],
+                "country": prompt_cfg["country"],
+                "city": prompt_cfg["city"],
+                "webSearch": prompt_cfg["webSearch"],
             },
             # Real observed results keyed by platform id -- {} until this prompt is actually run.
             "results": results if isinstance(results, dict) else {},
@@ -552,7 +596,32 @@ def build_ai_response(site_id: str) -> dict:
         "topDomains": [],
         "lists": lists,
         "prompts": prompts,
-        "suggestions": [],
+        "suggestions": _suggestions_for(site_id, target),
         "aiKeywords": query_ai_keywords_raw(site_id),
         "history": history,
     }
+
+
+def _suggestions_for(site_id: str, target) -> list:
+    """Starter-prompt suggestions for the setup wizard's step 3 and the composer's quick-add
+    shortcuts. Reuses run_prompt_research's deterministic template expansion (no external API,
+    already used by the Prompt Explorer via POST /api/prompt-research) -- seeded from the
+    tracked brand + aliases, which is real, owned data rather than a fabricated placeholder.
+
+    Empty for a target that hasn't been saved yet, which is the normal state the FIRST time a
+    brand-new project's setup wizard opens (its step 1/2 fields are only a client-side draft
+    until "Finish setup" submits them). Once a brand is tracked, re-opening the composer to add
+    more prompts gets real suggestions immediately.
+    """
+    if target is None or not (target.brand or "").strip():
+        return []
+    seeds = [target.brand] + list(target.aliases or [])
+    try:
+        from apps.dashboard.services.keyword_research_service import run_prompt_research
+        rows = run_prompt_research(site_id, seeds).get("rows", [])
+    except Exception:
+        logger.error("[ai_service] suggestion generation failed for %r", site_id, exc_info=True)
+        return []
+    # run_prompt_research's rows have no `id` -- the wizard/composer select by id
+    # (aiWizSel.includes(x.id)), so a stable index-based one is assigned here at the edge.
+    return [{**row, "id": f"sug-{i}"} for i, row in enumerate(rows)]

@@ -97,6 +97,15 @@ class ProjectCreateSerializer(serializers.Serializer):
     name = serializers.CharField(max_length=255, required=False, allow_blank=True)
     vertical = serializers.CharField(max_length=255, required=False, allow_blank=True, allow_null=True)
     location = serializers.CharField(max_length=255, required=False, allow_blank=True)
+    # Collected by the Add-domain modal's Connections step. All optional — a site can be added
+    # with none of them (the modal's explicit "Skip for now") and configured later in Settings.
+    # Previously the popover collected only domain+name, so add_site() always stored
+    # gsc_property=domain (which Search Console reads as a URL-prefix property, not the
+    # sc-domain: property most accounts actually own) and ga4_property_id=None — the direct
+    # cause of a new site's GA4-backed pages staying empty until someone visited Settings.
+    gsc_property = serializers.CharField(max_length=255, required=False, allow_blank=True)
+    ga4_property_id = serializers.CharField(max_length=100, required=False, allow_blank=True)
+    dataforseo_target_domain = serializers.CharField(max_length=255, required=False, allow_blank=True)
 
 
 class OverviewQuerySerializer(serializers.Serializer):

@@ -38,11 +38,16 @@ class SyncConfig(AppConfig):
     def ready(self):
         """Arrange for orphaned RefreshRun rows to be reaped when this process starts serving.
 
-        WHY at all: a sync runs in `threading.Thread(daemon=True)` (sync_api_service.start_sync_run),
-        so a restart kills it mid-run and leaves the row at status='running' forever -- the SPA
-        polls /api/tasks/<id> and never sees `done`, and the scheduler's per-site "already
-        running?" guard is blocked permanently. A restart is precisely the event that creates
-        those rows, so a restart is the right moment to clear them.
+        WHY at all: a sync can stop without reporting -- the box reboots, the process is
+        OOM-killed -- and the row then sits at status='running' forever: the SPA polls
+        /api/tasks/<id> and never sees `done`, and the scheduler's per-site "already running?"
+        guard is blocked permanently. A restart is a likely moment for that to have happened,
+        so a restart is a good moment to clear them.
+
+        (Syncs used to run in `threading.Thread(daemon=True)` inside the web worker, which made
+        this near-certain on EVERY restart. They now run as their own `manage.py run_sync`
+        process and survive a web-server restart, so this reap is a genuine safety net rather
+        than routine cleanup after every deploy.)
 
         WHY on the FIRST REQUEST rather than inside ready() itself: ready() runs for EVERY
         management command -- including `migrate`/`makemigrations` against a database where

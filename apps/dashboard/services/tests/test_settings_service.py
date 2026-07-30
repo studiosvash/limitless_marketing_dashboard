@@ -231,16 +231,31 @@ class ApplySettingsUpdateCredentialsTests(TestCase):
             apply_settings_update, build_settings_response,
         )
         result = apply_settings_update(SITE_ID, {"credentials": {
-            "gsc_property": "sc-domain:new.com", "ga4_property_id": "new-ga4",
+            "gsc_property": "sc-domain:new.com", "ga4_property_id": "444555666",
             "dataforseo_target_domain": "new.com",
         }})
         self.assertEqual(result, {"ok": True})
 
         body = build_settings_response(SITE_ID)
         self.assertEqual(body["credentials"], {
-            "gsc_property": "sc-domain:new.com", "ga4_property_id": "new-ga4",
+            "gsc_property": "sc-domain:new.com", "ga4_property_id": "444555666",
             "dataforseo_target_domain": "new.com",
         })
+
+    def test_ga4_properties_prefix_normalised_and_partial_update_preserves_other_fields(self):
+        """Two regressions in one call: (1) a pasted 'properties/123' must be stored bare, and
+        (2) sending only ga4_property_id must not touch dataforseo_target_domain — the old code
+        forwarded all three keys unconditionally, turning a partial credentials update into a
+        silent wipe of whichever field the caller did not send."""
+        from apps.dashboard.services.settings_service import (
+            apply_settings_update, build_settings_response,
+        )
+        apply_settings_update(SITE_ID, {"credentials": {"ga4_property_id": "properties/777888999"}})
+
+        body = build_settings_response(SITE_ID)
+        self.assertEqual(body["credentials"]["ga4_property_id"], "777888999")
+        self.assertEqual(body["credentials"]["gsc_property"], "sc-domain:old.com")
+        self.assertEqual(body["credentials"]["dataforseo_target_domain"], "old.com")
 
 
 class ApplySettingsUpdateBudgetTests(TestCase):

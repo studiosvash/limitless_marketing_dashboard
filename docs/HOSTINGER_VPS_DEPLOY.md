@@ -171,8 +171,8 @@ Yeh daalo — **`<...>` apni values se badlo**:
 ```ini
 # --- Django ---
 DJANGO_SECRET_KEY=<niche wale command se generate karo>
-DJANGO_ALLOWED_HOSTS=<aapka-domain.com>,www.<aapka-domain.com>,<VPS_IP>
-DJANGO_CSRF_TRUSTED_ORIGINS=https://<aapka-domain.com>,https://www.<aapka-domain.com>
+DJANGO_ALLOWED_HOSTS=limitless.vashstudios.cloud,<VPS_IP>
+DJANGO_CSRF_TRUSTED_ORIGINS=https://limitless.vashstudios.cloud
 
 # --- PostgreSQL (POSTGRES_DB hi master switch hai) ---
 POSTGRES_DB=limitlesshealth
@@ -204,7 +204,7 @@ EMAIL_HOST_USER=
 EMAIL_HOST_PASSWORD=
 EMAIL_USE_TLS=True
 DEFAULT_FROM_EMAIL=
-FRONTEND_URL=https://<aapka-domain.com>
+FRONTEND_URL=https://limitless.vashstudios.cloud
 
 # --- Google Ads (Standard Access milne ke baad) ---
 GOOGLE_ADS_DEVELOPER_TOKEN=
@@ -302,6 +302,7 @@ ExecStart=/var/www/fusehealth/venv/bin/gunicorn \
           --access-logfile - \
           --workers 3 \
           --timeout 120 \
+          --graceful-timeout 30 \
           --bind unix:/run/fusehealth.sock \
           config.wsgi:application
 Restart=always
@@ -312,7 +313,11 @@ WantedBy=multi-user.target
 
 > **`--workers 3` kyun?** Formula hai `(2 × CPU cores) + 1`. Hostinger ke 1-core VPS pe 3 theek hai, 2-core pe 5 kar dena. Cores dekhne ke liye: `nproc`
 >
-> **`--timeout 120` kyun?** Default 30 second hai. Aapke sync 5+ minute lete hain — woh background thread mein chalte hain isliye request block nahi hoti, par heavy page loads ke liye 120 safe hai.
+> **`--timeout 120` kyun?** Ye ek REQUEST timeout nahi hai — ye gunicorn ka WORKER watchdog hai: koi bhi worker jo 120 second tak arbiter ko heartbeat nahi bhejta, SIGKILL ho jata hai. Pehle yahan likha tha "sync background thread mein chalta hai isliye request block nahi hoti" — ye galat tha. Sync pehle sach me ek daemon thread ke andar chalta tha, **usi worker process ke andar jisne request serve ki thi**, aur woh worker normal page requests bhi serve karta hai. Isliye jab bhi us worker ne ek slow request handle ki (ya `systemctl restart` hua, ya deploy hua), sync bhi turant mar jata tha — chahe woh 20 minute se chal raha ho.
+>
+> Ab sync `manage.py run_sync` ke through apna **alag OS process** banata hai (`subprocess.Popen`, detached) — koi bhi gunicorn worker ka restart ya SIGKILL ab sync ko touch nahi karta, kyoki sync us worker ke andar chalta hi nahi. `--timeout 120` ab bhi zaroori hai (kisi genuinely stuck worker ko replace karne ke liye), bas iska sync se koi lena-dena nahi hai.
+>
+> **`--graceful-timeout 30` kyun?** Deploy/restart ke time worker ko SIGTERM milta hai; ye us worker ko in-flight HTTP requests khatam karne ke liye 30 second deta hai before force-kill. Sync isme cover nahi hota (woh alag process hai), ye sirf normal page requests ke liye hai.
 
 Permissions aur start:
 
@@ -341,7 +346,7 @@ nano /etc/nginx/sites-available/fusehealth
 ```nginx
 server {
     listen 80;
-    server_name <aapka-domain.com> www.<aapka-domain.com>;
+    server_name limitless.vashstudios.cloud;
 
     client_max_body_size 20M;
 
@@ -382,7 +387,7 @@ systemctl restart nginx
 
 ```bash
 apt install -y certbot python3-certbot-nginx
-certbot --nginx -d <aapka-domain.com> -d www.<aapka-domain.com>
+certbot --nginx -d limitless.vashstudios.cloud
 ```
 
 Auto-renew test:
@@ -425,11 +430,11 @@ DJANGO_SETTINGS_MODULE=config.settings.production python manage.py run_scheduled
 ```bash
 systemctl status fusehealth nginx postgresql    # teeno active
 ufw status                                       # sirf 22, 80, 443
-curl -I https://<aapka-domain.com>/login/        # 200 aana chahiye
+curl -I https://limitless.vashstudios.cloud/login/        # 200 aana chahiye
 tail -f /var/log/fusehealth/fusehealth.log      # live logs
 ```
 
-Browser mein `https://<aapka-domain.com>` kholo → login page dikhna chahiye, **CSS ke saath**.
+Browser mein `https://limitless.vashstudios.cloud` kholo → login page dikhna chahiye, **CSS ke saath**.
 
 ---
 

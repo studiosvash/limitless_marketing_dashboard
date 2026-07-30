@@ -31,7 +31,10 @@
         ['Medium (30–59)', 'medium', '#f59e0b', '#fef3c7', '#d97706', 'M', '#b45309'],
         ['Hard (60+)', 'hard', '#ef4444', '#fee2e2', '#dc2626', 'H', '#b91c1c']
       ];
-      const kwSetup = !data || !data.kpis || data.kpis.state === 'setup' || (data.kpis.total === 0 && (!data.keywords || !data.keywords.length));
+      // build_keywords_response never emits a `state` key (checked data.kpis.state ===
+      // 'setup' here used to be dead code) -- total===0 with an empty row list is the real
+      // signal, and now only gates the measured KPI/table section, not the Explorer above it.
+      const kwSetup = !data || !data.kpis || (data.kpis.total === 0 && (!data.keywords || !data.keywords.length));
       if (kwSetup) {
         /* Setup state: no measured numbers on screen, so no badge to attach to them. The
            Explorer still works (it is a live lookup), so it keeps its own. */
@@ -89,19 +92,25 @@
           let deltaFmt = '—', deltaColor = '#cbd5e1';
           if (k.prevPos == null) { deltaFmt = 'new'; deltaColor = '#2563eb'; }
           else {
-            const d = k.prevPos - k.pos;
-            if (d > 0) { deltaFmt = '▲ ' + d; deltaColor = '#059669'; }
-            else if (d < 0) { deltaFmt = '▼ ' + Math.abs(d); deltaColor = '#dc2626'; }
+            // AVG(position) over the current vs prior period is an unrounded float on both
+            // sides (e.g. 35.857142857142854), so a plain subtraction produces float noise
+            // like "▲ 2.1428571428571459" and "no change" almost never lands on exactly 0.
+            // Round the DISPLAYED delta and treat anything under half a position as noise;
+            // the sort key elsewhere still uses the raw k.pos/k.prevPos, unrounded.
+            const d = Math.round((k.prevPos - k.pos) * 10) / 10;
+            if (Math.abs(d) < 0.05) { deltaFmt = '—'; deltaColor = '#cbd5e1'; }
+            else if (d > 0) { deltaFmt = '▲ ' + this.dec1(d); deltaColor = '#059669'; }
+            else { deltaFmt = '▼ ' + this.dec1(Math.abs(d)); deltaColor = '#dc2626'; }
           }
           return {
             kw: k.kw, url: k.url || 'not ranking yet', isManual: k.source === 'manual',
             intentLabel: iv.label, intentStyle: iv.style,
-            posText: k.pos == null ? '—' : k.pos, posStyle: this.posBadge(k.pos),
+            posText: this.dec1(k.pos), posStyle: this.posBadge(k.pos),
             deltaFmt, deltaStyle: { fontSize: '12px', fontWeight: 600, color: deltaColor },
             volFmt: this.fmt(k.volume),
             spark: this.spark(k.monthly, 46, 16),
             sparkColor: k.monthly && k.monthly[11] >= k.monthly[0] ? '#22c55e' : '#ef4444',
-            kd: k.kd,
+            kd: this.dec1(k.kd),
             kdBarStyle: { height: '100%', width: Math.min(100, k.kd) + '%', background: this.kdColor(k.kd) },
             clicksFmt: this.fmt(k.clicks)
           };

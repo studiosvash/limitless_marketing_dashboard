@@ -67,11 +67,12 @@ def resolve_gsc_property(site_id: str, stored: str, service=None) -> str:
     ]
     match = next((c for c in candidates if c in allowed), None)
     if match is None:
+        properties_list = ", ".join(sorted(allowed)) or "none"
         raise ValueError(
             f"Your Google account has no Search Console access to '{domain}'. "
             f"Verify the property in Search Console (search.google.com/search-console), "
             f"or set the exact property URL in Settings -> General -> gsc_property. "
-            f"Properties this account can query: {sorted(allowed) or 'none'}"
+            f"Properties this account can query: {properties_list}"
         )
 
     logger.info(f"[gsc_property] Repaired gsc_property for {site_id!r}: {stored!r} -> {match!r}")

@@ -46,40 +46,56 @@ class DataForSEODomainOverviewConnector(BaseConnector):
         if not self.login or not self.password:
             return {"status": "error", "error": "DataForSEO credentials are not configured."}
 
-        target_url = target_url.strip().lower()
+        target_url = target_url.strip()
         if not target_url:
             return {"status": "error", "error": "Target URL cannot be empty."}
 
         # The UI sends "United States - Texas"; DataForSEO wants "Texas,United States".
         location_name = normalize_location_name(location_name)
 
-        # Ensure scheme for urlparse
-        if not target_url.startswith("http://") and not target_url.startswith("https://"):
+        # Ensure scheme for urlparse. Only the scheme/host get lowercased here (domain names
+        # are case-insensitive) -- the path is left exactly as given. URL paths ARE
+        # case-sensitive, and DataForSEO's `relative_url` match is exact, so lowercasing a
+        # mixed-case path (e.g. "/Blog/My-Post") silently turned any such page lookup into a
+        # guaranteed zero-result query.
+        if not target_url.lower().startswith("http://") and not target_url.lower().startswith("https://"):
             parsed_url = urlparse("https://" + target_url)
         else:
             parsed_url = urlparse(target_url)
 
-        domain = parsed_url.netloc
+        domain = parsed_url.netloc.lower()
         if domain.startswith("www."):
             domain = domain[4:]
-        
+
+        # Kept exactly as given, including any trailing slash. DataForSEO matches the page
+        # `target` as an exact string against its own indexed URL, and a site's canonical URL
+        # for a page may or may not carry a trailing slash -- there is no "normalized" form to
+        # prefer. Confirmed live: for a page DataForSEO has indexed WITH a trailing slash,
+        # stripping it (the previous behaviour, done "for consistency") silently turned a real
+        # 1-keyword result into 0. Trust the URL the caller actually typed.
         path = parsed_url.path
-        # Remove trailing slash if present for consistency, except if root
-        if path != "/" and path.endswith("/"):
-            path = path[:-1]
+
+        # DataForSEO Labs docs (Ranked Keywords, `target` field): "the domain name ... must be
+        # specified without https:// or www.; the webpage URL must be specified WITH https://
+        # or www. -- if you specify the webpage URL without https:// or www., the result will
+        # be returned for the entire domain rather than the specific page." Passing the domain
+        # alone plus a client-side `ranked_serp_element.serp_item.relative_url` filter (the
+        # previous approach) is a documented alternative, but it silently returned zero rows
+        # here for a lower-traffic subfolder page even though DataForSEO does have ranked
+        # keywords for it elsewhere on the domain -- using the full page URL as `target`, the
+        # way the docs lead with, scopes the query to the page from the start instead of
+        # relying on a post-hoc filter.
+        is_page_target = bool(path) and path != "/"
+        target = (parsed_url.scheme + "://" + domain + path) if is_page_target else domain
 
         payload = {
-            "target": domain,
+            "target": target,
             "location_name": location_name,
             "language_name": "English",
             "item_types": ["organic"],
             "limit": limit,
             "order_by": ["keyword_data.keyword_info.search_volume,desc"]
         }
-
-        # If a specific page path is given, apply filter
-        if path and path != "/":
-            payload["filters"] = [["ranked_serp_element.serp_item.relative_url", "=", path]]
 
         try:
             resp = requests.post(

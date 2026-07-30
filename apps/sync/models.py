@@ -60,6 +60,19 @@ class RefreshRun(models.Model):
     error_message = models.TextField(null=True, blank=True)
     started_at = models.DateTimeField(auto_now_add=True, db_index=True)
     finished_at = models.DateTimeField(null=True, blank=True)
+    # OS process id of the `manage.py run_sync` worker executing this run.
+    #
+    # Syncs used to run in a daemon thread INSIDE the gunicorn web worker, where any worker
+    # recycle killed them silently and left the row at status='running' forever -- for two
+    # hours, until the reaper's RUN_TIMEOUT elapsed. The SPA polled that row the whole time
+    # and showed a frozen progress bar, which is what "the sync just stops" looked like.
+    #
+    # Now that a run is its own process, the pid turns "did this die?" from a guess based on
+    # elapsed time into a fact: reap_orphaned_runs() can ask the OS. Nullable because rows
+    # created before this field existed have no pid, and because the pid is written a moment
+    # after the row (Popen needs the run id to exist first) -- so a NULL pid means "unknown",
+    # never "dead", and those rows still fall back to the timeout.
+    pid = models.IntegerField(null=True, blank=True)
 
     class Meta:
         ordering = ["-started_at"]

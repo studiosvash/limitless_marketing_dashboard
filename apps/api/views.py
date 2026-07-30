@@ -121,6 +121,9 @@ class ProjectListCreateView(APIView):
                 site_name=data.get("name") or None,
                 vertical=data.get("vertical") or None,
                 location=data.get("location") or "United States",
+                gsc_property=data.get("gsc_property") or None,
+                ga4_property_id=data.get("ga4_property_id") or None,
+                dataforseo_target_domain=data.get("dataforseo_target_domain") or None,
             )
         except ValueError as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
@@ -130,16 +133,23 @@ class ProjectListCreateView(APIView):
             body = ProjectSerializer(site).data
 
         # Verify Google Search Console connectivity immediately so the UI can warn
-        # the user if they added a site the connected Google Account doesn't own.
+        # the user if they added a site the connected Google Account doesn't own. The
+        # Add-domain modal already runs this same check (POST /api/connection-check) before
+        # the user ever presses "Add site", so for that path this is a confirming re-check.
+        # It stays here as a safety net for any other caller (a script, a future integration)
+        # that creates a project without going through the modal.
         try:
             from pipeline.connectors.gsc_property import resolve_gsc_property
-            resolve_gsc_property(site_url, site_url)
+            resolve_gsc_property(site_url, data.get("gsc_property") or site_url)
             body["gsc_connected"] = True
         except ValueError:
             body["gsc_connected"] = False
         except Exception:
-            # If the API fails for transient reasons, assume true to avoid false warnings
-            body["gsc_connected"] = True
+            # A transient failure here answers "we don't know", not "yes". Silently reporting
+            # True on any non-ValueError exception used to hide the one case this whole check
+            # exists to catch -- a real connectivity problem that happens not to raise
+            # ValueError -- behind a false "connected" claim the user had no reason to doubt.
+            body["gsc_connected"] = False
 
         # Auto-kick off initial data sync so the new site populates without requiring
         # a manual Refresh click. Returns task_id so the SPA can start polling the
@@ -264,8 +274,9 @@ class ProjectKeywordsView(APIView):
         or batch {keywords: [{kw, volume, kd, cpc, intent}, ...]} payloads."""
         from pipeline.services.saved_keyword_service import save_keywords
 
-        site_id = resolve_project_or_404(slug).site_url
-        location = request.data.get("location") or "United States"
+        site = resolve_project_or_404(slug)
+        site_id = site.site_url
+        location = request.data.get("location") or site.location or "United States"
 
         # Check for batch payload first
         batch = request.data.get("keywords")
@@ -458,36 +469,67 @@ class ProjectAIActionView(APIView):
         return Response({})
 
     def _handle_prompts(self, request, site_id):
+        # Every "add prompts" path in the SPA (AI Keywords bulk-add, the Prompt Explorer, the
+        # composer) funnels through this one handler. It used to create rows with no
+        # tracked_models, which falls back to AIPrompt's default `[]` -- so a newly added
+        # prompt showed "0 models", every model cell read "off", and run_prompt_checks skipped
+        # it entirely (it treats an empty tracked_models list as nothing to run). The AI
+        # Keywords -> "add as prompt" flow was therefore creating prompts that could never be
+        # run. Seed the same connectable_platforms() _handle_setup already uses, so a prompt
+        # is runnable the moment it's created regardless of which entry point added it.
         data = request.data
         list_id = data.get("listId")
         texts = [t.strip() for t in data.get("texts", []) if t and t.strip()]
-        created = [AIPrompt(site_url=site_id, list_id=list_id, text=t) for t in texts]
+        created = [
+            AIPrompt(site_url=site_id, list_id=list_id, text=t, tracked_models=connectable_platforms())
+            for t in texts
+        ]
         AIPrompt.objects.bulk_create(created)
         return Response({"added": len(created)})
 
     def _handle_prompts_remove(self, request, site_id):
-        AIPrompt.objects.filter(site_url=site_id, id=request.data.get("id")).delete()
+        # Accepts either a single "id" (the per-row Remove action) or a list "ids"
+        # (the Tracked Prompts grid's select-all-then-remove bulk action) -- both funnel
+        # through the same filter so a bulk remove is just as scoped to this project.
+        ids = request.data.get("ids")
+        if ids is None:
+            single = request.data.get("id")
+            ids = [single] if single is not None else []
+        AIPrompt.objects.filter(site_url=site_id, id__in=ids).delete()
         return Response({})
 
     def _handle_prompts_config(self, request, site_id):
         # Final-review finding: the SPA's actual "Save settings" call posts
         # {id, cfg: {models, webSearch, country, city, cadence}, listId} -- NOT a top-level
         # "models" key. Reading request.data.get("models", []) silently wiped
-        # tracked_models to [] on every save. cadence/country/city/webSearch are accepted
-        # but not persisted -- AIPrompt has no backing field for them yet (an honestly
-        # scoped-out gap, not a silent drop: see design spec / checklist), so listId
-        # (moving a prompt to another list) is the other real, persistable field from
-        # this payload and IS applied.
+        # tracked_models to [] on every save. cadence/country/city/webSearch used to be accepted
+        # and silently discarded -- AIPrompt has no columns for them -- so the config modal
+        # looked like it saved values that were never actually persisted. They now round-trip
+        # through ai_service.set_prompt_cfg/get_prompt_cfg (see ai_service.PROMPT_CFG_KEY).
+        # "text" is optional -- present only when the Prompt settings modal's editable
+        # question field was changed. Blank/whitespace-only is ignored rather than saved,
+        # so clearing the box by accident can never wipe out the tracked question.
         cfg = request.data.get("cfg", {})
+        prompt_id = request.data.get("id")
         update_fields = {"tracked_models": cfg.get("models", [])}
         list_id = request.data.get("listId")
         if list_id is not None:
             update_fields["list_id"] = list_id
-        updated = AIPrompt.objects.filter(site_url=site_id, id=request.data.get("id")).update(
+        text = request.data.get("text")
+        if isinstance(text, str) and text.strip():
+            update_fields["text"] = text.strip()
+        updated = AIPrompt.objects.filter(site_url=site_id, id=prompt_id).update(
             **update_fields
         )
         if not updated:
             return Response({"detail": "Prompt not found"}, status=404)
+
+        from apps.dashboard.services.ai_service import set_prompt_cfg
+        set_prompt_cfg(
+            site_id, prompt_id,
+            cadence=cfg.get("cadence"), country=cfg.get("country"),
+            city=cfg.get("city"), web_search=cfg.get("webSearch"),
+        )
         return Response({})
 
     def _handle_lists(self, request, site_id):
@@ -931,43 +973,83 @@ class ProjectSyncView(APIView):
     def post(self, request, slug):
         site_id = resolve_project_or_404(slug).site_url
         scope = request.data.get("scope", "all")
-        
-        # These scopes run DataForSEO connectors only, so they must NOT be gated on Search
-        # Console / GA4 credentials -- requiring them would block a positions refresh for a
-        # project that legitimately has no GSC property connected.
-        if scope not in ("positions", "positions_new"):
-            try:
-                from pipeline.connectors.gsc_property import resolve_gsc_property
-                resolve_gsc_property(site_id, site_id)
-            except ValueError:
-                return Response(
-                    {"detail": "Cannot fetch data: Search Console access is missing. Please connect the correct account in Settings."},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-                
-            from pipeline.connectors.ga4 import GA4Connector
-            connector = GA4Connector()
-            _, prop_id = connector._resolve_site(site_id)
-            if not prop_id:
-                return Response(
-                    {"detail": "Cannot fetch data: Google Analytics 4 property is missing. Please connect the correct account in Settings."},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
 
+        # No credential gate here, on purpose. This used to refuse the WHOLE run with a 400
+        # when Search Console access failed or the GA4 property was unset, for every scope
+        # except positions/positions_new. Three things were wrong with that:
+        #
+        #   1. A brand-new domain has no GA4 property BY DEFINITION (add_site stores NULL), so
+        #      the first "Refresh all" on every new site was rejected outright and nothing at
+        #      all synced -- including the 9 connectors that never touch GA4.
+        #   2. It gated scopes that need neither credential. The Backlinks refresh runs one
+        #      DataForSEO connector, and it was blocked by a missing GA4 property.
+        #   3. The 400 body has no `steps` key, so the SPA's startSync broke on the response
+        #      shape rather than showing the message.
+        #
+        # start_sync_run now returns `warnings` describing exactly which steps will be skipped
+        # and why, the run proceeds with everything that CAN run, and each unusable connector
+        # reports its own honest status in the step checklist. One missing credential should
+        # cost you that credential's data, not the entire refresh.
         return Response(start_sync_run(site_id, scope, user=request.user))
 
 
 @method_decorator(login_not_required, name="dispatch")
+class ProjectSyncActiveView(APIView):
+    """Is a refresh in flight for this site? (GET /api/projects/<slug>/sync/active)
+
+    The SPA calls this on boot so the progress bar survives a page reload. Without it, a hard
+    refresh mid-sync lost the task id and a live 20-30 minute run became invisible -- which
+    looks exactly like the sync having stopped.
+    """
+    def get(self, request, slug):
+        from apps.dashboard.services.sync_api_service import active_run
+        return Response(active_run(resolve_project_or_404(slug).site_url))
+
+
+@method_decorator(login_not_required, name="dispatch")
 class TaskStatusView(APIView):
-    """Polled by the SPA every ~500ms during a sync (GET /api/tasks/<id>)."""
+    """Polled by the SPA during a sync (GET /api/tasks/<id>)."""
     def get(self, request, task_id):
         status_data = task_status(task_id)
         if status_data is None:
-            # HANDOFF_SPEC 1: "unknown ids should return {done: true}" — the SPA polls at
-            # 500ms and treats any non-2xx as a hard error, so a 404 here breaks the
-            # progress bar for tasks that finished before a page reload.
+            # HANDOFF_SPEC 1: "unknown ids should return {done: true}" — the SPA treats any
+            # non-2xx as a hard error, so a 404 here breaks the progress bar for tasks that
+            # finished before a page reload.
             return Response({"task_id": task_id, "done": True})
         return Response(status_data)
+
+
+@method_decorator(login_not_required, name="dispatch")
+class ConnectionCheckView(APIView):
+    """Live-probe GSC / GA4 / DataForSEO (+ optional integrations) for a domain.
+
+    POST /api/connection-check
+      {domain, gsc_property?, ga4_property_id?, dataforseo_target?, include_optional?}
+      -> {ok, checks: [{id, label, state, detail, ...}]}
+
+    This calls external APIs, which every page-data endpoint is forbidden to do. It is allowed
+    here for the same reason /api/research, /api/domain-overview and /api/live-serp are: a user
+    pressed a button and is waiting for the answer. It renders no page and is never polled.
+
+    Takes a bare `domain` rather than a project slug on purpose -- the Add-domain modal runs
+    this BEFORE the site exists, which is the whole point: verify the credentials, then create
+    the site with working ones.
+    """
+    def post(self, request):
+        from apps.dashboard.services.connection_check_service import check_connections
+
+        domain = (request.data.get("domain") or "").strip().lower()
+        domain = domain.replace("https://", "").replace("http://", "").rstrip("/")
+        if not domain:
+            return Response({"detail": "domain is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response(check_connections(
+            domain=domain,
+            gsc_property=request.data.get("gsc_property"),
+            ga4_property_id=request.data.get("ga4_property_id"),
+            dataforseo_target=request.data.get("dataforseo_target"),
+            include_optional=bool(request.data.get("include_optional", True)),
+        ))
 
 
 # ---------------------------------------------------------------------------

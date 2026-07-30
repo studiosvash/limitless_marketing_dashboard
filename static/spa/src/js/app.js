@@ -5,6 +5,8 @@
     trmSearch: '', trmMatch: 'all', trmSort: { key: 'cost', dir: -1 }, trmSel: [], trmPage: 0, trmPer: 10, negMenuFor: null,
     projectId: 'fusehealth', projects: [],
     addSiteOpen: false, addSiteDomain: '', addSiteName: '', addSiteError: null, addSiteBusy: false,
+    addSiteStep: 1, addSiteGsc: '', addSiteGa4: '', addSiteDataforseo: '',
+    addSiteGscOptions: [], addSiteChecking: false, addSiteCheckResult: null,
     range: '30d',
     cache: {}, loading: true, error: null, chartHoverIndex: null,
     /* Real SyncLog rows ({name, status, records, last_sync, error}) for the selected project,
@@ -15,7 +17,8 @@
        previous site's freshness. See srcBadge(). */
     syncLog: null, syncLogFor: null,
     ncOpen: false,
-    sync: { active: false, progress: 0, step: '', cost: 0 },
+    sync: { active: false, progress: 0, step: '', cost: 0, steps: [], warnings: [] },
+    syncPanelOpen: false,
     freshness: 'Weekly · Mon',
     doQuery: '', doData: null, doLoading: false, doError: null, doSel: [], doTracked: [],
     /* Domain Overview "send to Position Tracking" destination picker. The lookup is for an
@@ -39,13 +42,14 @@
     aiWiz: 1, aiWizBrand: null, aiWizAliases: null, aiWizComps: null, aiWizCompInput: '', aiWizSel: null, aiWizCustom: '', aiWizBusy: false,
     aiTgOpen: false, aiListFilter: 'all', aiListsOpen: false, aiNewPlName: '',
     aiComposerOpen: false, aiComposerText: '', aiComposerList: null,
-    aiCfgOpen: null, aiCfgDraft: null,
+    aiCfgOpen: null, aiCfgDraft: null, aiPromptSel: [],
     aiExpQ: '', aiExploring: false, aiExp: null, aiExpSel: [], aiExpAddOpen: false,
     aiKwQ: '', aiKwSeg: 'all', aiKwSel: [], aiKwAddOpen: false,
     aiInspQ: '', aiInspecting: false, aiInspEntry: null,
     crawlCfg: null, crawlSaved: false, auPage: null, rules: null,
     alFilter: 'all',
-    creds: { gsc: '', ga4: '' }, credsFor: null, credsSaved: false,
+    creds: { gsc: '', ga4: '', dataforseo: '' }, credsFor: null, credsSaved: false,
+    credsTesting: false, credsTestResult: null,
     prefs: null, prefsFor: null,
     settingsSub: 'general', setFor: null,
     wsDraft: null, notifDraft: null, aiDraft: null, secDraft: null, dataDraft: null, teamDraft: null,
@@ -211,6 +215,7 @@
         this.fetchTab(tab, ps[0].id, range, false);
         if (tab !== 'alerts') this.fetchTab('alerts', ps[0].id, range, false);
         this.loadSyncLog(ps[0].id);
+        this.resumeActiveSync(ps[0].id);
       }
     }).catch(err => {
       /* The site switcher, the "add site" duplicate check and every project-scoped label
@@ -223,6 +228,7 @@
     this.fetchTab(tab, pid, range, false);
     if (tab !== 'alerts') this.fetchTab('alerts', pid, range, false);
     this.loadSyncLog(pid);
+    if (pid) this.resumeActiveSync(pid);
     /* Deliberately silent: this is a boot-time prefetch of a static autocomplete file for the
        Position Tracking location box, which positioning.js already falls back to a short
        built-in country list for when `allUsCities` is absent. Nothing the user asked for has
@@ -250,8 +256,12 @@
           next.cache[k] = data;
           if (s.tab === tab) next.loading = false;
           if (tab === 'settings' && s.credsFor !== pid) {
-            next.creds = { gsc: data.credentials.gsc_property, ga4: data.credentials.ga4_property_id };
+            next.creds = {
+              gsc: data.credentials.gsc_property, ga4: data.credentials.ga4_property_id,
+              dataforseo: data.credentials.dataforseo_target_domain,
+            };
             next.credsFor = pid;
+            next.credsTestResult = null;
           }
           if (tab === 'settings' && s.prefsFor !== pid) {
             next.prefs = Object.assign({}, data.prefs);
@@ -364,11 +374,24 @@
   histFwd() { if (this._hist && this._histIdx < this._hist.length - 1) this.applyNav(this._histIdx + 1); }
 
   toggleAddSite() {
-    this.setState(s => ({ addSiteOpen: !s.addSiteOpen, addSiteDomain: '', addSiteName: '', addSiteError: null }));
+    this.setState(s => ({
+      addSiteOpen: !s.addSiteOpen, addSiteStep: 1, addSiteDomain: '', addSiteName: '', addSiteError: null,
+      addSiteGsc: '', addSiteGa4: '', addSiteDataforseo: '', addSiteGscOptions: [],
+      addSiteChecking: false, addSiteCheckResult: null,
+    }));
   }
-  addSiteSubmit() {
-    if (this.state.addSiteBusy) return;
-    const domain = this.state.addSiteDomain.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/$/, '');
+
+  /* Bare domain, normalised the same way everywhere it's used (submit validation, the
+     duplicate check, and the connection-check call) so the three agree. */
+  _addSiteDomain() {
+    return this.state.addSiteDomain.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/$/, '');
+  }
+
+  /* Step 1 -> 2. This step is pure client-side validation, matching what addSiteSubmit always
+     checked before creating anything — moved here so a site with an obviously bad domain, or
+     one already added, never reaches the Connections step at all. */
+  addSiteNext() {
+    const domain = this._addSiteDomain();
     if (!domain || !/^[a-z0-9][a-z0-9\-\.]*\.[a-z]{2,}$/.test(domain)) {
       this.setState({ addSiteError: 'Enter a valid domain, e.g. example.com' });
       return;
@@ -377,13 +400,80 @@
       this.setState({ addSiteError: 'That site is already added' });
       return;
     }
+    this.setState({ addSiteStep: 2, addSiteError: null });
+    // Populate the GSC property dropdown as soon as the Connections step opens, so the field
+    // is a picker from the first moment rather than free text the user might mistype (Search
+    // Console reads a bare domain as a URL-prefix property, not the sc-domain: property most
+    // accounts actually own). This alone is a live GSC call but not GA4/DataForSEO, so it does
+    // not need to wait for the explicit "Check all connections" press.
+    window.FuseAPI.post('/api/connection-check', { domain, include_optional: false })
+      .then(result => {
+        if (!this._alive) return;
+        const gscCheck = (result.checks || []).find(c => c.id === 'gsc');
+        if (gscCheck && gscCheck.options) this.setState({ addSiteGscOptions: gscCheck.options });
+      })
+      .catch(() => {}); // best-effort prefill; the Check button below still works standalone
+  }
+  addSiteBack() { this.setState({ addSiteStep: 1, addSiteError: null }); }
+
+  /* The "Check all connections" button. Calls the same live GSC/GA4/DataForSEO probe Settings
+     uses, but BEFORE the site exists — POST /api/connection-check takes a bare domain, not a
+     project slug, specifically so this can run pre-creation. Its GSC check also returns every
+     verified property the connected account can query; addSiteGscOptions renders those as a
+     dropdown so the property can be picked rather than typed, which is the one field a typo
+     silently breaks (Search Console reads a bare domain as a URL-prefix property, not the
+     sc-domain: property most accounts actually own). */
+  addSiteCheck() {
+    if (this.state.addSiteChecking) return;
+    this.setState({ addSiteChecking: true, addSiteCheckResult: null });
+    window.FuseAPI.post('/api/connection-check', {
+      domain: this._addSiteDomain(),
+      gsc_property: this.state.addSiteGsc,
+      ga4_property_id: this.state.addSiteGa4,
+      dataforseo_target: this.state.addSiteDataforseo,
+      include_optional: false,
+    }).then(result => {
+      if (!this._alive) return;
+      const gscCheck = result.checks.find(c => c.id === 'gsc');
+      this.setState(s => ({
+        addSiteChecking: false, addSiteCheckResult: result,
+        addSiteGscOptions: (gscCheck && gscCheck.options) || s.addSiteGscOptions,
+        // Auto-fill the box with the resolved property so "Add site" persists what was
+        // actually verified, not whatever partial string the user was still typing.
+        addSiteGsc: (gscCheck && gscCheck.resolved) || s.addSiteGsc,
+      }));
+    }).catch(err => {
+      if (!this._alive) return;
+      this.setState({ addSiteChecking: false });
+      this.notify(this.errText(err, 'Could not run the connection check'));
+    });
+  }
+
+  /* Shared submit path for both "Add site & start sync" and "Skip for now" — they differ only
+     in whether credentials ride along. Skipping still creates the site (per the design: GA4/
+     GSC-backed pages simply stay empty until Settings -> Connections is filled in later). */
+  _addSiteCreate(withCreds) {
+    if (this.state.addSiteBusy) return;
+    const domain = this._addSiteDomain();
+    const body = { domain, name: this.state.addSiteName.trim() || undefined };
+    if (withCreds) {
+      if (this.state.addSiteGsc.trim()) body.gsc_property = this.state.addSiteGsc.trim();
+      if (this.state.addSiteGa4.trim()) body.ga4_property_id = this.state.addSiteGa4.trim();
+      if (this.state.addSiteDataforseo.trim()) body.dataforseo_target_domain = this.state.addSiteDataforseo.trim();
+    }
     this.setState({ addSiteBusy: true, addSiteError: null });
-    window.FuseAPI.post('/api/projects', { domain, name: this.state.addSiteName.trim() || undefined })
+    window.FuseAPI.post('/api/projects', body)
       .then(p => {
         if (!this._alive) return;
-        this.setState(s => ({ projects: s.projects.concat([p]), addSiteBusy: false, addSiteOpen: false, addSiteDomain: '', addSiteName: '' }));
-        if (p.gsc_connected === false) {
+        this.setState(s => ({
+          projects: s.projects.concat([p]), addSiteBusy: false, addSiteOpen: false,
+          addSiteDomain: '', addSiteName: '', addSiteStep: 1,
+          addSiteGsc: '', addSiteGa4: '', addSiteDataforseo: '', addSiteCheckResult: null,
+        }));
+        if (withCreds && p.gsc_connected === false) {
           this.notify('Site added, but not found in Search Console. Please connect account in Settings.');
+        } else if (!withCreds) {
+          this.notify('Added ' + p.domain + ' — GA4/GSC not connected yet, so those pages will stay empty until you add them in Settings → Connections.');
         } else {
           this.notify('Added ' + p.domain + ' — fetching data…');
         }
@@ -396,6 +486,37 @@
         }
       })
       .catch(err => { if (this._alive) this.setState({ addSiteBusy: false, addSiteError: err.detail || 'Could not add site' }); });
+  }
+  addSiteSubmit() { this._addSiteCreate(true); }
+  addSiteSkip() { this._addSiteCreate(false); }
+
+  /* Render vals for the Add-domain modal. Same result-row shape as Settings' credsTestRows
+     (same tone map, same dot style) so the two connection-check surfaces look identical. */
+  addSiteVals(s) {
+    const step1 = s.addSiteStep === 1, step2 = s.addSiteStep === 2;
+    const tone = {
+      ok: ['#d1fae5', '#047857', '✓'], fail: ['#fee2e2', '#b91c1c', '✗'],
+      absent: ['#f1f5f9', '#94a3b8', '—'], unknown: ['#fef3c7', '#b45309', '?'],
+    };
+    const checkRows = (s.addSiteCheckResult ? s.addSiteCheckResult.checks : []).map(c => {
+      const t = tone[c.state] || tone.absent;
+      return {
+        label: c.label, detail: c.detail,
+        dotStyle: { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '18px', height: '18px', borderRadius: '50%', background: t[0], color: t[1], fontSize: '11px', fontWeight: 700, flexShrink: 0 },
+        dotText: t[2],
+      };
+    });
+    return {
+      step1, step2, stepNum: s.addSiteStep, stepLabel: step1 ? 'Site details' : 'Connections',
+      gscOptions: s.addSiteGscOptions, gsc: s.addSiteGsc, ga4: s.addSiteGa4, dataforseo: s.addSiteDataforseo,
+      checkLabel: s.addSiteChecking ? 'Checking…' : 'Check all connections',
+      checkShown: !!s.addSiteCheckResult, checkRows,
+      backLabel: step1 ? 'Cancel' : '← Back',
+      backAction: step1 ? (() => this.toggleAddSite()) : (() => this.addSiteBack()),
+      skipLabel: s.addSiteBusy ? 'Adding…' : 'Skip for now',
+      primaryLabel: step1 ? 'Next' : (s.addSiteBusy ? 'Adding…' : 'Add site & start sync'),
+      primaryAction: step1 ? (() => this.addSiteNext()) : (() => this.addSiteSubmit()),
+    };
   }
   setProject(pid) {
     try { localStorage.setItem('fh_selected_project', pid); } catch (e) {}
@@ -430,63 +551,117 @@
     const pid = this.state.projectId;
     const activeScope = scope || 'all';
 
-    const _startPolling = (t) => {
-      if (!this._alive) return;
-      this.setState({ sync: { active: true, scope: activeScope, progress: 0.02, step: (t.steps && t.steps[0]) || 'Starting…', cost: t.est_cost || 0, projectId: pid, startTime: Date.now() } });
-      /* This poll runs twice a second. A toast per failed tick would be a stream of
-         identical notifications, so single failures are absorbed (the task endpoint can
-         blip mid-sync) and only a sustained outage — POLL_GIVE_UP consecutive failures,
-         ~3s — stops the progress bar and reports it, exactly once. */
-      const POLL_GIVE_UP = 6;
-      let pollFails = 0;
-      this._iv = setInterval(() => {
-        window.FuseAPI.get('/api/tasks/' + t.task_id).then(st => {
-          if (!this._alive) { clearInterval(this._iv); return; }
-          pollFails = 0;
-          if (st.done) {
-            clearInterval(this._iv); this._iv = null;
-            this.setState(s => {
-              const cache = {};
-              Object.keys(s.cache).forEach(k2 => { if (k2.indexOf(pid + ':') !== 0) cache[k2] = s.cache[k2]; });
-              return { sync: { active: false, scope: null, progress: 1, step: 'Done', cost: t.est_cost || 0, projectId: null, startTime: null }, freshness: 'Just now', cache };
-            });
-            this.fetchTab(this.state.tab, pid, this.state.range, true);
-            if (this.state.tab !== 'alerts') this.fetchTab('alerts', pid, this.state.range, false);
-            /* The whole point of a refresh is that the freshness changed — re-read the
-               SyncLog rows so every Data source badge moves with the data it describes
-               (including a connector whose run failed inside an otherwise "Done" sync). */
-            this.loadSyncLog(pid);
-            const proj = this.state.projects.find(p => p.id === pid) || {};
-            const dom = proj.domain || pid;
-            const scopeNotif = { audit: 'Crawl complete — Site Audit refreshed for ' + dom, positions: 'Positioning data refreshed for ' + dom, positions_new: 'New keywords measured for ' + dom, positioning_new: 'New keywords measured for ' + dom, positioning: 'Positioning data refreshed for ' + dom, keywords: 'Keywords data refreshed for ' + dom, backlinks: 'Backlinks data refreshed for ' + dom, ads: 'Ads data refreshed for ' + dom, ai: 'AI Optimization data refreshed for ' + dom, overview: 'Overview data refreshed for ' + dom, seo: 'SEO data refreshed for ' + dom };
-            this.notify(scopeNotif[activeScope] || (activeScope === 'all' ? ('All modules refreshed for ' + dom) : (activeScope + ' refreshed for ' + dom)));
-          } else {
-            this.setState({ sync: { active: true, scope: activeScope, progress: st.progress, step: st.step, cost: t.est_cost || 0, projectId: pid, startTime: this.state.sync.startTime } });
-          }
-        }).catch(err => {
-          if (!this._alive) { clearInterval(this._iv); return; }
-          pollFails++;
-          if (pollFails < POLL_GIVE_UP) return;
-          clearInterval(this._iv); this._iv = null;
-          /* The sync itself may well still be running server-side — we have only lost sight
-             of it — so the message says that instead of claiming the refresh failed, and the
-             progress bar is cleared rather than left frozen at whatever % it reached. */
-          this.setState({ sync: { active: false, scope: null, progress: 0, step: '', cost: t.est_cost || 0, projectId: null, startTime: null } });
-          const why = (err && err.detail) ? ' (' + err.detail + ')' : '';
-          this.notify('Lost track of the refresh' + why + ' — the sync may still be running. Reload the page to check.');
-        });
-      }, 500);
-    };
-
     if (preTaskId != null) {
       // Task already created server-side — skip POST /sync and go straight to polling.
-      _startPolling({ task_id: preTaskId, est_cost: 0, steps: ['Syncing…'] });
+      this._pollSyncTask(preTaskId, activeScope, pid, 0, []);
       return;
     }
 
     window.FuseAPI.post('/api/projects/' + pid + '/sync', { scope: activeScope })
-      .then(t => { _startPolling(t); })
+      .then(t => {
+        if (!this._alive) return;
+        if (t.warnings && t.warnings.length) {
+          // Shown once, at start, rather than repeated on every poll tick: "N steps will be
+          // skipped because X credential is missing" is a fact about the whole run, not a
+          // per-second update.
+          t.warnings.forEach(w => this.notify(w));
+        }
+        this._pollSyncTask(t.task_id, activeScope, pid, t.est_cost || 0, t.steps || []);
+      })
       .catch(err => { if (this._alive) this.notify(err.detail || 'Could not start sync'); });
+  }
+
+  /* Shared by a fresh start (startSync) and resuming after a reload (boot -> resumeActiveSync).
+     Runs at 500ms for the first ~6s (fast enough that a short page-scope sync still feels
+     live), then backs off to 2s. At 500ms against a handful of gunicorn workers, sustained
+     polling was itself part of "everything feels frozen when I click around" — a request that
+     takes longer than the interval piles up behind the next one and competes with whatever
+     page GET the user just triggered. A 20-30 minute "all" run does not need 500ms resolution
+     for its remaining 29 minutes. */
+  _pollSyncTask(taskId, scope, pid, estCost, initialSteps) {
+    if (this._iv) { clearInterval(this._iv); this._iv = null; }
+
+    this.setState({
+      sync: {
+        active: true, scope, progress: 0.02, step: (initialSteps && initialSteps[0]) || 'Starting…',
+        cost: estCost, projectId: pid, startTime: Date.now(), steps: [], warnings: [],
+      },
+    });
+
+    const POLL_GIVE_UP = 6;   // consecutive failed ticks before giving up on this run
+    const SLOWDOWN_AFTER_MS = 6000;
+    const FAST_MS = 500, SLOW_MS = 2000;
+    let pollFails = 0;
+    let inFlight = false;     // a slow tick must not stack a second request behind it
+    let slowedDown = false;
+    const startedAt = Date.now();
+
+    const tick = () => {
+      if (!this._alive) { clearInterval(this._iv); return; }
+      if (inFlight) return;
+      inFlight = true;
+      window.FuseAPI.get('/api/tasks/' + taskId).then(st => {
+        inFlight = false;
+        if (!this._alive) { clearInterval(this._iv); return; }
+        pollFails = 0;
+
+        if (!slowedDown && Date.now() - startedAt > SLOWDOWN_AFTER_MS) {
+          slowedDown = true;
+          clearInterval(this._iv);
+          this._iv = setInterval(tick, SLOW_MS);
+        }
+
+        if (st.done) {
+          clearInterval(this._iv); this._iv = null;
+          this.setState(s => {
+            const cache = {};
+            Object.keys(s.cache).forEach(k2 => { if (k2.indexOf(pid + ':') !== 0) cache[k2] = s.cache[k2]; });
+            return { sync: { active: false, scope: null, progress: 1, step: 'Done', cost: estCost, projectId: null, startTime: null, steps: [], warnings: [] }, freshness: 'Just now', cache };
+          });
+          this.fetchTab(this.state.tab, pid, this.state.range, true);
+          if (this.state.tab !== 'alerts') this.fetchTab('alerts', pid, this.state.range, false);
+          /* The whole point of a refresh is that the freshness changed — re-read the
+             SyncLog rows so every Data source badge moves with the data it describes
+             (including a connector whose run failed inside an otherwise "Done" sync). */
+          this.loadSyncLog(pid);
+          const proj = this.state.projects.find(p => p.id === pid) || {};
+          const dom = proj.domain || pid;
+          const scopeNotif = { audit: 'Crawl complete — Site Audit refreshed for ' + dom, positions: 'Positioning data refreshed for ' + dom, positions_new: 'New keywords measured for ' + dom, positioning_new: 'New keywords measured for ' + dom, positioning: 'Positioning data refreshed for ' + dom, keywords: 'Keywords data refreshed for ' + dom, backlinks: 'Backlinks data refreshed for ' + dom, ads: 'Ads data refreshed for ' + dom, ai: 'AI Optimization data refreshed for ' + dom, overview: 'Overview data refreshed for ' + dom, seo: 'SEO data refreshed for ' + dom };
+          this.notify(scopeNotif[scope] || (scope === 'all' ? ('All modules refreshed for ' + dom) : (scope + ' refreshed for ' + dom)));
+        } else {
+          this.setState(s => ({ sync: Object.assign({}, s.sync, {
+            active: true, scope, progress: st.progress, step: st.step, cost: estCost, projectId: pid,
+            steps: st.steps || [], elapsed: st.elapsed || 0,
+          }) }));
+        }
+      }).catch(err => {
+        inFlight = false;
+        if (!this._alive) { clearInterval(this._iv); return; }
+        pollFails++;
+        if (pollFails < POLL_GIVE_UP) return;
+        clearInterval(this._iv); this._iv = null;
+        /* The sync itself may well still be running server-side — we have only lost sight
+           of it — so the message says that instead of claiming the refresh failed, and the
+           progress bar is cleared rather than left frozen at whatever % it reached. */
+        this.setState({ sync: { active: false, scope: null, progress: 0, step: '', cost: estCost, projectId: null, startTime: null, steps: [], warnings: [] } });
+        const why = (err && err.detail) ? ' (' + err.detail + ')' : '';
+        this.notify('Lost track of the refresh' + why + ' — the sync may still be running. Reload the page to check.');
+      });
+    };
+    this._iv = setInterval(tick, FAST_MS);
+  }
+
+  /* Called once from boot(). A sync used to become invisible on any hard reload — the client
+     lost the task_id and GET /api/tasks/<id> needs one — which read exactly like "the sync
+     stopped" even though a 20-30 minute run was still working server-side. Reaping runs first
+     on the server side of this endpoint, so a row orphaned by an old crash is never mistaken
+     for a live one. */
+  resumeActiveSync(pid) {
+    window.FuseAPI.get('/api/projects/' + pid + '/sync/active').then(a => {
+      if (!this._alive || !a || a.task_id == null) return;
+      if (this.state.sync.active) return; // a fresh startSync already beat us to it
+      this._pollSyncTask(a.task_id, a.scope || 'all', pid, 0, []);
+    }).catch(() => {}); // best-effort; a normal boot must never fail over this
   }
 
   /* ---------- keyword explorer ---------- */
@@ -512,6 +687,22 @@
   doLocation() {
     const p = (this.state.projects || []).find(x => x.id === this.state.projectId) || {};
     return p.location || 'United States';
+  }
+
+  /* Google's `near` param needs a city/region and silently does nothing for a bare
+     country name -- so a country-only location (the common case: most projects are just
+     "United States") used to get dropped from "Open in Google" links entirely. `gl` is
+     the real country-bias param, so every location -- country-only or city-level -- now
+     maps to at least one filter, and city/state selections get both. Shared by the
+     Position Tracking SERP drawer and the Keyword Research drawer so both "Open in
+     Google" links stay in sync with the location the results were actually pulled for. */
+  googleSerpLocationParam(location) {
+    const COUNTRY_CODES = { 'United States': 'us', 'Canada': 'ca', 'United Kingdom': 'uk', 'Australia': 'au' };
+    const loc = location || '';
+    if (!loc) return '';
+    if (COUNTRY_CODES[loc]) return '&gl=' + COUNTRY_CODES[loc];
+    const near = loc.replace(/^United States - /, '');
+    return '&near=' + encodeURIComponent(near) + '&gl=us';
   }
 
   runDomainOverview() {
@@ -1062,10 +1253,16 @@
   saveCreds() {
     const pid = this.state.projectId;
     window.FuseAPI.put('/api/projects/' + pid + '/settings', {
-      credentials: { gsc_property: this.state.creds.gsc, ga4_property_id: this.state.creds.ga4 }
+      credentials: {
+        gsc_property: this.state.creds.gsc,
+        ga4_property_id: this.state.creds.ga4,
+        dataforseo_target_domain: this.state.creds.dataforseo,
+      }
     }).then(() => {
       if (!this._alive) return;
-      this.setState({ credsSaved: true });
+      this.setState({ credsSaved: true, credsFor: null }); // credsFor: null re-seeds from the
+      // server's normalised value next render (e.g. a pasted "properties/123" becomes "123"),
+      // so the box shows what was actually stored, not what was typed.
       setTimeout(() => { if (this._alive) this.setState({ credsSaved: false }); }, 1800);
     }).catch(err => {
       if (!this._alive) return;
@@ -1073,6 +1270,30 @@
          property that looks saved is the difference between "no data yet" and "misconfigured" */
       this.setState({ credsSaved: false });
       this.notify(this.errText(err, 'Could not save these credentials'));
+    });
+  }
+
+  /* "Saved ✓" only ever meant "the write succeeded", never "this actually works" — GA4 had no
+     access check at all, so a wrong-but-present property id looked identical to a correct one
+     until a sync failed 20 minutes later. This calls the same live probe the Add-domain modal
+     uses, against whatever is in the form right now (not necessarily saved yet). */
+  testConnections() {
+    const pid = this.state.projectId;
+    const domain = (this.state.projects.find(p => p.id === pid) || {}).domain || '';
+    this.setState({ credsTesting: true, credsTestResult: null });
+    window.FuseAPI.post('/api/connection-check', {
+      domain: domain,
+      gsc_property: this.state.creds.gsc,
+      ga4_property_id: this.state.creds.ga4,
+      dataforseo_target: this.state.creds.dataforseo,
+      include_optional: false,
+    }).then(result => {
+      if (!this._alive) return;
+      this.setState({ credsTesting: false, credsTestResult: result });
+    }).catch(err => {
+      if (!this._alive) return;
+      this.setState({ credsTesting: false });
+      this.notify(this.errText(err, 'Could not run the connection check'));
     });
   }
 
@@ -1383,6 +1604,17 @@
     return n.toLocaleString('en-US');
   }
   money(n) { return '$' + (n == null ? '0.00' : Number(n).toFixed(2)); }
+  /* One decimal place, edge-of-render only -- never round inside a query_*_raw/service helper.
+     SKILLS.md records why: _get_keywords_overview once formatted position as f"{avg:.0f}"
+     before any caller saw it, so 8.4 arrived as 8 irrecoverably and the column then sorted as
+     text ("1,234" < "9"). AVG(position)/AVG(keyword_difficulty) over ~28 daily rows routinely
+     produces 35.857142857142854; fmt() alone does not fix this — toLocaleString('en-US') on
+     that value returns "35.857", not "35.9". Sorting must still use the raw, unrounded number. */
+  dec1(n) {
+    if (n == null) return '—';
+    const r = Math.round(n * 10) / 10;
+    return (Number.isInteger(r) ? r.toFixed(0) : r.toFixed(1));
+  }
   /* Alert timestamps arrive as date-only ISO strings ("2026-07-24" — see
      alerts_service.build_alerts_response). Appending T00:00:00 forces local-midnight
      parsing; a bare "YYYY-MM-DD" is parsed as UTC by spec, which shifts the day for
@@ -1408,7 +1640,8 @@
     return Math.floor(days / 365) + 'y ago';
   }
   posBadge(p) {
-    const base = { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', minWidth: '28px', height: '24px', borderRadius: '4px', fontSize: '12px', fontWeight: 600 };
+    // 28px fit a single digit; a decimal position like "35.9" needs more room.
+    const base = { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', minWidth: '38px', height: '24px', borderRadius: '4px', fontSize: '12px', fontWeight: 600 };
     if (p == null) return Object.assign(base, { background: 'transparent', color: '#cbd5e1' });
     if (p <= 3) return Object.assign(base, { background: '#d1fae5', color: '#047857' });
     if (p <= 10) return Object.assign(base, { background: '#dbeafe', color: '#1d4ed8' });
@@ -1796,6 +2029,19 @@
         this.notify(this.errText(err, 'Could not explore prompt ideas'));
       });
   }
+  aiRemovePrompts(ids) {
+    if (!ids.length) return;
+    this.aiPost('prompts-remove', { ids })
+      .then(() => {
+        if (!this._alive) return;
+        this.setState({ aiPromptSel: [] });
+        this.aiReload();
+        this.notify(ids.length === 1 ? 'Prompt removed' : ids.length + ' prompts removed');
+      }).catch(err => {
+        if (!this._alive) return;
+        this.notify(this.errText(err, 'Could not remove ' + (ids.length === 1 ? 'that prompt' : 'those prompts')));
+      });
+  }
   aiListOp(op, id, name, after) {
     this.aiPost('lists', { op, id, name })
       .then(() => { if (!this._alive) return; this.aiReload(); if (after) after(); })
@@ -1917,8 +2163,15 @@
       toggleAddSite: () => this.toggleAddSite(),
       addSiteDomainSet: e => this.setState({ addSiteDomain: e.target.value, addSiteError: null }),
       addSiteNameSet: e => this.setState({ addSiteName: e.target.value }),
-      addSiteKeyDown: e => { if (e.key === 'Enter') this.addSiteSubmit(); if (e.key === 'Escape') this.toggleAddSite(); },
+      addSiteKeyDown: e => { if (e.key === 'Enter' && s.addSiteStep === 1) this.addSiteNext(); if (e.key === 'Escape') this.toggleAddSite(); },
+      addSiteNext: () => this.addSiteNext(),
+      addSiteBack: () => this.addSiteBack(),
+      addSiteGscSet: e => this.setState({ addSiteGsc: e.target.value }),
+      addSiteGa4Set: e => this.setState({ addSiteGa4: e.target.value }),
+      addSiteDataforseoSet: e => this.setState({ addSiteDataforseo: e.target.value }),
+      addSiteCheck: () => this.addSiteCheck(),
       addSiteSubmit: () => this.addSiteSubmit(),
+      addSiteSkip: () => this.addSiteSkip(),
       range7: () => this.setRange('7d'), range30: () => this.setRange('30d'), range90: () => this.setRange('90d'),
       refreshPage: () => { if (pageScope) this.startSync(pageScope); },
       /* Incremental positions refresh. The full 'positions' scope re-queries EVERY tracked
@@ -1972,7 +2225,10 @@
       exportXls: () => this.exportRows(s.selectedKws.length ? this.selectedRows() : this.matchRows(), 'xls'),
       credGsc: e => this.setState({ creds: Object.assign({}, s.creds, { gsc: e.target.value }) }),
       credGa4: e => this.setState({ creds: Object.assign({}, s.creds, { ga4: e.target.value }) }),
+      credDataforseo: e => this.setState({ creds: Object.assign({}, s.creds, { dataforseo: e.target.value }) }),
       saveCreds: () => this.saveCreds(),
+      testCreds: () => this.testConnections(),
+      syncPanelToggle: () => this.setState({ syncPanelOpen: !s.syncPanelOpen }),
       prefEmail: () => this.togglePref('email_alerts'),
       prefDigest: () => this.togglePref('weekly_digest'),
       syncAudit: () => this.startSync('audit'),
@@ -2120,6 +2376,29 @@
         else syncEtaText = remainingSec + 's remaining';
     }
 
+    /* Step checklist under the progress bar. Fed entirely by task_status()'s `steps[]` — no
+       new table, just RefreshRun/SyncLog fields that already existed (see
+       sync_api_service._step_details). Answers "what is it doing right now" and "did step N
+       actually run" without anyone needing to open a terminal or a log file. */
+    const SYNC_STEP_ICON = {
+      done: { text: '✓', bg: '#d1fae5', fg: '#047857' },
+      running: { text: '⟳', bg: '#e0e7ff', fg: '#4338ca' },
+      pending: { text: '·', bg: '#f1f5f9', fg: '#94a3b8' },
+      error: { text: '✗', bg: '#fee2e2', fg: '#b91c1c' },
+      skipped: { text: '⊘', bg: '#fef3c7', fg: '#b45309' },
+    };
+    const syncSteps = (s.sync.steps || []).map(st2 => {
+      const ic = SYNC_STEP_ICON[st2.state] || SYNC_STEP_ICON.pending;
+      return {
+        name: st2.name,
+        detail: st2.detail || '',
+        dotStyle: { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '16px', height: '16px', borderRadius: '50%', background: ic.bg, color: ic.fg, fontSize: '10px', fontWeight: 700, flexShrink: 0, animation: st2.state === 'running' ? 'fuseSpin 1s linear infinite' : 'none' },
+        dotText: ic.text,
+        nameStyle: { fontSize: '12.5px', fontWeight: st2.state === 'running' ? 700 : 500, color: st2.state === 'running' ? '#0f172a' : '#475569' },
+      };
+    });
+    const syncElapsedText = s.sync.elapsed ? (s.sync.elapsed >= 60 ? Math.floor(s.sync.elapsed / 60) + 'm ' + (s.sync.elapsed % 60) + 's' : s.sync.elapsed + 's') : '';
+
     const vals = {
       cpwOpen: s.cpwOpen, cpwOld: s.cpwOld, cpwNew: s.cpwNew, cpwNew2: s.cpwNew2, cpwErr: s.cpwErr, cpwMsg: s.cpwMsg, cpwBusy: s.cpwBusy,
       acceptInvite: s.acceptInviteToken ? {
@@ -2150,6 +2429,7 @@
       projects: s.projects.length ? s.projects : [{ id: s.projectId, domain: project.domain }],
       projectId: s.projectId, projectDomain: project.domain,
       addSiteOpen: s.addSiteOpen, addSiteDomain: s.addSiteDomain, addSiteName: s.addSiteName, addSiteError: s.addSiteError,
+      addSite: this.addSiteVals(s),
       rangeStyle: { d7: s.range === '7d' ? rActive : rBase, d30: s.range === '30d' ? rActive : rBase, d90: s.range === '90d' ? rActive : rBase },
       hasPageRefresh: !!pageScope,
       refreshPageLabel: isPageSyncing ? 'Syncing…' : (tabToLabel[tab] || 'Fetch page'),
@@ -2161,6 +2441,14 @@
       freshness: s.freshness,
       syncing, syncScopeLabel: activeScope === 'all' ? 'all modules' : (tabToLabel[tab] || activeScope || '').replace('Fetch ', ''), syncStep: s.sync.step, syncPct: Math.round(s.sync.progress * 100),
       syncPctText: Math.round(s.sync.progress * 100) + '%', syncCostText: this.money(s.sync.cost), syncEtaText,
+      syncElapsedText, syncSteps, syncStepsCount: syncSteps.length,
+      syncPanelOpen: s.syncPanelOpen,
+      syncPanelToggleLabel: s.syncPanelOpen ? 'Hide details ▲' : 'Show details ▼',
+      /* True while Phase 1 is deployed: the sync now runs as its own OS process
+         (manage.py run_sync), not a thread inside the web worker, so it survives navigating
+         to another page, switching tabs, or even a normal page reload (resumeActiveSync in
+         boot() re-attaches to it). This is the reassurance note the user asked for. */
+      syncSurviveNote: 'Running in the background — you can keep using the dashboard, and this will keep going even if you navigate away or reload the page.',
       hasError: !!s.error && !s.loading, errorText: s.error || '',
       loading: s.loading && !s.error,
       hasUnacked: unacked > 0, unackedCount: unacked,
@@ -2335,7 +2623,7 @@
         const kdc = this.kdColor(drRow.kd);
         vals.rd = {
           kw: drRow.kw, loc: s.research.location,
-          serpHref: 'https://www.google.com/search?q=' + encodeURIComponent(drRow.kw),
+          serpHref: 'https://www.google.com/search?q=' + encodeURIComponent(drRow.kw) + this.googleSerpLocationParam(s.research.location),
           volFmt: this.fmt(drRow.volume),
           kd: drRow.kd, kdLabel: drRow.kd >= 85 ? 'Very hard' : drRow.kd >= 70 ? 'Hard' : drRow.kd >= 50 ? 'Difficult' : drRow.kd >= 30 ? 'Possible' : drRow.kd >= 15 ? 'Easy' : 'Very easy',
           kdLabelStyle: { fontSize: '12px', fontWeight: 500, color: kdc, marginTop: '2px' },

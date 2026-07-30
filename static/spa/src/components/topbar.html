@@ -18,22 +18,6 @@
           <div onClick="{{ h.toggleAddSite }}" title="Add a site" aria-label="Add a site" style="display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 8px; border: 1px solid #e2e8f0; background: white; color: #4f46e5; cursor: pointer;" style-hover="background:#f8fafc">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m-8-8h16"></path></svg>
           </div>
-          <sc-if value="{{ addSiteOpen }}" hint-placeholder-val="{{ false }}">
-            <div style="position: absolute; top: 40px; right: 0; z-index: 30; width: 280px; background: white; border: 1px solid #e2e8f0; border-radius: 10px; box-shadow: 0 16px 40px rgba(15,23,42,0.18); padding: 14px;">
-              <div style="font-size: 13px; font-weight: 600; color: #0f172a; margin-bottom: 10px;">Add a site</div>
-              <label style="font-size: 11px; font-weight: 600; color: #64748b; display: block; margin-bottom: 4px;">Domain</label>
-              <input value="{{ addSiteDomain }}" onChange="{{ h.addSiteDomainSet }}" onKeyDown="{{ h.addSiteKeyDown }}" autoFocus="{{ true }}" aria-label="Domain" placeholder="e.g. example.com" style="width: 100%; box-sizing: border-box; padding: 8px 10px; font-size: 13px; border: 1px solid #cbd5e1; border-radius: 7px; margin-bottom: 8px; outline: none;" />
-              <label style="font-size: 11px; font-weight: 600; color: #64748b; display: block; margin-bottom: 4px;">Display name (optional)</label>
-              <input value="{{ addSiteName }}" onChange="{{ h.addSiteNameSet }}" onKeyDown="{{ h.addSiteKeyDown }}" aria-label="Display name" placeholder="e.g. Example Co." style="width: 100%; box-sizing: border-box; padding: 8px 10px; font-size: 13px; border: 1px solid #cbd5e1; border-radius: 7px; margin-bottom: 10px; outline: none;" />
-              <sc-if value="{{ addSiteError }}" hint-placeholder-val="{{ false }}">
-                <div style="font-size: 12px; color: #dc2626; margin-bottom: 8px;">{{ addSiteError }}</div>
-              </sc-if>
-              <div style="display: flex; gap: 8px; justify-content: flex-end;">
-                <div onClick="{{ h.toggleAddSite }}" style="padding: 7px 12px; font-size: 13px; font-weight: 500; color: #64748b; border-radius: 7px; cursor: pointer;" style-hover="background:#f8fafc">Cancel</div>
-                <div onClick="{{ h.addSiteSubmit }}" style="padding: 7px 14px; font-size: 13px; font-weight: 600; color: white; background: #4f46e5; border-radius: 7px; cursor: pointer;" style-hover="background:#4338ca">Add site</div>
-              </div>
-            </div>
-          </sc-if>
         </div>
 
         <div data-nc-root="" style="position: relative;">
@@ -102,3 +86,84 @@
         </div>
       </div>
     </header>
+
+    <!-- Add-domain modal — deliberately OUTSIDE <header>. <header> has `backdrop-filter`,
+         which (like `transform`/`filter`/`will-change`/`perspective`) creates a CSS containing
+         block for `position: fixed` descendants. With this modal nested inside <header>, its
+         `inset: 0` resolved against the header's own 64px box instead of the viewport, so the
+         "centered full-screen modal" rendered as a small box clipped to the topbar strip. -->
+    <sc-if value="{{ addSiteOpen }}" hint-placeholder-val="{{ false }}">
+      <div style="position: fixed; inset: 0; z-index: 9999; background: rgba(15,23,42,0.65); backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; padding: 20px;">
+        <div style="width: 100%; max-width: 480px; max-height: calc(100vh - 40px); background: white; border-radius: 16px; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.35); border: 1px solid #e2e8f0; overflow: hidden; display: flex; flex-direction: column;">
+          <div style="flex-shrink: 0; padding: 20px 24px; border-bottom: 1px solid #f1f5f9;">
+            <h2 style="margin: 0; font-size: 16.5px; font-weight: 600; color: #0f172a;">Add a site</h2>
+            <p style="margin: 4px 0 0; font-size: 12.5px; color: #94a3b8;">Step {{ addSite.stepNum }} of 2 — {{ addSite.stepLabel }}</p>
+          </div>
+
+          <!-- Step 2's connection-check results can push this section taller than the viewport
+               (GSC's failure detail alone lists every verified property). This is the scrolling
+               body between the fixed header and fixed footer, so "Add site"/"Back" never scroll
+               out of view -- the exact bug being fixed here. -->
+          <div style="padding: 24px; overflow-y: auto; flex: 1; min-height: 0;">
+            <!-- STEP 1: domain + display name -->
+            <sc-if value="{{ addSite.step1 }}" hint-placeholder-val="{{ true }}">
+              <label style="font-size: 12px; font-weight: 600; color: #334155; display: block; margin-bottom: 6px;">Domain</label>
+              <input value="{{ addSiteDomain }}" onChange="{{ h.addSiteDomainSet }}" onKeyDown="{{ h.addSiteKeyDown }}" autoFocus="{{ true }}" aria-label="Domain" placeholder="e.g. example.com" style="width: 100%; box-sizing: border-box; padding: 9px 12px; font-size: 13.5px; border: 1px solid #cbd5e1; border-radius: 8px; margin-bottom: 14px; outline: none;" />
+              <label style="font-size: 12px; font-weight: 600; color: #334155; display: block; margin-bottom: 6px;">Display name (optional)</label>
+              <input value="{{ addSiteName }}" onChange="{{ h.addSiteNameSet }}" onKeyDown="{{ h.addSiteKeyDown }}" aria-label="Display name" placeholder="e.g. Example Co." style="width: 100%; box-sizing: border-box; padding: 9px 12px; font-size: 13.5px; border: 1px solid #cbd5e1; border-radius: 8px; outline: none;" />
+            </sc-if>
+
+            <!-- STEP 2: connections + check -->
+            <sc-if value="{{ addSite.step2 }}" hint-placeholder-val="{{ false }}">
+              <div style="font-size: 12.5px; color: #64748b; margin-bottom: 16px;">Connecting GSC and GA4 now means <b style="color:#334155;">{{ addSiteDomain }}</b>'s traffic and ranking pages have data from the first sync, instead of staying empty until someone visits Settings later.</div>
+
+              <label style="font-size: 12px; font-weight: 600; color: #334155; display: block; margin-bottom: 6px;">GSC Property <span style="color: #94a3b8; font-weight: 400;">Google Search Console</span></label>
+              <select value="{{ addSite.gsc }}" onChange="{{ h.addSiteGscSet }}" aria-label="GSC Property" style="width: 100%; box-sizing: border-box; padding: 9px 12px; font-size: 13.5px; border: 1px solid #cbd5e1; border-radius: 8px; margin-bottom: 14px; outline: none; background: white; font-family: monospace;">
+                <option value="">— select a verified property —</option>
+                <sc-for list="{{ addSite.gscOptions }}" as="opt" hint-placeholder-count="2">
+                  <option value="{{ opt }}">{{ opt }}</option>
+                </sc-for>
+              </select>
+
+              <label style="font-size: 12px; font-weight: 600; color: #334155; display: block; margin-bottom: 6px;">GA4 Property ID <span style="color: #94a3b8; font-weight: 400;">optional</span></label>
+              <input value="{{ addSite.ga4 }}" onChange="{{ h.addSiteGa4Set }}" placeholder="e.g. 123456789 (numbers only)" style="width: 100%; box-sizing: border-box; padding: 9px 12px; font-size: 13.5px; border: 1px solid #cbd5e1; border-radius: 8px; margin-bottom: 14px; outline: none; font-family: monospace;" />
+
+              <label style="font-size: 12px; font-weight: 600; color: #334155; display: block; margin-bottom: 6px;">DataForSEO Target Domain <span style="color: #94a3b8; font-weight: 400;">optional — defaults to the domain above</span></label>
+              <input value="{{ addSite.dataforseo }}" onChange="{{ h.addSiteDataforseoSet }}" placeholder="defaults to this domain" style="width: 100%; box-sizing: border-box; padding: 9px 12px; font-size: 13.5px; border: 1px solid #cbd5e1; border-radius: 8px; margin-bottom: 14px; outline: none; font-family: monospace;" />
+
+              <div onClick="{{ h.addSiteCheck }}" style="display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; border: 1px solid #cbd5e1; color: #334155; font-size: 13px; font-weight: 600; border-radius: 8px; cursor: pointer; background: white;" style-hover="background:#f8fafc">{{ addSite.checkLabel }}</div>
+
+              <sc-if value="{{ addSite.checkShown }}" hint-placeholder-val="{{ false }}">
+                <div style="margin-top: 14px; display: flex; flex-direction: column; gap: 8px; padding-top: 14px; border-top: 1px solid #f1f5f9;">
+                  <sc-for list="{{ addSite.checkRows }}" as="c" hint-placeholder-count="3">
+                    <div style="display: flex; align-items: flex-start; gap: 10px;">
+                      <span style="{{ c.dotStyle }}">{{ c.dotText }}</span>
+                      <div style="min-width: 0;">
+                        <span style="font-size: 12.5px; font-weight: 700; color: #334155;">{{ c.label }}</span>
+                        <div style="font-size: 12px; color: #64748b; margin-top: 2px;">{{ c.detail }}</div>
+                      </div>
+                    </div>
+                  </sc-for>
+                </div>
+              </sc-if>
+
+              <div style="margin-top: 16px; padding: 10px 12px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; font-size: 12px; color: #64748b; line-height: 1.5;">GA4 aur GSC ke bina un pages ka data khaali rahega. Baad me Settings → Connections se add kar sakte hain, phir Refresh chalayein.</div>
+            </sc-if>
+
+            <sc-if value="{{ addSiteError }}" hint-placeholder-val="{{ false }}">
+              <div style="font-size: 12.5px; color: #dc2626; margin-top: 14px;">{{ addSiteError }}</div>
+            </sc-if>
+          </div>
+
+          <div style="flex-shrink: 0; padding: 16px 24px; border-top: 1px solid #f1f5f9; display: flex; align-items: center; justify-content: space-between;">
+            <span onClick="{{ addSite.backAction }}" style="font-size: 13px; font-weight: 600; color: #64748b; cursor: pointer; padding: 8px 4px;" style-hover="color:#334155">{{ addSite.backLabel }}</span>
+            <div style="display: flex; gap: 8px;">
+              <sc-if value="{{ addSite.step2 }}" hint-placeholder-val="{{ false }}">
+                <span onClick="{{ h.addSiteSkip }}" style="font-size: 13px; font-weight: 600; color: #64748b; cursor: pointer; padding: 8px 12px; border-radius: 8px;" style-hover="background:#f8fafc">{{ addSite.skipLabel }}</span>
+              </sc-if>
+              <div onClick="{{ addSite.primaryAction }}" style="padding: 8px 16px; font-size: 13px; font-weight: 600; color: white; background: #4f46e5; border-radius: 8px; cursor: pointer;" style-hover="background:#4338ca">{{ addSite.primaryLabel }}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </sc-if>

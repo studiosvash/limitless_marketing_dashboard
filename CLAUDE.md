@@ -17,14 +17,19 @@ The dashboard is **database-first**:
 1. Pages **read only from the database.** Never call an external API while rendering a page.
 2. The **Refresh all** button is the path that calls every API → writes to DB → UI updates.
 3. Each page has its **own refresh button** that syncs only that page's APIs.
-4. Every refresh shows a **live progress bar** (the SPA polls `GET /api/tasks/<id>` every 500 ms).
+4. Every refresh shows a **live progress bar with a per-connector step checklist** (the SPA
+   polls `GET /api/tasks/<id>` at 500 ms, backing off to 2 s after ~6 s) and survives navigating
+   away, reloading the page, or a server restart — the sync itself runs as its own OS process
+   (`manage.py run_sync`), started by `start_sync_run`, not a thread inside the web worker.
 5. Between refreshes, the user sees the **last saved data**. Stale-but-instant beats fresh-but-slow.
 
-Why: the APIs are rate-limited and a full sync takes minutes. Calling them on page load would
+Why: the APIs are rate-limited and a full sync takes 20-30 minutes typically (up to ~80 min
+worst case — see `apps/sync/scheduling.py`'s itemised budget). Calling them on page load would
 flicker, freeze, and burn quota. The database is the single source of truth the UI trusts.
 
-The only sanctioned exceptions are three explicit user lookups — `/api/research`,
-`/api/domain-overview`, `/api/live-serp` — which call an API because the user pressed a button.
+The only sanctioned exceptions are four explicit user lookups — `/api/research`,
+`/api/domain-overview`, `/api/live-serp`, `/api/connection-check` — which call an API because
+the user pressed a button.
 
 ---
 

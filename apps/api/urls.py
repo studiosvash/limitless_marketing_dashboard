@@ -40,6 +40,9 @@ urlpatterns = [
     path("alerts/ack", views.AlertBatchAckView.as_view(), name="alert-ack-batch"),
     path("alerts/<str:alert_id>/ack", views.AlertAckView.as_view(), name="alert-ack"),
     # Refresh / Sync
+    # `sync/active` before `sync` is not strictly required (different segment counts), but it
+    # documents the specific-before-generic intent, matching the alerts/ack pair above.
+    path("projects/<slug:slug>/sync/active", views.ProjectSyncActiveView.as_view(), name="project-sync-active"),
     path("projects/<slug:slug>/sync", views.ProjectSyncView.as_view(), name="project-sync"),
     path("tasks/<int:task_id>", views.TaskStatusView.as_view(), name="task-status"),
     # Keyword / Prompt Explorer (project id in body)
@@ -47,4 +50,8 @@ urlpatterns = [
     path("prompt-research", views.PromptResearchView.as_view(), name="prompt-research"),
     path("domain-overview", views.DomainOverviewView.as_view(), name="domain-overview"),
     path("live-serp", views.LiveSERPView.as_view(), name="live-serp"),
+    # Connection check — the FOURTH sanctioned live-API endpoint (with research,
+    # domain-overview and live-serp). Allowed to call out because a human pressed a button;
+    # see CLAUDE.md and .claude/api-reference.md.
+    path("connection-check", views.ConnectionCheckView.as_view(), name="connection-check"),
 ]

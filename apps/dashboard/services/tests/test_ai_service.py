@@ -265,7 +265,14 @@ class BuildAiResponsePlatformShapeTests(TestCase):
 class BuildAiResponseHonestEmptyFieldsTests(TestCase):
     """Even with real data seeded on both DBs (target/prompts/keywords), everything requiring
     the nonexistent LLM Mentions/Responses/scraper infra must stay exactly honest empty/zero --
-    never fabricated from adjacent real data."""
+    never fabricated from adjacent real data.
+
+    `suggestions` is the one field in this list that is NOT expected to be empty here: it is
+    derived from the tracked brand via deterministic template expansion (the same one
+    /api/prompt-research uses), and this test's own setUp creates an AITarget with brand="Acme"
+    -- so real suggestions ARE the honest behaviour once a brand is tracked. It only stays `[]`
+    for a target that hasn't been saved yet (see test_suggestions_empty_without_a_tracked_brand
+    below)."""
 
     def setUp(self):
         _new_analytics_db(self)
@@ -287,11 +294,36 @@ class BuildAiResponseHonestEmptyFieldsTests(TestCase):
         self.assertEqual(body["trend"], [])
         self.assertEqual(body["topPages"], [])
         self.assertEqual(body["topDomains"], [])
-        self.assertEqual(body["suggestions"], [])
         self.assertEqual(body["history"], [])
         self.assertEqual(body["budget"], {"cap": 0, "spent": 0, "weekly_est": 0})
         self.assertEqual(body["costs"], {"model": None, "inspect": None})
         self.assertIsNone(body["next_run"])
+
+    def test_suggestions_are_real_template_expansions_of_the_tracked_brand(self):
+        """Regression: suggestions used to be a hardcoded `[]`, which left the setup wizard's
+        step 3 and the composer's quick-add shortcuts permanently blank. They are deterministic
+        (no external API, no cost) template expansions of the tracked brand + aliases -- the
+        same mechanism /api/prompt-research already uses -- so this asserts real content, not a
+        fabricated one: every row's text must actually contain "Acme" (this test's tracked
+        brand), and each needs a stable `id` for the wizard/composer to select by."""
+        from apps.dashboard.services.ai_service import build_ai_response
+        body = build_ai_response(SITE_ID)
+
+        self.assertGreater(len(body["suggestions"]), 0)
+        for row in body["suggestions"]:
+            self.assertIn("Acme", row["text"])
+            self.assertIn("id", row)
+            self.assertEqual(row["aiVolume"], 0)  # honest -- no AI-volume source exists
+
+    def test_suggestions_empty_without_a_tracked_brand(self):
+        """A target that hasn't been saved yet (the normal state the FIRST time a brand-new
+        project's setup wizard opens -- its fields are only a client-side draft until "Finish
+        setup" submits them) must not crash or guess; it gets an honest empty list."""
+        from apps.dashboard.services.ai_service import build_ai_response
+        AITarget.objects.filter(site_url=SITE_ID).delete()
+
+        body = build_ai_response(SITE_ID)
+        self.assertEqual(body["suggestions"], [])
 
     def test_ai_keywords_field_matches_raw_calculator(self):
         from apps.dashboard.services.ai_service import build_ai_response, query_ai_keywords_raw

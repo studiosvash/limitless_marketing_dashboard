@@ -51,6 +51,62 @@ def _ensure_site_id(records: list[dict], site_id: Optional[str]) -> list[dict]:
     return records
 
 
+def _dedupe_by_keys(records: list[dict], keys: tuple[str, ...]) -> list[dict]:
+    """Collapse records sharing the same ON CONFLICT key tuple, keeping the LAST occurrence.
+
+    MANDATORY before every multi-row `insert(...).values(batch).on_conflict_do_update(...)`,
+    because the two dialects disagree about what a duplicate inside one statement means:
+
+      * **Postgres** treats the whole multi-row INSERT as a single command and refuses to
+        update the same row twice -- it raises
+        `CardinalityViolation: ON CONFLICT DO UPDATE command cannot affect row a second time`.
+      * **SQLite** applies rows one at a time, so the second duplicate simply UPDATEs the row
+        the first one just inserted. No error, no warning.
+
+    That asymmetry is a trap, not a nuisance: the entire test suite runs on SQLite
+    (`config/settings/base.py` forces it when RUNNING_TESTS), so this class of bug **cannot**
+    be caught by `manage.py test` and only appears in production. It cost a real outage --
+    `upsert_backlinks` conflicts on (site_id, referring_domain, target_url) while the
+    DataForSEO connector discards `url_from`, so every site-wide footer/nav link collapsed to
+    the same key. Because `BaseConnector.sync` wraps the write in one `get_session()` that
+    rolls back on any exception, a single duplicate discarded the whole 1000-row batch and the
+    Backlinks page sat empty in its "setup" state. Postgres also raises the batch size from 80
+    to 1000 (`dialect.max_batch_size`), so prod sends all rows as ONE statement -- maximising
+    the chance that a duplicate lands inside it.
+
+    "Last wins" matches `on_conflict_do_update` semantics: the final value for a key is what
+    the row would have ended up with had the statement been applied row by row. Input order is
+    otherwise preserved (the survivor keeps the first occurrence's position) so batching stays
+    deterministic and diffable.
+
+    A `None` in a key column is compared like any other value here. Note that Postgres does
+    NOT treat NULL as conflicting in the index itself, so records with a NULL key column
+    bypass the upsert and duplicate in the table -- a separate open issue tracked in
+    `.claude/SKILLS.md` §9 (`upsert_seo_daily`, `upsert_ad_search_terms`).
+    """
+    if len(records) < 2:
+        return records
+
+    first_index: dict[tuple, int] = {}
+    out: list[dict] = []
+    for r in records:
+        k = tuple(r.get(col) for col in keys)
+        idx = first_index.get(k)
+        if idx is None:
+            first_index[k] = len(out)
+            out.append(r)
+        else:
+            out[idx] = r  # last wins
+
+    dropped = len(records) - len(out)
+    if dropped:
+        logger.info(
+            f"[writer] Collapsed {dropped} duplicate row(s) on {keys} "
+            f"({len(records)} in, {len(out)} out)"
+        )
+    return out
+
+
 def ensure_tables(session: Session, *models) -> None:
     """Idempotently create the given table(s) if missing.
 
@@ -86,6 +142,7 @@ def upsert_seo_daily(session: Session, records: list[dict], site_id: Optional[st
     insert = upsert_insert(session)
     BATCH_SIZE = max_batch_size(session, 60)
     _upsert_keys = ("date", "site_id", "country", "device", "landing_page")
+    records = _dedupe_by_keys(records, _upsert_keys)
     update_cols = [k for k in records[0] if k not in _upsert_keys]
     total_written = 0
     for i in range(0, len(records), BATCH_SIZE):
@@ -119,6 +176,7 @@ def upsert_keyword_rankings(session: Session, records: list[dict], site_id: Opti
     insert = upsert_insert(session)
     BATCH_SIZE = max_batch_size(session, 80)
     _upsert_keys = ("date", "site_id", "keyword")
+    records = _dedupe_by_keys(records, _upsert_keys)
     update_cols = [k for k in records[0] if k not in _upsert_keys]
     total = 0
     for i in range(0, len(records), BATCH_SIZE):
@@ -152,6 +210,7 @@ def upsert_pages(session: Session, records: list[dict], site_id: Optional[str] =
     insert = upsert_insert(session)
     BATCH_SIZE = max_batch_size(session, 80)
     _upsert_keys = ("site_id", "url")
+    records = _dedupe_by_keys(records, _upsert_keys)
     update_cols = [k for k in records[0] if k not in _upsert_keys]
     total = 0
     for i in range(0, len(records), BATCH_SIZE):
@@ -182,6 +241,7 @@ def upsert_ad_metrics(session: Session, records: list[dict], site_id: Optional[s
     insert = upsert_insert(session)
     BATCH_SIZE = max_batch_size(session, 80)
     _upsert_keys = ("date", "site_id", "platform", "campaign")
+    records = _dedupe_by_keys(records, _upsert_keys)
     update_cols = [k for k in records[0] if k not in _upsert_keys]
     total = 0
     for i in range(0, len(records), BATCH_SIZE):
@@ -212,6 +272,7 @@ def upsert_backlinks(session: Session, records: list[dict], site_id: Optional[st
     insert = upsert_insert(session)
     BATCH_SIZE = max_batch_size(session, 80)
     _upsert_keys = ("site_id", "referring_domain", "target_url")
+    records = _dedupe_by_keys(records, _upsert_keys)
     update_cols = [k for k in records[0] if k not in _upsert_keys]
     total = 0
     for i in range(0, len(records), BATCH_SIZE):
@@ -242,6 +303,7 @@ def upsert_competitor_visibility(session: Session, records: list[dict], site_id:
     insert = upsert_insert(session)
     BATCH_SIZE = max_batch_size(session, 80)
     _upsert_keys = ("date", "site_id", "competitor_domain")
+    records = _dedupe_by_keys(records, _upsert_keys)
     update_cols = [k for k in records[0] if k not in _upsert_keys]
     total = 0
     for i in range(0, len(records), BATCH_SIZE):
@@ -272,6 +334,7 @@ def upsert_competitor_domains(session: Session, records: list[dict], site_id: Op
     insert = upsert_insert(session)
     BATCH_SIZE = max_batch_size(session, 80)
     _upsert_keys = ("site_id", "competitor_domain")
+    records = _dedupe_by_keys(records, _upsert_keys)
     update_cols = [k for k in records[0] if k not in _upsert_keys]
     total = 0
     for i in range(0, len(records), BATCH_SIZE):
@@ -300,6 +363,7 @@ def upsert_technical_issues(session: Session, records: list[dict], site_id: Opti
     insert = upsert_insert(session)
     BATCH_SIZE = max_batch_size(session, 80)
     _upsert_keys = ("site_id", "url", "issue_type")
+    records = _dedupe_by_keys(records, _upsert_keys)
     update_cols = [k for k in records[0] if k not in _upsert_keys]
     total = 0
     for i in range(0, len(records), BATCH_SIZE):
@@ -335,6 +399,7 @@ def upsert_page_speed(session: Session, records: list[dict], site_id: Optional[s
     # past SQLite's ~999 ceiling. 60 x 15 = 900.
     BATCH_SIZE = max_batch_size(session, 60)
     _upsert_keys = ("site_id", "url", "strategy")
+    records = _dedupe_by_keys(records, _upsert_keys)
     update_cols = [k for k in records[0] if k not in _upsert_keys]
     total = 0
     for i in range(0, len(records), BATCH_SIZE):
@@ -365,6 +430,7 @@ def upsert_indexing_status(session: Session, records: list[dict], site_id: Optio
     insert = upsert_insert(session)
     BATCH_SIZE = max_batch_size(session, 80)
     _upsert_keys = ("site_id", "url")
+    records = _dedupe_by_keys(records, _upsert_keys)
     update_cols = [k for k in records[0] if k not in _upsert_keys]
     total = 0
     for i in range(0, len(records), BATCH_SIZE):
@@ -413,6 +479,7 @@ def upsert_seo_aggregate(session: Session, records: list[dict]) -> int:
     """Upsert pre-rolled SEO aggregates. Unique on (site_id, period_type, period_start)."""
     if not records:
         return 0
+    records = _dedupe_by_keys(records, ("site_id", "period_type", "period_start"))
     update_cols = [k for k in records[0] if k not in ("site_id", "period_type", "period_start")]
     insert = upsert_insert(session)
     BATCH_SIZE = max_batch_size(session, 60)
@@ -440,6 +507,7 @@ def upsert_anomaly(session: Session, records: list[dict], site_id: Optional[str]
     _ensure_site_id(records, site_id)
     for r in records:
         r.setdefault("site_id", "")
+    records = _dedupe_by_keys(records, ("date", "site_id", "metric_type"))
     insert = upsert_insert(session)
     stmt = insert(Anomaly).values(records)
     stmt = stmt.on_conflict_do_update(
@@ -461,6 +529,7 @@ def upsert_comparative_metrics(session: Session, records: list[dict], site_id: O
     _ensure_site_id(records, site_id)
     for r in records:
         r.setdefault("site_id", "")
+    records = _dedupe_by_keys(records, ("site_id", "metric_type", "week_start"))
     insert = upsert_insert(session)
     stmt = insert(ComparativeMetrics).values(records)
     stmt = stmt.on_conflict_do_update(
@@ -488,6 +557,7 @@ def upsert_competitor_keyword_rankings(session: Session, records: list[dict], si
     insert = upsert_insert(session)
     BATCH_SIZE = max_batch_size(session, 60)
     _upsert_keys = ("date", "site_id", "keyword", "competitor_domain")
+    records = _dedupe_by_keys(records, _upsert_keys)
     update_cols = [k for k in records[0] if k not in _upsert_keys]
     total = 0
     for i in range(0, len(records), BATCH_SIZE):
@@ -520,6 +590,7 @@ def upsert_ai_keyword_data(session: Session, records: list[dict], site_id: Optio
     insert = upsert_insert(session)
     BATCH_SIZE = max_batch_size(session, 80)
     _upsert_keys = ("date", "site_id", "keyword")
+    records = _dedupe_by_keys(records, _upsert_keys)
     update_cols = [k for k in records[0] if k not in _upsert_keys]
     total = 0
     for i in range(0, len(records), BATCH_SIZE):
@@ -557,6 +628,7 @@ def upsert_saved_keywords(session: Session, records: list[dict], site_id: Option
     insert = upsert_insert(session)
     BATCH_SIZE = max_batch_size(session, 80)
     _upsert_keys = ("site_id", "keyword", "location")
+    records = _dedupe_by_keys(records, _upsert_keys)
     update_cols = [k for k in records[0] if k not in _upsert_keys and k != "id"]
     total = 0
     for i in range(0, len(records), BATCH_SIZE):
@@ -638,6 +710,7 @@ def upsert_ad_search_terms(session: Session, records: list[dict], site_id: Optio
     _ensure_site_id(records, site_id)
     for r in records:
         r.setdefault("campaign_id", None)
+    records = _dedupe_by_keys(records, ("date", "site_id", "term", "campaign_id"))
     insert = upsert_insert(session)
     total = 0
     batch_size = max_batch_size(session, 80)
@@ -668,6 +741,7 @@ def upsert_ga4_campaign_daily(session: Session, records: list[dict], site_id: Op
         return 0
     ensure_tables(session, GA4CampaignDaily)
     _ensure_site_id(records, site_id)
+    records = _dedupe_by_keys(records, ("date", "site_id", "campaign"))
     insert = upsert_insert(session)
     total = 0
     batch_size = max_batch_size(session, 80)
@@ -711,6 +785,7 @@ def upsert_page_crawl_meta(session: Session, records: list[dict], site_id: Optio
     # 7 columns -> 80 rows binds 560 parameters, inside SQLite's ~999 ceiling.
     BATCH_SIZE = max_batch_size(session, 80)
     _upsert_keys = ("site_id", "url")
+    records = _dedupe_by_keys(records, _upsert_keys)
     _always_overwrite = ("crawled_at",)
     update_cols = [k for k in records[0] if k not in _upsert_keys and k != "id"]
     total = 0

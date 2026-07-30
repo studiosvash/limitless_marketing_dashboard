@@ -657,15 +657,31 @@ def apply_settings_update(site_id: str, body: dict) -> dict:
                 UserProfile.objects.filter(user_id=uid).exclude(role="Owner").update(role=role)
 
     if "credentials" in body:
+        creds = body["credentials"]
         with get_session() as session:
             site = session.execute(select(Site).where(Site.site_url == site_id)).scalars().first()
         if site:
-            update_site(
-                site.id,
-                gsc_property=body["credentials"].get("gsc_property") or None,
-                ga4_property_id=body["credentials"].get("ga4_property_id") or None,
-                dataforseo_target_domain=body["credentials"].get("dataforseo_target_domain") or None,
-            )
+            # Only touch the keys the caller actually sent. This used to unconditionally pass
+            # all three, so saving just GSC + GA4 (the only two fields Settings has ever shown
+            # an input for) sent `dataforseo_target_domain=None`, and update_site/_bare_domain
+            # turned that into "" — silently blanking a DataForSEO target on EVERY GA4/GSC save,
+            # even one an operator had explicitly configured via the API or a script.
+            fields = {}
+            if "gsc_property" in creds:
+                fields["gsc_property"] = (creds.get("gsc_property") or "").strip() or None
+            if "ga4_property_id" in creds:
+                # GA4's own admin UI displays "properties/123456789" and that is what people
+                # paste. Every request builder does f"properties/{id}", so storing the prefixed
+                # form produced "properties/properties/123456789" and an INVALID_ARGUMENT hours
+                # later, well after Settings said "Saved ✓". Normalise once, here, so no save
+                # path can persist the broken form.
+                from pipeline.connectors.ga4 import normalise_property_id
+                raw = creds.get("ga4_property_id")
+                fields["ga4_property_id"] = normalise_property_id(raw) or None
+            if "dataforseo_target_domain" in creds:
+                fields["dataforseo_target_domain"] = (creds.get("dataforseo_target_domain") or "").strip() or None
+            if fields:
+                update_site(site.id, **fields)
 
     if "project" in body and isinstance(body["project"], dict):
         proj = body["project"]

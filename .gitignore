@@ -18,7 +18,8 @@ google_token.pickle
 data/
 
 # --- Django ------------------------------------------------------------------
-staticfiles/          # collectstatic output
+# collectstatic output
+staticfiles/
 media/
 
 # --- Python ------------------------------------------------------------------
@@ -52,8 +53,11 @@ Thumbs.db
 .worktrees/
 
 # --- Local scratch / test artifacts ------------------------------------------
-scratch/shots/        # browser screenshots from manual verification
+# browser screenshots from manual verification
+scratch/shots/
 scratch/*.png
-scratch/_*/           # verification output dirs (_verify_shots, _audit_screens, …)
+# verification output dirs (_verify_shots, _audit_screens, …)
+scratch/_*/
 _audit_screens/
-*.bak                 # DB backups (e.g. cache.db.bak-*)
+# DB backups (e.g. cache.db.bak-*)
+*.bak

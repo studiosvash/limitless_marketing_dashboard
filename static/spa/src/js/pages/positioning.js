@@ -867,10 +867,9 @@
             });
           }
           
-          const loc = vals.ptWs.location && vals.ptWs.location !== 'United States' ? vals.ptWs.location.replace(/^United States - /, '') : '';
-          const locParam = loc ? '&near=' + encodeURIComponent(loc) : '';
-          
-          vals.ptSerp = { 
+          const locParam = this.googleSerpLocationParam(vals.ptWs.location);
+
+          vals.ptSerp = {
             kw, 
             location: vals.ptWs.location, 
             href: 'https://www.google.com/search?q=' + encodeURIComponent(kw) + locParam, 

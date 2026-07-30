@@ -3,9 +3,11 @@ pipeline/services/sync_engine.py — Orchestrates connector runs for the FuseHea
 
 Architecture contract:
   - Pages NEVER call connectors directly. Only this engine calls connectors.
-  - Views POST to /sync/all/ or /sync/page/<page>/, which launch a background thread
-    that calls sync_all() or sync_page() here.
-  - Progress is written to RefreshRun rows; HTMX polls GET /sync/status/ every 2s.
+  - The SPA POSTs to /api/projects/<slug>/sync. start_sync_run() creates a RefreshRun row and
+    spawns `manage.py run_sync --run-id <id>` as a SEPARATE PROCESS, which calls sync_all() or
+    sync_page() here. (It used to be a daemon thread inside the web worker; every gunicorn
+    worker recycle killed the run mid-flight. See run_sync.py's module docstring.)
+  - Progress is written to RefreshRun rows; the SPA polls GET /api/tasks/<id>.
 """
 
 import importlib
@@ -264,7 +266,7 @@ def sync_all(site_url: str, run_id: int) -> dict:
     """
     Run all active connectors for site_url.
     Updates the RefreshRun progress row after each connector completes.
-    Called from a background thread by the sync view.
+    Called by the `run_sync` management command, in its own process.
 
     Returns a summary dict: {completed, total, records_written, errors}.
     """
@@ -299,12 +301,17 @@ def sync_all(site_url: str, run_id: int) -> dict:
             RefreshRun.objects.filter(pk=run_id).update(completed_count=completed)
             continue
 
-        # Narrow this run to the keywords that actually need measuring, for scopes that ask
-        # for it. `incremental_kws` is computed ONCE before the loop; if it came back empty
-        # the scope is skipped entirely rather than silently running the full list, because
-        # "nothing new" and "everything" must not be the same outcome.
-        if incremental_kws is not None and name in _INCREMENTAL_SCOPES.get(page, ()):
-            connector.only_keywords = incremental_kws
+        # NOTE: scope='all' deliberately has NO incremental narrowing. Narrowing belongs to
+        # sync_page's `positioning_new` scope, whose whole purpose is to measure only the
+        # keywords that have never been measured. "Refresh all" means all — narrowing it here
+        # would silently skip keywords the user asked to re-measure.
+        #
+        # (Two lines applying sync_page's `incremental_kws` were pasted into this loop in
+        # commit 2260104. Neither `incremental_kws` nor `page` exists in this function, and the
+        # lines sat OUTSIDE the try/except below, so the first connector raised NameError, the
+        # exception escaped sync_all, and the background thread died silently — leaving the
+        # RefreshRun row at status='running'/completed_count=0 forever. scope='all' was
+        # completely broken from that commit until this fix. See test_sync_engine.py.)
 
         try:
             result = connector.sync(site_id=site_url)
@@ -364,7 +371,7 @@ def sync_page(page: str, site_url: str, run_id: int) -> dict:
     """
     Run only the connectors relevant to `page` for site_url.
     Updates the RefreshRun progress row after each connector completes.
-    Called from a background thread by the sync view.
+    Called by the `run_sync` management command, in its own process.
 
     Returns a summary dict: {completed, total, records_written, errors}.
     """
@@ -428,6 +435,14 @@ def sync_page(page: str, site_url: str, run_id: int) -> dict:
             completed += 1
             RefreshRun.objects.filter(pk=run_id).update(completed_count=completed)
             continue
+
+        # Narrow this run to the keywords that actually need measuring, for scopes that ask
+        # for it. `incremental_kws` is resolved ONCE above, before any connector runs; if it
+        # came back empty the scope returned early rather than silently running the full list,
+        # because "nothing new" and "everything" must not be the same outcome. Consumers read
+        # it with getattr(self, "only_keywords", None) — see dataforseo_serp.fetch().
+        if incremental_kws is not None and name in _INCREMENTAL_SCOPES.get(page, ()):
+            connector.only_keywords = incremental_kws
 
         try:
             result = connector.sync(site_id=site_url)

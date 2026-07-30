@@ -43,8 +43,11 @@ class SyncEndpointTests(APITestCase):
     def setUp(self):
         self.client_auth = _bootstrap(self)
 
-    @patch("apps.dashboard.services.sync_api_service.threading.Thread")
-    def test_sync_creates_run_and_returns_task_contract(self, mock_thread):
+    # The sync now runs as `manage.py run_sync` in its OWN PROCESS rather than a daemon thread
+    # inside the web worker, so these tests stub the spawn instead of threading.Thread. See the
+    # module docstring of apps/sync/management/commands/run_sync.py for why the thread had to go.
+    @patch("apps.dashboard.services.sync_api_service._spawn_sync_process", return_value=4242)
+    def test_sync_creates_run_and_returns_task_contract(self, mock_spawn):
         """POST /sync must return exactly what the SPA's startSync reads: task_id/steps/est_cost."""
         resp = self.client_auth.post(
             "/api/projects/fusehealth/sync", {"scope": "overview"}, format="json"
@@ -59,10 +62,46 @@ class SyncEndpointTests(APITestCase):
         run = RefreshRun.objects.get(pk=body["task_id"])
         self.assertEqual(run.site_url, SITE_URL)
         self.assertEqual(run.total_count, 2)
-        mock_thread.assert_called_once()  # background sync actually kicked off
+        mock_spawn.assert_called_once()   # background sync actually kicked off
+        self.assertEqual(run.pid, 4242)   # ...and its pid was recorded for the reaper
 
-    @patch("apps.dashboard.services.sync_api_service.threading.Thread")
-    def test_scope_alias_positions_maps_to_positioning(self, _mock_thread):
+    @patch("apps.dashboard.services.sync_api_service._spawn_sync_process", return_value=1)
+    def test_missing_credentials_warn_instead_of_blocking_the_run(self, _mock_spawn):
+        """A site with no GA4 property must still sync everything else.
+
+        Regression: ProjectSyncView used to refuse the WHOLE run with a 400 when the GA4
+        property was unset — which is the state of every brand-new domain — so the first
+        Refresh on a new site did nothing at all, including the connectors that never touch
+        GA4. The seeded Site here has no ga4_property_id, exactly like a fresh add.
+        """
+        resp = self.client_auth.post(
+            "/api/projects/fusehealth/sync", {"scope": "overview"}, format="json"
+        )
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(body["steps"], ["gsc", "ga4"])
+        # The run started, and the response says which step cannot produce data and why.
+        self.assertTrue(any("Google Analytics 4" in w for w in body["warnings"]))
+        self.assertEqual(RefreshRun.objects.get(pk=body["task_id"]).status, RefreshStatus.RUNNING)
+
+    @patch("apps.dashboard.services.sync_api_service._spawn_sync_process", return_value=1)
+    def test_a_second_refresh_attaches_to_the_run_already_in_flight(self, mock_spawn):
+        """One sync per site. Two tabs must not fork two processes over the same connectors,
+        racing on SyncLog's UNIQUE(connector, site_url) row and double-spending DataForSEO."""
+        first = self.client_auth.post(
+            "/api/projects/fusehealth/sync", {"scope": "overview"}, format="json"
+        ).json()
+        second = self.client_auth.post(
+            "/api/projects/fusehealth/sync", {"scope": "keywords"}, format="json"
+        ).json()
+
+        self.assertEqual(second["task_id"], first["task_id"])
+        self.assertTrue(second["already_running"])
+        self.assertEqual(mock_spawn.call_count, 1)
+        self.assertEqual(RefreshRun.objects.count(), 1)
+
+    @patch("apps.dashboard.services.sync_api_service._spawn_sync_process", return_value=1)
+    def test_scope_alias_positions_maps_to_positioning(self, _mock_spawn):
         resp = self.client_auth.post(
             "/api/projects/fusehealth/sync", {"scope": "positions"}, format="json"
         )
@@ -71,18 +110,31 @@ class SyncEndpointTests(APITestCase):
             resp.json()["steps"], ["gsc_keywords", "dataforseo_serp", "dataforseo_keywords", "dataforseo_labs_competitors", "dataforseo_serp_competitors"]
         )
 
-    @patch("apps.dashboard.services.sync_api_service.threading.Thread")
-    def test_backlinks_scope_is_no_longer_a_silent_noop(self, _mock_thread):
-        """Regression: backlinks/ads had EMPTY connector lists, so Refresh did nothing."""
+    @patch("apps.dashboard.services.sync_api_service._spawn_sync_process", return_value=1)
+    def test_backlinks_scope_is_no_longer_a_silent_noop(self, _mock_spawn):
+        """Regression: backlinks/ads had EMPTY connector lists, so Refresh did nothing.
+
+        Also a regression test for the credential gate: the backlinks scope runs ONE DataForSEO
+        connector and needs neither GSC nor GA4, yet the old gate blocked it on a missing GA4
+        property — one of the reasons a new domain's Backlinks page stayed empty.
+        """
         resp = self.client_auth.post(
             "/api/projects/fusehealth/sync", {"scope": "backlinks"}, format="json"
         )
+        self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.json()["steps"], ["dataforseo_backlinks"])
+
+        # Finish the first run so the one-per-site guard doesn't absorb the second POST.
+        RefreshRun.objects.all().update(status=RefreshStatus.SUCCESS)
 
         resp = self.client_auth.post(
             "/api/projects/fusehealth/sync", {"scope": "ads"}, format="json"
         )
-        self.assertEqual(resp.json()["steps"], ["google_ads", "ga4"])
+        # google_ads_search_terms is deliberately its own connector: search_term_view is a
+        # different GAQL resource with its own reporting restrictions, so it can 403
+        # independently of the campaign pull. One connector = one table = one SyncLog row.
+        self.assertEqual(resp.json()["steps"],
+                         ["google_ads", "google_ads_search_terms", "ga4"])
 
     def test_unknown_slug_is_404(self):
         resp = self.client_auth.post("/api/projects/nope/sync", {"scope": "all"}, format="json")

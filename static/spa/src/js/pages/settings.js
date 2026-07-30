@@ -363,8 +363,24 @@
         domain: data.project.domain, vertical: data.project.vertical,
         projectIdLabel: 'project: ' + data.project.id,
         competitors: data.project.competitors,
-        gsc: s.creds.gsc, ga4: s.creds.ga4,
+        gsc: s.creds.gsc, ga4: s.creds.ga4, dataforseo: s.creds.dataforseo,
         credsSaveLabel: s.credsSaved ? 'Saved \u2713' : 'Save credentials',
+        credsTestLabel: s.credsTesting ? 'Checking\u2026' : 'Test connection',
+        credsTestBusy: !!s.credsTesting,
+        /* "Saved \u2713" only ever meant the write succeeded \u2014 GA4 had no access check at all, so a
+           wrong-but-present property id looked fine until a sync failed 20 minutes later. This
+           renders the same live probe the Add-domain modal uses, run against the current form. */
+        credsTestRows: (s.credsTestResult ? s.credsTestResult.checks : []).map(c => {
+          const tone = { ok: ['#d1fae5', '#047857', '\u2713'], fail: ['#fee2e2', '#b91c1c', '\u2717'],
+                        absent: ['#f1f5f9', '#94a3b8', '\u2014'], unknown: ['#fef3c7', '#b45309', '?'] }[c.state]
+                       || ['#f1f5f9', '#94a3b8', '\u2014'];
+          return {
+            label: c.label, detail: c.detail,
+            dotStyle: { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '18px', height: '18px', borderRadius: '50%', background: tone[0], color: tone[1], fontSize: '11px', fontWeight: 700, flexShrink: 0 },
+            dotText: tone[2],
+          };
+        }),
+        credsTestShown: !!s.credsTestResult,
         ws: ws, savedWs: s.savedWs ? 'Saved \u2713' : 'Save workspace',
         seatPct: Math.min(100, Math.round((ws.seats_used / ws.seats_total) * 100)),
         toggleEmail: toggle(!!prefs.email_alerts),

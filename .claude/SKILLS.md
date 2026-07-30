@@ -436,7 +436,14 @@ Each of these is a real bug that was found and fixed. Do not re-introduce them.
 | `PRAGMA table_info` in a migration | A syntax error on Postgres. Use `sqlalchemy.inspect()` to ask the connected dialect what columns exist — see `ensure_site_columns()` |
 | Formatting numbers in a `query_*_raw` / shared helper | `_get_keywords_overview` formatted position as `f"{avg:.0f}"` before any caller saw it, so 8.4 arrived as 8 irrecoverably and the column sorted as text (`"1,234" < "9"`). Return raw numbers; format at the edge |
 | Coercing an absent value to `0` | Zero and unknown are different facts. `None` position, `None` volume, `cost_per_unit: None` when no units were recorded — all deliberate |
-| A live API call in a page-data endpoint | Rate limits, latency, **and money**. `/positions` was billing DataForSEO on every render. Only `/research`, `/domain-overview` and `/live-serp` may call out, because a user pressed a button |
+| A live API call in a page-data endpoint | Rate limits, latency, **and money**. `/positions` was billing DataForSEO on every render. Only `/research`, `/domain-overview`, `/live-serp` and `/connection-check` may call out, because a user pressed a button |
+| A multi-row `insert(...).values(batch).on_conflict_do_update(...)` without deduping `batch` by the conflict-target columns first | Postgres raises `CardinalityViolation: ON CONFLICT DO UPDATE command cannot affect row a second time` and rolls back the **entire batch** if two records share a conflict key — e.g. `upsert_backlinks` conflicts on `(site_id, referring_domain, target_url)` but the connector drops `url_from`, so every site-wide footer/nav link collapsed to one key. **SQLite hides this completely** (it applies rows one at a time, so a duplicate just re-updates in place) — the whole test suite forces SQLite, so this class of bug is invisible until it hits production Postgres. Use `pipeline/db/writer._dedupe_by_keys(records, keys)` (last-occurrence-wins) before every batch |
+| A NULL value in an upsert's conflict-target column | Postgres does **not** treat `NULL = NULL` as a conflict inside a unique index, so a record with a null key column bypasses `ON CONFLICT` entirely and duplicates on every sync instead of updating in place. `_dedupe_by_keys` does not fix this (it's a Postgres index semantic, not a batch-dedup problem) — open in `upsert_seo_daily` (defaults `country`/`device`/`landing_page` to `None`) and `upsert_ad_search_terms` (`campaign_id` to `None`). Needs a schema decision (sentinel value vs. a partial index) before fixing |
+| A credential-save endpoint forwarding every field unconditionally | `apply_settings_update`'s credentials branch used to always pass `dataforseo_target_domain=body["credentials"].get(...) or None`, so saving *just* GSC + GA4 (the only two fields the UI ever showed) silently blanked an explicitly-configured DataForSEO target on every save. Only touch the keys actually present in the request body |
+| Pasting `properties/123456789` into a GA4 property field | GA4's own admin UI displays the property with that prefix, and every request builder does `f"properties/{id}"` — storing the prefixed form doubles it to `properties/properties/123456789` and fails with `INVALID_ARGUMENT` deep inside a sync, long after the save reported success. Normalise with `pipeline.connectors.ga4.normalise_property_id()` at every write path |
+| Gating a live-lookup feature behind `!kw.setup` (or any "no synced data" flag) | The Keyword Explorer is `POST /api/research` — it works identically on a project with zero synced rows, but the markup nested it inside the same `sc-if` as the measured KPI/table section, so a brand-new project hid a feature that would have worked. Only gate the sections that genuinely have nothing to show before a sync |
+| A credential pre-flight check that returns a blanket 400 | `POST /.../sync` used to resolve GSC + GA4 up front and refuse the **entire** run if either was unset/wrong — so a brand-new site (GA4 is `NULL` by definition) couldn't sync anything, including scopes that touch neither credential (e.g. `backlinks`). Skip what's missing and report it in `warnings`; don't refuse the whole request |
+| `threading.Thread(daemon=True)` for a 20-30 minute job inside the web worker | Dies with the worker: a `gunicorn --timeout` SIGKILL, a deploy, or (in dev) the `runserver` autoreloader restarting on the sync's own log write all silently kill it mid-run, leaving the row `running` for up to `RUN_TIMEOUT` (2h). Run it as `manage.py run_sync` in its own `subprocess.Popen` instead, and track the pid on the row so a dead process is detected directly instead of waited out |
 
 ---
 
@@ -471,6 +478,17 @@ Each of these is a real bug that was found and fixed. Do not re-introduce them.
   and took the render down.
 - Competitor positions were synthesised from a site-wide average plus an **MD5-derived offset**.
   Being deterministic, they looked stable and therefore real. An absent cell is the answer.
+- `sync_all()` had two lines pasted into it from `sync_page()` — reading `incremental_kws`/
+  `page`, neither of which exists in `sync_all`. They sat **outside** the per-connector
+  try/except, so the first connector raised `NameError`, the exception escaped the whole
+  function, and the background sync died silently on every single "Refresh all" from the
+  commit that introduced this until the fix — the row stayed `running` forever with
+  `completed_count=0`. No test called `sync_all()`/`sync_page()` directly (every existing test
+  patches the thread away), which is how this shipped; see `apps/api/tests/test_sync_engine.py`.
+- `ai_optimization.js`'s Prompts table read `pr.results[platform].cited` / `.snippet` with no
+  null guard. `results` is genuinely `{}` until a prompt has been run at least once, so any
+  tracked-but-never-run model crashed the whole `vals()` build — the entire SPA render went
+  blank on a project whose setup wizard had just seeded `tracked_models` for the first time.
 
 If you touch any of these, fix them properly rather than extending them.
 

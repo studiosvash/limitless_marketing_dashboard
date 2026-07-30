@@ -111,7 +111,7 @@ class SettingsPutCredentialsTests(APITestCase):
     def test_put_credentials_persists_on_next_get(self):
         payload = {"credentials": {
             "gsc_property": "sc-domain:new.com",
-            "ga4_property_id": "new-ga4",
+            "ga4_property_id": "999888777",
             "dataforseo_target_domain": "new.com",
         }}
         resp = self.client_auth.put("/api/projects/fusehealth/settings", payload, format="json")
@@ -120,6 +120,42 @@ class SettingsPutCredentialsTests(APITestCase):
 
         get_resp = self.client_auth.get("/api/projects/fusehealth/settings")
         self.assertEqual(get_resp.json()["credentials"], payload["credentials"])
+
+    def test_ga4_properties_prefix_is_stripped_on_save(self):
+        """GA4's own admin UI displays 'properties/123456789', and that is what people paste.
+        Every request builder does f"properties/{id}", so storing the prefixed form produced
+        properties/properties/123456789 and an INVALID_ARGUMENT hours later. It must be
+        normalised at the write, not just tolerated at read."""
+        resp = self.client_auth.put("/api/projects/fusehealth/settings", {
+            "credentials": {"ga4_property_id": "properties/123456789"}
+        }, format="json")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["credentials"]["ga4_property_id"], "123456789")
+
+    def test_non_numeric_ga4_property_id_is_rejected_not_stored_verbatim(self):
+        """A Measurement ID (G-XXXXXXX) or free text used to save cleanly and fail only when a
+        sync actually queried GA4. It must not be silently persisted as if it were valid."""
+        resp = self.client_auth.put("/api/projects/fusehealth/settings", {
+            "credentials": {"ga4_property_id": "G-ABC1234"}
+        }, format="json")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["credentials"]["ga4_property_id"], "")
+
+    def test_saving_gsc_and_ga4_does_not_blank_the_dataforseo_target(self):
+        """Regression: saveCreds only ever sent gsc_property + ga4_property_id (the only two
+        fields the UI has ever shown inputs for), but apply_settings_update used to forward
+        dataforseo_target_domain=None unconditionally on every save, which _bare_domain(None)
+        turned into "" -- silently blanking an explicitly configured DataForSEO target on
+        every single GSC/GA4 save."""
+        self.client_auth.put("/api/projects/fusehealth/settings", {
+            "credentials": {"dataforseo_target_domain": "explicit-target.com"}
+        }, format="json")
+
+        resp = self.client_auth.put("/api/projects/fusehealth/settings", {
+            "credentials": {"gsc_property": "sc-domain:new.com", "ga4_property_id": "111222333"}
+        }, format="json")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["credentials"]["dataforseo_target_domain"], "explicit-target.com")
 
 
 class SettingsPutPerKeyMergeTests(APITestCase):

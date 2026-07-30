@@ -271,7 +271,7 @@
           /* --- prompt table --- */
           aiv.noPrompts = prompts.length === 0;
           aiv.platNames = llm.map(pl2 => pl2.name);
-          aiv.promptGridCols = 'minmax(280px, 1.8fr) repeat(' + llm.length + ', 1fr)';
+          aiv.promptGridCols = '28px minmax(280px, 1.8fr) repeat(' + llm.length + ', 1fr)';
           const cell = r => {
             if (!r) return { label: 'off', style: Object.assign(chip('#f8fafc', '#cbd5e1'), { fontSize: '11px', fontWeight: 500 }) };
             if (!r.mentioned) return { label: '—', style: { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', minWidth: '44px', height: '24px', borderRadius: '4px', fontSize: '12px', fontWeight: 600, background: '#f8fafc', color: '#cbd5e1' } };
@@ -280,27 +280,58 @@
           };
           const visPrompts = prompts.filter(pr => s.aiListFilter === 'all' || pr.listId === s.aiListFilter);
           aiv.promptEmptyFiltered = prompts.length > 0 && visPrompts.length === 0;
+
+          /* --- select + bulk remove --- */
+          const promptSel = s.aiPromptSel || [];
+          const promptSelSet = new Set(promptSel);
+          const visPromptSel = visPrompts.filter(pr => promptSelSet.has(pr.id));
+          const promptAllOn = visPrompts.length > 0 && visPrompts.every(pr => promptSelSet.has(pr.id));
+          aiv.promptAllChecked = promptAllOn;
+          aiv.promptAllCheckStyle = { width: '15px', height: '15px', borderRadius: '4px', border: '1.5px solid ' + (promptAllOn ? '#4f46e5' : '#cbd5e1'), background: promptAllOn ? '#4f46e5' : 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, color: 'white', fontSize: '10px', fontWeight: 700, cursor: 'pointer' };
+          aiv.promptToggleAll = () => this.setState({ aiPromptSel: promptAllOn ? [] : visPrompts.map(pr => pr.id) });
+          aiv.promptAnySel = visPromptSel.length > 0;
+          aiv.promptSelCount = visPromptSel.length + ' selected';
+          aiv.promptClearSel = () => this.setState({ aiPromptSel: [] });
+          aiv.promptRemoveSel = () => this.aiRemovePrompts(visPromptSel.map(pr => pr.id));
+
           aiv.promptRows = visPrompts.map(pr => {
             const open = s.aiOpen === pr.id;
-            const citedN = llm.filter(pl2 => pr.cfg.models.includes(pl2.id) && pr.results[pl2.id].cited).length;
+            const prSelOn = promptSelSet.has(pr.id);
+            /* `results` is {} until the prompt has actually been run — build_ai_response says so
+               explicitly ("Real observed results keyed by platform id -- {} until this prompt is
+               actually run"). So a TRACKED model routinely has no result entry, and reading
+               through pr.results[id] without a guard threw a TypeError. There is no try/catch
+               around renderVals(), so that throw killed the whole vals() build and the entire
+               SPA render went blank — the reported "Prompts tab bugs out".
+               It became reachable when _handle_setup started seeding tracked_models with
+               connectable_platforms(): every prompt the setup wizard creates on a new project
+               has models but no results, so a fresh project crashed on first visit.
+               cell() already tolerates null; these two reads did not. */
+            const res = pl2 => pr.results[pl2.id] || null;
+            const citedN = llm.filter(pl2 => pr.cfg.models.includes(pl2.id) && (res(pl2) || {}).cited).length;
             return {
               text: pr.text, open,
               meta: listName(pr.listId) + ' · ' + pr.cfg.models.length + ' model' + (pr.cfg.models.length === 1 ? '' : 's') + ' · ' + pr.cfg.cadence + ' · ' + (pr.cfg.city || pr.cfg.country) + (pr.lastRun ? ' · last run ' + pr.lastRun : ' · not run yet'),
-              cells: llm.map(pl2 => cell(pr.cfg.models.includes(pl2.id) ? pr.results[pl2.id] : null)),
+              cells: llm.map(pl2 => cell(pr.cfg.models.includes(pl2.id) ? res(pl2) : null)),
+              checked: prSelOn,
+              checkStyle: { width: '15px', height: '15px', borderRadius: '4px', border: '1.5px solid ' + (prSelOn ? '#4f46e5' : '#cbd5e1'), background: prSelOn ? '#4f46e5' : 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, color: 'white', fontSize: '10px', fontWeight: 700, cursor: 'pointer' },
+              toggleSel: e => { e.stopPropagation(); this.setState(st => ({ aiPromptSel: prSelOn ? (st.aiPromptSel || []).filter(x => x !== pr.id) : (st.aiPromptSel || []).concat([pr.id]) })); },
               toggle: () => this.setState({ aiOpen: open ? null : pr.id }),
               chev: { color: '#cbd5e1', fontSize: '18px', transform: open ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s ease', flexShrink: 0 },
               coverage: citedN + ' of ' + pr.cfg.models.length + ' models cite you',
               details: llm.filter(pl2 => pr.cfg.models.includes(pl2.id)).map(pl2 => ({
                 name: pl2.name,
                 dot: { width: '8px', height: '8px', borderRadius: '50%', background: pl2.color, flexShrink: 0 },
-                snippet: pr.results[pl2.id].snippet
+                /* Honest placeholder rather than a blank paragraph: the row exists because the
+                   model is tracked, and "not run yet" is the actual state, not missing data. */
+                snippet: (res(pl2) || {}).snippet || 'Not run yet — press “Run now” to check this model.'
               })),
               runLabel: 'Run now · ' + money3(runCostOf(pr)),
               runStyle: redBtn,
               run: () => this.aiRun({ promptId: pr.id }),
               inspect: () => this.aiInspect(pr.text, pr.id),
-              cfgOpen: () => this.setState({ aiCfgOpen: pr.id, aiCfgDraft: Object.assign({}, pr.cfg, { models: pr.cfg.models.slice(), listId: pr.listId }) }),
-              remove: () => this.aiPost('prompts-remove', { id: pr.id }).then(() => { this.aiReload(); this.notify('Prompt removed'); }).catch(() => {})
+              cfgOpen: () => this.setState({ aiCfgOpen: pr.id, aiCfgDraft: Object.assign({}, pr.cfg, { models: pr.cfg.models.slice(), listId: pr.listId, text: pr.text }) }),
+              remove: () => this.aiRemovePrompts([pr.id])
             };
           });
           const flt = d.lists.find(l => l.id === s.aiListFilter);
@@ -319,7 +350,7 @@
             const setDr = patch => this.setState(st => ({ aiCfgDraft: Object.assign({}, st.aiCfgDraft, patch) }));
             const tg = toggle2(!!dr.webSearch);
             aiv.cfg = {
-              open: true, text: cfgPr.text,
+              open: true, text: dr.text, textSet: e => setDr({ text: e.target.value }),
               models: llm.map(pl2 => {
                 const on = dr.models.includes(pl2.id);
                 return {
@@ -339,8 +370,9 @@
               listOptions: d.lists.map(l => ({ value: l.id, label: l.name })),
               costNote: 'One run ≈ ' + money3(dr.models.length * d.costs.model) + ' · ' + (dr.cadence === 'manual' ? 'manual runs only' : dr.cadence + ' ≈ ' + money3(dr.models.length * d.costs.model * (dr.cadence === 'daily' ? 30 : 4.3)) + '/mo'),
               close: () => this.setState({ aiCfgOpen: null, aiCfgDraft: null }),
-              save: () => this.aiPost('prompts-config', { id: cfgPr.id, cfg: { models: dr.models, webSearch: dr.webSearch, country: dr.country, city: dr.city, cadence: dr.cadence }, listId: dr.listId })
-                .then(() => { this.setState({ aiCfgOpen: null, aiCfgDraft: null }); this.aiReload(); this.notify('Prompt settings saved'); }).catch(() => {})
+              save: () => this.aiPost('prompts-config', { id: cfgPr.id, cfg: { models: dr.models, webSearch: dr.webSearch, country: dr.country, city: dr.city, cadence: dr.cadence }, listId: dr.listId, text: dr.text })
+                .then(() => { this.setState({ aiCfgOpen: null, aiCfgDraft: null }); this.aiReload(); this.notify('Prompt settings saved'); })
+                .catch(err => { if (this._alive) this.notify(this.errText(err, 'Could not save prompt settings')); })
             };
           } else { aiv.cfg = { open: false }; }
         }

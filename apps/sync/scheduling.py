@@ -23,6 +23,7 @@ Nothing here calls an external API or starts a sync; it only reads RefreshRun hi
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime, timedelta
 
 from django.utils import timezone
@@ -84,10 +85,14 @@ def _covered_by_all_scope(module: str) -> bool:
 # Orphaned-run reaping
 # ---------------------------------------------------------------------------
 
-# start_sync_run() runs the sync in `threading.Thread(daemon=True)`. A server restart (or a
-# crash, or Ctrl-C in dev) kills that thread mid-run and leaves the RefreshRun row at
-# status='running' forever: the SPA polls /api/tasks/<id> and never sees `done`, and the
-# scheduler's "is a sync already running for this site?" guard would be blocked permanently.
+# A run can still stop reporting without finishing -- the machine is rebooted, the process is
+# OOM-killed, the run wedges inside a connector -- and the row then sits at status='running'
+# forever: the SPA polls /api/tasks/<id> and never sees `done`, and the per-site "already
+# running?" guard blocks the site permanently.
+#
+# Since start_sync_run() moved the sync into its own process (RefreshRun.pid), the pid check in
+# reap_orphaned_runs() catches most of these within one tick. THIS timeout is the fallback for
+# the cases the pid cannot answer: rows with no pid, and a process that is alive but stuck.
 #
 # The timeout is picked from the real worst case of a scope='all' run, adding up the
 # connectors' own hard limits rather than guessing:
@@ -110,42 +115,112 @@ RUN_TIMEOUT = timedelta(hours=2)
 # because "sync failed" would be a claim we cannot support.
 REAP_MESSAGE = (
     "Sync did not report a result within {hours:.0f}h and was marked failed by the scheduler. "
-    "The most likely cause is a server restart while the sync was running (syncs run in a "
-    "daemon thread and do not survive one). Re-run the refresh to try again."
+    "The most likely cause is a server restart while the sync was running. Re-run the refresh "
+    "to try again."
 )
+
+# Used when the pid is gone: this is not a guess, so it does not hedge.
+DEAD_PROCESS_MESSAGE = (
+    "The sync process (pid {pid}) is no longer running but never reported a result. It was most "
+    "likely killed by a server restart or deploy. Re-run the refresh to try again."
+)
+
+# A just-spawned run has a NULL pid for a moment: start_sync_run creates the row, THEN spawns
+# the process and writes the pid back. Without this grace period the reaper could look at that
+# row mid-spawn, see no pid, and kill a run that was about to start.
+PID_GRACE = timedelta(minutes=2)
+
+
+def _process_alive(pid: int) -> bool:
+    """Is this pid a live process? Returns True on any uncertainty.
+
+    Biased towards True on purpose: wrongly declaring a live 30-minute sync dead is far worse
+    than leaving a dead row for the RUN_TIMEOUT fallback to clear.
+
+    The pid-reuse race (the OS recycling a pid onto an unrelated process) is not worth
+    defending against here: it would make us keep waiting for a run that is already dead, and
+    the timeout catches that anyway.
+    """
+    try:
+        import psutil  # type: ignore[import]
+        return psutil.pid_exists(pid)
+    except ImportError:
+        pass
+    if hasattr(os, "kill"):
+        try:
+            os.kill(pid, 0)      # signal 0 = existence check only
+            return True
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True          # exists, owned by someone else
+        except Exception:
+            return True
+    return True
 
 
 def reap_orphaned_runs(now: datetime | None = None, dry_run: bool = False) -> list[RefreshRun]:
-    """Mark every RefreshRun still `running` past RUN_TIMEOUT as `error`.
+    """Resolve every RefreshRun stuck at `running` that cannot still be making progress.
+
+    Two independent reasons a row gets reaped:
+
+    1. **Its process is gone.** Since syncs run as `manage.py run_sync` in their own process
+       (RefreshRun.pid), a missing pid is direct evidence, not an inference — so these are
+       cleared within one tick instead of after RUN_TIMEOUT. This is the case that used to hurt
+       most: a deploy mid-sync left the row 'running' for two hours, the SPA polled a frozen
+       progress bar the whole time, and the scheduler treated the site as busy.
+    2. **It has exceeded RUN_TIMEOUT.** The fallback, for rows with no pid (created before the
+       field existed, or caught mid-spawn) and for a process that is alive but wedged.
 
     Returns the affected rows (fetched before the update, so callers can log them). With
     dry_run=True nothing is written and the rows are only reported.
 
-    Safe to call concurrently and repeatedly: the UPDATE is filtered on status='running', so a
-    run that finishes between the SELECT and the UPDATE is left alone, and a second reaper pass
-    finds nothing to do.
+    Safe to call concurrently and repeatedly: every UPDATE is filtered on status='running', so a
+    run that finishes between the SELECT and the UPDATE is left alone, and a second pass finds
+    nothing to do.
     """
     now = now or timezone.now()
-    cutoff = now - RUN_TIMEOUT
 
-    stale = list(
-        RefreshRun.objects.filter(status=RefreshStatus.RUNNING, started_at__lt=cutoff)
+    timed_out = list(
+        RefreshRun.objects.filter(status=RefreshStatus.RUNNING, started_at__lt=now - RUN_TIMEOUT)
     )
+    timed_out_ids = {r.pk for r in timed_out}
+
+    # Candidates for the pid check: still running, young enough that the timeout hasn't caught
+    # them, and past the spawn grace period.
+    dead: list[RefreshRun] = [
+        r for r in RefreshRun.objects.filter(
+            status=RefreshStatus.RUNNING, started_at__lt=now - PID_GRACE,
+        ).exclude(pk__in=timed_out_ids)
+        if r.pid and not _process_alive(r.pid)
+    ]
+
+    stale = timed_out + dead
     if not stale or dry_run:
         return stale
 
-    RefreshRun.objects.filter(
-        pk__in=[r.pk for r in stale], status=RefreshStatus.RUNNING
-    ).update(
-        status=RefreshStatus.ERROR,
-        current_connector=None,
-        finished_at=now,
-        error_message=REAP_MESSAGE.format(hours=RUN_TIMEOUT.total_seconds() / 3600),
-    )
+    if timed_out:
+        RefreshRun.objects.filter(
+            pk__in=timed_out_ids, status=RefreshStatus.RUNNING
+        ).update(
+            status=RefreshStatus.ERROR,
+            current_connector=None,
+            finished_at=now,
+            error_message=REAP_MESSAGE.format(hours=RUN_TIMEOUT.total_seconds() / 3600),
+        )
+    for run in dead:
+        RefreshRun.objects.filter(pk=run.pk, status=RefreshStatus.RUNNING).update(
+            status=RefreshStatus.ERROR,
+            current_connector=None,
+            finished_at=now,
+            error_message=DEAD_PROCESS_MESSAGE.format(pid=run.pid),
+        )
+
     for run in stale:
         logger.warning(
-            "[scheduler] Reaped orphaned RefreshRun#%s (%s@%s) started %s",
-            run.pk, run.scope, run.site_url, run.started_at.isoformat(),
+            "[scheduler] Reaped orphaned RefreshRun#%s (%s@%s) started %s pid=%s reason=%s",
+            run.pk, run.scope, run.site_url, run.started_at.isoformat(), run.pid,
+            "timeout" if run.pk in timed_out_ids else "dead-process",
         )
     return stale
 

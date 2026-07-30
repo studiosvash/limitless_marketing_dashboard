@@ -195,6 +195,35 @@ class AIPromptsRemoveActionTests(APITestCase):
         self.assertEqual(remaining.count(), 1)
         self.assertEqual(remaining.first().id, keep.id)
 
+    def test_removes_multiple_targeted_prompts_by_ids(self):
+        # The Tracked Prompts grid's select-all-then-remove bulk action posts "ids", not "id".
+        keep = AIPrompt.objects.create(site_url=SITE_URL, text="keep me")
+        remove_a = AIPrompt.objects.create(site_url=SITE_URL, text="remove a")
+        remove_b = AIPrompt.objects.create(site_url=SITE_URL, text="remove b")
+
+        resp = self.client_auth.post(
+            "/api/projects/fusehealth/ai/prompts-remove",
+            {"ids": [remove_a.id, remove_b.id]}, format="json",
+        )
+        self.assertEqual(resp.status_code, 200)
+
+        remaining = AIPrompt.objects.filter(site_url=SITE_URL)
+        self.assertEqual(remaining.count(), 1)
+        self.assertEqual(remaining.first().id, keep.id)
+
+    def test_bulk_remove_only_deletes_this_projects_prompts(self):
+        other = AIPrompt.objects.create(site_url="https://other-project.com", text="not yours")
+        mine = AIPrompt.objects.create(site_url=SITE_URL, text="mine")
+
+        resp = self.client_auth.post(
+            "/api/projects/fusehealth/ai/prompts-remove",
+            {"ids": [mine.id, other.id]}, format="json",
+        )
+        self.assertEqual(resp.status_code, 200)
+
+        self.assertFalse(AIPrompt.objects.filter(id=mine.id).exists())
+        self.assertTrue(AIPrompt.objects.filter(id=other.id).exists())
+
 
 class AIPromptsConfigActionTests(APITestCase):
     def setUp(self):
@@ -233,6 +262,30 @@ class AIPromptsConfigActionTests(APITestCase):
         self.assertEqual(resp.status_code, 200)
         prompt.refresh_from_db()
         self.assertEqual(prompt.tracked_models, ["chatgpt"])
+
+    def test_config_save_can_edit_the_prompt_text(self):
+        prompt = AIPrompt.objects.create(site_url=SITE_URL, text="best iv therapy")
+        resp = self.client_auth.post(
+            "/api/projects/fusehealth/ai/prompts-config",
+            {"id": prompt.id, "cfg": {"models": ["chatgpt"]},
+             "text": "what is the best iv therapy in austin"},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 200)
+        prompt.refresh_from_db()
+        self.assertEqual(prompt.text, "what is the best iv therapy in austin")
+
+    def test_config_save_with_blank_text_does_not_wipe_the_prompt(self):
+        # Clearing the editable text box by accident must never save an empty question.
+        prompt = AIPrompt.objects.create(site_url=SITE_URL, text="best iv therapy")
+        resp = self.client_auth.post(
+            "/api/projects/fusehealth/ai/prompts-config",
+            {"id": prompt.id, "cfg": {"models": ["chatgpt"]}, "text": "   "},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 200)
+        prompt.refresh_from_db()
+        self.assertEqual(prompt.text, "best iv therapy")
 
     def test_config_save_moves_prompt_to_a_new_list(self):
         plist = AIPromptList.objects.create(site_url=SITE_URL, name="New List")

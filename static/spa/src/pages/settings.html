@@ -91,12 +91,30 @@
               </div>
               <div>
                 <label style="display: block; font-size: 12px; font-weight: 600; color: #334155; margin-bottom: 6px;">GA4 Property ID <span style="color: #94a3b8; font-weight: 400;">Google Analytics 4</span></label>
-                <input value="{{ st.ga4 }}" onChange="{{ h.credGa4 }}" style="width: 100%; box-sizing: border-box; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-family: monospace; font-size: 13px; color: #334155; outline: none;">
+                <input value="{{ st.ga4 }}" onChange="{{ h.credGa4 }}" placeholder="e.g. 123456789 (numbers only)" style="width: 100%; box-sizing: border-box; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-family: monospace; font-size: 13px; color: #334155; outline: none;">
+              </div>
+              <div>
+                <label style="display: block; font-size: 12px; font-weight: 600; color: #334155; margin-bottom: 6px;">DataForSEO Target Domain <span style="color: #94a3b8; font-weight: 400;">keyword/backlink/competitor data</span></label>
+                <input value="{{ st.dataforseo }}" onChange="{{ h.credDataforseo }}" placeholder="defaults to this site's domain" style="width: 100%; box-sizing: border-box; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-family: monospace; font-size: 13px; color: #334155; outline: none;">
               </div>
             </div>
-            <div style="margin-top: 16px;">
+            <div style="margin-top: 16px; display: flex; align-items: center; gap: 10px;">
               <div onClick="{{ h.saveCreds }}" style="display: inline-flex; padding: 8px 16px; background: #4f46e5; color: white; font-size: 13px; font-weight: 600; border-radius: 8px; cursor: pointer;" style-hover="background:#4338ca">{{ st.credsSaveLabel }}</div>
+              <div onClick="{{ h.testCreds }}" style="display: inline-flex; padding: 8px 16px; border: 1px solid #cbd5e1; color: #334155; font-size: 13px; font-weight: 600; border-radius: 8px; cursor: pointer; background: white;" style-hover="background:#f8fafc">{{ st.credsTestLabel }}</div>
             </div>
+            <sc-if value="{{ st.credsTestShown }}" hint-placeholder-val="{{ false }}">
+              <div style="margin-top: 14px; display: flex; flex-direction: column; gap: 8px; padding-top: 14px; border-top: 1px solid #f1f5f9;">
+                <sc-for list="{{ st.credsTestRows }}" as="c" hint-placeholder-count="3">
+                  <div style="display: flex; align-items: flex-start; gap: 10px;">
+                    <span style="{{ c.dotStyle }}">{{ c.dotText }}</span>
+                    <div style="min-width: 0;">
+                      <span style="font-size: 12.5px; font-weight: 700; color: #334155;">{{ c.label }}</span>
+                      <div style="font-size: 12px; color: #64748b; margin-top: 2px;">{{ c.detail }}</div>
+                    </div>
+                  </div>
+                </sc-for>
+              </div>
+            </sc-if>
           </div>
 
           <div style="border-radius: 12px; background: #fff; border: 1px solid #fecaca; box-shadow: 0 1px 2px rgba(0,0,0,0.05); padding: 24px;">

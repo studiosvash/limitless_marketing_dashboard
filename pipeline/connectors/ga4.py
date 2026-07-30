@@ -33,6 +33,62 @@ from pipeline.db.writer import upsert_seo_daily, upsert_ga4_campaign_daily
 load_dotenv()
 
 
+def normalise_property_id(raw: str | None) -> str:
+    """Reduce whatever the user pasted to the bare numeric GA4 property id.
+
+    GA4's admin UI displays the property as `properties/123456789`, and that is what people
+    copy. Every request builder here does `property=f"properties/{property_id}"`, so storing
+    the prefixed form produces `properties/properties/123456789` and an INVALID_ARGUMENT from
+    the API -- hours later, inside a sync, long after Settings said "Saved ✓". Strip it once,
+    at the edge, so no write path can store the broken form.
+
+    Returns "" for anything that is not a bare number after stripping (e.g. a `G-XXXXXXX`
+    Measurement ID, which is a different identifier people confuse for this one). Callers
+    decide whether "" is a validation error or simply "not configured".
+    """
+    s = (raw or "").strip()
+    if not s:
+        return ""
+    if s.lower().startswith("properties/"):
+        s = s.split("/", 1)[1].strip()
+    return s if s.isdigit() else ""
+
+
+def probe_property(property_id: str) -> tuple[bool, str]:
+    """Can the connected Google identity actually read this GA4 property?
+
+    Returns (ok, human-readable detail). Never raises — this backs a "Test connection" button
+    and a CLI check, both of which must report a failure rather than become one.
+
+    Why this exists: there was NO access check for GA4 anywhere. The only gate was a presence
+    check (`if not prop_id`), so a wrong-but-real-looking property id passed validation, saved
+    cleanly, and then failed 20 minutes into a sync. One deliberately cheap report — one day,
+    one metric, one row — is enough to prove read access without spending meaningful quota
+    (GA4 allows 14,000 tokens/hour).
+    """
+    pid = normalise_property_id(property_id)
+    if not pid:
+        return False, (
+            "Not a valid GA4 property ID. Use the numeric ID from GA4 → Admin → Property "
+            "details (e.g. 123456789), not a G- Measurement ID."
+        )
+    try:
+        client = BetaAnalyticsDataClient(credentials=get_google_credentials())
+        resp = client.run_report(RunReportRequest(
+            property=f"properties/{pid}",
+            metrics=[Metric(name="sessions")],
+            date_ranges=[DateRange(start_date="7daysAgo", end_date="yesterday")],
+            limit=1,
+        ))
+    except Exception as exc:
+        return False, f"GA4 rejected property {pid}: {exc}"
+
+    sessions = "0"
+    if resp.rows:
+        sessions = resp.rows[0].metric_values[0].value
+    return True, f"Property {pid} readable — {sessions} sessions in the last 7 days."
+
+
 class GA4Connector(BaseConnector):
     name = "ga4"
 
