@@ -138,6 +138,19 @@
             <div style="display: grid; grid-template-columns: 1.4fr 1fr; gap: 16px;">
               <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); padding: 22px 24px;">
                 <div style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: #94a3b8;">AI Share of Voice <span style="text-transform: none; letter-spacing: 0; font-weight: 500;">· AI Overviews + ChatGPT</span></div>
+                <!-- No real measurement to show a number for: never invent a percentage. -->
+                <sc-if value="{{ aiv.visSetup }}" hint-placeholder-val="{{ false }}">
+                  <div style="padding: 32px 12px; text-align: center;">
+                    <p style="font-size: 14px; font-weight: 600; color: #334155; margin: 0;">Not measured yet</p>
+                    <p style="font-size: 13px; color: #94a3b8; margin: 6px 0 0; max-width: 320px; margin-left: auto; margin-right: auto;">{{ aiv.visSetupMsg }}</p>
+                  </div>
+                </sc-if>
+                <sc-if value="{{ aiv.visNoComps }}" hint-placeholder-val="{{ false }}">
+                  <div style="padding: 32px 12px; text-align: center;">
+                    <p style="font-size: 13px; color: #94a3b8; margin: 0; max-width: 320px; margin-left: auto; margin-right: auto;">{{ aiv.visNoCompsMsg }}</p>
+                  </div>
+                </sc-if>
+                <sc-if value="{{ aiv.visOk }}" hint-placeholder-val="{{ true }}">
                 <div style="display: flex; align-items: baseline; gap: 10px; margin-top: 6px;">
                   <span style="font-size: 40px; font-weight: 800; color: #0f172a; line-height: 1;">{{ aiv.sovPct }}</span>
                   <span style="{{ aiv.sovDeltaStyle }}">{{ aiv.sovDelta }}</span>
@@ -154,6 +167,7 @@
                     </div>
                   </sc-for>
                 </div>
+                </sc-if>
               </div>
               <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
                 <sc-for list="{{ aiv.kpis }}" as="k" hint-placeholder-count="4">
@@ -189,6 +203,12 @@
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
               <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
                 <div style="padding: 14px 20px; border-bottom: 1px solid #f1f5f9;"><h2 style="font-size: 14px; font-weight: 600; margin: 0;">Your Most-Cited Pages</h2></div>
+                <sc-if value="{{ aiv.visNoPages }}" hint-placeholder-val="{{ false }}">
+                  <div style="padding: 32px 20px; text-align: center;">
+                    <p style="font-size: 13px; color: #94a3b8; margin: 0;">{{ aiv.visNoPagesMsg }}</p>
+                  </div>
+                </sc-if>
+                <sc-if value="{{ !aiv.visNoPages }}" hint-placeholder-val="{{ true }}">
                 <div style="display: grid; grid-template-columns: 1fr 70px 90px; gap: 8px; padding: 8px 20px; font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8; border-bottom: 1px solid #f8fafc;">
                   <span>Page</span><span style="text-align: right;">Mentions</span><span style="text-align: right;">AI Impr.</span>
                 </div>
@@ -202,6 +222,7 @@
                     <span style="font-size: 13px; color: #64748b; text-align: right;">{{ p.imprFmt }}</span>
                   </div>
                 </sc-for>
+                </sc-if>
               </div>
               <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
                 <div style="padding: 14px 20px; border-bottom: 1px solid #f1f5f9;"><h2 style="font-size: 14px; font-weight: 600; margin: 0;">Domains Dominating AI Answers <span style="font-size: 11px; font-weight: 500; color: #94a3b8;">in your space</span></h2></div>

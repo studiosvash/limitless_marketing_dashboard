@@ -118,10 +118,27 @@
 
         if (sub2 === 'visibility') {
           const sov = d.sov;
+          // Each empty case has its own truth; none of them is a zero.
+          aiv.visSetup = d.visibilityState === 'setup';
+          aiv.visNoComps = d.visibilityState === 'no_competitors';
+          aiv.visNoPages = !aiv.visSetup && d.topPages.length === 0;
+          aiv.visOk = !aiv.visSetup && !aiv.visNoComps;
+          aiv.visSetupMsg = 'No AI visibility data yet — press Refresh to take the first weekly snapshot.';
+          aiv.visNoCompsMsg = 'Add competitors under Targets to see share of voice.';
+          aiv.visNoPagesMsg = 'AI has not cited any of your pages yet.';
           const maxSov = Math.max.apply(null, sov.rows.map(r => r.sov)) || 1;
           aiv.sovPct = sov.you + '%';
-          aiv.sovDelta = (sov.delta >= 0 ? '▲ +' : '▼ ') + Math.abs(sov.delta) + ' pts vs. last week';
-          aiv.sovDeltaStyle = { fontSize: '12px', fontWeight: 600, padding: '3px 8px', borderRadius: '4px', background: sov.delta >= 0 ? '#ecfdf5' : '#fff1f2', color: sov.delta >= 0 ? '#059669' : '#e11d48' };
+          // delta is null until a second weekly snapshot exists. Printing "+0 pts vs. last
+          // week" would assert we measured last week when we did not.
+          const hasDelta = sov.delta !== null && sov.delta !== undefined;
+          aiv.sovDelta = hasDelta
+            ? (sov.delta >= 0 ? '▲ +' : '▼ ') + Math.abs(sov.delta) + ' pts vs. last week'
+            : 'first measurement — no comparison yet';
+          aiv.sovDeltaStyle = {
+            fontSize: '12px', fontWeight: 600, padding: '3px 8px', borderRadius: '4px',
+            background: !hasDelta ? '#f1f5f9' : (sov.delta >= 0 ? '#ecfdf5' : '#fff1f2'),
+            color: !hasDelta ? '#64748b' : (sov.delta >= 0 ? '#059669' : '#e11d48')
+          };
           aiv.sovRows = sov.rows.map((r, i2) => ({
             rank: '#' + (i2 + 1), domain: r.domain, sovFmt: r.sov + '%',
             mentionsFmt: this.fmt(r.mentions) + ' mentions',

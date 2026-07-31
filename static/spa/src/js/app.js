@@ -2143,7 +2143,7 @@
       backlinks: ['Backlinks', 'Live and lost links with referring domain quality'],
       offsite: ['Off-site SEO', 'Off-site organic interactions from GA4 — referral, social & video'],
       pages: ['Site Audit', 'Crawl health, indexing, and page speed — merged view'],
-      ai: ['AI Optimization', 'Brand visibility across ChatGPT, AI Overviews, Claude, Gemini & Perplexity'],
+      ai: ['AI Optimization', 'Brand visibility in AI Overviews & ChatGPT · prompt checks across ChatGPT, Claude, Gemini & Perplexity'],
       ads: ['Paid Overview', 'Google Ads & GA4 — spend, outcomes, and pacing'],
       campaigns: ['Campaigns', 'Budgets, delivery, and results by campaign'],
       terms: ['Search Terms', 'The real queries your ads matched — cut waste, find keywords'],
