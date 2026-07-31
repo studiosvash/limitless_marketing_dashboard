@@ -1473,8 +1473,13 @@ git commit -m "feat(llm-mentions): wire connector into the ai scope and the API 
 
 **Files:**
 - Modify: `static/spa/src/js/pages/ai_optimization.js:119-172`
-- Modify: `static/spa/src/pages/ai_optimization.html` (the AI Visibility section headings)
-- Modify: `static/spa/src/index.html` (page subtitle copy)
+- Modify: `static/spa/src/pages/site_audit.html` — **this file holds the AI Optimization markup**,
+  not just Site Audit. It opens with `<sc-if value="{{ showAi }}">` and contains the AI Share of
+  Voice card (~line 139), Your Most-Cited Pages (~line 189) and Domains Dominating AI Answers
+  (~line 205). The filename is misleading and pre-dates this work; there is no
+  `pages/ai_optimization.html`.
+- Modify: wherever the AI Optimization page subtitle lives (search for "Claude, Gemini" across
+  `static/spa/src/`)
 
 **Interfaces:**
 - Consumes: `sov.delta` (may be `null`), `visibilityState` (`"setup" | "no_competitors" | "ok"`), `mentionPlatforms` (2 entries) from Task 5.
