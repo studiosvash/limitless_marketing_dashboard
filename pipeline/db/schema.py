@@ -501,6 +501,64 @@ class AIKeywordData(Base):
     )
 
 
+class LLMMentionMetric(Base):
+    """Weekly LLM-mention aggregate for one subject on one platform.
+
+    Written by `dataforseo_llm_mentions` from DataForSEO's LLM Mentions API. One row per
+    (site, week, subject domain, platform). `subject_type` distinguishes the project itself
+    from the competitors it tracks from domains merely DISCOVERED in the same answers -- the
+    grain is identical, so one table serves both the Share-of-Voice list and the
+    "Domains Dominating AI Answers" list, and "which new domain is rising?" stays a
+    single-table query.
+
+    Weekly rather than daily because the API returns current state with no history: the
+    snapshot IS the history, and it cannot be backfilled later.
+    """
+    __tablename__ = "llm_mention_metrics"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    site_id = Column(String(255), nullable=False, index=True, default="")
+    week_start = Column(Date, nullable=False, index=True)   # Monday of the ISO week, UTC
+    subject_domain = Column(String(255), nullable=False, index=True)
+    subject_type = Column(String(20), nullable=False, default="discovered")  # you|competitor|discovered
+    platform = Column(String(20), nullable=False, default="google")          # google|chat_gpt
+    mentions = Column(Integer, nullable=False, default=0)
+    ai_search_volume = Column(Integer, nullable=False, default=0)
+    last_fetched = Column(DateTime, server_default=func.now())
+
+    # Every conflict-target column is NOT NULL on purpose: Postgres does not treat NULL = NULL
+    # as a conflict, so a null key would bypass ON CONFLICT and duplicate on every sync.
+    __table_args__ = (
+        UniqueConstraint("site_id", "week_start", "subject_domain", "platform",
+                         name="uq_llm_mention_week"),
+        Index("ix_llm_mention_site_week", "site_id", "week_start"),
+    )
+
+
+class LLMCitedPage(Base):
+    """One of the project's own URLs that AI answers cited, in a given week.
+
+    Only URLs on the project's own host are stored. The API's top_pages response also returns
+    co-occurring pages from OTHER domains (a call for driphydration.com returns perfectb.com
+    URLs), which would be wrong under a heading that says "Your Most-Cited Pages".
+    """
+    __tablename__ = "llm_cited_pages"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    site_id = Column(String(255), nullable=False, index=True, default="")
+    week_start = Column(Date, nullable=False, index=True)
+    url = Column(Text, nullable=False, index=True)
+    mentions = Column(Integer, nullable=False, default=0)
+    ai_search_volume = Column(Integer, nullable=False, default=0)
+    platforms = Column(Text, nullable=True)   # JSON list, e.g. ["google", "chat_gpt"]
+    last_fetched = Column(DateTime, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("site_id", "week_start", "url", name="uq_llm_cited_page_week"),
+        Index("ix_llm_cited_page_site_week", "site_id", "week_start"),
+    )
+
+
 class SavedKeyword(Base):
     """
     The site's TRACKED keyword list — keywords an admin explicitly bookmarked from the

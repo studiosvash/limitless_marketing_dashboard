@@ -29,6 +29,7 @@ from pipeline.db.schema import (
     PageSpeed, IndexingStatus, SEOAggregate,
     Anomaly, ComparativeMetrics,
     CompetitorKeywordRanking, TrackedCompetitor, AIKeywordData,
+    LLMCitedPage, LLMMentionMetric,
     SavedKeyword, BacklinksSnapshot,
     AuditSnapshot, AdSearchTerm, GA4CampaignDaily, ConnectorCost,
     PageCrawlMeta, ensure_page_speed_columns,
@@ -606,6 +607,77 @@ def upsert_ai_keyword_data(session: Session, records: list[dict], site_id: Optio
         session.execute(stmt)
         total += len(batch)
     logger.debug(f"[writer] ai_keyword_data: upserted {total} rows")
+    return total
+
+
+# ─────────────────────────────────────────────
+# LLM Mentions (DataForSEO AI Optimization)
+# ─────────────────────────────────────────────
+
+def upsert_llm_mention_metrics(session: Session, records: list[dict],
+                               site_id: Optional[str] = None) -> int:
+    """Upsert weekly LLM-mention aggregates. Unique on
+    (site_id, week_start, subject_domain, platform)."""
+    if not records:
+        return 0
+
+    ensure_tables(session, LLMMentionMetric)
+    _ensure_site_id(records, site_id)
+    for r in records:
+        r.setdefault("site_id", "")
+
+    insert = upsert_insert(session)
+    BATCH_SIZE = max_batch_size(session, 80)
+    _upsert_keys = ("site_id", "week_start", "subject_domain", "platform")
+    records = _dedupe_by_keys(records, _upsert_keys)
+    update_cols = [k for k in records[0] if k not in _upsert_keys]
+    total = 0
+    for i in range(0, len(records), BATCH_SIZE):
+        batch = records[i:i + BATCH_SIZE]
+        stmt = insert(LLMMentionMetric).values(batch)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=list(_upsert_keys),
+            set_={
+                k: func.coalesce(stmt.excluded[k], getattr(LLMMentionMetric, k))
+                for k in update_cols
+            },
+        )
+        session.execute(stmt)
+        total += len(batch)
+    logger.debug(f"[writer] llm_mention_metrics: upserted {total} rows")
+    return total
+
+
+def upsert_llm_cited_pages(session: Session, records: list[dict],
+                           site_id: Optional[str] = None) -> int:
+    """Upsert the project's own cited URLs for a week. Unique on (site_id, week_start, url)."""
+    if not records:
+        return 0
+
+    ensure_tables(session, LLMCitedPage)
+    _ensure_site_id(records, site_id)
+    for r in records:
+        r.setdefault("site_id", "")
+
+    insert = upsert_insert(session)
+    BATCH_SIZE = max_batch_size(session, 80)
+    _upsert_keys = ("site_id", "week_start", "url")
+    records = _dedupe_by_keys(records, _upsert_keys)
+    update_cols = [k for k in records[0] if k not in _upsert_keys]
+    total = 0
+    for i in range(0, len(records), BATCH_SIZE):
+        batch = records[i:i + BATCH_SIZE]
+        stmt = insert(LLMCitedPage).values(batch)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=list(_upsert_keys),
+            set_={
+                k: func.coalesce(stmt.excluded[k], getattr(LLMCitedPage, k))
+                for k in update_cols
+            },
+        )
+        session.execute(stmt)
+        total += len(batch)
+    logger.debug(f"[writer] llm_cited_pages: upserted {total} rows")
     return total
 
 
