@@ -56,14 +56,29 @@ class GSCConnector(BaseConnector):
         return self.site_url or ""
 
     def _get_last_synced_date(self, site_url: str) -> Optional[date]:
-        """
-        Check the SQLite DB for the most recent date in seo_daily for the given site.
+        """Most recent date **this connector** has written search data for, or None.
+
+        `impressions > 0` is what makes the row GSC's own, and the filter is load-bearing:
+        `seo_daily` is a shared table where `ga4` writes the analytics columns and leaves
+        clicks/impressions/ctr/avg_position at 0 (see ga4._normalize). Asking for the newest
+        row of ANY kind therefore read GA4's cursor, not GSC's — and because GA4's window ends
+        *yesterday* while gsc_safe_range ends *today − 3*, fetch() computed
+        `new_start > new_end` and returned [] on every run once GA4 had synced even once.
+        The connector logged `success, 0 records` each time, so nothing looked broken while
+        every GSC figure on the Overview page sat at 0 permanently
+        (production, premierstaff.com, 2026-07-30).
+
+        The predicate is exact rather than a heuristic: the Search Analytics API only returns
+        a row because that page was served, so a GSC row always has impressions >= 1. A row
+        both connectors wrote (same date/country/device/landing_page) also has impressions >= 1
+        and counts, correctly, as synced.
         """
         with get_session() as session:
             try:
                 result = session.execute(
                     select(func.max(SEODaily.date)).where(
                         SEODaily.site_id == site_url,
+                        SEODaily.impressions > 0,
                     )
                 ).scalar()
             except Exception:

@@ -22,6 +22,27 @@ def _resolve_site_ids(site_id: str) -> list[str]:
 # When GA4 reports no revenue (a property with no ecommerce/revenue events) the
 # honest answer is 0.0 — never a per-conversion estimate.
 
+def _engagement(engaged: int, sessions: int) -> dict:
+    """The two engagement-rate keys, or `None` for both when there is nothing to divide by.
+
+    An engagement rate over zero sessions is **undefined**, not zero: "0% of visitors
+    engaged" asserts that visitors arrived and none engaged, which is a measurement nobody
+    took. Every one of these used to be `... if sessions > 0 else 0`, so a backlink domain
+    that drove no traffic and a platform with no connector both reported a confident 0.0%
+    next to genuinely-measured rows. `None` renders as an em dash instead — the same
+    convention `impressions` and `users` already use on this page.
+
+    `engagedRate` is the 0-1 fraction the SPA multiplies by 100; `engagementRate` is the
+    percentage. Both are returned together so they can never disagree about whether the
+    number exists."""
+    if sessions <= 0:
+        return {"engagedRate": None, "engagementRate": None}
+    return {
+        "engagedRate": round(engaged / sessions, 3),
+        "engagementRate": round(engaged / sessions * 100, 1),
+    }
+
+
 def _revenue_total_raw(site_ids: list[str], start, end) -> float:
     """Real GA4 revenue for the whole period, or 0.0 when GA4 reported none."""
     try:
@@ -262,7 +283,7 @@ def build_offsite_response(site_id: str, curr_start, curr_end, prev_start, prev_
     channels = []
     for ch, data in channel_agg.items():
         sess = data["sessions"]
-        er = round(data["engaged"] / sess * 100, 1) if sess > 0 else 0.0
+        er = _engagement(data["engaged"], sess)["engagementRate"]
         channels.append({
             "channel": ch,
             "sessions": sess,
@@ -302,7 +323,10 @@ def build_offsite_response(site_id: str, curr_start, curr_end, prev_start, prev_
             # unknown. It used to be set to `sessions` and commented "# estimate" —
             # a fabricated number. null says "not measured".
             "users": None,
-            "engagementRate": round(engaged / share * 100, 1) if share > 0 else 0.0,
+            # None, not 0.0 — this is the common case here, not an edge one: a referring
+            # domain is listed because it LINKS to us, and most of them drive no measured
+            # GA4 sessions at all. See _engagement().
+            "engagementRate": _engagement(engaged, share)["engagementRate"],
             "keyEvents": convs,
             # Real GA4 totalRevenue attributed to this source, or 0.0 when GA4
             # reported none / the domain drove no measured sessions.
@@ -339,10 +363,10 @@ def build_offsite_response(site_id: str, curr_start, curr_end, prev_start, prev_
     # multipliers were invented out of thin air. None makes the SPA render "—" with
     # a "connector needed" caption, which is the truth.
     social = [
-        {"platform": "LinkedIn", "source": "linkedin.com", "channel": "Social", "connected": li_conn, "impressions": None, "sessions": li_sess, "engagedRate": round(li_eng / li_sess, 3) if li_sess > 0 else 0, "engagementRate": round(li_eng / li_sess * 100, 1) if li_sess > 0 else 0, "keyEvents": li_conv, "revenue": li_rev},
-        {"platform": "Reddit", "source": "reddit.com", "channel": "Social", "connected": reddit_conn, "impressions": None, "sessions": rd_sess, "engagedRate": round(rd_eng / rd_sess, 3) if rd_sess > 0 else 0, "engagementRate": round(rd_eng / rd_sess * 100, 1) if rd_sess > 0 else 0, "keyEvents": rd_conv, "revenue": rd_rev},
-        {"platform": "YouTube", "source": "youtube.com", "channel": "Video", "connected": yt_conn, "impressions": None, "sessions": yt_sess, "engagedRate": round(yt_eng / yt_sess, 3) if yt_sess > 0 else 0, "engagementRate": round(yt_eng / yt_sess * 100, 1) if yt_sess > 0 else 0, "keyEvents": yt_conv, "revenue": yt_rev},
-        {"platform": "X / Twitter", "source": "t.co", "channel": "Social", "connected": x_conn, "impressions": None, "sessions": tw_sess, "engagedRate": round(tw_eng / tw_sess, 3) if tw_sess > 0 else 0, "engagementRate": round(tw_eng / tw_sess * 100, 1) if tw_sess > 0 else 0, "keyEvents": tw_conv, "revenue": tw_rev},
+        {"platform": "LinkedIn", "source": "linkedin.com", "channel": "Social", "connected": li_conn, "impressions": None, "sessions": li_sess, **_engagement(li_eng, li_sess), "keyEvents": li_conv, "revenue": li_rev},
+        {"platform": "Reddit", "source": "reddit.com", "channel": "Social", "connected": reddit_conn, "impressions": None, "sessions": rd_sess, **_engagement(rd_eng, rd_sess), "keyEvents": rd_conv, "revenue": rd_rev},
+        {"platform": "YouTube", "source": "youtube.com", "channel": "Video", "connected": yt_conn, "impressions": None, "sessions": yt_sess, **_engagement(yt_eng, yt_sess), "keyEvents": yt_conv, "revenue": yt_rev},
+        {"platform": "X / Twitter", "source": "t.co", "channel": "Social", "connected": x_conn, "impressions": None, "sessions": tw_sess, **_engagement(tw_eng, tw_sess), "keyEvents": tw_conv, "revenue": tw_rev},
     ]
 
     _ga4_at, _ga4_status = _last_ga4_sync(site_id)

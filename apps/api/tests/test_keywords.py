@@ -8,7 +8,7 @@ from rest_framework.authtoken.models import Token
 from rest_framework.test import APIClient, APITestCase
 
 from pipeline.db.engine import get_engine
-from pipeline.db.schema import init_db, Site, KeywordRanking
+from pipeline.db.schema import init_db, Site, KeywordRanking, SavedKeyword, SEODaily
 from pipeline.utils.db_connection import get_session
 import pipeline.utils.db_connection as db_connection
 
@@ -27,6 +27,19 @@ class KeywordsEndpointTests(APITestCase):
         with get_session() as session:
             session.add(Site(site_url="sc-domain:fusehealth.com", site_name="FuseHealth",
                               slug="fusehealth", is_active=1))
+            # /keywords is bounded by the site's tracked list (build_keywords_response ->
+            # get_keyword_intelligence_raw(tracked_only=True)); without a saved_keywords row
+            # load_tracked_keywords() falls back to the repo's legacy keywords.txt and the
+            # ranking below is filtered out, so the endpoint returns an empty response.
+            session.add(SavedKeyword(site_id="sc-domain:fusehealth.com",
+                                      keyword="iv therapy near me"))
+            # Anchors the period window. ProjectKeywordsView resolves its range through
+            # latest_data_anchor(), which is max(seo_daily.date) — with no seo_daily row it
+            # falls back to date.today() and the 30-day window lands in whatever month the
+            # suite happens to run in, excluding the fixed-date ranking below. Anchoring on
+            # 2026-07-01 makes the window 2026-06-01..2026-06-30 on every future run.
+            session.add(SEODaily(date=date(2026, 7, 1), site_id="sc-domain:fusehealth.com",
+                                  clicks=12, impressions=200))
             session.add(KeywordRanking(date=date(2026, 6, 30), site_id="sc-domain:fusehealth.com",
                                         keyword="iv therapy near me", position=6, clicks=12,
                                         impressions=200, search_volume=2400,

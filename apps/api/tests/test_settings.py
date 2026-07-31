@@ -8,7 +8,7 @@ from rest_framework.test import APIClient, APITestCase
 
 from apps.accounts.models import Role, UserProfile
 from apps.dashboard.models import ProjectSettings
-from apps.dashboard.services.settings_service import DEFAULT_SETTINGS_BLOB
+from apps.dashboard.services.settings_service import DEFAULT_SETTINGS_BLOB, LIVE_ROLES
 from apps.sync.models import SyncLog, SyncStatus
 from pipeline.db.engine import get_engine
 from pipeline.db.schema import init_db, Site
@@ -58,6 +58,9 @@ class SettingsGetEndpointTests(APITestCase):
             connector="ga4", site_url=SITE_URL, status=SyncStatus.ERROR,
             records_written=0, error_message="401 Unauthorized: token expired",
         )
+        # Stored with the retired Role vocabulary on purpose: every database seeded before
+        # seed_users.py was corrected still holds these, and the endpoint must not hand the
+        # SPA a role string its team table has no concept of.
         seo_user = get_user_model().objects.create_user("seo1")
         UserProfile.objects.filter(user=seo_user).update(role=Role.SEO)
 
@@ -74,7 +77,11 @@ class SettingsGetEndpointTests(APITestCase):
         team_by_name = {m["name"]: m for m in body["team"]}
         self.assertIn("founder1", team_by_name)
         self.assertIn("seo1", team_by_name)
-        self.assertEqual(team_by_name["seo1"]["role"], Role.SEO)
+        # Healed to the live vocabulary on the way out — "seo" reaches the SPA as "Admin",
+        # the access that row already had (check_owner_admin refuses only "Analyst").
+        self.assertEqual(team_by_name["seo1"]["role"], "Admin")
+        for member in body["team"]:
+            self.assertIn(member["role"], LIVE_ROLES)
 
     def test_get_fresh_project_is_honest_not_a_crash(self):
         # No ProjectSettings row, no SyncLog rows beyond the auth user's own profile --
@@ -187,18 +194,33 @@ class SettingsPutPerKeyMergeTests(APITestCase):
                           DEFAULT_SETTINGS_BLOB["notifications"]["digest_day"])
 
 
+class SettingsPutTeamTests(APITestCase):
+    """`team` is a real mutation now (commit d699575, documented in
+    .claude/api-reference.md §PUT /settings) — it used to be a flat 400. The service-level
+    contract is covered in test_settings_service.ApplySettingsUpdateTeamTests; this pins the
+    endpoint half: a 200 rather than the old rejection, and the role actually landing."""
+
+    def setUp(self):
+        self.client_auth = _bootstrap_settings_test_env(self)
+        # Second user: _bootstrap_settings_test_env's "founder1" is the first profile by id
+        # and query_team_raw pins that one to Owner, which team updates deliberately skip.
+        self.member = get_user_model().objects.create_user("analyst1")
+        UserProfile.objects.filter(user=self.member).update(role="Analyst")
+
+    def test_put_team_applies_the_role(self):
+        resp = self.client_auth.put(
+            "/api/projects/fusehealth/settings",
+            {"team": [{"id": self.member.id, "role": "Admin"}]},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.member.profile.refresh_from_db()
+        self.assertEqual(self.member.profile.role, "Admin")
+
+
 class SettingsPutRejectedKeysTests(APITestCase):
     def setUp(self):
         self.client_auth = _bootstrap_settings_test_env(self)
-
-    def test_put_team_is_a_clean_400_and_persists_nothing(self):
-        resp = self.client_auth.put(
-            "/api/projects/fusehealth/settings",
-            {"team": [{"id": 1, "role": "Owner"}]},
-            format="json",
-        )
-        self.assertEqual(resp.status_code, 400)
-        self.assertFalse(ProjectSettings.objects.filter(site_url=SITE_URL).exists())
 
     def test_put_security_is_a_clean_400_and_persists_nothing(self):
         resp = self.client_auth.put(

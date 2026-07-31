@@ -225,9 +225,21 @@
         const statusOf = pg2 => pg2 ? (pg2.statusCode + (pg2.kind === 'gone' ? ' · broken' : pg2.kind === 'redirect' ? ' · redirect' : '')) : '200';
         const pgByUrl = {};
         data.crawledPages.forEach(pg2 => { pgByUrl[pg2.url] = pg2; });
+        /* AFFECTED PAGES: collapsed to a preview, expandable to the whole list.
+           The payload carries every affected URL (site_audit_service builds checks[].pages
+           from all TechnicalIssue rows), so "+ 99 more pages" was hiding data the browser
+           already had and sending the user to a CSV for it. PAGE_PREVIEW keeps the row
+           scannable when several checks are open; "Show all" reveals the rest in place.
+           RENDER_MAX is a DOM guard for checks with thousands of URLs — when it bites, the
+           label says exactly how many are rendered rather than implying the list is complete. */
+        const PAGE_PREVIEW = 8;
+        const RENDER_MAX = 500;
         au.issueRows = list.map(c => {
           const open = s.auOpen === c.id;
-          const shown = c.pages.slice(0, 8);
+          const showAll = open && s.auAllPages === c.id;
+          const total = c.pages.length;
+          const shownN = showAll ? Math.min(total, RENDER_MAX) : Math.min(total, PAGE_PREVIEW);
+          const shown = c.pages.slice(0, shownN);
           return {
             title: c.title, category: c.category, open, howToFix: c.howToFix,
             dot: dot(c.hidden ? '#cbd5e1' : SEVC[c.severity]),
@@ -237,6 +249,11 @@
             chev: { color: '#cbd5e1', fontSize: '18px', transform: open ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s ease' },
             toggle: () => this.setState({ auOpen: open ? null : c.id }),
             hasPages: c.pages.length > 0,
+            /* Expanded lists scroll inside their own box so a 107-page check does not push
+               every other check off the screen. */
+            pagesWrap: showAll
+              ? { maxHeight: '420px', overflowY: 'auto', border: '1px solid #e2e8f0', borderRadius: '8px' }
+              : {},
             pages: shown.map(u => {
               const urlStr = typeof u === 'string' ? u : u.url;
               const pg2 = pgByUrl[urlStr];
@@ -250,7 +267,13 @@
                 status: (pg2 && pg2.statusCode) ? statusOf(pg2) : (u.status || '200')
               };
             }),
-            more: c.pages.length > 8, moreLabel: '+ ' + (c.pages.length - 8) + ' more pages — export for the full list',
+            more: total > PAGE_PREVIEW,
+            moreLabel: showAll
+              ? 'Show fewer'
+              : 'Show all ' + this.fmt(total) + ' affected pages',
+            toggleAll: () => this.setState({ auAllPages: showAll ? null : c.id }),
+            capped: showAll && total > RENDER_MAX,
+            cappedLabel: 'Showing the first ' + this.fmt(RENDER_MAX) + ' of ' + this.fmt(total) + ' — export for the full list',
             exportPages: () => this.downloadCsv(project.domain + '-' + c.id + '.csv', [['url', 'url']], c.pages.map(x => ({ url: typeof x === 'string' ? x : x.url }))),
             hide: () => this.toggleAuditCheck(c.id),
             hideLabel: c.hidden ? 'Restore check' : 'Hide this check'

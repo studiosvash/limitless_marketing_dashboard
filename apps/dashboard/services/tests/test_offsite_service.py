@@ -212,9 +212,65 @@ class BuildOffsiteResponseTests(TestCase):
 
         self.assertEqual(body["channels"], [])
         self.assertEqual(body["referrers"], [])
-        self.assertEqual(body["social"], [])
         self.assertEqual(body["connectors"], {
             "linkedin": False, "reddit": False, "youtube": False,
             "x": False, "facebook": False, "instagram": False,
         })
-        self.assertEqual(body["syncMeta"], {"state": "setup"})
+        # syncMeta reports the real `ga4` SyncLog row — GA4 is what feeds every number on
+        # this page. Nothing has synced in this test, so `lastUpdated` is None and
+        # `lastStatus` is "never": the banner prints "never synced" instead of a date.
+        # `lastUpdated` used to be handed `totals["engagementRate"]` — an engagement-rate
+        # percentage under a key the frontend renders as a timestamp — so assert it is
+        # None-or-a-string here and never a number.
+        self.assertEqual(body["syncMeta"]["state"], "ready")
+        self.assertIsNone(body["syncMeta"]["lastUpdated"])
+        self.assertEqual(body["syncMeta"]["lastStatus"], "never")
+
+        # `social` is a FIXED roster of the four platforms the page reports on — it is not
+        # empty even with no data, because each row is a real GA4 traffic-source rollup
+        # (sessions/keyEvents/revenue summed from ga4_traffic_source_daily) and "GA4 recorded
+        # no sessions from linkedin.com" is a measurement, not a gap.
+        #
+        # What this test exists to guard is `impressions`. GA4 can only see sessions that
+        # ARRIVED from a source; it cannot see how many times a post was shown on the
+        # platform. That number lives in each platform's own API and no platform connector is
+        # wired, so it is None for every row, connected or not. It used to be invented as
+        # `sessions * 12 / 8 / 5 / 4` — that is the fabrication that must never come back.
+        self.assertEqual([r["platform"] for r in body["social"]],
+                         ["LinkedIn", "Reddit", "YouTube", "X / Twitter"])
+        for row in body["social"]:
+            self.assertIsNone(row["impressions"], f"{row['platform']} impressions must stay None")
+            self.assertFalse(row["connected"])
+            self.assertEqual(row["sessions"], 0)
+            # An engagement rate over zero sessions is undefined, not 0% — "0% of visitors
+            # engaged" claims a measurement nobody took. See offsite_service._engagement.
+            self.assertIsNone(row["engagedRate"], f"{row['platform']} engagedRate over 0 sessions")
+            self.assertIsNone(row["engagementRate"])
+
+
+class EngagementRateTests(TestCase):
+    """`_engagement` is the single place that decides whether an engagement rate exists.
+    Every rate on this page (social platforms, referring domains, channel mix) goes through
+    it, so the "undefined is not zero" rule cannot drift apart between them."""
+
+    def test_zero_sessions_is_undefined_not_zero(self):
+        from apps.dashboard.services.offsite_service import _engagement
+        self.assertEqual(_engagement(0, 0),
+                         {"engagedRate": None, "engagementRate": None})
+
+    def test_measured_sessions_still_produce_a_real_rate(self):
+        """The guard must not swallow real data — a rate of exactly 0 over REAL sessions is a
+        genuine measurement and has to survive as 0, not become None."""
+        from apps.dashboard.services.offsite_service import _engagement
+        self.assertEqual(_engagement(30, 120),
+                         {"engagedRate": 0.25, "engagementRate": 25.0})
+        self.assertEqual(_engagement(0, 120),
+                         {"engagedRate": 0.0, "engagementRate": 0.0})
+
+    def test_the_two_keys_never_disagree_about_existence(self):
+        from apps.dashboard.services.offsite_service import _engagement
+        for engaged, sessions in ((0, 0), (0, 10), (5, 10), (10, 10)):
+            result = _engagement(engaged, sessions)
+            self.assertEqual(result["engagedRate"] is None,
+                             result["engagementRate"] is None,
+                             f"disagreement at engaged={engaged} sessions={sessions}")

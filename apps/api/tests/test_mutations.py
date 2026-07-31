@@ -84,6 +84,68 @@ class AlertAckTests(MutationTestBase):
             self.assertEqual(self.client_auth.post(f"/api/alerts/{feed_id}/ack").status_code, 200)
 
 
+class AlertUnackTests(MutationTestBase):
+    """Undo for an acknowledgement. Every case here is "the feed must say unacknowledged
+    again", because that flag is what the row, the sidebar badge and the bell all read."""
+
+    def _feed(self):
+        return self.client_auth.get("/api/projects/fusehealth/alerts").json()["feed"]
+
+    def _by_kind(self, kind):
+        return next(i for i in self._feed() if i["kind"] == kind)
+
+    def test_unack_reverses_an_anomaly_ack_including_the_mirror(self):
+        anomaly_id = self._by_kind("anomaly")["id"]
+        self.client_auth.post(f"/api/alerts/{anomaly_id}/ack")
+        self.assertTrue(self._by_kind("anomaly")["acknowledged"])
+
+        resp = self.client_auth.post(f"/api/alerts/{anomaly_id}/unack")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json(), {"ok": True})
+
+        self.assertFalse(self._by_kind("anomaly")["acknowledged"])
+        # The feed ORs alertAcks with Anomaly.is_acknowledged, so the mirror must be cleared
+        # too -- clearing only the state list would leave the row acknowledged forever.
+        with get_session() as session:
+            row = session.query(Anomaly).one()
+            self.assertFalse(bool(row.is_acknowledged))
+
+    def test_unack_reverses_a_technical_ack(self):
+        issue_id = self._by_kind("technical")["id"]
+        self.client_auth.post(f"/api/alerts/{issue_id}/ack")
+        self.assertTrue(self._by_kind("technical")["acknowledged"])
+
+        self.client_auth.post(f"/api/alerts/{issue_id}/unack")
+        self.assertFalse(self._by_kind("technical")["acknowledged"])
+
+    def test_unack_reverses_acknowledge_all(self):
+        ids = [i["id"] for i in self._feed()]
+        self.client_auth.post("/api/alerts/ack", {"ids": ids, "project": "fusehealth"},
+                              format="json")
+        self.assertTrue(all(i["acknowledged"] for i in self._feed()))
+
+        self.client_auth.post(f"/api/alerts/{ids[0]}/unack")
+        after = {i["id"]: i["acknowledged"] for i in self._feed()}
+        self.assertFalse(after[ids[0]])
+        self.assertTrue(all(after[i] for i in ids[1:]))  # only the one row came back
+
+    def test_unack_is_idempotent_and_safe_on_a_never_acked_alert(self):
+        feed_id = self._feed()[0]["id"]
+        for _ in range(3):
+            self.assertEqual(self.client_auth.post(f"/api/alerts/{feed_id}/unack").status_code, 200)
+        self.assertFalse(self._feed()[0]["acknowledged"])
+
+    def test_ack_after_unack_acknowledges_again(self):
+        feed_id = self._by_kind("anomaly")["id"]
+        self.client_auth.post(f"/api/alerts/{feed_id}/ack")
+        self.client_auth.post(f"/api/alerts/{feed_id}/unack")
+        self.client_auth.post(f"/api/alerts/{feed_id}/ack")
+        self.assertTrue(self._by_kind("anomaly")["acknowledged"])
+
+    def test_unauthenticated_is_401(self):
+        self.assertEqual(APIClient().post("/api/alerts/anomaly-1/unack").status_code, 401)
+
+
 class AuditToggleCheckTests(MutationTestBase):
     def test_toggle_hides_check_and_recomputes_totals(self):
         before = self.client_auth.get("/api/projects/fusehealth/audit").json()

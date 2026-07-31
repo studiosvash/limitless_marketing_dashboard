@@ -112,7 +112,11 @@
         // Keyed off the value, not the toggle: a missing impression count stays a
         // dash even when the platform is marked connected in Settings.
         imprFmt: r.impressions != null ? this.fmt(r.impressions) : '—',
-        sessFmt: this.fmt(r.sessions), engFmt: Math.round(r.engagedRate * 100) + '%',
+        sessFmt: this.fmt(r.sessions),
+        // Same rule as imprFmt above: null is "undefined", not zero. A platform that drove
+        // no sessions has no engagement rate to report — `Math.round(null * 100)` is 0, so
+        // without this guard an unmeasured platform printed a confident "0%".
+        engFmt: r.engagedRate == null ? '—' : Math.round(r.engagedRate * 100) + '%',
         keyFmt: this.fmt(Math.round(r.keyEvents)), revFmt: this.money(r.revenue),
         badge: r.platform.slice(0, 1),
         badgeStyle: { width: '26px', height: '26px', borderRadius: '6px', background: socColors[r.platform] || '#64748b', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '13px', fontWeight: 700, flexShrink: 0 }
@@ -147,7 +151,11 @@
       off.referrers = refRows.map(r => ({
         domain: r.domain, rank: r.authorityScore,
         rankStyle: { fontWeight: 600, color: r.authorityScore >= 70 ? '#059669' : r.authorityScore >= 40 ? '#2563eb' : '#64748b' },
-        sessFmt: this.fmt(r.sessions), engFmt: (r.engagementRate || 0) + '%',
+        sessFmt: this.fmt(r.sessions),
+        // Most referring domains drive no measured sessions — they are listed because they
+        // LINK to us, not because GA4 saw traffic from them. `|| 0` turned every one of
+        // those into "0% engaged", a number nobody measured, sitting next to real ones.
+        engFmt: r.engagementRate == null ? '—' : r.engagementRate + '%',
         keyFmt: this.fmt(Math.round(r.keyEvents)), revFmt: this.money(r.revenue),
         href: 'https://' + r.domain
       }));

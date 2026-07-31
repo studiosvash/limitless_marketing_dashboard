@@ -187,6 +187,31 @@ def ack_alert(site_id: str, alert_id: str) -> None:
             logger.warning(f"ack_alert mirror failed: {e}")
 
 
+def unack_alert(site_id: str, alert_id: str) -> None:
+    """Undo an acknowledgement — the exact inverse of ack_alert(), and idempotent.
+
+    BOTH sides of an ack have to be cleared. build_alerts_response() reports an anomaly as
+    acknowledged when `Anomaly.is_acknowledged` is set OR the feed id is in `alertAcks`
+    (see the `a["is_acknowledged"] or feed_id in acked` line), so dropping the id from
+    `alertAcks` alone would leave the row still reading "Acknowledged" after the user
+    pressed Undo. Technical/system ids live only in `alertAcks` and need no mirror.
+
+    As with ack_alert, a mirror failure is logged rather than raised: the authoritative
+    record is `alertAcks`, which has already been rewritten by then."""
+    acked = get_state(site_id, "alertAcks", [])
+    if alert_id in acked:
+        set_state(site_id, "alertAcks", [a for a in acked if a != alert_id])
+    if alert_id.startswith("anomaly-"):
+        try:
+            pk = int(alert_id.removeprefix("anomaly-"))
+            with get_session() as session:
+                session.execute(
+                    update(Anomaly).where(Anomaly.id == pk).values(is_acknowledged=0)
+                )
+        except Exception as e:  # undo must never 500 on mirror failure
+            logger.warning(f"unack_alert mirror failed: {e}")
+
+
 def ack_alerts(site_id: str, alert_ids: list) -> dict:
     """Acknowledge many ids in one pass -> {"acknowledged": [...], "failed": [{id, detail}]}.
 

@@ -39,6 +39,7 @@ urlpatterns = [
     # counts so they cannot collide, but the specific-before-generic order documents intent.
     path("alerts/ack", views.AlertBatchAckView.as_view(), name="alert-ack-batch"),
     path("alerts/<str:alert_id>/ack", views.AlertAckView.as_view(), name="alert-ack"),
+    path("alerts/<str:alert_id>/unack", views.AlertUnackView.as_view(), name="alert-unack"),
     # Refresh / Sync
     # `sync/active` before `sync` is not strictly required (different segment counts), but it
     # documents the specific-before-generic intent, matching the alerts/ack pair above.

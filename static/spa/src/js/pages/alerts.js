@@ -30,6 +30,10 @@
           sevLabel: f.severity, sevStyle: this.sevChip(f.severity),
           acknowledged: f.acknowledged, showAck: !f.acknowledged && f.severity !== 'info',
           ack: () => this.ackAlert(f.id),
+          /* Undo sits on every acknowledged row, not only under the Acknowledged filter:
+             "Acknowledge all" is one click that dismisses the whole feed, and the user has to
+             be able to take a row back without hunting for where it went. */
+          undo: () => this.unackAlert(f.id),
           rowStyle: { display: 'flex', alignItems: 'center', gap: '14px', padding: '14px 20px', borderTop: '1px solid #f1f5f9', opacity: f.acknowledged ? 0.55 : 1 }
         }))
       };

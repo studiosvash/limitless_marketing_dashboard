@@ -193,6 +193,12 @@ POSTGRES_PORT = env("POSTGRES_PORT", "5432")
 # Kept in both branches — see the note above.
 ANALYTICS_DB_PATH = env("ANALYTICS_DB_PATH", str(BASE_DIR / "data" / "fusehealth.db"))
 
+# Confines every tempfile.mkdtemp() the suite makes to one directory and deletes it at the
+# end of the run. The analytics-DB fixture (.claude/skills.md §8) never removed its temp
+# directory, and 58 copies of it across 34 modules quietly accumulated 16.6 GB / 29 216
+# directories until the drive hit zero bytes. See config/test_runner.py.
+TEST_RUNNER = "config.test_runner.TempCleaningRunner"
+
 if POSTGRES_DB and not RUNNING_TESTS:
     DATABASES = {
         "default": {

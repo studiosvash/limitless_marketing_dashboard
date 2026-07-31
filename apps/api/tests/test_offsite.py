@@ -71,12 +71,23 @@ class OffsiteEndpointTests(APITestCase):
         # honest setup/empty fields, unaffected by seeded data
         self.assertEqual(body["channels"], [])
         self.assertEqual(body["referrers"], [])
-        self.assertEqual(body["social"], [])
+        # `social` is a fixed four-platform roster, not an empty list — see the fuller
+        # explanation in test_offsite_service.test_unbuilt_fields_report_setup_not_fake_data.
+        # The invariant that matters here: platform impressions are never invented.
+        self.assertEqual([r["platform"] for r in body["social"]],
+                         ["LinkedIn", "Reddit", "YouTube", "X / Twitter"])
+        for row in body["social"]:
+            self.assertIsNone(row["impressions"])
+            self.assertEqual(row["sessions"], 0)
         self.assertEqual(body["connectors"], {
             "linkedin": False, "reddit": False, "youtube": False,
             "x": False, "facebook": False, "instagram": False,
         })
-        self.assertEqual(body["syncMeta"], {"state": "setup"})
+        # syncMeta carries the real `ga4` SyncLog row; nothing has synced here, so the banner
+        # gets None + "never" rather than an invented date (api-reference.md §offsite).
+        self.assertEqual(body["syncMeta"]["state"], "ready")
+        self.assertIsNone(body["syncMeta"]["lastUpdated"])
+        self.assertEqual(body["syncMeta"]["lastStatus"], "never")
 
     def test_range_7d_shifts_window_and_excludes_older_row(self):
         # anchor = 2026-07-10. 7d window: curr = [2026-07-03, 2026-07-09].

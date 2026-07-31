@@ -5,7 +5,7 @@ from pathlib import Path
 from django.test import TestCase, override_settings
 
 from pipeline.db.engine import get_engine
-from pipeline.db.schema import init_db, KeywordRanking
+from pipeline.db.schema import init_db, KeywordRanking, SavedKeyword
 from pipeline.utils.db_connection import get_session
 import pipeline.utils.db_connection as db_connection
 
@@ -101,6 +101,12 @@ class BuildKeywordsResponseTests(TestCase):
 
         with get_session() as session:
             session.add_all([
+                # build_keywords_response runs get_keyword_intelligence_raw(tracked_only=True),
+                # so every figure is bounded by the site's saved_keywords list. With none in
+                # the DB, load_tracked_keywords() falls back to the repo's legacy keywords.txt
+                # and none of the rows below match — the response comes back empty.
+                SavedKeyword(site_id="sc-domain:fusehealth.com", keyword="iv therapy near me"),
+                SavedKeyword(site_id="sc-domain:fusehealth.com", keyword="mobile iv drip"),
                 KeywordRanking(date=date(2026, 6, 30), site_id="sc-domain:fusehealth.com",
                                keyword="iv therapy near me", position=6, clicks=12,
                                impressions=200, search_volume=2400, keyword_difficulty=24,
@@ -192,7 +198,14 @@ class BuildKeywordsResponseBeyondTopClicksCapTests(TestCase):
             target = KeywordRanking(date=self.curr_date, site_id=self.site_id,
                                      keyword="low click high impression target", position=15,
                                      clicks=0, impressions=500)
-            session.add_all(fillers + [target])
+            # The whole set has to be TRACKED for build_keywords_response to see it
+            # (tracked_only=True bounds it by saved_keywords) — and tracking all 201 is what
+            # makes this a real >200-keyword site, which is the condition under test.
+            tracked = [SavedKeyword(site_id=self.site_id, keyword=f"filler keyword {i}")
+                       for i in range(200)]
+            tracked.append(SavedKeyword(site_id=self.site_id,
+                                        keyword="low click high impression target"))
+            session.add_all(fillers + [target] + tracked)
 
     def test_striking_keyword_outside_top_200_by_clicks_still_has_a_keywords_entry(self):
         from apps.dashboard.services.keywords_service import build_keywords_response

@@ -1214,6 +1214,30 @@ class AlertAckView(APIView):
 
 
 @method_decorator(login_not_required, name="dispatch")
+class AlertUnackView(APIView):
+    """POST /api/alerts/<alert_id>/unack -> {ok}. Undo for the row's "✓ Acknowledged" state.
+
+    Acknowledging is not a destructive action, but it was a one-way one: a misclick (or an
+    "Acknowledge all") hid a real alert from the badge with no way back short of editing the
+    stored state. This reverses exactly what AlertAckView wrote, and resolves the site set
+    the same way — with ?project= when the SPA scopes it, otherwise every active project —
+    so an ack recorded across several projects is fully undone rather than half undone.
+    Idempotent: un-acking something that was never acked is a no-op that still returns ok."""
+
+    def post(self, request, alert_id):
+        from apps.dashboard.services.alerts_service import unack_alert
+
+        slug = request.query_params.get("project") or request.data.get("project")
+        if slug:
+            sites = [resolve_project_or_404(slug).site_url]
+        else:
+            sites = [s.site_url for s in list_sites(active_only=True)]
+        for site_id in sites:
+            unack_alert(site_id, alert_id)
+        return Response({"ok": True})
+
+
+@method_decorator(login_not_required, name="dispatch")
 class AlertBatchAckView(APIView):
     """POST /api/alerts/ack {ids: [...], project?: <slug>} -> {ok, acknowledged: [...],
     failed: [{id, detail}]}.

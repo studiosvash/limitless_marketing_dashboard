@@ -212,19 +212,22 @@
                   <div style="padding: 0 20px 18px 42px; display: flex; flex-direction: column; gap: 12px;">
                     <div style="border-radius: 8px; background: #f8fafc; border: 1px solid #e2e8f0; padding: 12px 14px; font-size: 13px; color: #475569;"><b style="color: #0f172a;">How to fix:</b> {{ i.howToFix }}</div>
                     <sc-if value="{{ i.hasPages }}" hint-placeholder-val="{{ true }}">
-                      <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
-                        <thead><tr style="text-align: left; color: #94a3b8; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;"><th style="font-weight: 500; padding: 6px 0;">Affected page</th><th style="font-weight: 500; padding: 6px 12px; text-align: center;">Page score</th><th style="font-weight: 500; padding: 6px 0; text-align: right;">Status</th></tr></thead>
-                        <tbody>
-                          <sc-for list="{{ i.pages }}" as="pg" hint-placeholder-count="3">
-                            <tr style="border-top: 1px solid #f1f5f9;">
-                              <td style="padding: 7px 0; font-family: monospace; font-size: 12px; color: #475569;">{{ pg.url }}</td>
-                              <td style="padding: 7px 12px; text-align: center;"><span style="{{ pg.scoreStyle }}">{{ pg.score }}</span></td>
-                              <td style="padding: 7px 0; text-align: right; color: #64748b; font-size: 12px;">{{ pg.status }}</td>
-                            </tr>
-                          </sc-for>
-                        </tbody>
-                      </table>
-                      <sc-if value="{{ i.more }}" hint-placeholder-val="{{ false }}"><div style="font-size: 12px; color: #94a3b8;">{{ i.moreLabel }}</div></sc-if>
+                      <div style="{{ i.pagesWrap }}">
+                        <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
+                          <thead><tr style="text-align: left; color: #94a3b8; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;"><th style="font-weight: 500; padding: 6px 0;">Affected page</th><th style="font-weight: 500; padding: 6px 12px; text-align: center;">Page score</th><th style="font-weight: 500; padding: 6px 0; text-align: right;">Status</th></tr></thead>
+                          <tbody>
+                            <sc-for list="{{ i.pages }}" as="pg" hint-placeholder-count="3">
+                              <tr style="border-top: 1px solid #f1f5f9;">
+                                <td style="padding: 7px 0; font-family: monospace; font-size: 12px; color: #475569;">{{ pg.url }}</td>
+                                <td style="padding: 7px 12px; text-align: center;"><span style="{{ pg.scoreStyle }}">{{ pg.score }}</span></td>
+                                <td style="padding: 7px 0; text-align: right; color: #64748b; font-size: 12px;">{{ pg.status }}</td>
+                              </tr>
+                            </sc-for>
+                          </tbody>
+                        </table>
+                      </div>
+                      <sc-if value="{{ i.more }}" hint-placeholder-val="{{ false }}"><div onClick="{{ i.toggleAll }}" style="font-size: 12px; font-weight: 600; color: #4f46e5; cursor: pointer;" style-hover="opacity:0.7">{{ i.moreLabel }}</div></sc-if>
+                      <sc-if value="{{ i.capped }}" hint-placeholder-val="{{ false }}"><div style="font-size: 12px; color: #94a3b8;">{{ i.cappedLabel }}</div></sc-if>
                     </sc-if>
                     <div style="display: flex; gap: 14px;">
                       <span onClick="{{ i.exportPages }}" style="font-size: 12px; font-weight: 600; color: #4f46e5; cursor: pointer;" style-hover="opacity:0.7">Export affected pages</span>

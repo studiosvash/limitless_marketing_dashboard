@@ -78,9 +78,9 @@ class QueryConnectorsRawEmptyTests(TestCase):
 
 
 class QueryTeamRawTests(TestCase):
-    """Real seeded users matching apps/accounts/management/commands/seed_users.py's shape
-    (founder/seo/ads, no email set, roles from apps.accounts.models.Role) -- not a fabricated
-    team list."""
+    """A deployment seeded by the OLD seed_users.py — legacy Role values (founder/seo/ads),
+    no email set. `seed_users` now writes Owner/Admin/Admin, but rows written before that fix
+    are still in every existing database, so this is the state query_team_raw has to repair."""
 
     def setUp(self):
         self.founder = User.objects.create_user(username="founder")
@@ -95,17 +95,55 @@ class QueryTeamRawTests(TestCase):
         self.ads = User.objects.create_user(username="ads", email="ads@limitlesshold.com")
         UserProfile.objects.filter(user=self.ads).update(role=Role.ADS)
 
-    def test_reflects_real_seeded_users_with_real_roles(self):
-        from apps.dashboard.services.settings_service import query_team_raw
+    def test_legacy_seeded_roles_are_healed_into_the_live_vocabulary(self):
+        """Every row comes back as Owner/Admin/Analyst — never a retired founder/seo/ads
+        value, which the Settings team table would otherwise print verbatim as a role the UI
+        has no concept of.
+
+        The founder (first user by id) becomes the single Owner; the other legacy values
+        become Admin, which is the access they already had — check_owner_admin refuses only
+        the literal "Analyst", so a row stored as "seo" was never actually restricted. This
+        relabels; it does not re-permission."""
+        from apps.dashboard.services.settings_service import query_team_raw, LIVE_ROLES
         rows = query_team_raw()
         by_name = {r["name"]: r for r in rows}
 
         self.assertEqual(len(rows), 3)
-        self.assertEqual(by_name["founder"]["role"], Role.FOUNDER)
-        self.assertEqual(by_name["seo"]["role"], Role.SEO)
-        self.assertEqual(by_name["ads"]["role"], Role.ADS)
+        self.assertEqual(by_name["founder"]["role"], "Owner")
+        self.assertEqual(by_name["seo"]["role"], "Admin")
+        self.assertEqual(by_name["ads"]["role"], "Admin")
         for r in rows:
+            self.assertIn(r["role"], LIVE_ROLES)
             self.assertEqual(r["status"], "active")
+
+        # Persisted, not just reported — a later read (or any check_owner_admin call) has to
+        # see the same answer.
+        for user in (self.founder, self.seo, self.ads):
+            user.profile.refresh_from_db()
+        self.assertEqual(self.founder.profile.role, "Owner")
+        self.assertEqual(self.seo.profile.role, "Admin")
+        self.assertEqual(self.ads.profile.role, "Admin")
+
+    def test_analyst_is_never_promoted_by_the_self_heal(self):
+        """Analyst is a live value, so the heal must leave it alone. Sweeping it up with the
+        legacy values would hand a restricted account Admin access on the next page load."""
+        from apps.dashboard.services.settings_service import query_team_raw
+        UserProfile.objects.filter(user=self.seo).update(role="Analyst")
+
+        by_name = {r["name"]: r for r in query_team_raw()}
+        self.assertEqual(by_name["seo"]["role"], "Analyst")
+
+    def test_a_second_owner_and_any_viewer_are_normalised_to_admin(self):
+        """Only one Owner may exist. A second stored Owner, and the retired "Viewer" value,
+        both become Admin — otherwise two accounts would pass check_owner_only()."""
+        from apps.dashboard.services.settings_service import query_team_raw
+        UserProfile.objects.filter(user=self.seo).update(role="Owner")
+        UserProfile.objects.filter(user=self.ads).update(role="Viewer")
+
+        by_name = {r["name"]: r for r in query_team_raw()}
+        self.assertEqual(by_name["founder"]["role"], "Owner")
+        self.assertEqual(by_name["seo"]["role"], "Admin")
+        self.assertEqual(by_name["ads"]["role"], "Admin")
 
     def test_email_honestly_blank_when_unset(self):
         from apps.dashboard.services.settings_service import query_team_raw
@@ -297,15 +335,46 @@ class ApplySettingsUpdatePerKeyMergeTests(TestCase):
         self.assertIs(body["notifications"]["weekly_digest"], True)
 
 
-class ApplySettingsUpdateTeamSecurityRejectedTests(TestCase):
+class ApplySettingsUpdateTeamTests(TestCase):
+    """`team` used to be refused with {"error": "not_yet_available"}; it became a real
+    mutation in commit d699575 and is documented in .claude/api-reference.md §PUT /settings:
+    "Sets UserProfile.role for each {id, role} where role ∈ Admin|Analyst; Owner rows are
+    excluded". These tests pin that contract, including what it deliberately refuses to do."""
+
     def setUp(self):
         _new_analytics_db(self)
+        self.owner = User.objects.create_user(username="owner")
+        UserProfile.objects.filter(user=self.owner).update(role="Owner")
+        self.member = User.objects.create_user(username="member")
+        UserProfile.objects.filter(user=self.member).update(role="Analyst")
 
-    def test_team_update_rejected_and_persists_nothing(self):
+    def test_role_change_is_applied(self):
         from apps.dashboard.services.settings_service import apply_settings_update
-        result = apply_settings_update(SITE_ID, {"team": [{"id": 1, "role": "Owner"}]})
-        self.assertEqual(result, {"error": "not_yet_available"})
-        self.assertFalse(ProjectSettings.objects.filter(site_url=SITE_ID).exists())
+        result = apply_settings_update(SITE_ID, {"team": [{"id": self.member.id, "role": "Admin"}]})
+        self.assertEqual(result, {"ok": True})
+        self.member.profile.refresh_from_db()
+        self.assertEqual(self.member.profile.role, "Admin")
+
+    def test_owner_row_is_never_demoted(self):
+        """The Owner is excluded at the query level, so even an explicit demotion is a no-op.
+        Without this the last Owner could be downgraded and nobody could restore anyone."""
+        from apps.dashboard.services.settings_service import apply_settings_update
+        apply_settings_update(SITE_ID, {"team": [{"id": self.owner.id, "role": "Analyst"}]})
+        self.owner.profile.refresh_from_db()
+        self.assertEqual(self.owner.profile.role, "Owner")
+
+    def test_promotion_to_owner_is_ignored(self):
+        """Only Admin|Analyst are accepted values — "Owner" is not assignable through this
+        path, so a client sending it changes nothing rather than minting a second Owner."""
+        from apps.dashboard.services.settings_service import apply_settings_update
+        apply_settings_update(SITE_ID, {"team": [{"id": self.member.id, "role": "Owner"}]})
+        self.member.profile.refresh_from_db()
+        self.assertEqual(self.member.profile.role, "Analyst")
+
+
+class ApplySettingsUpdateSecurityRejectedTests(TestCase):
+    def setUp(self):
+        _new_analytics_db(self)
 
     def test_security_update_rejected_and_persists_nothing(self):
         from apps.dashboard.services.settings_service import apply_settings_update

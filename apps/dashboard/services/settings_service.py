@@ -293,6 +293,12 @@ def query_connectors_raw(site_id: str) -> list[dict]:
     return out
 
 
+# The only role values this app understands. `check_owner_admin` blocks exactly one of them
+# ("Analyst"), the Settings team table renders them verbatim, and nothing else is defined —
+# see .claude/skills.md §7.
+LIVE_ROLES = ("Owner", "Admin", "Analyst")
+
+
 def query_team_raw() -> list[dict]:
     """Real reshape of the app's actual Django users -- enforces exactly 1 Owner (the founder/first user).
     Normalizes extra owners/viewers to Admin and self-heals UserProfile rows. email is blank if unseeded,
@@ -305,9 +311,20 @@ def query_team_raw() -> list[dict]:
         if idx == 0 or (not owner_seen and p.user.username.lower() in ("founder", "owner")):
             role = "Owner"
             owner_seen = True
-        elif role in ("Owner", "Viewer"):
+        elif role == "Owner" or role not in LIVE_ROLES:
+            # Three cases collapse to Admin:
+            #   * a SECOND stored Owner — only one may exist, or two accounts pass
+            #     check_owner_only() and the "only the Owner can…" guard means nothing;
+            #   * the retired "Viewer" value;
+            #   * anything outside LIVE_ROLES, which in practice means the retired
+            #     founder/seo/ads vocabulary that `seed_users` wrote until it was corrected.
+            #     Those rows already had Admin-level access (check_owner_admin only refuses
+            #     the literal "Analyst"), so this relabels them to what they could always do
+            #     rather than granting or revoking anything. Admin, not Analyst, for exactly
+            #     that reason — self-healing must never silently change someone's permissions.
             role = "Admin"
-            
+
+
         if p.role != role:
             p.role = role
             p.save(update_fields=["role"])

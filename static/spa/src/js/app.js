@@ -3,7 +3,12 @@
     cmpFilter: 'all', cmpSearch: '', cmpOpenId: null, cmpSort: { key: 'spend', dir: -1 },
     editBudgetId: null, editBudgetVal: '', termFilter: 'all', termCampaign: null,
     trmSearch: '', trmMatch: 'all', trmSort: { key: 'cost', dir: -1 }, trmSel: [], trmPage: 0, trmPer: 10, negMenuFor: null,
-    projectId: 'fusehealth', projects: [],
+    /* null until GET /api/projects answers — there is nothing to guess from before that.
+       This used to default to the literal slug 'fusehealth', which is wrong two different
+       ways: on a deployment whose database has no such project every boot-time request
+       (page data, sync log, sync resume) fired at a 404, and on one that DOES have it the
+       app silently opened a project the user never chose. See boot(). */
+    projectId: null, projects: [],
     addSiteOpen: false, addSiteDomain: '', addSiteName: '', addSiteError: null, addSiteBusy: false,
     addSiteStep: 1, addSiteGsc: '', addSiteGa4: '', addSiteDataforseo: '',
     addSiteGscOptions: [], addSiteChecking: false, addSiteCheckResult: null,
@@ -37,6 +42,8 @@
     offSort: { key: 'sessions', dir: -1 },
     pgSort: { key: 'clicks', dir: -1 },
     auSub: 'overview', auSev: 'all', auCat: 'all', auSearch: '', auOpen: null, auView: 'table', auPgSearch: '', auPgSort: { key: 'score', dir: 1 },
+    /* id of the audit check whose affected-page list is fully expanded (null = preview only) */
+    auAllPages: null,
     auCmpA: null, auCmpB: null, auCmpFilter: 'all', auProg: { score: true, errors: true, warnings: true, notices: false, pages: false },
     aiSub: 'visibility', aiPlat: { chatgpt: true, perplexity: true }, aiOpen: null,
     aiWiz: 1, aiWizBrand: null, aiWizAliases: null, aiWizComps: null, aiWizCompInput: '', aiWizSel: null, aiWizCustom: '', aiWizBusy: false,
@@ -199,24 +206,43 @@
     let kwLists = [];
     try { kwLists = JSON.parse(localStorage.getItem('fh_keyword_lists') || '[]') || []; } catch (e) {}
     if (!kwLists.length) kwLists = [{ id: 'l1', name: 'Priority targets', keywords: [] }];
-    /* Served-copy patch: restore the last selected project across page reloads (the upstream
-       design file resets to the hardcoded default project on every reload). Falls back to
-       the first real project if the remembered one no longer exists. */
-    let pid = this.state.projectId;
-    try { pid = localStorage.getItem('fh_selected_project') || pid; } catch (e) {}
+    /* Which project to open. A remembered choice is a real prior decision by this user, so
+       it is opened straight away and its data loads in parallel with the project list. With
+       NO remembered choice there is nothing to go on, so the app waits for /api/projects
+       instead of guessing: the old code fell back to the hardcoded slug 'fusehealth', which
+       either 404'd every boot request on a deployment without that project, or silently
+       opened a project the user never picked on one that had it. `loading` is already true
+       in the initial state, so the wait shows the skeleton rather than an empty screen. */
+    let pid = null;
+    try { pid = localStorage.getItem('fh_selected_project') || null; } catch (e) {}
     this.setState({ tab, range, kwLists, projectId: pid, seoOpen: this.state.seoOpen || this.SEOTABS.includes(tab), adsOpen: this.state.adsOpen || this.ADSTABS.includes(tab) });
     this._hist = [Object.assign(this.navSnapshot(), { tab, projectId: pid })];
     this._histIdx = 0;
+
+    const openProject = (id) => {
+      this.fetchTab(tab, id, range, false);
+      if (tab !== 'alerts') this.fetchTab('alerts', id, range, false);
+      this.loadSyncLog(id);
+      this.resumeActiveSync(id);
+    };
+
     api.get('/api/projects').then(ps => {
       if (!this._alive) return;
       this.setState({ projects: ps });
-      if (ps.length && !ps.some(p => p.id === pid)) {
-        this.setState({ projectId: ps[0].id });
-        this.fetchTab(tab, ps[0].id, range, false);
-        if (tab !== 'alerts') this.fetchTab('alerts', ps[0].id, range, false);
-        this.loadSyncLog(ps[0].id);
-        this.resumeActiveSync(ps[0].id);
-      }
+      /* No projects at all is a real answer, not a pending one — stop the skeleton rather
+         than spinning forever on a workspace whose first action is "add a site". */
+      if (!ps.length) { this.setState({ loading: false }); return; }
+      const resolved = ps.some(p => p.id === pid) ? pid : ps[0].id;
+      /* Persisted here, not only in setProject(): until now the remembered-project key was
+         written ONLY when the user used the topbar switcher, so a single-project workspace
+         never remembered anything and re-ran this resolution on every reload. */
+      try { localStorage.setItem('fh_selected_project', resolved); } catch (e) {}
+      if (resolved === pid) return;                    // already loading the right one
+      /* The remembered project is gone (deleted, or this browser last used a different
+         deployment). Clear `error` as well as switching: its 404 may already have painted
+         the error state over a view that is about to receive real data. */
+      this.setState({ projectId: resolved, error: null });
+      openProject(resolved);
     }).catch(err => {
       /* The site switcher, the "add site" duplicate check and every project-scoped label
          are built from this list. If it never arrives the user is stranded on whichever
@@ -225,10 +251,7 @@
       if (!this._alive) return;
       this.notify(this.errText(err, 'Could not load your site list'));
     });
-    this.fetchTab(tab, pid, range, false);
-    if (tab !== 'alerts') this.fetchTab('alerts', pid, range, false);
-    this.loadSyncLog(pid);
-    if (pid) this.resumeActiveSync(pid);
+    if (pid) openProject(pid);
     /* Deliberately silent: this is a boot-time prefetch of a static autocomplete file for the
        Position Tracking location box, which positioning.js already falls back to a short
        built-in country list for when `allUsCities` is absent. Nothing the user asked for has
@@ -283,7 +306,17 @@
           return next;
         });
       })
-      .catch(e => { if (this._alive) this.setState({ loading: false, error: (e && e.message) || 'Request failed' }); });
+      /* Guarded on BOTH the project and the tab this response belongs to. A rejection for a
+         view the user has since moved off must not paint "Couldn't load this view" over the
+         one they are now looking at — boot() can have a stale remembered project's 404 land
+         after the correct project's data has already arrived, and because renderVals() bails
+         out early on `s.error`, that leaves a fully-loaded page showing an error box. */
+      .catch(e => {
+        if (!this._alive || this.state.projectId !== pid) return;
+        this.setState(s => (s.tab === tab
+          ? { loading: false, error: (e && e.message) || 'Request failed' }
+          : {}));
+      });
   }
 
   /* Loads the per-connector SyncLog rows that every "Data source" badge is built from.
@@ -359,7 +392,7 @@
     this.setState({
       tab: snap.tab, projectId: snap.projectId, research: snap.research,
       kwSeg: snap.kwSeg, blFilter: snap.blFilter, alFilter: snap.alFilter,
-      auSub: snap.auSub || 'overview', auOpen: null,
+      auSub: snap.auSub || 'overview', auOpen: null, auAllPages: null,
       aiSub: snap.aiSub || 'visibility', aiOpen: null,
       seoOpen: this.state.seoOpen || this.SEOTABS.includes(snap.tab), adsOpen: this.state.adsOpen || this.ADSTABS.includes(snap.tab), error: null,
       selectedKws: [], sendOpen: false, exportOpen: false, sendSub: null, showLists: false
@@ -1249,6 +1282,33 @@
     });
   }
 
+  /* unackAlert(id) — the row's Undo button. The exact inverse of ackAlert(): same single-row
+   * path, same cache patch with acknowledged flipped back to false, so the row returns to the
+   * unacknowledged list and the sidebar/bell badges (which derive from that one flag) count it
+   * again. Deliberately sends no `project`, matching ackAlert: the ack was recorded for every
+   * active project, so the undo has to clear the same set or it would only half-undo.
+   * The local flag is flipped only after the server confirms — an alert that still reads
+   * "acknowledged" on the next fetch must not look undone in the meantime. */
+  unackAlert(id) {
+    const pid = this.state.projectId;
+    return window.FuseAPI.post('/api/alerts/' + id + '/unack', {}).then(() => {
+      if (!this._alive) return { ok: true };
+      this.setState(s => {
+        const k = this.key('alerts', pid, s.range);
+        const cur = s.cache[k];
+        if (!cur) return {};
+        const cache = Object.assign({}, s.cache);
+        cache[k] = { feed: cur.feed.map(f => f.id === id ? Object.assign({}, f, { acknowledged: false }) : f) };
+        return { cache };
+      });
+      this.notify('Acknowledgement undone');
+      return { ok: true };
+    }).catch(err => {
+      if (this._alive) this.notify(this.errText(err, 'Could not undo this acknowledgement'));
+      return { ok: false, err: err };
+    });
+  }
+
   /* ---------- settings ---------- */
   saveCreds() {
     const pid = this.state.projectId;
@@ -1692,7 +1752,7 @@
     const pid = this.state.projectId;
     window.FuseAPI.post('/api/projects/' + pid + '/audit/toggle-check', { checkId }).then(() => {
       if (!this._alive) return;
-      this.setState({ auOpen: null });
+      this.setState({ auOpen: null, auAllPages: null });
       this.fetchTab('pages', pid, this.state.range, true);
     }).catch(err => {
       if (!this._alive) return;
@@ -2057,7 +2117,12 @@
   renderVals() {
     const s = this.state;
     const tab = s.tab;
-    const project = (s.projects.find(p => p.id === s.projectId)) || { domain: 'fusehealth.com', name: 'FuseHealth' };
+    /* Empty, not a stand-in domain. This ran before /api/projects answers on every boot, so
+       the hardcoded {domain:'fusehealth.com', name:'FuseHealth'} it used to fall back to
+       labelled the topbar, the page title and every CSV export filename with a site the
+       viewer may have no connection to. A blank label for the fraction of a second the list
+       is in flight is honest; a confident wrong one is not. */
+    const project = (s.projects.find(p => p.id === s.projectId)) || { domain: '', name: '' };
 
     /* nav */
     const navBase = { display: 'flex', alignItems: 'center', gap: '12px', padding: '8px 12px', borderRadius: '8px', color: '#475569', marginBottom: '2px', cursor: 'pointer' };

@@ -14,13 +14,25 @@ import os
 from django.contrib.auth.models import User
 from django.core.management.base import BaseCommand
 
-from apps.accounts.models import Role, UserProfile
+from apps.accounts.models import UserProfile
 
 # (username, role, is_superuser, env var for password)
+#
+# Roles are the LIVE vocabulary — Owner / Admin / Analyst — not apps.accounts.models.Role
+# (founder/seo/ads), which is the retired system nothing enforces any more
+# (.claude/skills.md §7). Seeding the retired values wrote strings no live check understands:
+# `check_owner_admin` only blocks the exact string "Analyst", so a user stored as "seo" or
+# "ads" silently had full Admin access anyway, while the Settings team table printed the raw
+# value and showed a role the UI has no concept of.
+#
+# `seo` and `ads` map to **Admin**, not Analyst, deliberately: that is the access they already
+# have today, and this change is meant to make the stored label honest, not to quietly revoke
+# anyone's permissions. Demoting either account to Analyst is a real product decision — do it
+# from Settings → Team, where it is visible and reversible.
 USERS = [
-    ("founder", Role.FOUNDER, True, "FUSEHEALTH_FOUNDER_PASSWORD"),
-    ("seo", Role.SEO, False, "FUSEHEALTH_SEO_PASSWORD"),
-    ("ads", Role.ADS, False, "FUSEHEALTH_ADS_PASSWORD"),
+    ("founder", "Owner", True, "FUSEHEALTH_FOUNDER_PASSWORD"),
+    ("seo", "Admin", False, "FUSEHEALTH_SEO_PASSWORD"),
+    ("ads", "Admin", False, "FUSEHEALTH_ADS_PASSWORD"),
 ]
 
 
