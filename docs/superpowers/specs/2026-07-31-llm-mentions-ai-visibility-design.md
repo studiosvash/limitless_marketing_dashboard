@@ -63,9 +63,13 @@ Two endpoints, at most two calls per project per week.
 | 1 | `llm_mentions/cross_aggregation_metrics` | per-subject mentions + `ai_search_volume`, platform split, `total.sources_domain` (top domains) | always |
 | 2 | `llm_mentions/top_pages` | your most-cited URLs | only if call 1 shows your domain mentions > 0 |
 
-**Deliberately NOT called** — both are redundant against call 1, verified in the live response:
+**Not called alongside call 1** — both would be redundant, verified in the live response:
 
-- `aggregation_metrics` — call 1's `items[]` already contains your own target's metrics.
+- `aggregation_metrics` — call 1's `items[]` already contains your own target's metrics, so it is
+  never called *in addition to* call 1. It **is** the fallback when call 1 cannot run at all:
+  cross-aggregation requires ≥2 targets, and `AITarget.competitors` defaults to `[]`, so every
+  newly added project would otherwise get no rows, forever. That makes it a first-class path,
+  not an edge case. Either way it stays **one** metrics call per project per week.
 - `top_domains` — call 1's `total.sources_domain` already returns the top domains (5 entries).
   If more than 5 rows are wanted later, add the dedicated endpoint then.
 

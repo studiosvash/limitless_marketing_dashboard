@@ -435,8 +435,11 @@ At most two calls per project per week. Three things keep it there:
      `aggregation_key` accepts up to 10 entities (domain and brand-name targets together).
   3. `top_pages` is skipped entirely unless the project's own domain was mentioned at all.
 
-`aggregation_metrics` and `top_domains` are deliberately NOT called: cross_aggregation already
-returns this project's own metrics in `items[]` and the top domains in `total.sources_domain`.
+`top_domains` is never called: cross_aggregation already returns the top domains in
+`total.sources_domain`. `aggregation_metrics` is never called *alongside* cross_aggregation
+either -- that response already carries this project's own metrics in `items[]` -- but it IS
+the fallback when cross_aggregation cannot run: it needs at least 2 targets, and a project with
+no competitors would otherwise get no rows at all. Either way: one metrics call per week.
 """
 import json
 import logging
