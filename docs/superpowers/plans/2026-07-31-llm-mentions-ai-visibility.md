@@ -22,7 +22,7 @@
 - **Services never raise.** Catch, log with `exc_info=True`, return a safe empty shape of the right type.
 - **Do not add a frontend build step, CSS framework, or component library.** The SPA uses inline styles and text inclusion deliberately.
 - `week_start` is always `d - timedelta(days=d.weekday())` (Monday of the ISO week, UTC). This is the dedupe key — one definition, used everywhere.
-- Platform values are exactly `google` (displayed "AI Overviews") and `chat_gpt` (displayed "ChatGPT"). No others exist in this API.
+- Real platform values are exactly `google` (displayed "AI Overviews") and `chat_gpt` (displayed "ChatGPT") — the API offers no others. One sentinel is also stored: `all`, used only for `subject_type="discovered"` rows, because `total.sources_domain` carries no platform breakdown and splitting it by a ratio would be invented data. `all` never appears in `MENTION_PLATFORMS` and never collides with a real platform row.
 - Run tests with `python manage.py test <label>`.
 
 ---
