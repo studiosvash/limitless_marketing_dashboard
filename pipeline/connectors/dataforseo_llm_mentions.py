@@ -122,22 +122,14 @@ class DataForSEOLLMMentionsConnector(BaseConnector):
                            exc_info=True)
             return False
 
-    def _build_aggregation_entities(
-        self, site_url: str, brand: str, aliases: list[str], competitors: list[str],
-    ) -> list[str]:
-        """Up to MAX_ENTITIES_PER_KEY targets for one aggregation_key: this project's own
-        domain and brand names first, then up to MAX_COMPETITORS competitor domains."""
-        own = [canonical_domain(site_url), brand, *aliases]
-        others = [canonical_domain(c) for c in competitors[:MAX_COMPETITORS]]
-
-        seen: set[str] = set()
-        entities: list[str] = []
-        for entity in own + others:
-            entity = (entity or "").strip()
-            if entity and entity not in seen:
-                seen.add(entity)
-                entities.append(entity)
-        return entities[:MAX_ENTITIES_PER_KEY]
+    @staticmethod
+    def _entities(domain: str, names: list[str]) -> list[dict]:
+        ents: list[dict] = [{"domain": domain}]
+        for n in names:
+            n = (n or "").strip()
+            if n and len(ents) < MAX_ENTITIES_PER_KEY:
+                ents.append({"keyword": n, "match_type": "word_match"})
+        return ents
 
     # ── HTTP (implemented in Task 3) ────────────────────────────────────────────────────
     def _call_cross_aggregation(self, payload: list[dict]) -> dict:
@@ -167,15 +159,23 @@ class DataForSEOLLMMentionsConnector(BaseConnector):
             return []
 
         self._run_cost = 0.0
+        own_domain = canonical_domain(site_url)
+        location = self._site_location(site_id)
+        comps = [canonical_domain(c) for c in competitors if canonical_domain(c)][:MAX_COMPETITORS]
 
-        entities = self._build_aggregation_entities(site_url, brand, aliases, competitors)
-        payload = [{
-            "aggregation_key": entities,
-            "location_name": self._site_location(site_id),
-            "language_name": "English",
-        }]
-        self._call_cross_aggregation(payload)
+        targets = [{"aggregation_key": own_domain,
+                    "target": self._entities(own_domain, [brand] + aliases)}]
+        for c in comps:
+            targets.append({"aggregation_key": c,
+                            "target": self._entities(c, [c.split(".")[0]])})
+
+        if len(targets) >= 2:
+            self._call_cross_aggregation([{
+                "targets": targets,
+                "location_name": location,
+                "language_code": "en",
+            }])
 
         # Task 3 fills this in: parse the cross_aggregation response, conditionally call
-        # _call_top_pages when this project's own domain was mentioned, and normalize records.
+        # _call_top_pages when this project's own domain was mentioned, and normalise records.
         return []
