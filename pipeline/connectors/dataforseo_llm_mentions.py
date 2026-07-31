@@ -7,6 +7,7 @@ when people ask AI instead of Google, do we get mentioned — and who gets menti
 Endpoints (Live, instant — no task_post/task_get polling):
   POST /v3/ai_optimization/llm_mentions/cross_aggregation_metrics
   POST /v3/ai_optimization/llm_mentions/top_pages
+  POST /v3/ai_optimization/llm_mentions/aggregation_metrics
 
 Writes to: llm_mention_metrics, llm_cited_pages (one weekly snapshot per project).
 
@@ -22,8 +23,11 @@ At most two calls per project per week. Three things keep it there:
      up to MAX_ENTITIES_PER_KEY domain and brand-name entities.
   3. `top_pages` is skipped entirely unless the project's own domain was mentioned at all.
 
-`aggregation_metrics` and `top_domains` are deliberately NOT called: cross_aggregation already
-returns this project's own metrics in `items[]` and the top domains in `total.sources_domain`.
+`top_domains` is never called: cross_aggregation already returns the top domains in
+`total.sources_domain`. `aggregation_metrics` is never called *alongside* cross_aggregation
+either -- that response already carries this project's own metrics in `items[]` -- but it IS
+the fallback when cross_aggregation cannot run: it needs at least 2 targets, and a project with
+no competitors would otherwise get no rows at all. Either way: one metrics call per week.
 """
 import json
 import logging
