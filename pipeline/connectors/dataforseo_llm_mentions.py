@@ -136,12 +136,144 @@ class DataForSEOLLMMentionsConnector(BaseConnector):
                 ents.append({"keyword": n, "match_type": "word_match"})
         return ents
 
-    # ── HTTP (implemented in Task 3) ────────────────────────────────────────────────────
-    def _call_cross_aggregation(self, payload: list[dict]) -> dict:
-        raise NotImplementedError
+    # ── HTTP ────────────────────────────────────────────────────────────────────────────
+    @staticmethod
+    def _unwrap(data: dict) -> dict:
+        """DataForSEO envelope -> the single result object holding `items`.
 
+        Same shape every DataForSEO connector here assumes: tasks[0].result[0].
+        """
+        tasks = (data or {}).get("tasks") or []
+        if not tasks:
+            return {}
+        task = tasks[0]
+        if task.get("status_code") != 20000:
+            logger.warning(
+                "[dataforseo_llm_mentions] Non-success status: %s — %s",
+                task.get("status_code"), task.get("status_message"),
+            )
+            return {}
+        result = task.get("result") or []
+        return result[0] if result else {}
+
+    @staticmethod
+    def _group_value(group: list, key: str) -> tuple[int, int]:
+        """(mentions, ai_search_volume) for one key inside a group_element list.
+
+        A group_element carries NO `mentions` key when the value is zero, so both reads are
+        `or 0` rather than a plain `.get(...)` with a default.
+        """
+        for el in group or []:
+            if el.get("key") == key:
+                return int(el.get("mentions") or 0), int(el.get("ai_search_volume") or 0)
+        return 0, 0
+
+    @with_retry(max_retries=3, base_delay=5.0)
+    def _call_cross_aggregation(self, payload: list[dict]) -> dict:
+        resp = requests.post(CROSS_AGG_ENDPOINT, auth=self.auth, json=payload, timeout=90)
+        resp.raise_for_status()
+        data = resp.json()
+        self._run_cost += extract_cost(data)
+        return data
+
+    @with_retry(max_retries=3, base_delay=5.0)
     def _call_top_pages(self, payload: list[dict]) -> dict:
-        raise NotImplementedError
+        resp = requests.post(TOP_PAGES_ENDPOINT, auth=self.auth, json=payload, timeout=90)
+        resp.raise_for_status()
+        data = resp.json()
+        self._run_cost += extract_cost(data)
+        return data
+
+    # ── parsing ─────────────────────────────────────────────────────────────────────────
+    def _parse_cross_aggregation(self, data: dict, site_url: str, own_domain: str,
+                                 competitors: list[str], week: date) -> list[dict]:
+        block = self._unwrap(data)
+        items = (block.get("items") or [{}])[0] if isinstance(block.get("items"), list) else {}
+        if not items:
+            return []
+
+        tracked = {canonical_domain(c) for c in competitors}
+        tracked.add(own_domain)
+        out: list[dict] = []
+
+        for entry in items.get("items") or []:
+            domain = canonical_domain(entry.get("key"))
+            if not domain:
+                continue
+            subject_type = "you" if domain == own_domain else "competitor"
+            for platform in ("google", "chat_gpt"):
+                mentions, volume = self._group_value(entry.get("platform"), platform)
+                out.append({
+                    "_table": "metrics", "site_id": site_url, "week_start": week,
+                    "subject_domain": domain, "subject_type": subject_type,
+                    "platform": platform, "mentions": mentions, "ai_search_volume": volume,
+                })
+
+        # Domains AI cites in this space that are neither us nor a tracked competitor.
+        # `total.sources_domain` carries NO platform breakdown, so these rows are stored once
+        # under the sentinel platform 'all'. Splitting the total across google/chat_gpt by
+        # some ratio would be invented data; 'all' says exactly what is known.
+        for el in (items.get("total") or {}).get("sources_domain") or []:
+            domain = canonical_domain(el.get("key"))
+            if not domain or domain in tracked:
+                continue
+            out.append({
+                "_table": "metrics", "site_id": site_url, "week_start": week,
+                "subject_domain": domain, "subject_type": "discovered",
+                "platform": "all",
+                "mentions": int(el.get("mentions") or 0),
+                "ai_search_volume": int(el.get("ai_search_volume") or 0),
+            })
+        return out
+
+    def _parse_top_pages(self, data: dict, site_url: str, own_domain: str,
+                         week: date) -> list[dict]:
+        block = self._unwrap(data)
+        items = (block.get("items") or [{}])[0] if isinstance(block.get("items"), list) else {}
+        if not items:
+            return []
+
+        out: list[dict] = []
+        for entry in items.get("items") or []:
+            url = (entry.get("key") or "").strip()
+            if not url or canonical_domain(url) != own_domain:
+                # top_pages returns co-occurring pages from OTHER domains (a call for
+                # driphydration.com returns perfectb.com URLs). "Your Most-Cited Pages"
+                # means ours.
+                continue
+            mentions = 0
+            volume = 0
+            platforms = []
+            for platform in ("google", "chat_gpt"):
+                m, v = self._group_value(entry.get("platform"), platform)
+                mentions += m
+                volume += v
+                if m:
+                    platforms.append(platform)
+            out.append({
+                "_table": "pages", "site_id": site_url, "week_start": week, "url": url,
+                "mentions": mentions, "ai_search_volume": volume,
+                "platforms": json.dumps(platforms),
+            })
+        return out
+
+    # ── payload building ────────────────────────────────────────────────────────────────
+    # NOTE: `_entities` and the cross-aggregation payload construction inside `fetch()` were
+    # already added in Task 2 (its guard test needed a real call to assert against). Leave
+    # them exactly as they are — Task 3 only adds the HTTP bodies, the parsers, the
+    # conditional top_pages call and `_write_records`.
+
+    def _write_records(self, session, records: list[dict], site_id: Optional[str] = None) -> int:
+        """BaseConnector hands one flat list and one session; the `_table` tag on each record
+        says which table it belongs to. Both writes share the transaction, so a failure in
+        either rolls back the whole week rather than leaving a half-written snapshot."""
+        metrics = [{k: v for k, v in r.items() if k != "_table"}
+                   for r in records if r.get("_table") == "metrics"]
+        pages = [{k: v for k, v in r.items() if k != "_table"}
+                 for r in records if r.get("_table") == "pages"]
+        written = upsert_llm_mention_metrics(session, metrics, site_id=site_id)
+        written += upsert_llm_cited_pages(session, pages, site_id=site_id)
+        return written
 
     # ── orchestration ───────────────────────────────────────────────────────────────────
     def fetch(self, site_id: Optional[str] = None) -> list[dict]:
@@ -166,26 +298,56 @@ class DataForSEOLLMMentionsConnector(BaseConnector):
         self._run_cost = 0.0
         own_domain = canonical_domain(site_url)
         location = self._site_location(site_id)
-        comps = []
-        for c in competitors:
-            domain = canonical_domain(c)
-            if domain:
-                comps.append(domain)
-        comps = comps[:MAX_COMPETITORS]
+        comps = [canonical_domain(c) for c in competitors if canonical_domain(c)][:MAX_COMPETITORS]
 
-        targets = [{"aggregation_key": own_domain,
-                    "target": self._entities(own_domain, [brand] + aliases)}]
-        for c in comps:
-            targets.append({"aggregation_key": c,
-                            "target": self._entities(c, [c.split(".")[0]])})
+        records: list[dict] = []
+        try:
+            targets = [{"aggregation_key": own_domain,
+                        "target": self._entities(own_domain, [brand] + aliases)}]
+            for c in comps:
+                targets.append({"aggregation_key": c,
+                                "target": self._entities(c, [c.split(".")[0]])})
 
-        if len(targets) >= 2:
-            self._call_cross_aggregation([{
-                "targets": targets,
-                "location_name": location,
-                "language_code": "en",
-            }])
+            if len(targets) >= 2:
+                data = self._call_cross_aggregation([{
+                    "targets": targets,
+                    "location_name": location,
+                    "language_code": "en",
+                }])
+                records.extend(
+                    self._parse_cross_aggregation(data, site_url, own_domain, comps, week))
+            else:
+                # cross_aggregation_metrics requires at least 2 targets. With no competitors
+                # there is no share of voice to compute; the service renders the "add
+                # competitors" state rather than a meaningless 100%.
+                self.logger.info(
+                    "[dataforseo_llm_mentions] %r has no competitors — share of voice "
+                    "needs at least one, recording own mentions only", site_url,
+                )
 
-        # Task 3 fills this in: parse the cross_aggregation response, conditionally call
-        # _call_top_pages when this project's own domain was mentioned, and normalise records.
-        return []
+            own_mentions = sum(
+                r["mentions"] for r in records
+                if r.get("subject_type") == "you" and r.get("_table") == "metrics"
+            )
+            if own_mentions:
+                pages_data = self._call_top_pages([{
+                    "target": [{"domain": own_domain}],
+                    "location_name": location,
+                    "language_code": "en",
+                    "items_list_limit": TOP_PAGES_LIMIT,
+                }])
+                records.extend(self._parse_top_pages(pages_data, site_url, own_domain, week))
+            else:
+                self.logger.info(
+                    "[dataforseo_llm_mentions] %r has no AI mentions this week — skipping "
+                    "the top_pages call (nothing to list, and it would cost money)", site_url,
+                )
+        finally:
+            record_cost(
+                self.name, site_url, self._run_cost, units=len(records) or 1,
+                notes=f"llm_mentions cross_aggregation + top_pages, week {week}",
+            )
+
+        self.logger.info(
+            "[dataforseo_llm_mentions] %r week %s — %d rows", site_url, week, len(records))
+        return records
