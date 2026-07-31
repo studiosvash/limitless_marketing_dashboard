@@ -18,6 +18,7 @@ CROSS_AGG = {"tasks": [{"status_code": 20000, "result": [{"items": [{
         "sources_domain": [
             {"type": "group_element", "key": "driphydration.com", "mentions": 3633, "ai_search_volume": 1617742},
             {"type": "group_element", "key": "www.youtube.com", "mentions": 1916, "ai_search_volume": 962270},
+            {"type": "group_element", "key": "www.driphydration.com", "mentions": 5, "ai_search_volume": 50},
         ],
     },
     "items": [
@@ -87,6 +88,12 @@ class CrossAggregationParsingTests(SimpleTestCase):
         self.assertEqual(
             self._connector()._parse_cross_aggregation(bad, SITE, "fusehealth.com", [], WEEK), [])
 
+    def test_a_tracked_competitors_www_host_is_not_double_counted_as_discovered(self):
+        recs = self._connector()._parse_cross_aggregation(
+            CROSS_AGG, SITE, "fusehealth.com", ["driphydration.com", "restoreiv.com"], WEEK)
+        discovered = {r["subject_domain"] for r in recs if r["subject_type"] == "discovered"}
+        self.assertNotIn("www.driphydration.com", discovered)
+
 
 class TopPagesParsingTests(SimpleTestCase):
     def _connector(self):
@@ -105,3 +112,36 @@ class TopPagesParsingTests(SimpleTestCase):
         self.assertEqual(rec["mentions"], 36)
         self.assertEqual(rec["ai_search_volume"], 1627)
         self.assertIn("google", rec["platforms"])
+
+
+AGG_ONLY = {"tasks": [{"status_code": 20000, "result": [{"items": [{
+    "total": {
+        "platform": [
+            {"type": "group_element", "key": "google", "mentions": 1, "ai_search_volume": 50},
+            {"type": "group_element", "key": "chat_gpt"},
+        ],
+        "sources_domain": [
+            {"type": "group_element", "key": "www.fusehealth.com", "mentions": 1, "ai_search_volume": 50},
+            {"type": "group_element", "key": "www.rxpnow.com", "mentions": 1, "ai_search_volume": 50},
+        ],
+    },
+}]}]}]}
+
+
+class AggregationFallbackParsingTests(SimpleTestCase):
+    def _connector(self):
+        with mock.patch.dict("os.environ",
+                             {"DATAFORSEO_LOGIN": "u", "DATAFORSEO_PASSWORD": "p"}):
+            return DataForSEOLLMMentionsConnector()
+
+    def test_own_mentions_are_recorded_for_both_platforms(self):
+        recs = self._connector()._parse_aggregation(AGG_ONLY, SITE, "fusehealth.com", WEEK)
+        mine = {r["platform"]: r for r in recs if r["subject_type"] == "you"}
+        self.assertEqual(mine["google"]["mentions"], 1)
+        self.assertEqual(mine["chat_gpt"]["mentions"], 0)
+
+    def test_our_own_www_host_is_not_listed_as_a_rival(self):
+        recs = self._connector()._parse_aggregation(AGG_ONLY, SITE, "fusehealth.com", WEEK)
+        discovered = {r["subject_domain"] for r in recs if r["subject_type"] == "discovered"}
+        self.assertNotIn("www.fusehealth.com", discovered)
+        self.assertIn("www.rxpnow.com", discovered)

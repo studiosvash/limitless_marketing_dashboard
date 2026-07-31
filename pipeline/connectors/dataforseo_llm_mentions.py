@@ -51,6 +51,7 @@ logger = logging.getLogger(__name__)
 DATAFORSEO_BASE = "https://api.dataforseo.com/v3"
 CROSS_AGG_ENDPOINT = f"{DATAFORSEO_BASE}/ai_optimization/llm_mentions/cross_aggregation_metrics"
 TOP_PAGES_ENDPOINT = f"{DATAFORSEO_BASE}/ai_optimization/llm_mentions/top_pages"
+AGG_ENDPOINT = f"{DATAFORSEO_BASE}/ai_optimization/llm_mentions/aggregation_metrics"
 
 # The API accepts at most 10 aggregation targets; one of them is always the project itself.
 MAX_COMPETITORS = 9
@@ -184,6 +185,14 @@ class DataForSEOLLMMentionsConnector(BaseConnector):
         self._run_cost += extract_cost(data)
         return data
 
+    @with_retry(max_retries=3, base_delay=5.0)
+    def _call_aggregation(self, payload: list[dict]) -> dict:
+        resp = requests.post(AGG_ENDPOINT, auth=self.auth, json=payload, timeout=90)
+        resp.raise_for_status()
+        data = resp.json()
+        self._run_cost += extract_cost(data)
+        return data
+
     # ── parsing ─────────────────────────────────────────────────────────────────────────
     def _parse_cross_aggregation(self, data: dict, site_url: str, own_domain: str,
                                  competitors: list[str], week: date) -> list[dict]:
@@ -209,13 +218,33 @@ class DataForSEOLLMMentionsConnector(BaseConnector):
                     "platform": platform, "mentions": mentions, "ai_search_volume": volume,
                 })
 
-        # Domains AI cites in this space that are neither us nor a tracked competitor.
-        # `total.sources_domain` carries NO platform breakdown, so these rows are stored once
-        # under the sentinel platform 'all'. Splitting the total across google/chat_gpt by
-        # some ratio would be invented data; 'all' says exactly what is known.
-        for el in (items.get("total") or {}).get("sources_domain") or []:
+        out.extend(self._discovered_rows(items.get("total") or {}, tracked, site_url, week))
+        return out
+
+    @staticmethod
+    def _bare_host(domain: str) -> str:
+        """`www.` stripped, for comparing a sources_domain host against a tracked subject.
+
+        Only for comparison. `canonical_domain` keeps www.x.com and x.com distinct on purpose,
+        because Search Console treats them as different properties — but a sources_domain list
+        that reports your own www host must not present it as a rival.
+        """
+        d = (domain or "").lower()
+        return d[4:] if d.startswith("www.") else d
+
+    def _discovered_rows(self, total: dict, tracked: set[str], site_url: str,
+                         week: date) -> list[dict]:
+        """Domains AI cites that are neither us nor a tracked competitor.
+
+        `total.sources_domain` carries NO platform breakdown, so these rows are stored once
+        under the sentinel platform 'all'. Splitting the total across google/chat_gpt by some
+        ratio would be invented data; 'all' says exactly what is known.
+        """
+        tracked_bare = {self._bare_host(t) for t in tracked}
+        out: list[dict] = []
+        for el in (total or {}).get("sources_domain") or []:
             domain = canonical_domain(el.get("key"))
-            if not domain or domain in tracked:
+            if not domain or self._bare_host(domain) in tracked_bare:
                 continue
             out.append({
                 "_table": "metrics", "site_id": site_url, "week_start": week,
@@ -224,6 +253,30 @@ class DataForSEOLLMMentionsConnector(BaseConnector):
                 "mentions": int(el.get("mentions") or 0),
                 "ai_search_volume": int(el.get("ai_search_volume") or 0),
             })
+        return out
+
+    def _parse_aggregation(self, data: dict, site_url: str, own_domain: str,
+                           week: date) -> list[dict]:
+        """Own mentions only, for a project with no competitors to compare against.
+
+        `aggregation_metrics` is the single-target endpoint. Unlike cross-aggregation it has no
+        per-target `items[]`; one target's numbers are in `items[0].total`.
+        """
+        block = self._unwrap(data)
+        items = (block.get("items") or [{}])[0] if isinstance(block.get("items"), list) else {}
+        if not items:
+            return []
+        total = items.get("total") or {}
+
+        out: list[dict] = []
+        for platform in ("google", "chat_gpt"):
+            mentions, volume = self._group_value(total.get("platform"), platform)
+            out.append({
+                "_table": "metrics", "site_id": site_url, "week_start": week,
+                "subject_domain": own_domain, "subject_type": "you",
+                "platform": platform, "mentions": mentions, "ai_search_volume": volume,
+            })
+        out.extend(self._discovered_rows(total, {own_domain}, site_url, week))
         return out
 
     def _parse_top_pages(self, data: dict, site_url: str, own_domain: str,
@@ -317,13 +370,20 @@ class DataForSEOLLMMentionsConnector(BaseConnector):
                 records.extend(
                     self._parse_cross_aggregation(data, site_url, own_domain, comps, week))
             else:
-                # cross_aggregation_metrics requires at least 2 targets. With no competitors
-                # there is no share of voice to compute; the service renders the "add
-                # competitors" state rather than a meaningless 100%.
+                # cross_aggregation_metrics needs at least 2 targets. Rather than leave a
+                # brand-only project with no data at all, ask the single-target endpoint for
+                # its own mentions; the service renders the "add competitors" state instead
+                # of a meaningless 100% share.
                 self.logger.info(
-                    "[dataforseo_llm_mentions] %r has no competitors — share of voice "
-                    "needs at least one, recording own mentions only", site_url,
+                    "[dataforseo_llm_mentions] %r has no competitors — fetching own mentions "
+                    "only; share of voice needs at least one competitor", site_url,
                 )
+                data = self._call_aggregation([{
+                    "target": self._entities(own_domain, [brand] + aliases),
+                    "location_name": location,
+                    "language_code": "en",
+                }])
+                records.extend(self._parse_aggregation(data, site_url, own_domain, week))
 
             own_mentions = sum(
                 r["mentions"] for r in records

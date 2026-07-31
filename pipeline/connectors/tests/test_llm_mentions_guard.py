@@ -85,12 +85,14 @@ class WeeklyGuardTests(SimpleTestCase):
 
     def test_project_with_a_brand_but_no_competitors_makes_no_cross_aggregation_call(self):
         # cross_aggregation_metrics requires at least 2 targets; sending one would 400 and
-        # still be billed. Own-mentions-only is Task 3's aggregation_metrics path.
+        # still be billed. Own-mentions-only is Task 3's aggregation_metrics fallback path.
         c = self._connector()
         c._load_targets = mock.Mock(return_value=("FuseHealth", [], []))
-        with mock.patch.object(c, "_call_cross_aggregation") as api:
+        with mock.patch.object(c, "_call_cross_aggregation") as cross_api, \
+             mock.patch.object(c, "_call_aggregation", return_value={}) as agg_api:
             c.fetch(site_id=SITE)
-        api.assert_not_called()
+        cross_api.assert_not_called()
+        agg_api.assert_called_once()
 
     def test_a_failed_week_check_raises_instead_of_spending(self):
         c = self._connector()
