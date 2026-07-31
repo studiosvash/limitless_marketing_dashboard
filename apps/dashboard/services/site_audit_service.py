@@ -78,6 +78,7 @@ from pipeline.db.schema import (
 )
 from pipeline.db.writer import ensure_tables, upsert_audit_snapshot
 from pipeline.utils.db_connection import get_session
+from pipeline.utils.site_ids import resolve_site_ids
 
 logger = logging.getLogger(__name__)
 
@@ -266,12 +267,12 @@ def _bare_domain(site_id: str) -> str:
 
 
 def _site_id_variants(site_id: str) -> list[str]:
-    """Both spellings of a property id. GSC-sourced tables store `sc-domain:example.com`
-    while other writers store the bare `example.com`; the audit payload has always read
-    across both, and the snapshot history must match it or a site's history would appear
-    empty purely because of which form the sync happened to pass in."""
-    alt = site_id.replace("sc-domain:", "") if site_id.startswith("sc-domain:") else f"sc-domain:{site_id}"
-    return [site_id, alt]
+    """Every spelling of a property id. GSC-sourced tables store `sc-domain:example.com`, other
+    writers store the bare `example.com`, and a URL-prefix property arrives as
+    `https://example.com/`; the audit payload has always read across them, and the snapshot
+    history must match it or a site's history would appear empty purely because of which form
+    the sync happened to pass in. See `pipeline/utils/site_ids.py`."""
+    return resolve_site_ids(site_id)
 
 
 def _check_ssl(domain: str) -> dict:

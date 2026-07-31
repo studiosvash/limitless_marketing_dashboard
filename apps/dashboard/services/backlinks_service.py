@@ -24,12 +24,14 @@ from sqlalchemy import func, select
 
 from pipeline.db.schema import Backlink, BacklinksSnapshot, TrackedCompetitor
 from pipeline.utils.db_connection import get_session
+from pipeline.utils.site_ids import resolve_site_ids
 from pipeline.services.competitor_service import get_tracked_competitors
 
 
 def _resolve_site_ids(site_id: str) -> list[str]:
-    alt_id = site_id.replace("sc-domain:", "") if site_id.startswith("sc-domain:") else f"sc-domain:{site_id}"
-    return [site_id, alt_id]
+    """Every spelling this site's analytics rows may be keyed under — see
+    `pipeline/utils/site_ids.py` for why the `sc-domain:` prefix alone was not enough."""
+    return resolve_site_ids(site_id)
 
 
 def _fmt_date(d) -> str:

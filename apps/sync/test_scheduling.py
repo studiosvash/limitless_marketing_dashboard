@@ -5,6 +5,8 @@ These are the proofs behind the claims in apps/sync/scheduling.py -- particularl
 `manual` never runs automatically and never gets a fabricated next-run date, and that a
 `running` row orphaned by a server restart is cleared instead of blocking the site forever.
 """
+import os
+import sys
 from datetime import timedelta
 from io import StringIO
 from unittest import mock
@@ -371,3 +373,70 @@ class RunScheduledSyncsCommandTests(TestCase):
         started.assert_not_called()
         self.assertIn("REAPED", output)
         self.assertIn("retry after", output)
+
+
+class ProcessAliveTests(TestCase):
+    """`_process_alive` itself, which every other test in this file mocks away.
+
+    That blanket mocking is exactly why the Windows bug below shipped unnoticed: the reaper's
+    logic was covered, but the one function that touches the OS never was.
+    """
+
+    def _no_psutil(self):
+        """Force the fallback path. psutil is a requirement, but the fallback must still be
+        correct — a venv built before it was added still runs this code."""
+        return mock.patch.dict(sys.modules, {"psutil": None})
+
+    def test_windows_never_calls_os_kill(self):
+        """os.kill(pid, 0) is NOT an existence check on Windows.
+
+        CPython maps every signal other than CTRL_C_EVENT/CTRL_BREAK_EVENT onto TerminateProcess,
+        so the "is this sync still alive?" probe would KILL the sync it was asking about — and
+        the reaper runs on every GET /api/sync/active.
+        """
+        with self._no_psutil(), \
+             mock.patch.object(scheduling.sys, "platform", "win32"), \
+             mock.patch.object(scheduling, "_windows_process_alive", return_value=True), \
+             mock.patch.object(scheduling.os, "kill") as killer:
+            scheduling._process_alive(4242)
+        killer.assert_not_called()
+
+    def test_windows_reports_a_dead_pid_as_dead(self):
+        """The old bare `except Exception: return True` swallowed Windows' OSError for an unknown
+        pid, so dead runs were never reaped and sat at 'running' until RUN_TIMEOUT (2h)."""
+        with self._no_psutil(), \
+             mock.patch.object(scheduling.sys, "platform", "win32"), \
+             mock.patch.object(scheduling, "_windows_process_alive", return_value=False):
+            self.assertIs(scheduling._process_alive(4242), False)
+
+    def test_posix_dead_pid_is_false(self):
+        with self._no_psutil(), \
+             mock.patch.object(scheduling.sys, "platform", "linux"), \
+             mock.patch.object(scheduling.os, "kill", side_effect=ProcessLookupError):
+            self.assertIs(scheduling._process_alive(4242), False)
+
+    def test_posix_live_pid_is_true(self):
+        with self._no_psutil(), \
+             mock.patch.object(scheduling.sys, "platform", "linux"), \
+             mock.patch.object(scheduling.os, "kill", return_value=None):
+            self.assertIs(scheduling._process_alive(4242), True)
+
+    def test_posix_permission_error_means_it_exists(self):
+        """Owned by another user — that is an answer, not an uncertainty."""
+        with self._no_psutil(), \
+             mock.patch.object(scheduling.sys, "platform", "linux"), \
+             mock.patch.object(scheduling.os, "kill", side_effect=PermissionError):
+            self.assertIs(scheduling._process_alive(4242), True)
+
+    def test_psutil_is_preferred_when_installed(self):
+        fake = mock.Mock()
+        fake.pid_exists.return_value = False
+        with mock.patch.dict(sys.modules, {"psutil": fake}), \
+             mock.patch.object(scheduling.os, "kill") as killer:
+            self.assertIs(scheduling._process_alive(4242), False)
+        fake.pid_exists.assert_called_once_with(4242)
+        killer.assert_not_called()
+
+    def test_this_processs_own_pid_is_alive_on_the_real_platform(self):
+        """End-to-end on whatever OS the suite is running on, with no mocking at all."""
+        self.assertIs(scheduling._process_alive(os.getpid()), True)

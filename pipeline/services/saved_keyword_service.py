@@ -49,9 +49,21 @@ def list_saved_keywords(site_id: str) -> list[dict]:
         return []
 
 
+# Separators that mean "this was pasted from a list", never part of the keyword itself when
+# they sit at either end. A comma INSIDE a phrase ("austin, tx event staff") is real and stays.
+_LIST_SEPARATORS = " \t\r\n,;|"
+
+
 def _clean_row(row: dict, location: Optional[str]) -> Optional[dict]:
-    """Keep only persistable fields; require a keyword. Coerce numerics, default location."""
-    kw = (row.get("keyword") or "").strip()
+    """Keep only persistable fields; require a keyword. Coerce numerics, default location.
+
+    The keyword is stripped of list separators as well as whitespace. `.strip()` alone let a
+    pasted comma-separated list through verbatim -- one project had all 16 tracked keywords
+    stored as `"festival staffing,"` with the comma included, which is a different phrase: it
+    went to DataForSEO inside the query and came back with no AI search volume, having been
+    billed for the lookup anyway.
+    """
+    kw = (row.get("keyword") or "").strip(_LIST_SEPARATORS)
     if not kw:
         return None
     rec = {k: row.get(k) for k in _FIELDS}

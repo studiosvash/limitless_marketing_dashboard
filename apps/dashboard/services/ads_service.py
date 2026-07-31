@@ -18,6 +18,7 @@ from sqlalchemy import case, func, select
 from apps.dashboard.services.mutation_state import get_state, set_state
 from pipeline.db.schema import AdMetricDaily, AdSearchTerm, GA4CampaignDaily, SEODaily
 from pipeline.utils.db_connection import get_session
+from pipeline.utils.site_ids import resolve_site_ids
 
 logger = logging.getLogger(__name__)
 
@@ -25,8 +26,9 @@ _ADS_OVERRIDES_DEFAULT = {"status": {}, "budget": {}, "negatives": [], "promoted
 
 
 def _resolve_site_ids(site_id: str) -> list[str]:
-    alt_id = site_id.replace("sc-domain:", "") if site_id.startswith("sc-domain:") else f"sc-domain:{site_id}"
-    return [site_id, alt_id]
+    """Every spelling this site's analytics rows may be keyed under — see
+    `pipeline/utils/site_ids.py` for why the `sc-domain:` prefix alone was not enough."""
+    return resolve_site_ids(site_id)
 
 
 def get_ads_overrides(site_id: str) -> dict:

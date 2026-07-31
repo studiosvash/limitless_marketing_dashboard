@@ -33,6 +33,7 @@ from pipeline.services.ai_visibility_service import (
     not_connected_reason, platform_name,
 )
 from pipeline.utils.db_connection import get_session
+from pipeline.utils.site_ids import resolve_site_ids
 
 logger = logging.getLogger(__name__)
 
@@ -81,10 +82,13 @@ AI_COST_CONNECTORS = (COST_CONNECTOR_RUN, COST_CONNECTOR_INSPECT)
 
 
 def _resolve_site_ids(site_id: str) -> list[str]:
-    """Both spellings of a Search Console property: analytics rows may be keyed either with or
-    without the `sc-domain:` prefix depending on which connector wrote them."""
-    alt_id = site_id.replace("sc-domain:", "") if site_id.startswith("sc-domain:") else f"sc-domain:{site_id}"
-    return [site_id, alt_id]
+    """Every spelling this site's analytics rows may be keyed under. Delegates to the one
+    matcher in `pipeline/utils/site_ids.py`.
+
+    This used to expand only the `sc-domain:` prefix, which is why this page rendered empty for
+    a project registered as `premierstaff.com` whose `ai_keyword_data` rows had been written
+    under `https://premierstaff.com/`."""
+    return resolve_site_ids(site_id)
 
 
 def query_ai_keywords_raw(site_id: str) -> list[dict]:

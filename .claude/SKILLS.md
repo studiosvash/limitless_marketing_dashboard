@@ -83,17 +83,31 @@ everything below the view layer uses `Site.site_url` (`"sc-domain:fusehealth.com
 `site_id` string. It is the join key across both databases. `resolve_project_or_404(slug).site_url`
 is the conversion, and every slug-taking view calls it as its first statement.
 
-Because sites can be registered with or without the `sc-domain:` prefix, several services match
-against **both** forms:
+Because nothing enforces which spelling of a site gets written, **four** appear in the analytics
+tables for the same site:
 
-```python
-def _resolve_site_ids(site_id: str) -> list[str]:
-    alt = site_id.replace("sc-domain:", "") if site_id.startswith("sc-domain:") else f"sc-domain:{site_id}"
-    return [site_id, alt]
+```
+premierstaff.com                 <- sites.site_url, what every view resolves a slug to
+sc-domain:premierstaff.com       <- Search Console domain properties
+https://premierstaff.com/        <- Search Console URL-prefix properties, and whatever a
+https://premierstaff.com            connector happened to be handed the day it ran
 ```
 
-Use it (`ads_service`, `offsite_service`, `backlinks_service`, `site_audit_service`, `ai_service`
-all do) whenever you query analytics tables.
+**`pipeline/utils/site_ids.resolve_site_ids(site_id)` is the one matcher.** It expands a site_id
+into every spelling it could have been stored under, exact input first. Call it whenever you
+query an analytics table:
+
+```python
+from pipeline.utils.site_ids import resolve_site_ids
+... .where(Model.site_id.in_(resolve_site_ids(site_id)))
+```
+
+`ads_service`, `offsite_service`, `backlinks_service`, `site_audit_service` and `ai_service` each
+keep a thin `_resolve_site_ids` / `_site_id_variants` wrapper that delegates to it. They used to
+carry five separate copies that knew only the `sc-domain:` prefix — see §9.
+
+`www.x.com` and `x.com` are deliberately **not** merged: Search Console treats them as different
+properties, and unioning them would attribute one host's traffic to the other.
 
 ---
 
@@ -447,6 +461,9 @@ Each of these is a real bug that was found and fixed. Do not re-introduce them.
 | Deriving one connector's incremental cursor from `max(date)` over a table **two** connectors write | `seo_daily` is shared: `gsc` owns clicks/impressions/ctr/avg_position, `ga4` owns sessions/pageviews/users and leaves the GSC columns at 0. `GSCConnector._get_last_synced_date` asked for the newest row of any kind, so it read GA4's cursor. GA4's window ends **yesterday**, `gsc_safe_range` ends **today − 3** (GSC lags 3 days) — so from the first GA4 run onwards `new_start > new_end` and `fetch()` returned `[]` **forever**, logging `success, 0 records` every time. Production ran three weeks like this: `ga4` 18 324 records, `gsc` 0, every Overview KPI stuck at 0 while Keywords/Positions (fed by `gsc_keywords` → `keyword_rankings`, its own cursor) looked healthy. The cursor now filters `impressions > 0`, which is exactly "a row GSC wrote" — the Search Analytics API only returns a row because the page was served. **A `success, 0 records` SyncLog row is not proof a connector is working; check that the columns it owns are non-zero.** See `pipeline/connectors/tests/test_gsc_incremental.py` |
 | Writing `apps.accounts.models.Role` (`founder`/`seo`/`ads`) into `UserProfile.role` | That vocabulary is retired (§7) and nothing enforces it: `check_owner_admin` refuses exactly one string, `"Analyst"`, so a profile stored as `"seo"` had full Admin access while the Settings team table printed a role the UI has no concept of. `seed_users` wrote those values until it was corrected to Owner/Admin/Admin, and `query_team_raw` now heals any non-`LIVE_ROLES` value to `Admin` — Admin, not Analyst, because that is the access those rows already had and a self-heal must never silently re-permission anyone |
 | A test fixture that calls `tempfile.mkdtemp()` and never removes the directory | The analytics-DB fixture (§8) is copied at 58 call sites across 34 modules, each leaving a 0.5-1 MB SQLite file behind. That accumulated **29 216 directories / 16.6 GB** and filled the drive to zero bytes, at which point the suite could not run at all. Fixed centrally rather than 58 times: `config/test_runner.py` points `tempfile.tempdir` at one run-scoped directory and deletes it in `teardown_test_environment` (disposing the `_SessionFactory` engine first, or Windows keeps the SQLite handles open). New fixtures need no cleanup code — but they must not pass an explicit `dir=` |
+| A site-id matcher that only knows the `sc-domain:` prefix | The join key is a string and four spellings exist (§3). Five services each carried their own two-line copy that expanded `sc-domain:` and nothing else, so a project registered as `premierstaff.com` could not see the 16 `ai_keyword_data` rows a connector had written under `https://premierstaff.com/` — the AI Optimization page rendered **completely empty over data that was already in the database**, and `saved_keywords` was split 24/16 across the two spellings. Use `pipeline/utils/site_ids.resolve_site_ids()`; do not write a sixth copy |
+| `os.kill(pid, 0)` as a liveness check | POSIX-only. On Windows CPython maps **every** signal other than `CTRL_C_EVENT`/`CTRL_BREAK_EVENT` onto `TerminateProcess`, so the "is this sync still alive?" probe *kills the sync it is asking about* — and `reap_orphaned_runs()` runs on every `GET /api/sync/active`, i.e. every few seconds during a refresh. The same call raised `OSError(WinError 87)` for an unknown pid, which a bare `except Exception: return True` swallowed, so dead runs were never reaped either and sat at `running` until `RUN_TIMEOUT` (2h). `_process_alive` now prefers `psutil` (a requirement) and falls back to `OpenProcess`/`GetExitCodeProcess` on Windows. Note every reaper test mocked `_process_alive` away, which is exactly why this shipped — test the function that touches the OS |
+| `.strip()` on a user-supplied keyword | Removes whitespace, not punctuation. A pasted comma-separated list split on newlines only left all 16 of one project's tracked keywords stored as `"festival staffing,"` — a different phrase, which went to DataForSEO inside the query, returned `ai_search_volume = 0` for 11 of 16, and was billed anyway. `saved_keyword_service._clean_row` now strips leading/trailing list separators; a comma **inside** a phrase (`"austin, tx event staff"`) is real and survives |
 | Hardcoding a default project id / domain in the SPA | `state.projectId` defaulted to the literal slug `'fusehealth'` and `renderVals` fell back to `{domain:'fusehealth.com'}`. On a deployment without that project, every boot request (page data, sync log, sync resume) fired at a 404 and the 404's `.catch` could land *after* the corrected refetch, pinning `error` on over fully-loaded data; on a deployment that has it, the app silently opened a project the user never picked and labelled exports with someone else's domain. `boot()` now waits for `/api/projects` when nothing is remembered, and `fetchTab`'s `.catch` ignores rejections for a project the user has moved off |
 
 ---

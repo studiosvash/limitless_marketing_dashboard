@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 from datetime import datetime, timedelta
 
 from django.utils import timezone
@@ -131,6 +132,36 @@ DEAD_PROCESS_MESSAGE = (
 PID_GRACE = timedelta(minutes=2)
 
 
+def _windows_process_alive(pid: int) -> bool:
+    """Ask the Win32 API directly whether `pid` exists.
+
+    `os.kill` cannot be used here — see `_process_alive`. OpenProcess answers the question
+    without touching the process: a handle means it exists, ERROR_ACCESS_DENIED means it exists
+    but belongs to someone else, and ERROR_INVALID_PARAMETER means there is no such pid.
+
+    (A process that exited with code 259 is indistinguishable from a running one, because 259 is
+    STILL_ACTIVE. That collision keeps us on the True side, which is the bias this whole function
+    is built around, and RUN_TIMEOUT still catches it.)
+    """
+    import ctypes
+
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    ERROR_ACCESS_DENIED = 5
+    STILL_ACTIVE = 259
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not handle:
+        return ctypes.get_last_error() == ERROR_ACCESS_DENIED
+    try:
+        code = ctypes.c_ulong()
+        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+            return True          # the handle opened, so it exists; the read is what failed
+        return code.value == STILL_ACTIVE
+    finally:
+        kernel32.CloseHandle(handle)
+
+
 def _process_alive(pid: int) -> bool:
     """Is this pid a live process? Returns True on any uncertainty.
 
@@ -140,15 +171,32 @@ def _process_alive(pid: int) -> bool:
     The pid-reuse race (the OS recycling a pid onto an unrelated process) is not worth
     defending against here: it would make us keep waiting for a run that is already dead, and
     the timeout catches that anyway.
+
+    **`os.kill(pid, 0)` is POSIX-only and must never run on Windows.** CPython maps any signal
+    other than CTRL_C_EVENT/CTRL_BREAK_EVENT onto TerminateProcess, so on Windows the "existence
+    check" *terminates the process it is asking about* — and this function is reached from every
+    GET /api/sync/active, i.e. every few seconds while a sync is running. It also raised
+    OSError(WinError 87) for an unknown pid, which the old bare `except Exception: return True`
+    swallowed, so dead runs were never reaped either. Both halves are fixed by not going near
+    os.kill on Windows.
     """
     try:
         import psutil  # type: ignore[import]
-        return psutil.pid_exists(pid)
+        return bool(psutil.pid_exists(pid))
     except ImportError:
         pass
+
+    if sys.platform == "win32":
+        try:
+            return _windows_process_alive(pid)
+        except Exception:
+            logger.warning("[scheduler] Windows liveness check failed for pid %s", pid,
+                           exc_info=True)
+            return True
+
     if hasattr(os, "kill"):
         try:
-            os.kill(pid, 0)      # signal 0 = existence check only
+            os.kill(pid, 0)      # signal 0 = existence check only (POSIX semantics)
             return True
         except ProcessLookupError:
             return False
