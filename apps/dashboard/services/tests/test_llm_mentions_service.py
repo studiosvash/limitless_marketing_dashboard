@@ -130,3 +130,34 @@ class VisibilityBlockTests(SimpleTestCase):
         self.assertEqual([p["id"] for p in block["mentionPlatforms"]], ["google", "chat_gpt"])
         self.assertEqual([p["name"] for p in block["mentionPlatforms"]],
                          ["AI Overviews", "ChatGPT"])
+
+    def test_a_discovered_row_does_not_inflate_a_tracked_domains_total(self):
+        # The same domain arriving as both a tracked subject and a discovered sources_domain
+        # row must not have the two summed — that total is the share-of-voice numerator.
+        self._seed([
+            ("fusehealth.com", "you", "google", 10, 100),
+            ("fusehealth.com", "you", "chat_gpt", 5, 50),
+            ("fusehealth.com", "discovered", "all", 999, 9990),
+            ("rival.com", "competitor", "google", 85, 850),
+        ])
+        block = build_visibility_block(SITE)
+        you = next(r for r in block["sov"]["rows"] if r["isYou"])
+        self.assertEqual(you["mentions"], 15, "only the real platform rows may be summed")
+        self.assertEqual(block["mentions"], 15)
+
+    def test_setup_block_is_not_shared_mutable_state(self):
+        first = build_visibility_block(SITE)
+        first["sov"]["rows"].append({"domain": "poison"})
+        first["topPages"].append({"url": "poison"})
+        second = build_visibility_block(SITE)
+        self.assertEqual(second["sov"]["rows"], [])
+        self.assertEqual(second["topPages"], [])
+
+    def test_delta_is_none_when_last_weeks_subject_was_a_different_domain(self):
+        self._seed([("olddomain.com", "you", "google", 10, 100),
+                    ("x.com", "competitor", "google", 90, 900)], week=LAST_WEEK)
+        self._seed([("fusehealth.com", "you", "google", 30, 300),
+                    ("x.com", "competitor", "google", 70, 700)], week=THIS_WEEK)
+        block = build_visibility_block(SITE)
+        self.assertIsNone(block["sov"]["delta"],
+                          "a different subject last week is not a change in our share")

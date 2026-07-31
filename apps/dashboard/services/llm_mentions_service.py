@@ -28,16 +28,24 @@ MENTION_PLATFORMS = [
     {"id": "chat_gpt", "name": "ChatGPT", "color": "#10a37f"},
 ]
 
-_EMPTY = {
-    "sov": {"you": 0, "delta": None, "rows": []},
-    "mentions": 0,
-    "impressions": 0,
-    "cited_pages": 0,
-    "topPages": [],
-    "topDomains": [],
-    "mentionPlatforms": MENTION_PLATFORMS,
-    "state": "setup",
-}
+
+def _empty_block() -> dict:
+    """A fresh block every call — never a shared module-level dict.
+
+    A shallow copy would hand every caller the SAME nested `sov`/`rows`/`topPages`/`topDomains`
+    objects, so a single mutation anywhere would poison every subsequent setup-state response
+    in the process.
+    """
+    return {
+        "sov": {"you": 0, "delta": None, "rows": []},
+        "mentions": 0,
+        "impressions": 0,
+        "cited_pages": 0,
+        "topPages": [],
+        "topDomains": [],
+        "mentionPlatforms": [dict(p) for p in MENTION_PLATFORMS],
+        "state": "setup",
+    }
 
 
 def query_mention_metrics_raw(site_id: str, weeks: int = 2) -> list[dict]:
@@ -102,19 +110,38 @@ def query_cited_pages_raw(site_id: str, week_start) -> list[dict]:
     return out
 
 
+DISCOVERED_PLATFORM = "all"
+
+
 def _totals_by_domain(rows: list[dict], week) -> dict:
-    """{domain: {"type", "mentions", "volume"}} for one week, platforms summed."""
-    agg: dict = {}
-    for r in rows:
-        if r["week_start"] != week:
-            continue
-        d = agg.setdefault(r["subject_domain"],
-                           {"type": r["subject_type"], "mentions": 0, "volume": 0})
-        d["mentions"] += r["mentions"]
-        d["volume"] += r["ai_search_volume"]
-        # 'you' and 'competitor' must win over a stray 'discovered' row for the same domain.
+    """{domain: {"type", "mentions", "volume"}} for one week.
+
+    Two passes on purpose. The type is decided first, because `you`/`competitor` must win over
+    a stray `discovered` row for the same domain -- otherwise a project could be listed as its
+    own rival. Only then are rows summed, and only the rows belonging to that type: a tracked
+    subject's total is the sum of its real platform rows, a discovered domain's total is its
+    single `all` sentinel row. Summing both would inflate the share-of-voice numerator.
+    """
+    week_rows = [r for r in rows if r["week_start"] == week]
+
+    types: dict = {}
+    for r in week_rows:
+        domain = r["subject_domain"]
         if r["subject_type"] in ("you", "competitor"):
-            d["type"] = r["subject_type"]
+            types[domain] = r["subject_type"]
+        else:
+            types.setdefault(domain, "discovered")
+
+    # Seeded with every domain at zero so a competitor with no mentions still appears --
+    # absence is information on this page, not a reason to drop the row.
+    agg = {d: {"type": t, "mentions": 0, "volume": 0} for d, t in types.items()}
+    for r in week_rows:
+        domain = r["subject_domain"]
+        is_sentinel = r["platform"] == DISCOVERED_PLATFORM
+        if (types[domain] == "discovered") != is_sentinel:
+            continue
+        agg[domain]["mentions"] += r["mentions"]
+        agg[domain]["volume"] += r["ai_search_volume"]
     return agg
 
 
@@ -148,7 +175,7 @@ def build_visibility_block(site_id: str) -> dict:
     """`sov`, KPI values, `topPages`, `topDomains` and `mentionPlatforms` for the AI page."""
     rows = query_mention_metrics_raw(site_id, weeks=2)
     if not rows:
-        return dict(_EMPTY)
+        return _empty_block()
 
     weeks = sorted({r["week_start"] for r in rows}, reverse=True)
     this_week = weeks[0]
@@ -169,11 +196,13 @@ def build_visibility_block(site_id: str) -> dict:
     # A delta needs a real prior measurement. Without one it stays None and the SPA shows
     # "no comparison yet" -- printing +0 would claim last week was measured when it was not.
     delta = None
-    if len(weeks) > 1:
+    if len(weeks) > 1 and you_row is not None:
         prev_agg = _totals_by_domain(rows, weeks[1])
-        prev_shares = _sov_percentages(prev_agg)
         prev_you_domain = next((d for d, v in prev_agg.items() if v["type"] == "you"), None)
-        if prev_you_domain is not None:
+        # Compare like with like. A different subject last week is not a change in OUR share,
+        # so the honest answer is "no comparison" rather than a misleading number.
+        if prev_you_domain == you_row["domain"]:
+            prev_shares = _sov_percentages(prev_agg)
             delta = you_share - prev_shares[prev_you_domain]
 
     competitors = [d for d, v in agg.items() if v["type"] == "competitor"]
@@ -198,6 +227,6 @@ def build_visibility_block(site_id: str) -> dict:
         "cited_pages": len(pages),
         "topPages": pages,
         "topDomains": top_domains_out,
-        "mentionPlatforms": MENTION_PLATFORMS,
+        "mentionPlatforms": [dict(p) for p in MENTION_PLATFORMS],
         "state": state,
     }
