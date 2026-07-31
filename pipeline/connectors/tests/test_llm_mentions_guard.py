@@ -91,3 +91,30 @@ class WeeklyGuardTests(SimpleTestCase):
         with mock.patch.object(c, "_call_cross_aggregation") as api:
             c.fetch(site_id=SITE)
         api.assert_not_called()
+
+    def test_a_failed_week_check_raises_instead_of_spending(self):
+        c = self._connector()
+        with mock.patch.object(c, "_week_already_stored", side_effect=RuntimeError("db down")), \
+             mock.patch.object(c, "_call_cross_aggregation") as api:
+            with self.assertRaises(RuntimeError):
+                c.fetch(site_id=SITE)
+        api.assert_not_called()
+
+    def test_each_subject_gets_its_own_aggregation_key(self):
+        # A single collapsed aggregation_key would bucket the project and its competitors
+        # together and destroy the share-of-voice split this feature exists to produce.
+        c = self._connector()
+        c._load_targets = mock.Mock(
+            return_value=("FuseHealth", ["Fuse Health"], ["driphydration.com", "restoreiv.com"]))
+        with mock.patch.object(c, "_call_cross_aggregation", return_value={}) as api:
+            c.fetch(site_id=SITE)
+
+        payload = api.call_args[0][0]
+        body = payload[0]
+        self.assertEqual(body["language_code"], "en")
+        keys = [t["aggregation_key"] for t in body["targets"]]
+        self.assertEqual(keys, ["fusehealth.com", "driphydration.com", "restoreiv.com"])
+        own = body["targets"][0]["target"]
+        self.assertEqual(own[0], {"domain": "fusehealth.com"})
+        self.assertIn({"keyword": "FuseHealth", "match_type": "word_match"}, own)
+        self.assertIn({"keyword": "Fuse Health", "match_type": "word_match"}, own)

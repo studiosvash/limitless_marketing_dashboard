@@ -18,7 +18,8 @@ At most two calls per project per week. Three things keep it there:
      week. `fetch()` checks the database first and returns [] without any HTTP call when this
      week is already stored -- pressing "Refresh all" ten times in a day costs ONE call.
   2. A single cross_aggregation call covers the project AND all its competitors, because one
-     `aggregation_key` accepts up to 10 entities (domain and brand-name targets together).
+     request carries one `targets` array with one `aggregation_key` per subject, each holding
+     up to MAX_ENTITIES_PER_KEY domain and brand-name entities.
   3. `top_pages` is skipped entirely unless the project's own domain was mentioned at all.
 
 `aggregation_metrics` and `top_domains` are deliberately NOT called: cross_aggregation already
@@ -115,12 +116,16 @@ class DataForSEOLLMMentionsConnector(BaseConnector):
                            LLMMentionMetric.week_start == week)
                 ).scalar()
             return bool(n)
-        except Exception:
-            # A failed check must not silently re-spend; treat "unknown" as "not stored" only
-            # after logging loudly, because the alternative is a page that never updates.
-            logger.warning("[dataforseo_llm_mentions] week check failed for %r", site_url,
-                           exc_info=True)
-            return False
+        except Exception as exc:
+            # Deliberately NOT fail-open. Returning "not stored" here would make every sync
+            # run re-call a metered API behind nothing but a warning; returning "stored"
+            # would report a successful sync that wrote nothing. Raising lets
+            # BaseConnector.sync() record a real error the operator can see, and spends
+            # nothing while the cause is unknown.
+            raise RuntimeError(
+                f"[dataforseo_llm_mentions] could not check whether week {week} is already "
+                f"stored for {site_url!r}; refusing to call a metered API on an unknown state"
+            ) from exc
 
     @staticmethod
     def _entities(domain: str, names: list[str]) -> list[dict]:
@@ -161,7 +166,12 @@ class DataForSEOLLMMentionsConnector(BaseConnector):
         self._run_cost = 0.0
         own_domain = canonical_domain(site_url)
         location = self._site_location(site_id)
-        comps = [canonical_domain(c) for c in competitors if canonical_domain(c)][:MAX_COMPETITORS]
+        comps = []
+        for c in competitors:
+            domain = canonical_domain(c)
+            if domain:
+                comps.append(domain)
+        comps = comps[:MAX_COMPETITORS]
 
         targets = [{"aggregation_key": own_domain,
                     "target": self._entities(own_domain, [brand] + aliases)}]
