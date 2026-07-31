@@ -1,5 +1,6 @@
 import os
 import tempfile
+from datetime import date
 from pathlib import Path
 from unittest import mock
 
@@ -10,6 +11,7 @@ from rest_framework.test import APIClient, APITestCase
 
 from pipeline.db.engine import get_engine
 from pipeline.db.schema import init_db, Site
+from pipeline.db.writer import upsert_llm_mention_metrics
 from pipeline.utils.db_connection import get_session
 import pipeline.utils.db_connection as db_connection
 
@@ -505,7 +507,12 @@ class AIRunPersistenceTests(APITestCase):
         # Real spend was recorded and is read back as real money, not an estimate.
         self.assertEqual(body["budget"]["spent"], EXPECTED_COST)
         self.assertEqual(body["costs"]["model"], EXPECTED_COST)
-        self.assertEqual(body["kpis"]["mentions"], 1)
+        # kpis.mentions now comes from DataForSEO LLM Mentions (AI Overviews + ChatGPT), which
+        # is what the card is labelled. A prompt run measures a different thing -- one tracked
+        # prompt against whichever answer engines have keys -- so it surfaces per-cell and in
+        # prompt_coverage instead of being summed into the same number behind one label.
+        self.assertEqual(body["kpis"]["mentions"], 0)
+        self.assertTrue(pr["results"]["chatgpt"]["mentioned"])
         self.assertEqual(body["kpis"]["prompt_coverage"], {"cited": 1, "total": 1})
 
     @mock.patch("pipeline.services.ai_visibility_service.requests.post")
@@ -517,6 +524,9 @@ class AIRunPersistenceTests(APITestCase):
         cell = body["prompts"][0]["results"]["chatgpt"]
         self.assertEqual(cell["verdict"], "absent")
         self.assertFalse(cell["mentioned"])
+        # kpis.mentions is 0 here because no LLM Mentions snapshot is seeded in this test (its
+        # source is DataForSEO LLM Mentions, not the prompt run) -- it would read 0 regardless
+        # of this prompt's absent verdict, which is asserted directly via cell["mentioned"] above.
         self.assertEqual(body["kpis"]["mentions"], 0)
         self.assertEqual(body["kpis"]["prompt_coverage"], {"cited": 0, "total": 1})
 
@@ -677,3 +687,57 @@ class AIMutationAuthAndSlugTests(APITestCase):
             "/api/projects/does-not-exist/ai/targets", {"brand": "x"}, format="json"
         )
         self.assertEqual(resp.status_code, 404)
+
+
+class AIVisibilityFromLLMMentionsTests(APITestCase):
+    """The AI page must serve stored LLM-mention data, never call an API while rendering."""
+
+    def setUp(self):
+        db_connection._SessionFactory = None
+        self.addCleanup(setattr, db_connection, "_SessionFactory", None)
+        tmp = tempfile.mkdtemp()
+        db_path = str(Path(tmp) / "fusehealth.db")
+        init_db(get_engine(db_path))
+        self._ctx = override_settings(ANALYTICS_DB_PATH=db_path)
+        self._ctx.enable()
+        self.addCleanup(self._ctx.disable)
+
+        with get_session() as session:
+            session.add(Site(site_url="sc-domain:example.com", site_name="Example",
+                             slug="example", is_active=1))
+            session.commit()
+        with get_session() as session:
+            upsert_llm_mention_metrics(session, [
+                {"site_id": "sc-domain:example.com", "week_start": date(2026, 7, 27),
+                 "subject_domain": "example.com", "subject_type": "you",
+                 "platform": "google", "mentions": 20, "ai_search_volume": 500},
+                {"site_id": "sc-domain:example.com", "week_start": date(2026, 7, 27),
+                 "subject_domain": "rival.com", "subject_type": "competitor",
+                 "platform": "google", "mentions": 80, "ai_search_volume": 4000},
+            ])
+            session.commit()
+
+        user = get_user_model().objects.create_user("aivis", password="x")
+        token = Token.objects.get(user=user)
+        self.client_auth = APIClient()
+        self.client_auth.credentials(HTTP_AUTHORIZATION=f"Bearer {token.key}")
+
+    def test_ai_endpoint_serves_real_share_of_voice(self):
+        resp = self.client_auth.get("/api/projects/example/ai")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data["sov"]["you"], 20)
+        self.assertEqual({r["domain"] for r in data["sov"]["rows"]},
+                         {"example.com", "rival.com"})
+        self.assertEqual(data["kpis"]["mentions"], 20)
+        self.assertEqual(data["kpis"]["impressions"], 500)
+
+    def test_mention_platforms_are_two_but_llm_platforms_stay_four(self):
+        data = self.client_auth.get("/api/projects/example/ai").json()
+        self.assertEqual([p["id"] for p in data["mentionPlatforms"]], ["google", "chat_gpt"])
+        self.assertEqual(len(data["llmPlatforms"]), 4,
+                         "the Prompts tab still tracks four answer engines")
+
+    def test_prompt_coverage_still_comes_from_prompt_runs(self):
+        data = self.client_auth.get("/api/projects/example/ai").json()
+        self.assertEqual(data["kpis"]["prompt_coverage"], {"cited": 0, "total": 0})

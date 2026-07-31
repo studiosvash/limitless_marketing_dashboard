@@ -58,7 +58,7 @@ PAGE_CONNECTORS: dict[str, list[str]] = {
     # site, which has nothing to do with which keywords are new).
     "positioning_new": ["dataforseo_serp", "dataforseo_keywords", "dataforseo_serp_competitors"],
     # AI visibility / AI-keyword volume refresh (DataForSEO AI Optimization API).
-    "ai":          ["dataforseo_ai_keywords"],
+    "ai":          ["dataforseo_ai_keywords", "dataforseo_llm_mentions"],
     # Site audit. The page's payload (apps/dashboard/services/site_audit_service.py) is built
     # from THREE tables, not one:
     #     IndexingStatus  <- url_inspection      (indexing breakdown, crawled pages, last crawl)
@@ -98,6 +98,7 @@ ALL_CONNECTORS: list[str] = [
     "dataforseo_backlinks",
     "dataforseo_onpage",
     "dataforseo_ai_keywords",
+    "dataforseo_llm_mentions",
 ]
 
 
@@ -130,6 +131,7 @@ def _get_connector(name: str):
         # Additive 2026-06-15: per-keyword competitor rank capture + AI search keyword data.
         "dataforseo_serp_competitors": ("pipeline.connectors.dataforseo_serp_competitors", "DataForSEOSerpCompetitorsConnector"),
         "dataforseo_ai_keywords":      ("pipeline.connectors.dataforseo_ai_keywords",      "DataForSEOAIKeywordsConnector"),
+        "dataforseo_llm_mentions":     ("pipeline.connectors.dataforseo_llm_mentions",     "DataForSEOLLMMentionsConnector"),
         # Credentials-missing connectors — in map for future use.
         "google_ads":  ("pipeline.connectors.google_ads",  "GoogleAdsConnector"),
         # Separate from google_ads on purpose: search_term_view is a different GAQL resource

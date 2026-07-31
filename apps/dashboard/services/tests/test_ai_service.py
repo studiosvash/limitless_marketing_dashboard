@@ -290,7 +290,9 @@ class BuildAiResponseHonestEmptyFieldsTests(TestCase):
         from apps.dashboard.services.ai_service import build_ai_response
         body = build_ai_response(SITE_ID)
 
-        self.assertEqual(body["sov"], {"you": 0, "delta": 0, "rows": []})
+        # delta is None, not 0, before a second weekly snapshot exists: 0 would assert that
+        # last week was measured and the share was unchanged, which never happened.
+        self.assertEqual(body["sov"], {"you": 0, "delta": None, "rows": []})
         self.assertEqual(body["trend"], [])
         self.assertEqual(body["topPages"], [])
         self.assertEqual(body["topDomains"], [])

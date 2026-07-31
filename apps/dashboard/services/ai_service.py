@@ -1,22 +1,24 @@
 """AI Optimization page — assembles the response from things that really exist.
 
-Three real sources, and nothing else:
+Four real sources, and nothing else:
 
 1. **First-party ORM data** — `AITarget` / `AIPromptList` / `AIPrompt` (targets, lists, prompts,
    `setupDone`).
 2. **`AIKeywordData`** (analytics DB) — reshaped into `aiKeywords`.
 3. **Stored answer-engine checks** — what `pipeline/services/ai_visibility_service.check_prompt`
    actually observed, written by the `run`/`inspect` actions in `apps/api/views.py` and read back
-   here as `prompts[].results`, `prompts[].lastRun`, `history`, and the `kpis` counts. Their real
-   USD cost is read back out of the `connector_costs` table.
+   here as `prompts[].results`, `prompts[].lastRun`, `history`, and `kpis.prompt_coverage`. Their
+   real USD cost is read back out of the `connector_costs` table.
+4. **Stored DataForSEO LLM Mentions snapshots** — assembled by
+   `apps.dashboard.services.llm_mentions_service.build_visibility_block` from the
+   `llm_mention_metrics` / `llm_cited_pages` tables and merged in here as `sov`, `mentionPlatforms`,
+   `topPages`, `topDomains`, `visibilityState`, and `kpis.mentions`/`.impressions`/`.cited_pages`.
 
-Everything with no source is `0` / `None` / `[]` and stays that way. `sov`, `trend`, `topPages`,
-`topDomains` and `suggestions` are the honest empties: share-of-voice and a trend line need a
-scheduled run history over a stable prompt set (this feature is manual-run only, so there is no
-comparable series yet); cited *pages* and cited *domains* need a web-search-enabled provider that
-returns verified sources, which is not connected (see `ai_visibility_service`'s module docstring);
-and a real prompt-suggestion engine does not exist. A plausible-looking number in any of those
-slots is worse than a visible gap.
+Everything with no source is `0` / `None` / `[]` and stays that way. `trend` and `suggestions`
+are the honest empties: a trend line needs a stable weekly series to chart against, and while
+LLM Mentions snapshots are now being collected weekly, the chart itself is not wired yet in this
+release; a real prompt-suggestion engine does not exist. A plausible-looking number in either of
+those slots is worse than a visible gap.
 """
 import json
 import logging
@@ -25,6 +27,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import func, select
 
 from apps.dashboard.models import AITarget, AIPromptList, AIPrompt, ProjectSettings
+from apps.dashboard.services.llm_mentions_service import build_visibility_block
 from apps.dashboard.services.mutation_state import get_state, set_state
 from pipeline.db.schema import AIKeywordData, ConnectorCost
 from pipeline.db.writer import ensure_tables, insert_connector_cost
@@ -551,20 +554,21 @@ def build_ai_response(site_id: str) -> dict:
     history = get_run_history(site_id)
     spend = _spend(site_id)
 
-    # KPIs counted off real stored checks, nothing else.
-    mentions = 0
+    # prompt_coverage still comes off real stored answer-engine checks, nothing else.
     cited_prompts = 0
     for pr in prompts:
         hit_cited = False
         for res in pr["results"].values():
             if not isinstance(res, dict):
                 continue
-            if res.get("mentioned"):
-                mentions += 1
             if res.get("cited"):
                 hit_cited = True
         if hit_cited:
             cited_prompts += 1
+
+    # Real AI-answer visibility, read back from stored LLM Mentions snapshots. Everything it
+    # returns used to be a hardcoded 0/[] under a label claiming an API that was not wired.
+    vis = build_visibility_block(site_id)
 
     return {
         "setupDone": bool(target and target.setup_done),
@@ -583,21 +587,24 @@ def build_ai_response(site_id: str) -> dict:
         "costs": {"model": spend["per_run_check"], "inspect": spend["per_inspect"]},
         # No scheduler runs these prompts (they are manual-only), so there is no next run.
         "next_run": None,
-        "mentionPlatforms": MENTION_PLATFORMS,
-        # Same {id,name,color} object shape as mentionPlatforms -- the SPA uses llmPlatforms
-        # (aliased "llm") for the Prompts table's model-column headers/dots/coverage counts.
+        "mentionPlatforms": vis["mentionPlatforms"],
+        # llmPlatforms stays the four answer engines the Prompts tab checks with this
+        # deployment's own API keys. DataForSEO's LLM Mentions covers only two platforms, so
+        # these two lists are NOT interchangeable -- they were the same constant, which is why
+        # the visibility toggles offered Claude/Gemini/Perplexity that could never have data.
         "llmPlatforms": MENTION_PLATFORMS,
-        # Honest empties -- see the module docstring for why each has no real source.
-        "sov": {"you": 0, "delta": 0, "rows": []},
+        "sov": vis["sov"],
         "kpis": {
-            "mentions": mentions,
-            "impressions": 0,          # nothing measures answer-engine impressions
-            "cited_pages": 0,          # needs verified sources; no web-search provider connected
+            "mentions": vis["mentions"],
+            "impressions": vis["impressions"],
+            "cited_pages": vis["cited_pages"],
+            # Still from real prompt runs -- a different measurement, deliberately unchanged.
             "prompt_coverage": {"cited": cited_prompts, "total": len(prompts)},
         },
-        "trend": [],
-        "topPages": [],
-        "topDomains": [],
+        "trend": [],   # Lean v1: weekly rows are being collected; the chart is not wired yet.
+        "topPages": vis["topPages"],
+        "topDomains": vis["topDomains"],
+        "visibilityState": vis["state"],
         "lists": lists,
         "prompts": prompts,
         "suggestions": _suggestions_for(site_id, target),
