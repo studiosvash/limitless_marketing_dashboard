@@ -842,14 +842,10 @@ Replace the `# ── HTTP (implemented in Task 3) ──` block in `pipeline/co
         return out
 
     # ── payload building ────────────────────────────────────────────────────────────────
-    @staticmethod
-    def _entities(domain: str, names: list[str]) -> list[dict]:
-        ents: list[dict] = [{"domain": domain}]
-        for n in names:
-            n = (n or "").strip()
-            if n and len(ents) < MAX_ENTITIES_PER_KEY:
-                ents.append({"keyword": n, "match_type": "word_match"})
-        return ents
+    # NOTE: `_entities` and the cross-aggregation payload construction inside `fetch()` were
+    # already added in Task 2 (its guard test needed a real call to assert against). Leave
+    # them exactly as they are — Task 3 only adds the HTTP bodies, the parsers, the
+    # conditional top_pages call and `_write_records`.
 
     def _write_records(self, session, records: list[dict], site_id: Optional[str] = None) -> int:
         """BaseConnector hands one flat list and one session; the `_table` tag on each record
@@ -864,7 +860,9 @@ Replace the `# ── HTTP (implemented in Task 3) ──` block in `pipeline/co
         return written
 ```
 
-Then replace the trailing `self._run_cost = 0.0` / `return []` of `fetch()` with:
+Then extend the tail of `fetch()`. Task 2 already builds `own_domain`, `location`, `comps` and
+`targets` and calls `_call_cross_aggregation` when `len(targets) >= 2` — keep that code and wrap
+it so the response is captured, parsed and cost-recorded:
 
 ```python
         self._run_cost = 0.0
