@@ -153,6 +153,24 @@ class CrossAggregationParsingTests(SimpleTestCase):
         discovered = {r["subject_domain"] for r in recs if r["subject_type"] == "discovered"}
         self.assertNotIn("www.eventstaff.com", discovered)
 
+    def test_a_zero_mention_week_still_writes_rows_for_every_tracked_subject(self):
+        # Otherwise nothing is written, the weekly guard never trips, and the next Refresh
+        # re-buys the same paid call.
+        empty = {"tasks": [{"status_code": 20000, "result": [{"total": {}, "items": None}]}]}
+        recs = self._connector()._parse_cross_aggregation(
+            empty, SITE, "fusehealth.com", ["driphydration.com"], WEEK)
+        metrics = [r for r in recs if r["_table"] == "metrics"]
+        self.assertEqual(len(metrics), 4, "2 subjects x 2 platforms, all at zero")
+        self.assertTrue(all(r["mentions"] == 0 for r in metrics))
+        self.assertEqual({r["subject_domain"] for r in metrics},
+                         {"fusehealth.com", "driphydration.com"})
+
+    def test_a_competitor_absent_from_items_is_still_listed_at_zero(self):
+        recs = self._connector()._parse_cross_aggregation(
+            CROSS_AGG, SITE, "fusehealth.com", ["driphydration.com", "neverseen.com"], WEEK)
+        domains = {r["subject_domain"] for r in recs if r["_table"] == "metrics"}
+        self.assertIn("neverseen.com", domains)
+
 
 class TopPagesParsingTests(SimpleTestCase):
     def _connector(self):

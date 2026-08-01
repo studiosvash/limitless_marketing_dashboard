@@ -217,7 +217,24 @@ class DataForSEOLLMMentionsConnector(BaseConnector):
 
         tracked = {canonical_domain(c) for c in competitors}
         tracked.add(own_domain)
-        out: list[dict] = []
+
+        # Seed every tracked subject at zero BEFORE reading the response. A week that genuinely
+        # measured zero is not an empty week: those rows ARE the finding, and they are what makes
+        # the weekly guard trip. Without them a zero-mention project writes nothing, the guard
+        # never fires, and every Refresh re-buys the same paid call. This also restores a
+        # competitor that returns no `items[]` entry to the Share-of-Voice list at 0% instead of
+        # dropping it -- absence is information on this page.
+        seeded: dict = {}
+        for domain, stype in ([(own_domain, "you")]
+                              + [(c, "competitor") for c in competitors if c]):
+            if not domain:
+                continue
+            for platform in ("google", "chat_gpt"):
+                seeded[(domain, platform)] = {
+                    "_table": "metrics", "site_id": site_url, "week_start": week,
+                    "subject_domain": domain, "subject_type": stype,
+                    "platform": platform, "mentions": 0, "ai_search_volume": 0,
+                }
 
         for entry in block.get("items") or []:
             domain = canonical_domain(entry.get("key"))
@@ -226,12 +243,13 @@ class DataForSEOLLMMentionsConnector(BaseConnector):
             subject_type = "you" if domain == own_domain else "competitor"
             for platform in ("google", "chat_gpt"):
                 mentions, volume = self._group_value(entry.get("platform"), platform)
-                out.append({
+                seeded[(domain, platform)] = {
                     "_table": "metrics", "site_id": site_url, "week_start": week,
                     "subject_domain": domain, "subject_type": subject_type,
                     "platform": platform, "mentions": mentions, "ai_search_volume": volume,
-                })
+                }
 
+        out = list(seeded.values())
         out.extend(self._discovered_rows(block.get("total") or {}, tracked, site_url, week))
         return out
 
@@ -403,13 +421,24 @@ class DataForSEOLLMMentionsConnector(BaseConnector):
                 if r.get("subject_type") == "you" and r.get("_table") == "metrics"
             )
             if own_mentions:
-                pages_data = self._call_top_pages([{
-                    "target": [{"domain": own_domain}],
-                    "location_name": location,
-                    "language_code": "en",
-                    "items_list_limit": TOP_PAGES_LIMIT,
-                }])
-                records.extend(self._parse_top_pages(pages_data, site_url, own_domain, week))
+                try:
+                    pages_data = self._call_top_pages([{
+                        "target": [{"domain": own_domain}],
+                        "location_name": location,
+                        "language_code": "en",
+                        "items_list_limit": TOP_PAGES_LIMIT,
+                    }])
+                    records.extend(self._parse_top_pages(pages_data, site_url, own_domain, week))
+                except Exception:
+                    # Never discard the metrics snapshot we have already been billed for
+                    # because a second, independent call failed. Without this the whole run
+                    # raises, nothing is written, the weekly guard never trips, and the next
+                    # Refresh re-buys the same paid call -- every time, all week.
+                    self.logger.error(
+                        "[dataforseo_llm_mentions] top_pages failed for %r — keeping the "
+                        "metrics snapshot already paid for; cited pages stay empty this week",
+                        site_url, exc_info=True,
+                    )
             else:
                 self.logger.info(
                     "[dataforseo_llm_mentions] %r has no AI mentions this week — skipping "

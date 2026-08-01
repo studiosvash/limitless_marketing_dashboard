@@ -44,6 +44,15 @@ class WeeklyGuardTests(SimpleTestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
+        # A test must never reach the network. This already happened once on this branch:
+        # an unmocked path fired a real, billable DataForSEO request.
+        blocker = mock.patch(
+            "pipeline.connectors.dataforseo_llm_mentions.requests.post",
+            side_effect=AssertionError("no network in tests"),
+        )
+        blocker.start()
+        self.addCleanup(blocker.stop)
+
     def _connector(self):
         c = DataForSEOLLMMentionsConnector()
         # Targets come from Django's AITarget; stub the lookup so this test stays about the guard.
