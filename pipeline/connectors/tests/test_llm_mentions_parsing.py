@@ -145,3 +145,24 @@ class AggregationFallbackParsingTests(SimpleTestCase):
         discovered = {r["subject_domain"] for r in recs if r["subject_type"] == "discovered"}
         self.assertNotIn("www.fusehealth.com", discovered)
         self.assertIn("www.rxpnow.com", discovered)
+
+
+class EndpointUrlTests(SimpleTestCase):
+    """The URLs cannot be exercised by a fixture-based test, and all three were wrong in the
+    first implementation: they 404'd against the real API and every test still passed. These
+    assertions pin the values verified live on 2026-08-01."""
+
+    def test_endpoints_use_the_verified_rest_paths(self):
+        from pipeline.connectors import dataforseo_llm_mentions as m
+        self.assertTrue(m.CROSS_AGG_ENDPOINT.endswith(
+            "/ai_optimization/llm_mentions/cross_aggregated_metrics/live"))
+        self.assertTrue(m.AGG_ENDPOINT.endswith(
+            "/ai_optimization/llm_mentions/aggregated_metrics/live"))
+        self.assertTrue(m.TOP_PAGES_ENDPOINT.endswith(
+            "/ai_optimization/llm_mentions/top_pages/live"))
+
+    def test_every_endpoint_is_a_live_path(self):
+        # The `/live` suffix is what makes these instant rather than task_post/task_get.
+        from pipeline.connectors import dataforseo_llm_mentions as m
+        for url in (m.CROSS_AGG_ENDPOINT, m.AGG_ENDPOINT, m.TOP_PAGES_ENDPOINT):
+            self.assertTrue(url.endswith("/live"), url)

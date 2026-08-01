@@ -53,9 +53,15 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 DATAFORSEO_BASE = "https://api.dataforseo.com/v3"
-CROSS_AGG_ENDPOINT = f"{DATAFORSEO_BASE}/ai_optimization/llm_mentions/cross_aggregation_metrics"
-TOP_PAGES_ENDPOINT = f"{DATAFORSEO_BASE}/ai_optimization/llm_mentions/top_pages"
-AGG_ENDPOINT = f"{DATAFORSEO_BASE}/ai_optimization/llm_mentions/aggregation_metrics"
+# Verified against the live API on 2026-08-01 by probing each path with a real payload.
+# Two traps here: the REST paths are `aggregated_metrics` / `cross_aggregated_metrics`, NOT the
+# `aggregation_metrics` / `cross_aggregation_metrics` spellings used by DataForSEO's own MCP tool
+# identifiers -- those 404 -- and every path needs the `/live` suffix. A wrong path returns a
+# plain HTTP 404, which `with_retry` treats as permanent, so the whole sync fails fast rather
+# than silently writing nothing.
+CROSS_AGG_ENDPOINT = f"{DATAFORSEO_BASE}/ai_optimization/llm_mentions/cross_aggregated_metrics/live"
+TOP_PAGES_ENDPOINT = f"{DATAFORSEO_BASE}/ai_optimization/llm_mentions/top_pages/live"
+AGG_ENDPOINT = f"{DATAFORSEO_BASE}/ai_optimization/llm_mentions/aggregated_metrics/live"
 
 # The API accepts at most 10 aggregation targets; one of them is always the project itself.
 MAX_COMPETITORS = 9
