@@ -206,16 +206,20 @@ class DataForSEOLLMMentionsConnector(BaseConnector):
     # ── parsing ─────────────────────────────────────────────────────────────────────────
     def _parse_cross_aggregation(self, data: dict, site_url: str, own_domain: str,
                                  competitors: list[str], week: date) -> list[dict]:
+        # `_unwrap` already returns tasks[0].result[0], which the live API shapes as
+        # {"total": {...}, "items": [...]} directly -- there is no extra wrapper array to
+        # index into. (An earlier version of this method re-indexed block["items"][0], which
+        # grabbed the first per-subject entry instead of the block and made block.get("total")
+        # None for every real response -- every parser silently returned [].)
         block = self._unwrap(data)
-        items = (block.get("items") or [{}])[0] if isinstance(block.get("items"), list) else {}
-        if not items:
+        if not block:
             return []
 
         tracked = {canonical_domain(c) for c in competitors}
         tracked.add(own_domain)
         out: list[dict] = []
 
-        for entry in items.get("items") or []:
+        for entry in block.get("items") or []:
             domain = canonical_domain(entry.get("key"))
             if not domain:
                 continue
@@ -228,7 +232,7 @@ class DataForSEOLLMMentionsConnector(BaseConnector):
                     "platform": platform, "mentions": mentions, "ai_search_volume": volume,
                 })
 
-        out.extend(self._discovered_rows(items.get("total") or {}, tracked, site_url, week))
+        out.extend(self._discovered_rows(block.get("total") or {}, tracked, site_url, week))
         return out
 
     @staticmethod
@@ -269,14 +273,14 @@ class DataForSEOLLMMentionsConnector(BaseConnector):
                            week: date) -> list[dict]:
         """Own mentions only, for a project with no competitors to compare against.
 
-        `aggregation_metrics` is the single-target endpoint. Unlike cross-aggregation it has no
-        per-target `items[]`; one target's numbers are in `items[0].total`.
+        `aggregation_metrics` is the single-target endpoint: `_unwrap` returns
+        {"total": {...}, "items": [...]} directly, and the live API always sends `items: null`
+        or `items: []` here -- the single target's numbers live in `total`, never in `items[]`.
         """
         block = self._unwrap(data)
-        items = (block.get("items") or [{}])[0] if isinstance(block.get("items"), list) else {}
-        if not items:
+        if not block:
             return []
-        total = items.get("total") or {}
+        total = block.get("total") or {}
 
         out: list[dict] = []
         for platform in ("google", "chat_gpt"):
@@ -292,12 +296,11 @@ class DataForSEOLLMMentionsConnector(BaseConnector):
     def _parse_top_pages(self, data: dict, site_url: str, own_domain: str,
                          week: date) -> list[dict]:
         block = self._unwrap(data)
-        items = (block.get("items") or [{}])[0] if isinstance(block.get("items"), list) else {}
-        if not items:
+        if not block:
             return []
 
         out: list[dict] = []
-        for entry in items.get("items") or []:
+        for entry in block.get("items") or []:
             url = (entry.get("key") or "").strip()
             if not url or canonical_domain(url) != own_domain:
                 # top_pages returns co-occurring pages from OTHER domains (a call for
