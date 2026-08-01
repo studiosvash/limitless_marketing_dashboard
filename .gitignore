@@ -4,7 +4,17 @@
 !.env.example
 
 
-.claude/
+.claude/*
+# The five reference docs CLAUDE.md routes every session to (SKILLS.md/DESIGN.md were already
+# tracked as pre-existing files, which git keeps tracking regardless of a later ignore rule --
+# these three were created after the blanket rule above and so were silently never committed by
+# any of tasks 1-6 of the LLM Mentions feature, despite real content having been written into
+# them the whole time. `.claude/*` (not `.claude/`) so the negations below can reach inside the
+# directory -- a bare directory-level ignore stops git from descending into it at all, which
+# silently defeats file-level `!` exceptions.
+!.claude/api-reference.md
+!.claude/features.md
+!.claude/tech-stack.md
 
 # Google OAuth token artifacts
 token.json
