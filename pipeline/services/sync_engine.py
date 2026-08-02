@@ -190,6 +190,20 @@ _TECHNICAL_ISSUE_INPUTS = ("gsc", "ga4", "gsc_pages", "url_inspection", "pagespe
 _AUDIT_SNAPSHOT_INPUTS = ("url_inspection", "pagespeed", "dataforseo_onpage")
 
 
+def _run_cancelled(run_id: int) -> bool:
+    """Has this run been stopped from the UI since the last connector finished?
+
+    Checked between connectors, which is the whole cancellation contract on this side:
+    the API marks the row `cancelled` and then kills this process, but a kill can fail
+    (stale pid, permissions) and a signal can arrive late. This check is what guarantees
+    the run stops anyway -- before the next connector, i.e. before the next API spend.
+
+    One cheap indexed query per connector, against a run that takes minutes.
+    """
+    from apps.sync.models import RefreshRun, RefreshStatus  # type: ignore[import]
+    return RefreshRun.objects.filter(pk=run_id, status=RefreshStatus.CANCELLED).exists()
+
+
 def _run_post_sync(site_url: str, connectors_run: list[str]) -> None:
     """
     Trigger aggregate rebuild if SEO data was refreshed.
@@ -293,6 +307,14 @@ def sync_all(site_url: str, run_id: int) -> dict:
         f"total_connectors={total}"
     )
 
+    # Cancelled before this process even reached its first connector (e.g. Stop was clicked
+    # while the OS process was still spawning). Check BEFORE the RUNNING update below, which
+    # would otherwise stomp the `cancelled` status the API just wrote and hide it from every
+    # check inside the loop.
+    if _run_cancelled(run_id):
+        logger.info(f"[sync_engine] sync_all cancelled before it started — run_id={run_id}")
+        return {"completed": 0, "total": total, "records_written": 0, "errors": [], "cancelled": True}
+
     # Initialise the run row.
     RefreshRun.objects.filter(pk=run_id).update(
         total_count=total,
@@ -300,6 +322,12 @@ def sync_all(site_url: str, run_id: int) -> dict:
     )
 
     for name in connectors:
+        if _run_cancelled(run_id):
+            logger.info(f"[sync_engine] sync_all cancelled — stopping before {name!r} "
+                        f"({completed}/{total} done, {total_records} records kept)")
+            return {"completed": completed, "total": total,
+                    "records_written": total_records, "errors": errors, "cancelled": True}
+
         logger.info(f"[sync_engine] [{completed + 1}/{total}] Running connector: {name!r}")
         RefreshRun.objects.filter(pk=run_id).update(current_connector=name)
 
@@ -411,6 +439,14 @@ def sync_page(page: str, site_url: str, run_id: int) -> dict:
         )
         return {"completed": 0, "total": 0, "records_written": 0, "errors": []}
 
+    # Cancelled before this process even reached its first connector (e.g. Stop was clicked
+    # while the OS process was still spawning). Check BEFORE the RUNNING update below, which
+    # would otherwise stomp the `cancelled` status the API just wrote and hide it from every
+    # check inside the loop.
+    if _run_cancelled(run_id):
+        logger.info(f"[sync_engine] sync_page cancelled before it started — page={page!r} run_id={run_id}")
+        return {"completed": 0, "total": total, "records_written": 0, "errors": [], "cancelled": True}
+
     RefreshRun.objects.filter(pk=run_id).update(
         total_count=total,
         status=RefreshStatus.RUNNING,
@@ -435,6 +471,12 @@ def sync_page(page: str, site_url: str, run_id: int) -> dict:
         logger.info(f"[sync_engine] {page!r}: narrowing to {len(incremental_kws)} keyword(s) needing backfill")
 
     for name in connector_names:
+        if _run_cancelled(run_id):
+            logger.info(f"[sync_engine] sync_page cancelled — stopping before {name!r} "
+                        f"({completed}/{total} done, {total_records} records kept)")
+            return {"completed": completed, "total": total,
+                    "records_written": total_records, "errors": errors, "cancelled": True}
+
         logger.info(f"[sync_engine] [{completed + 1}/{total}] Running connector: {name!r}")
         RefreshRun.objects.filter(pk=run_id).update(current_connector=name)
 

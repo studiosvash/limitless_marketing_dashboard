@@ -237,3 +237,61 @@ class SyncEngineTests(TestCase):
         """`Refresh all` used to pick the probes up as a `_run_post_sync` side effect. Now that
         they are a connector they must be in ALL_CONNECTORS, or 'all' would silently do less."""
         self.assertIn("domain_checks", ALL_CONNECTORS)
+
+    # ------------------------------------------------------------- cancellation
+
+    def test_sync_page_stops_before_the_next_connector_when_cancelled(self):
+        """The reliable half of Stop. Even if the kill fails outright, the run must not
+        start another connector -- that is what stops the money."""
+        run = self._run_row(scope="audit")
+
+        def factory(name):
+            conn = FakeConnector(name)
+            self.built[name] = conn
+            # Cancel lands while the FIRST connector is running.
+            if len(self.built) == 1:
+                RefreshRun.objects.filter(pk=run.pk).update(status=RefreshStatus.CANCELLED)
+            return conn
+
+        p = patch.object(sync_engine, "_get_connector", side_effect=factory)
+        p.start()
+        self.addCleanup(p.stop)
+
+        summary = sync_page("audit", SITE_URL, run.pk)
+
+        self.assertTrue(summary["cancelled"])
+        self.assertEqual(len(self.built), 1, "a second connector ran after cancellation")
+        self.assertEqual(summary["records_written"], 5, "work already done must be kept")
+
+    def test_a_cancelled_run_keeps_its_cancelled_status(self):
+        """sync_page must not overwrite `cancelled` with success/error on its way out."""
+        run = self._run_row(scope="overview")
+        RefreshRun.objects.filter(pk=run.pk).update(status=RefreshStatus.CANCELLED)
+        self._stub_connectors()
+
+        sync_page("overview", SITE_URL, run.pk)
+
+        run.refresh_from_db()
+        self.assertEqual(run.status, RefreshStatus.CANCELLED)
+
+    def test_cancelling_skips_post_sync_processing(self):
+        """Rebuilding aggregates and technical issues from a half-finished run would
+        publish numbers derived from partial data."""
+        run = self._run_row(scope="overview")
+        RefreshRun.objects.filter(pk=run.pk).update(status=RefreshStatus.CANCELLED)
+        self._stub_connectors()
+
+        with patch.object(sync_engine, "_run_post_sync") as post:
+            sync_page("overview", SITE_URL, run.pk)
+
+        post.assert_not_called()
+
+    def test_sync_all_stops_when_cancelled(self):
+        run = self._run_row(scope="all")
+        RefreshRun.objects.filter(pk=run.pk).update(status=RefreshStatus.CANCELLED)
+        self._stub_connectors()
+
+        summary = sync_all(SITE_URL, run.pk)
+
+        self.assertTrue(summary["cancelled"])
+        self.assertEqual(self.built, {}, "no connector should have run")
