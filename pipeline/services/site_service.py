@@ -13,6 +13,7 @@ from sqlalchemy import select
 
 from pipeline.utils.db_connection import get_session
 from pipeline.utils.logger import get_logger
+from pipeline.utils.site_ids import normalize_domain
 from pipeline.db.schema import Site
 
 load_dotenv()
@@ -61,14 +62,17 @@ def _ensure_columns(session) -> None:
 
 
 def _bare_domain(value: str) -> str:
-    if not value:
-        return ""
-    return (
-        value.replace("https://", "")
-        .replace("http://", "")
-        .replace("sc-domain:", "")
-        .rstrip("/")
-    )
+    """The registration form of a domain — delegates to `site_ids.normalize_domain`.
+
+    This used to be three `str.replace` calls and an `.rstrip("/")`, which stripped the scheme
+    and the `sc-domain:` prefix but NOT a leading `www.`. So `add_site`'s duplicate guard (which
+    compares this function's output) saw `www.premierstaff.com` and `premierstaff.com` as two
+    different sites and happily registered both: two projects, two slugs, two sync budgets, and
+    a project switcher offering the user a choice between two halves of one site's history.
+    `normalize_domain` strips `www.` too, and also handles a path, a port, a trailing dot and
+    an uppercase scheme that the old substring replaces missed. See pipeline/utils/site_ids.py.
+    """
+    return normalize_domain(value)
 
 
 def _slugify(value: str) -> str:
@@ -134,16 +138,30 @@ def get_active_site_ids() -> list[str]:
 
 
 def sync_primary_site_from_env() -> None:
+    """Upsert the site named by GSC_SITE_URL in .env.
+
+    Matches on the NORMALISED domain, not on the raw env string. `GSC_SITE_URL` is a Search
+    Console property (`sc-domain:x.com`, `https://www.x.com/`), and add_site now stores
+    `sites.site_url` normalised — so an equality test against the raw value would miss the row
+    this created and insert a second project for the same site, which is exactly the duplication
+    add_site was fixed to prevent. The raw property string still goes to `gsc_property`, which
+    is where a property identifier belongs.
+    """
     gsc = os.getenv("GSC_SITE_URL", "").strip()
     if not gsc:
+        return
+    domain = _bare_domain(gsc)
+    if not domain:
         return
     ga4 = os.getenv("GA4_PROPERTY_ID", "").strip() or None
     df_target = _bare_domain(os.getenv("DATAFORSEO_TARGET_DOMAIN", "").strip() or gsc) or None
     with get_session() as session:
         _ensure_columns(session)
-        site = session.execute(
-            select(Site).where(Site.site_url == gsc)
-        ).scalars().first()
+        site = next(
+            (s for s in session.execute(select(Site)).scalars().all()
+             if _bare_domain(s.site_url) == domain),
+            None,
+        )
         if site:
             changed = (
                 site.gsc_property != gsc
@@ -159,46 +177,62 @@ def sync_primary_site_from_env() -> None:
                 logger.info(f"[site_service] Synced primary site from .env: {gsc}")
         else:
             session.add(Site(
-                site_url=gsc,
-                site_name=_bare_domain(gsc) or gsc,
+                site_url=domain,
+                site_name=domain,
+                slug=slugify_unique(session, domain),
                 gsc_property=gsc,
                 ga4_property_id=ga4,
                 dataforseo_target_domain=df_target,
                 is_active=1,
             ))
-            logger.info(f"[site_service] Created primary site from .env: {gsc}")
+            logger.info(f"[site_service] Created primary site from .env: {domain} (property {gsc})")
 
 
 def add_site(site_url, site_name=None, gsc_property=None, ga4_property_id=None,
              dataforseo_target_domain=None, vertical=None, location="United States",
              search_engine="Google", device="Desktop", language="English") -> int:
-    """Register a new site.
+    """Register a new site. Returns the new row's integer primary key.
+
+    `site_url` is accepted in any spelling and STORED NORMALISED — `https://www.x.com/`,
+    `http://x.com`, `sc-domain:x.com` and `x.com` all become `x.com`. That normalised string is
+    the cross-database join key (`.claude/skills.md` §3), so normalising at the single point of
+    registration is what keeps one site from becoming two projects. The duplicate check below
+    compares the same normalised form, which is the fix for the bug where `premierstaff.com` and
+    `www.premierstaff.com` were both accepted as new sites.
+
+    `gsc_property` is NOT normalised: it is a Search Console property identifier, and the
+    account may genuinely own `https://www.x.com/` rather than the domain property. Left unset
+    it defaults to the bare domain, which gsc_property.resolve_gsc_property() then matches
+    against the account's real property list (including the www URL-prefix forms) and repairs.
 
     search_engine/device/language are the Position Tracking wizard's "Tracking area" choices.
     Their defaults match the wizard's own pre-selected options, so a caller that does not pass
     them stores what the wizard would have shown rather than NULL. They are a recorded
     preference only — see the note on Site in pipeline/db/schema.py.
     """
-    site_url = (site_url or "").strip()
-    if not site_url:
+    raw_url = (site_url or "").strip()
+    if not raw_url:
         raise ValueError("site_url is required")
-    bare_url = _bare_domain(site_url).lower()
+    domain = _bare_domain(raw_url)
+    if not domain:
+        # Honest failure beats storing an empty join key that silently matches nothing.
+        raise ValueError(f"Could not read a domain from {raw_url!r}")
     with get_session() as session:
         _ensure_columns(session)
         existing_sites = session.execute(select(Site)).scalars().all()
         for s in existing_sites:
-            if _bare_domain(s.site_url).lower() == bare_url:
+            if _bare_domain(s.site_url) == domain:
                 raise ValueError(f"Site already exists: {s.site_url}")
-        name = site_name or _bare_domain(site_url) or site_url
+        name = site_name or domain
         site = Site(
-            site_url=site_url,
+            site_url=domain,
             site_name=name,
             slug=slugify_unique(session, name),
             vertical=vertical,
             location=location,
-            gsc_property=gsc_property or site_url,
+            gsc_property=gsc_property or domain,
             ga4_property_id=ga4_property_id or None,
-            dataforseo_target_domain=_bare_domain(dataforseo_target_domain or site_url),
+            dataforseo_target_domain=_bare_domain(dataforseo_target_domain or domain),
             is_active=1,
             search_engine=search_engine or "Google",
             device=device or "Desktop",
@@ -207,7 +241,9 @@ def add_site(site_url, site_name=None, gsc_property=None, ga4_property_id=None,
         session.add(site)
         session.flush()
         new_id = site.id
-        logger.info(f"[site_service] Added site #{new_id}: {site_url}")
+        if domain != raw_url:
+            logger.info(f"[site_service] Normalised {raw_url!r} -> {domain!r}")
+        logger.info(f"[site_service] Added site #{new_id}: {domain}")
         return new_id
 
 

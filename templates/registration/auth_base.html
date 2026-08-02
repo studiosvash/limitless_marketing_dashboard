@@ -1,0 +1,43 @@
+{% comment %}
+Shell shared by every server-rendered auth page (sign in, accept invite, password reset).
+These are the only pages outside the SPA, and they must look like the same product, so the
+card, logo and type scale live here once instead of being copy-pasted per page.
+{% endcomment %}
+<!doctype html>
+<html lang="en" class="h-full">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{% block title %}FuseHealth{% endblock %}</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = { theme: { extend: {
+      fontFamily: { sans: ['Inter','system-ui','sans-serif'] },
+      colors: { brand: {50:'#eef2ff',100:'#e0e7ff',200:'#c7d2fe',600:'#4f46e5',700:'#4338ca'} }
+    } } }
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body class="h-full bg-slate-50 font-sans antialiased text-slate-900">
+  <div class="min-h-full flex items-center justify-center p-6">
+    <div class="w-full max-w-sm">
+
+      <div class="flex items-center justify-center gap-2 mb-6">
+        <div class="w-9 h-9 rounded-lg bg-brand-600 flex items-center justify-center text-white font-bold">F</div>
+        <span class="font-semibold text-lg tracking-tight">FuseHealth</span>
+      </div>
+
+      <div class="rounded-xl bg-white border border-slate-200 shadow-sm p-6">
+        <h1 class="text-[17px] font-semibold tracking-tight">{% block heading %}{% endblock %}</h1>
+        <p class="text-sm text-slate-400 mt-1">{% block subheading %}Internal intelligence dashboard{% endblock %}</p>
+        {% block content %}{% endblock %}
+      </div>
+
+      {% block below_card %}{% endblock %}
+
+      <p class="text-center text-xs text-slate-400 mt-6">FuseHealth · authorized users only</p>
+    </div>
+  </div>
+</body>
+</html>

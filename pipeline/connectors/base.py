@@ -17,17 +17,28 @@ def _update_django_sync_log(connector: str, site_url: str, status: str, **kwargs
     try:
         from apps.sync.models import SyncLog
         from django.utils import timezone
+        defaults = {
+            "status": status,
+            # error_message may be an EXPLICIT None (success path clearing a previous
+            # failure) — dropping None here made stale error text stick to success rows
+            # forever, which Settings → Connections then displayed as a live problem.
+            **{k: v for k, v in kwargs.items() if v is not None or k == "error_message"},
+        }
+        # `last_synced` means "when did this connector last FINISH", so only a finish writes
+        # it. A start used to overwrite it with None, which destroyed that answer the instant a
+        # sync began — and if the sync process was then killed (server restart mid-run),
+        # nothing ever rewrote the row and the loss was permanent. Settings → Data pipeline
+        # reads this column, so pagespeed on premierstaff.com showed "Last synced: never"
+        # indefinitely while page_speed held 96 real Lighthouse rows from that very run.
+        # Leaving the stored value alone makes a running row read "last synced <then>, running
+        # now", which is both true and useful. A connector that has genuinely never finished
+        # still has NULL here, because the column defaults to NULL on insert.
+        if status in ("success", "error"):
+            defaults["last_synced"] = timezone.now()
         obj, _ = SyncLog.objects.update_or_create(
             connector=connector,
             site_url=site_url,
-            defaults={
-                "status": status,
-                "last_synced": timezone.now() if status in ("success", "error") else None,
-                # error_message may be an EXPLICIT None (success path clearing a previous
-                # failure) — dropping None here made stale error text stick to success rows
-                # forever, which Settings → Connections then displayed as a live problem.
-                **{k: v for k, v in kwargs.items() if v is not None or k == "error_message"},
-            },
+            defaults=defaults,
         )
     except ImportError:
         pass  # Non-Django context (standalone scripts, tests)

@@ -14,7 +14,7 @@
           subTabs: [], showOverview: false, showIssues: false, showCrawled: false,
           showCompare: false, showProgress: false, showStats: false,
           domain: project.domain, crawlDate: '', pagesCrawled: 0, crawlDuration: '', userAgent: '', measuredLabel: '',
-          barSegs: [], breakRows: [], sevTotals: [], cats: [], vitals: [], domChecks: [], noDomChecks: false, topIssues: [],
+          barSegs: [], breakRows: [], sevTotals: [], cats: [], vitals: [], domChecks: [], noDomChecks: false, hasDomChecks: false, topIssues: [],
           hasCritical: false, noCritical: false, criticalRows: [], criticalMore: false,
           criticalCountLabel: '', criticalMoreLabel: '',
           sevFilters: [], catFilters: [], noIssues: true, issueRows: [], search: '',
@@ -165,6 +165,7 @@
            therefore means "no crawl has recorded them yet", not "the domain has no checks" --
            say that instead of rendering a blank card. */
         au.noDomChecks = data.domainChecks.length === 0;
+        au.hasDomChecks = !au.noDomChecks;   // gates the header's "Re-run" link
         au.domChecks = data.domainChecks.map(d => ({
           label: d.label, detail: d.detail, mark: d.ok ? '✓' : '!',
           icon: { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '20px', height: '20px', borderRadius: '50%', fontSize: '12px', fontWeight: 700, background: d.ok ? '#dcfce7' : '#fef3c7', color: d.ok ? '#15803d' : '#b45309', flexShrink: 0 }
@@ -292,7 +293,19 @@
           let rows = data.crawledPages.map(pg2 => Object.assign({}, pg2, { issues: pg2.errors * 10000 + pg2.warnings * 100 + pg2.notices }));
           if (s.auPgSearch) { const q = s.auPgSearch.toLowerCase(); rows = rows.filter(r => r.url.toLowerCase().includes(q)); }
           rows = this.sortRows(rows, s.auPgSort);
-          au.pageRows = rows.slice(0, 40).map(r => ({
+          /* PAGINATION. The whole crawled-page list is already in this payload — the table used
+             to render `rows.slice(0, 40)` and tell you to export a CSV to see the rest, which on
+             a 1 139-page site meant 96% of the data the browser was holding was unreachable in
+             the UI. Paging rather than rendering everything keeps the DOM small on those sites.
+
+             The page index is CLAMPED here, not trusted: filtering can shrink the list under a
+             reader who is on page 12, and an out-of-range slice renders an empty table that is
+             indistinguishable from "no pages matched". */
+          const PAGE_SIZE = 40;
+          const pg = this.pageSlice(rows.length, s.auPgPage, PAGE_SIZE);
+          const pageCount = pg.pageCount, pageIdx = pg.pageIdx, from = pg.from;
+          const visible = rows.slice(from, from + PAGE_SIZE);
+          au.pageRows = visible.map(r => ({
             open: () => this.setState({ auPage: r.id }),
             url: r.url, score: scoreText(r.score), scoreStyle: scoreChip(r.score),
             status: String(r.statusCode),
@@ -308,10 +321,42 @@
             loadLabel: secsText(r.loadTimeMs),
             loadStyle: { fontSize: '12.5px', fontWeight: 600, color: r.loadTimeMs == null ? '#94a3b8' : r.loadTimeMs > 3000 ? '#dc2626' : r.loadTimeMs > 1500 ? '#b45309' : '#64748b' }
           }));
-          const shownN = Math.min(40, rows.length);
-          const measuredShown = rows.slice(0, shownN).filter(r => r.measured).length;
-          au.pageRowCount = (rows.length > 40 ? 'Showing 40 of ' + rows.length + ' pages — refine with the URL filter or export the full list' : rows.length + ' page' + (rows.length === 1 ? '' : 's'))
-            + ' · ' + measuredShown + ' of ' + shownN + ' Lighthouse-scored (a dash means the page was crawled but not measured)';
+          /* The Lighthouse count is over the WHOLE filtered list, not just this page. Per-page
+             it would swing between 40/40 and 0/40 as you clicked through and read as coverage
+             changing, when all that changed was which slice you are looking at. */
+          const measuredAll = rows.filter(r => r.measured).length;
+          au.pageRowCount = (rows.length === 0
+              ? 'No pages match this filter'
+              : 'Showing ' + (from + 1) + '–' + (from + visible.length) + ' of ' + rows.length + ' page' + (rows.length === 1 ? '' : 's'))
+            + ' · ' + measuredAll + ' of ' + rows.length + ' Lighthouse-scored across the whole list'
+            + ' (a dash means the page was crawled but not measured)';
+
+          /* Numbered pages, windowed to 7 so a 29-page site audit does not print 29 buttons.
+             First and last are always reachable so you can jump to either end in one click. */
+          const pageBtn = (n, label, active, click) => ({
+            label: label, click: click,
+            style: {
+              minWidth: '30px', padding: '5px 9px', fontSize: '12.5px', fontWeight: 600,
+              borderRadius: '6px', cursor: 'pointer', border: '1px solid ' + (active ? '#4f46e5' : '#e2e8f0'),
+              background: active ? '#eef2ff' : 'white', color: active ? '#4338ca' : '#64748b'
+            }
+          });
+          const go = n => () => this.setState({ auPgPage: n });
+          const nums = this.pageWindow(pageCount, pageIdx).map(n => n === 'gap'
+            ? { label: '…', style: { padding: '5px 4px', fontSize: '12.5px', color: '#cbd5e1' } }
+            : pageBtn(n, String(n + 1), n === pageIdx, go(n)));
+          const navBtn = (on, click) => ({
+            click: on ? click : () => {},
+            style: {
+              padding: '5px 11px', fontSize: '12.5px', fontWeight: 600, borderRadius: '6px',
+              border: '1px solid #e2e8f0', background: 'white',
+              color: on ? '#64748b' : '#cbd5e1', cursor: on ? 'pointer' : 'default'
+            }
+          });
+          au.hasPageNav = pageCount > 1;
+          au.pageNums = nums;
+          au.pagePrev = navBtn(pageIdx > 0, go(pageIdx - 1));
+          au.pageNext = navBtn(pageIdx < pageCount - 1, go(pageIdx + 1));
         } else {
           /* `avgScore` averages the folder's MEASURED pages only and is null when it has
              none, so the column states its own denominator instead of implying the average

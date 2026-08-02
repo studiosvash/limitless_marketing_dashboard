@@ -203,8 +203,8 @@
             <span style="margin-left: auto; font-size: 13px; color: #64748b;">Showing <b style="color:#0f172a;">{{ bl.rowCount }}</b> of {{ bl.backlinksFmt }} backlinks</span>
           </div>
           <div style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
-            <div style="display: grid; grid-template-columns: 1.7fr 1.1fr 70px 96px 100px; padding: 10px 18px; background: #f8fafc; border-bottom: 1px solid #f1f5f9; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8; font-weight: 600;">
-              <span>Referring domain</span><span>Anchor &amp; target</span><span style="text-align:right;">Domain AS</span><span style="text-align:center;">Follow</span><span style="text-align:right;">First seen</span>
+            <div style="display: grid; grid-template-columns: 1.5fr 1fr 70px 64px 96px 100px; padding: 10px 18px; background: #f8fafc; border-bottom: 1px solid #f1f5f9; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8; font-weight: 600;">
+              <span>Referring domain</span><span>Anchor &amp; target</span><span style="text-align:right;">Domain AS</span><span style="text-align:right;">Spam</span><span style="text-align:center;">Follow</span><span style="text-align:right;">First seen</span>
             </div>
             <div style="max-height: 620px; overflow-y: auto;">
               <sc-if value="{{ bl.rows.length === 0 }}" hint-placeholder-val="{{ false }}">
@@ -214,11 +214,11 @@
                 </div>
               </sc-if>
               <sc-for list="{{ bl.rows }}" as="r" hint-placeholder-count="16">
-                <div style="display: grid; grid-template-columns: 1.7fr 1.1fr 70px 96px 100px; align-items: center; padding: 12px 18px; border-bottom: 1px solid #f8fafc;" style-hover="background:#f8fafc">
+                <div style="display: grid; grid-template-columns: 1.5fr 1fr 70px 64px 96px 100px; align-items: center; padding: 12px 18px; border-bottom: 1px solid #f8fafc;" style-hover="background:#f8fafc">
                   <div style="min-width: 0;">
                     <div style="display:flex;align-items:center;gap:8px;">
                       <span style="font-size:13px;">{{ r.flag }}</span>
-                      <span style="font-size:13px;color:#0f172a;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ r.pageTitle }}</span>
+                      <a href="{{ r.urlFrom }}" target="_blank" rel="noopener" title="Open the page that links to you" style="font-size:13px;color:#0f172a;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-decoration:none;" style-hover="color:#4f46e5;text-decoration:underline">{{ r.pageTitle }}</a>
                       <sc-for list="{{ r.badges }}" as="bd" hint-placeholder-count="1"><span style="font-size:10px;font-weight:600;padding:1px 6px;border-radius:4px;color:{{ bd.color }};background:{{ bd.bg }};flex-shrink:0;">{{ bd.label }}</span></sc-for>
                     </div>
                   </div>
@@ -226,7 +226,8 @@
                     <div style="font-size:13px;color:#4f46e5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ r.anchor }}</div>
                     <div style="font-size:12px;color:#94a3b8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px;">→ {{ r.urlTo }}</div>
                   </div>
-                  <span style="text-align:right;"><span style="{{ r.asStyle }}">{{ r.domainRank }}</span></span>
+                  <span style="text-align:right;" title="Page rank: {{ r.pageRank }}"><span style="{{ r.asStyle }}">{{ r.domainRank }}</span></span>
+                  <span style="text-align:right;font-size:12px;font-weight:600;color:{{ r.spamColor }};">{{ r.spam }}</span>
                   <span style="text-align:center;"><span style="font-size:11px;font-weight:500;color:{{ r.followColor }};">{{ r.follow }}</span></span>
                   <span style="text-align:right;font-size:12px;color:#94a3b8;">{{ r.firstSeen }}</span>
                 </div>
@@ -240,17 +241,18 @@
         <sc-if value="{{ bl.isRefDom }}" hint-placeholder-val="{{ false }}">
         <div style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
           <div style="padding: 14px 18px; border-bottom: 1px solid #f1f5f9; font-size: 14px; font-weight: 600;">All Referring Domains <span style="color:#94a3b8;font-weight:400;">({{ bl.refDomainsFmt }})</span></div>
-          <div style="display: grid; grid-template-columns: 1.6fr 80px 100px 110px 90px 110px; padding: 10px 18px; background: #f8fafc; border-bottom: 1px solid #f1f5f9; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8; font-weight: 600;">
-            <span>Domain</span><span style="text-align:right;">AS</span><span style="text-align:right;">Backlinks</span><span style="text-align:right;">Links to us</span><span style="text-align:center;">Follow</span><span style="text-align:right;">First seen</span>
+          <div style="display: grid; grid-template-columns: 1.4fr 70px 64px 100px 110px 90px 110px; padding: 10px 18px; background: #f8fafc; border-bottom: 1px solid #f1f5f9; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8; font-weight: 600;">
+            <span>Domain</span><span style="text-align:right;">AS</span><span style="text-align:right;">Spam</span><span style="text-align:right;">Backlinks</span><span style="text-align:right;">Links to us</span><span style="text-align:center;">Follow</span><span style="text-align:right;">First seen</span>
           </div>
           <div style="max-height: 640px; overflow-y: auto;">
             <sc-if value="{{ bl.allRefDomains.length === 0 }}" hint-placeholder-val="{{ false }}">
               <div style="padding: 44px 20px; text-align: center;"><div style="font-size: 15px; font-weight: 600; color: #334155;">Nothing here</div><div style="font-size: 13px; color: #94a3b8; margin-top: 4px;">No referring domains have been synced for this site yet.</div></div>
             </sc-if>
             <sc-for list="{{ bl.allRefDomains }}" as="d" hint-placeholder-count="16">
-              <div style="display: grid; grid-template-columns: 1.6fr 80px 100px 110px 90px 110px; align-items: center; padding: 12px 18px; border-bottom: 1px solid #f8fafc;" style-hover="background:#f8fafc">
+              <div style="display: grid; grid-template-columns: 1.4fr 70px 64px 100px 110px 90px 110px; align-items: center; padding: 12px 18px; border-bottom: 1px solid #f8fafc;" style-hover="background:#f8fafc">
                 <span style="display:inline-flex;align-items:center;gap:9px;min-width:0;"><span style="font-size:14px;">{{ d.flag }}</span><a href="https://{{ d.domain }}" target="_blank" rel="noopener" style="color:#4f46e5;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-decoration:none;" style-hover="text-decoration:underline">{{ d.domain }}</a><sc-if value="{{ d.isNew }}" hint-placeholder-val="{{ false }}"><span style="font-size:10px;font-weight:600;padding:1px 6px;border-radius:4px;color:#059669;background:#ecfdf5;">NEW</span></sc-if></span>
                 <span style="text-align:right;"><span style="{{ d.asStyle }}">{{ d.as }}</span></span>
+                <span style="text-align:right;font-size:12px;font-weight:600;color:{{ d.spamColor }};">{{ d.spam }}</span>
                 <span style="text-align:right;font-size:13px;color:#334155;">{{ d.backlinksFmt }}</span>
                 <span style="text-align:right;font-size:13px;color:#334155;">{{ d.linksToUs }}</span>
                 <span style="text-align:center;"><span style="font-size:11px;font-weight:500;color:{{ d.followColor }};">{{ d.follow }}</span></span>

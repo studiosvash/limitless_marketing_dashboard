@@ -11,6 +11,7 @@ from apps.sync.models import SyncLog, SyncStatus
 from pipeline.db.engine import get_engine
 from pipeline.db.schema import init_db
 from pipeline.services.site_service import add_site
+from pipeline.utils.site_ids import normalize_domain
 from pipeline.utils.db_connection import get_session
 import pipeline.utils.db_connection as db_connection
 
@@ -263,18 +264,23 @@ class ApplySettingsUpdateCredentialsTests(TestCase):
             site_url=SITE_ID, site_name="Example", gsc_property="sc-domain:old.com",
             ga4_property_id="old-ga4", dataforseo_target_domain="old.com",
         )
+        # add_site NORMALISES the domain it is given, so the row's site_url — the join key
+        # everything below looks up — is "example.com", not the "https://example.com" spelling
+        # passed in. Keying off the stored value is what production does too: site_id always
+        # arrives as resolve_project_or_404(slug).site_url.
+        self.site_id = normalize_domain(SITE_ID)
 
     def test_credentials_update_reflects_on_next_build_call(self):
         from apps.dashboard.services.settings_service import (
             apply_settings_update, build_settings_response,
         )
-        result = apply_settings_update(SITE_ID, {"credentials": {
+        result = apply_settings_update(self.site_id, {"credentials": {
             "gsc_property": "sc-domain:new.com", "ga4_property_id": "444555666",
             "dataforseo_target_domain": "new.com",
         }})
         self.assertEqual(result, {"ok": True})
 
-        body = build_settings_response(SITE_ID)
+        body = build_settings_response(self.site_id)
         self.assertEqual(body["credentials"], {
             "gsc_property": "sc-domain:new.com", "ga4_property_id": "444555666",
             "dataforseo_target_domain": "new.com",
@@ -288,9 +294,9 @@ class ApplySettingsUpdateCredentialsTests(TestCase):
         from apps.dashboard.services.settings_service import (
             apply_settings_update, build_settings_response,
         )
-        apply_settings_update(SITE_ID, {"credentials": {"ga4_property_id": "properties/777888999"}})
+        apply_settings_update(self.site_id, {"credentials": {"ga4_property_id": "properties/777888999"}})
 
-        body = build_settings_response(SITE_ID)
+        body = build_settings_response(self.site_id)
         self.assertEqual(body["credentials"]["ga4_property_id"], "777888999")
         self.assertEqual(body["credentials"]["gsc_property"], "sc-domain:old.com")
         self.assertEqual(body["credentials"]["dataforseo_target_domain"], "old.com")

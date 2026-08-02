@@ -106,8 +106,36 @@ from pipeline.utils.site_ids import resolve_site_ids
 keep a thin `_resolve_site_ids` / `_site_id_variants` wrapper that delegates to it. They used to
 carry five separate copies that knew only the `sc-domain:` prefix — see §9.
 
-`www.x.com` and `x.com` are deliberately **not** merged: Search Console treats them as different
-properties, and unioning them would attribute one host's traffic to the other.
+**`www.x.com` and `x.com` ARE one site (changed 2026-08-02; this file previously said the
+opposite).** The same module exposes the registration rule:
+
+```python
+from pipeline.utils.site_ids import normalize_domain
+normalize_domain("https://www.premierstaff.com/careers")   # -> "premierstaff.com"
+```
+
+`normalize_domain()` strips the scheme, `sc-domain:`, a leading `www.`, any path, port, trailing
+dot and trailing slash, and lowercases. `add_site()` stores its output as `sites.site_url` and
+dedupes on it, so a site cannot be registered twice under two spellings. `resolve_site_ids()`
+expands to **both** hosts, so rows written under the www spelling before this rule existed stay
+readable — this was a read-side widening, not a data rewrite.
+
+The old rule (Search Console models `www.x.com` and `x.com` as separate properties, so merging
+could cross-attribute traffic) was correct in the abstract and wrong in practice: the registry
+let one site be added twice, producing two projects, two slugs, two sync budgets, two halves of
+one history, and a project switcher offering a choice between them. No domain in this product
+serves different content on the two hosts.
+
+Two functions, two questions — don't swap them:
+
+| Function | Question it answers | `https://www.x.com/` → |
+|---|---|---|
+| `canonical_domain()` | *Which host is this string?* — right for matching against a GSC property list | `www.x.com` |
+| `normalize_domain()` | *Which site is this?* — right for registration, dedup, comparing to `Site.site_url` | `x.com` |
+
+Projects registered before the rule keep their old `site_url` until
+`python manage.py normalize_site_urls --apply` runs (dry-run by default; it moves the
+`site_url`-keyed Django rows with them and refuses to merge two projects for one site).
 
 ---
 
@@ -480,6 +508,7 @@ Each of these is a real bug that was found and fixed. Do not re-introduce them.
 | Trusting `llm_mentions/top_pages` to return only YOUR pages | It returns co-occurring pages from other domains too — a live call for `driphydration.com` came back containing `https://www.perfectb.com/...`. Filter on `canonical_domain(url) == own_domain` before storing, or "Your Most-Cited Pages" lists a competitor's content |
 | Two state keys that must track each other but live in different files | `app.js`'s `aiPlat` default was `{chatgpt, perplexity}` while `llm_mentions_service.MENTION_PLATFORMS`' ids became `google`/`chat_gpt`, so both platform toggle chips silently defaulted to "off" — nothing raised, the Share-of-Voice trend just rendered as if every platform were deselected. `mentionPlatforms` (2 entries, DataForSEO-backed) and `llmPlatforms` (4 entries, the Prompts tab's own LLM keys) are deliberately different lists; a frontend default keyed on one must be written against *that* list's ids, not copied from the other |
 | Naming a REST endpoint after its MCP tool identifier | The connector shipped calling `llm_mentions/aggregation_metrics` and `llm_mentions/cross_aggregation_metrics`, carried over from the MCP tool names `ai_opt_llm_ment_agg_metrics` / `ai_opt_llm_ment_cross_agg_metrics`. Both return a plain HTTP 404 — the real REST paths are `llm_mentions/aggregated_metrics/live` and `llm_mentions/cross_aggregated_metrics/live` (**`aggregated`, not `aggregation`**, and every DataForSEO Live endpoint needs the `/live` suffix, exactly like the working `ai_keyword_data/keywords_search_volume/live`). Every test passed the whole time this was wrong, because a fixture never touches a URL — only a real call against the real host exercises the path string. `EndpointUrlTests` in `pipeline/connectors/tests/test_llm_mentions_parsing.py` now pins the verified paths so this can't regress silently |
+| A domain-equality check that strips the scheme but not `www.` | `sites.site_url` is the cross-database join key, and `add_site`'s duplicate guard compared a `_bare_domain()` that stripped `https://`, `http://`, `sc-domain:` and a trailing slash — **not a leading `www.`**. So `premierstaff.com` and `www.premierstaff.com` were both accepted as new sites: two projects, two slugs, two sync budgets, two halves of one site's history, and a project switcher that offered the user a choice between them with no way to tell which was real. The SPA's client-side pre-check (`_addSiteDomain`) had the identical gap, so nothing caught it on either side. Use `pipeline/utils/site_ids.normalize_domain()` — §3 — at every point that asks "is this the same site?" Note the two follow-on traps this created: `canonical_domain("https://")` used to fall back to the raw string and yield `"https"`, a domain-shaped non-domain that would have been stored as a `site_url`; and `POST /api/projects` passed the **raw typed string** to `start_sync_run()`, which would have filed a brand-new site's entire first sync under a key no page reads |
 | A fixture built from a tool's rendering of a response, not the response itself | The real envelope is `tasks[0].result[0] == {"total": {...}, "items": [...]}`. DataForSEO's MCP tool happens to present that `result` array under a field it labels `items` in its own output, which got misread as an *extra* nesting level inside the real envelope — so all three parsers read `result[0]["items"][0]` as the block. `.get("total")` on that was always `None`, so every parser returned `[]`: both live syncs reported **success with 0 records written** while all 37 tests stayed green, because the hand-written fixtures matched the wrong shape the code expected. Fixtures in `test_llm_mentions_parsing.py` are now trimmed from real captured responses (`.superpowers/sdd/2026-07-31-llm-mentions-ai-visibility/real-*.json`). Build a fixture from a captured response, never from documentation or a tool's rendering of one |
 
 ---

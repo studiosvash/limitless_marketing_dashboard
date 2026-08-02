@@ -1,10 +1,12 @@
 import sqlite3
 import tempfile
+from datetime import timedelta
 from pathlib import Path
 
 from django.core.management import call_command
 from django.db import IntegrityError
 from django.test import TestCase, override_settings
+from django.utils import timezone
 
 from sqlalchemy import inspect as sa_inspect
 
@@ -22,6 +24,58 @@ class SyncLogTests(TestCase):
         log = SyncLog.objects.create(connector="ga4", site_url="https://fusehealth.com")
         self.assertEqual(log.status, "never")
         self.assertEqual(log.records_written, 0)
+
+
+class RunningMarkerTests(TestCase):
+    """`last_synced` answers "when did this connector last finish?" -- a question a run that is
+    still in flight cannot change the answer to.
+
+    It used to be overwritten with None every time a connector STARTED, so the moment a sync
+    began, Settings -> Data pipeline stopped being able to say when that connector last
+    succeeded. Combined with a killed sync process (nothing then rewrites the row), the loss
+    was permanent: pagespeed on premierstaff.com read "Last synced: never" while its
+    page_speed table held 96 real Lighthouse rows from 2026-07-24.
+    """
+
+    SITE = "https://fusehealth.com"
+
+    def _mark(self, status, **kwargs):
+        from pipeline.connectors.base import _update_django_sync_log
+
+        _update_django_sync_log("pagespeed", self.SITE, status, **kwargs)
+        return SyncLog.objects.get(connector="pagespeed", site_url=self.SITE)
+
+    def test_starting_a_run_keeps_the_previous_finish_time_and_count(self):
+        earlier = timezone.now() - timedelta(days=1)
+        SyncLog.objects.create(
+            connector="pagespeed", site_url=self.SITE, status="success",
+            last_synced=earlier, records_written=96,
+        )
+        log = self._mark("running")
+        self.assertEqual(log.status, "running")
+        self.assertEqual(log.last_synced, earlier)
+        self.assertEqual(log.records_written, 96)
+
+    def test_a_connector_that_has_never_run_still_has_no_finish_time(self):
+        log = self._mark("running")
+        self.assertEqual(log.status, "running")
+        self.assertIsNone(log.last_synced)
+
+    def test_finishing_stamps_a_fresh_time(self):
+        SyncLog.objects.create(
+            connector="pagespeed", site_url=self.SITE, status="running",
+            last_synced=timezone.now() - timedelta(days=1),
+        )
+        before = timezone.now()
+        log = self._mark("success", records_written=96, error_message=None)
+        self.assertGreaterEqual(log.last_synced, before)
+        self.assertEqual(log.records_written, 96)
+
+    def test_failing_stamps_a_fresh_time_too(self):
+        before = timezone.now()
+        log = self._mark("error", error_message="boom")
+        self.assertGreaterEqual(log.last_synced, before)
+        self.assertEqual(log.error_message, "boom")
 
 
 class RefreshRunTests(TestCase):

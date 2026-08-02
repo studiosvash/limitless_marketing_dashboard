@@ -9,7 +9,47 @@ that was sitting right there.
 """
 from django.test import SimpleTestCase
 
-from pipeline.utils.site_ids import canonical_domain, resolve_site_ids
+from pipeline.utils.site_ids import canonical_domain, normalize_domain, resolve_site_ids
+
+
+class NormalizeDomainTests(SimpleTestCase):
+    """The registration rule: every spelling of one site collapses to one string.
+
+    The bug: `add_site`'s duplicate guard compared a helper that stripped the scheme and the
+    `sc-domain:` prefix but not `www.`, so premierstaff.com and www.premierstaff.com were both
+    accepted and the same site became two projects.
+    """
+
+    def test_every_spelling_of_one_site_normalises_to_the_same_domain(self):
+        for raw in [
+            "https://premierstaff.com",
+            "http://premierstaff.com",
+            "https://www.premierstaff.com",
+            "http://www.premierstaff.com",
+            "premierstaff.com",
+            "www.premierstaff.com",
+            "https://www.premierstaff.com/",
+            "sc-domain:premierstaff.com",
+            "  HTTPS://WWW.PremierStaff.com/careers  ",
+            "https://www.premierstaff.com:8443/",
+            "www.premierstaff.com.",
+        ]:
+            self.assertEqual(normalize_domain(raw), "premierstaff.com", raw)
+
+    def test_www_is_only_stripped_as_a_leading_label(self):
+        # A domain that merely CONTAINS "www" is a different site, not a prefixed one.
+        self.assertEqual(normalize_domain("wwwstaff.com"), "wwwstaff.com")
+        self.assertEqual(normalize_domain("www.www.premierstaff.com"), "www.premierstaff.com")
+
+    def test_a_subdomain_that_is_not_www_survives(self):
+        # Only `www.` is treated as the same site; blog.x.com is genuinely a different host.
+        self.assertEqual(normalize_domain("https://blog.premierstaff.com/"), "blog.premierstaff.com")
+
+    def test_empty_input_is_empty(self):
+        # Callers must treat "" as invalid input — never store it as a join key.
+        self.assertEqual(normalize_domain(""), "")
+        self.assertEqual(normalize_domain(None), "")
+        self.assertEqual(normalize_domain("   "), "")
 
 
 class CanonicalDomainTests(SimpleTestCase):
@@ -24,8 +64,11 @@ class CanonicalDomainTests(SimpleTestCase):
         ]:
             self.assertEqual(canonical_domain(raw), "premierstaff.com", raw)
 
-    def test_keeps_www_distinct_but_normalises_the_rest(self):
-        # www.x.com and x.com are different hosts to Search Console, so they are NOT merged.
+    def test_keeps_www_because_it_answers_which_host_not_which_site(self):
+        # canonical_domain deliberately still reports the exact host — that is the right answer
+        # when matching a string against a Search Console property list, where
+        # https://www.x.com/ and https://x.com/ really are two properties. Use
+        # normalize_domain() when the question is "which SITE is this?".
         self.assertEqual(canonical_domain("https://www.premierstaff.com/"), "www.premierstaff.com")
 
     def test_drops_a_path_because_the_join_key_is_a_host(self):
@@ -71,3 +114,24 @@ class ResolveSiteIdsTests(SimpleTestCase):
     def test_empty_input_yields_nothing_to_match(self):
         # `.in_([])` is a valid empty result; `.in_([""])` would be a silent full-table miss.
         self.assertEqual(resolve_site_ids(""), [])
+
+    def test_a_bare_domain_also_matches_rows_written_under_the_www_host(self):
+        # add_site now normalises www away, so a project stored as premierstaff.com must still
+        # reach the rows a connector wrote under the www spelling before that rule existed.
+        got = resolve_site_ids("premierstaff.com")
+        for expected in [
+            "www.premierstaff.com",
+            "sc-domain:www.premierstaff.com",
+            "https://www.premierstaff.com/",
+            "http://www.premierstaff.com",
+        ]:
+            self.assertIn(expected, got)
+
+    def test_a_www_project_still_matches_the_bare_host(self):
+        # The other direction, for a project row that has not been through
+        # `manage.py normalize_site_urls` yet.
+        got = resolve_site_ids("www.premierstaff.com")
+        self.assertEqual(got[0], "www.premierstaff.com")
+        self.assertIn("premierstaff.com", got)
+        self.assertIn("sc-domain:premierstaff.com", got)
+        self.assertIn("https://premierstaff.com/", got)

@@ -64,21 +64,26 @@
       off.trendStart = tr.length ? tr[0].date : '';
       off.trendEnd = tr.length ? tr[tr.length - 1].date : '';
 
-      /* channel mix */
-      const chMax = Math.max.apply(null, data.channels.map(c => c.sessions).concat([1]));
+      /* channel mix — off-site channels only. This page reports on referral/social/video
+         traffic, not organic search; Organic Search (and Direct/Paid/Unassigned) used to be
+         listed too, just dimmed, which still showed a channel this page explicitly excludes.
+         `chTotal` stays the sum across ALL channels (not just the ones listed below) so each
+         row's % and the "of all sessions are off-site" stat both answer the same question:
+         how much of the SITE's total traffic this off-site source drives. */
+      const offCh = data.channels.filter(c => c.offsite);
+      const chMax = Math.max.apply(null, offCh.map(c => c.sessions).concat([1]));
       const chTotal = data.channels.reduce((a, c) => a + c.sessions, 0) || 1;
-      const chColors = { 'Organic Search': '#94a3b8', 'Direct': '#cbd5e1', 'Referral': '#4f46e5', 'Organic Social': '#0a66c2', 'Organic Video': '#dc2626', 'Email': '#a1a1aa' };
-      off.channels = data.channels.map(c => {
-        const col = chColors[c.channel] || '#94a3b8';
+      const chColors = { 'Referral': '#4f46e5', 'Organic Social': '#0a66c2', 'Social': '#0a66c2', 'Organic Video': '#dc2626', 'Video': '#dc2626' };
+      off.channels = offCh.map(c => {
+        const col = chColors[c.channel] || '#4f46e5';
         return {
           channel: c.channel, sessFmt: this.fmt(c.sessions),
           pctLabel: Math.round(c.sessions / chTotal * 100) + '%',
-          labelColor: c.offsite ? '#0f172a' : '#64748b', labelWeight: c.offsite ? 600 : 400,
+          labelColor: '#0f172a', labelWeight: 600,
           dotStyle: { width: '8px', height: '8px', borderRadius: '2px', background: col, flexShrink: 0 },
-          barStyle: { height: '100%', width: Math.max(2, Math.round(c.sessions / chMax * 100)) + '%', background: col, borderRadius: '9999px', opacity: c.offsite ? 1 : 0.5 }
+          barStyle: { height: '100%', width: Math.max(2, Math.round(c.sessions / chMax * 100)) + '%', background: col, borderRadius: '9999px', opacity: 1 }
         };
       });
-      const offCh = data.channels.filter(c => c.offsite);
       const offSess = offCh.reduce((a, c) => a + c.sessions, 0);
       off.offShareLabel = Math.round(offSess / chTotal * 100) + '%';
       off.offKeyEvents = this.fmt(Math.round(offCh.reduce((a, c) => a + c.keyEvents, 0)));
@@ -87,20 +92,26 @@
       const li = data.social.find(x => x.platform === 'LinkedIn') || { impressions: null, sessions: 0, keyEvents: 0, revenue: 0 };
       const liConnected = !!(data.connectors && data.connectors.linkedin);
       // impressions === null means "no platform connector has ever reported this".
-      // That is independent of the Settings toggle, so the dash and the caption key
-      // off the value itself — a connected toggle must never turn a missing number
-      // into a printed 0.
+      // That is independent of `connected`, so the dash and the caption key off the
+      // value itself — a connected flag must never turn a missing number into a
+      // printed 0.
       const liImpr = li.impressions == null ? null : li.impressions;
       off.li = {
         impressions: liImpr == null ? '—' : this.fmt(liImpr), sessions: this.fmt(li.sessions),
         ctr: liImpr ? +(li.sessions / liImpr * 100).toFixed(1) + '%' : '—',
         keyEvents: this.fmt(Math.round(li.keyEvents)), revenue: this.money(li.revenue),
         connected: liConnected,
-        badgeLabel: liConnected ? 'Connected' : 'Not connected',
+        badgeLabel: liConnected ? 'Connected' : 'No connector',
         badgeStyle: liConnected
           ? { marginLeft: 'auto', fontSize: '10px', fontWeight: 600, color: '#059669', background: '#ecfdf5', padding: '3px 8px', borderRadius: '9999px' }
-          : { marginLeft: 'auto', fontSize: '10px', fontWeight: 600, color: '#4f46e5', background: '#eef2ff', padding: '3px 8px', borderRadius: '9999px', cursor: 'pointer', textDecoration: 'underline' },
-        subtitle: liConnected ? 'Connector live · impressions + click-throughs' : 'Connector not set up yet (click badge to connect in Settings)',
+          // Not underlined and not a pointer any more. The badge still opens Settings ->
+          // Connections (that is where the explanation lives), but styling it as a link
+          // promised a connect action that no longer exists there — the LinkedIn connector
+          // is not wired into the sync engine, so there is nothing to press.
+          : { marginLeft: 'auto', fontSize: '10px', fontWeight: 600, color: '#94a3b8', background: '#f1f5f9', padding: '3px 8px', borderRadius: '9999px', cursor: 'pointer' },
+        subtitle: liConnected
+          ? 'Connector live · impressions + click-throughs'
+          : 'Sessions are GA4. Impressions & CTR need the LinkedIn API, which is not connected yet.',
         imprCaption: liImpr == null ? 'connector needed' : 'from LinkedIn API'
       };
 

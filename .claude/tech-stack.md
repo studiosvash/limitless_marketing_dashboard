@@ -36,7 +36,7 @@
   - `config/settings/production.py` — `DEBUG=False`, raises `RuntimeError` at import if `DJANGO_SECRET_KEY` is unset, HSTS/SSL redirect/secure cookies, `ALLOWED_HOSTS` and `CSRF_TRUSTED_ORIGINS` read from comma-separated env vars.
 - Installed apps: `django.contrib.*`, `rest_framework`, `rest_framework.authtoken`, plus `apps.accounts`, `apps.dashboard`, `apps.sync`, `apps.api`.
 - Middleware is stock Django plus **`django.contrib.auth.middleware.LoginRequiredMiddleware`**, which protects every view by default. Views opt out with `@login_not_required`.
-- Root URLconf `config/urls.py` exposes only four things: `/admin/`, `/login/` + `/logout/`, `/api/…`, and `/` (the SPA). `/app/` is a permanent-less redirect to `/` for old bookmarks.
+- Root URLconf `config/urls.py` exposes only four things: `/admin/`, the `apps.accounts` auth routes (`/login/`, `/logout/`, `/accept-invite/`, `/password-reset/…`, `/reset/…`), `/api/…`, and `/` (the SPA). `/app/` is a permanent-less redirect to `/` for old bookmarks.
 
 **Why Django:** the app needs sessions, an admin, a migration system, and a battle-tested auth stack for a small internal team. None of that is worth hand-rolling.
 
@@ -191,6 +191,14 @@ from the removed HTMX/Tailwind template UI. `static/spa/us_cities.json` (~1 MB) 
   `LOGIN_REDIRECT_URL = "spa"`, `LOGOUT_REDIRECT_URL = "login"`.
 - `apps/accounts/views.py` wraps Django's built-in `LoginView` (branded template,
   `redirect_authenticated_user=True`) and a CSRF-exempt `LogoutView` that redirects to `/login/`.
+- It also holds the two public flows that must work **without** an account: `AcceptInviteView`
+  (`/accept-invite/?token=…`, the invitation email's target) and the four
+  `PasswordReset*View` subclasses. All are `@login_not_required` — that decorator is the whole
+  reason they are subclasses instead of `auth_views.*` wired straight into `urls.py`.
+- Links in outbound email are built from the incoming request's host
+  (`apps/api/views.py::build_frontend_link` for invites, Django's `RequestSite` for password
+  resets), so dev mails localhost and production mails the deployed domain with no config.
+  `FRONTEND_URL` overrides the former only when it isn't a stale localhost value.
 - `apps/accounts/backends.EmailOrUsernameModelBackend` lets a user sign in with **either**
   username or email. It is listed before `ModelBackend` in `AUTHENTICATION_BACKENDS` and
   performs a dummy password hash on a miss to flatten the timing signal.
@@ -307,7 +315,7 @@ development on 3.13.
 | `LINKEDIN_*` | LinkedIn Ads API | `linkedin` (unwired) |
 | `WEBFLOW_*`, `WP_*`, `FRAMER_SITEMAP_URL` | CMS connectors | `webflow`, `wordpress`, `sitemap` (unwired) |
 | `EMAIL_BACKEND`, `EMAIL_HOST`, `EMAIL_PORT`, `EMAIL_HOST_USER`, `EMAIL_HOST_PASSWORD`, `EMAIL_USE_TLS`, `EMAIL_USE_SSL`, `DEFAULT_FROM_EMAIL` | Invitation email | `base.py`, `apps/api/views.py` |
-| `FRONTEND_URL` | Base URL in invitation emails | `apps/api/views.py` |
+| `FRONTEND_URL` | Optional override for the base URL in invitation emails. **Leave blank** — the link is derived from the request's own host | `apps/api/views.py` |
 
 `scripts/audit_env.py` performs a live credential audit and reports availability without
 printing secrets.
@@ -316,15 +324,25 @@ printing secrets.
 
 ## 9. Background jobs & scheduling
 
-- **No Celery, no RQ, no cron, no scheduler of any kind exists in this repo.**
-- A refresh is a `threading.Thread(target=sync_all|sync_page, daemon=True)` started from
-  `start_sync_run()`. Progress is written to a `RefreshRun` row; the SPA polls
-  `GET /api/tasks/<id>` every 500 ms until `done`.
-- Because the thread is a daemon inside the web process, a server restart mid-sync leaves the
-  `RefreshRun` row stuck in `running` forever. Nothing reaps it.
-- The Settings → Automation "sync schedule" (`syncConfig`) is genuinely persisted but **nothing
-  reads it to schedule anything**. `settings_service._sync_summary_raw()` returns
-  `next_run: None` / `day: None` for exactly this reason.
+- **No Celery and no RQ.** Scheduling is one management command driven by the OS scheduler.
+- A refresh is its own OS process — `manage.py run_sync`, spawned by `start_sync_run()`, with
+  its pid stored on the `RefreshRun` row. Progress is written to that row; the SPA polls
+  `GET /api/tasks/<id>` every 500 ms until `done`. (It used to be a daemon thread inside the
+  web worker, where any restart or worker recycle killed it silently. A run now survives a
+  web-server restart.)
+- A run that dies anyway is reaped by `apps/sync/scheduling.reap_orphaned_runs()` — a dead pid
+  is direct evidence, with `RUN_TIMEOUT` (2 h) as the fallback. It runs on the first request of
+  each web process, on every scheduler tick, and before a run is started or reported.
+- The same call then runs `reconcile_orphaned_sync_logs()`, which clears the **connector**
+  (`SyncLog`) rows left at `running` by that death. Without it, Settings → Data pipeline
+  reported "Last synced: never · 0 records" forever for whichever connector was in flight —
+  see `.claude/api-reference.md` § Orphaned-run reaping.
+- `SyncLog.last_synced` means *last finished*: only the `success`/`error` writes stamp it, and a
+  start leaves the stored value alone.
+- The Settings → Automation "sync schedule" (`syncConfig`) is read and acted on by
+  `manage.py run_scheduled_syncs` (point Task Scheduler / cron at it hourly); it starts at most
+  one due module per site per tick. `settings_service` and the scheduler share
+  `apps/sync/scheduling.py`, so the date shown and the decision made cannot drift apart.
 
 ---
 

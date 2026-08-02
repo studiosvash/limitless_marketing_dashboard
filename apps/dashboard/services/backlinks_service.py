@@ -22,7 +22,7 @@ from collections import defaultdict
 from datetime import date, timedelta
 from sqlalchemy import func, select
 
-from pipeline.db.schema import Backlink, BacklinksSnapshot, TrackedCompetitor
+from pipeline.db.schema import Backlink, BacklinksSnapshot, TrackedCompetitor, ensure_backlinks_columns
 from pipeline.utils.db_connection import get_session
 from pipeline.utils.site_ids import resolve_site_ids
 from pipeline.services.competitor_service import get_tracked_competitors
@@ -98,6 +98,9 @@ def query_backlinks_table_raw(site_id: str, limit: int = 500) -> list[dict]:
     site_ids = _resolve_site_ids(site_id)
     try:
         with get_session() as session:
+            # select(Backlink) references url_from/page_from_rank/spam_score, which do not
+            # exist on a `backlinks` table created before this migration.
+            ensure_backlinks_columns(session)
             rows = session.execute(
                 select(Backlink)
                 .where(Backlink.site_id.in_(site_ids))
@@ -108,10 +111,13 @@ def query_backlinks_table_raw(site_id: str, limit: int = 500) -> list[dict]:
                 {
                     "domain": r.referring_domain,
                     "target_url": r.target_url,
+                    "url_from": r.url_from or "",
                     "anchor": r.anchor or "—",
                     "status": r.status or "live",
                     "dofollow": bool(r.dofollow),
                     "domain_rank": r.domain_rank or 0,
+                    "page_rank": r.page_from_rank,
+                    "spam_score": r.spam_score,
                     "first_seen": r.first_seen.isoformat() if r.first_seen else None,
                     "last_seen": r.last_seen.isoformat() if r.last_seen else None,
                     "firstSeen": _fmt_date(r.first_seen),
@@ -130,8 +136,10 @@ def query_referring_domains_raw(site_id: str, links: list[dict] = None) -> list[
     """Referring domains rolled up from the real Backlink rows.
 
     `firstSeen` is the earliest real `first_seen` across that domain's links (empty when the
-    connector never supplied one). `category` and `spam` have no column behind them, so they
-    stay empty/None instead of carrying a stand-in value.
+    connector never supplied one). `category` has no column behind it, so it stays empty
+    instead of carrying a stand-in value. `spam` averages the real per-link
+    `backlink_spam_score` DataForSEO returns; it is None only when none of the domain's stored
+    links carry one yet (synced before this column existed).
     """
     if links is None:
         links = query_backlinks_table_raw(site_id, limit=5000)
@@ -142,6 +150,7 @@ def query_referring_domains_raw(site_id: str, links: list[dict] = None) -> list[
     out = []
     for domain, rows in sorted(by_domain.items(), key=lambda kv: -len(kv[1])):
         ranks = [r.get("domain_rank") or 0 for r in rows]
+        spam_scores = [r["spam_score"] for r in rows if r.get("spam_score") is not None]
         seen = sorted(r["first_seen"] for r in rows if r.get("first_seen"))
         first_seen_iso = seen[0] if seen else None
         first_seen_date = date.fromisoformat(first_seen_iso) if first_seen_iso else None
@@ -156,7 +165,7 @@ def query_referring_domains_raw(site_id: str, links: list[dict] = None) -> list[
             "first_seen": first_seen_iso,
             "isNew": _is_recent(first_seen_date),
             "category": "",   # no category column on `backlinks`
-            "spam": None,     # no spam score column on `backlinks`
+            "spam": round(sum(spam_scores) / len(spam_scores)) if spam_scores else None,
         })
     return out
 

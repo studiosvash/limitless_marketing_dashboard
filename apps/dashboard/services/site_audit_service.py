@@ -386,44 +386,69 @@ def stored_domain_checks(site_id: str) -> list[dict]:
     return []
 
 
-def refresh_domain_checks(site_id: str) -> list[dict]:
-    """Probe the domain (SSL, sitemap.xml, robots.txt, HTTP/2, www redirect, llms.txt) and
-    record the result. Returns the checks it stored.
+def probe_domain_checks(site_id: str) -> list[dict]:
+    """Run the six probes (SSL, sitemap.xml, robots.txt, HTTP/2, www redirect, llms.txt) and
+    return their results **without storing anything**.
 
-    **SYNC PATH ONLY.** This makes six live network calls; it belongs with every other network
-    call in this system, i.e. behind the Refresh button. Nothing in a page-data path may call
-    it. `pipeline/services/sync_engine.py::_run_post_sync` is the hook — the same one
-    `record_audit_snapshot` documents — and it must run there BEFORE `record_audit_snapshot`
-    so the snapshot's score reflects the checks just taken.
+    **SYNC PATH ONLY.** Six live network calls, so it belongs behind the Refresh button with
+    every other outbound call — never in a page-data path. Its one caller is
+    `pipeline/connectors/domain_checks.py`, which stores the result and records the SyncLog row.
 
-    On failure the previously stored checks are kept; a failed probe never blanks real state.
+    Raises on failure rather than swallowing, so a broken probe surfaces as a red step in the
+    refresh checklist instead of a silent no-op. The individual `_check_*` helpers already
+    return an `ok: False` dict for the ordinary "this site does not have it" case, so an
+    exception here means the probe machinery itself failed — which is worth showing.
     """
     domain = _bare_domain(site_id)
     if not domain:
-        return stored_domain_checks(site_id)
+        raise ValueError(f"Could not derive a domain to probe from site_id {site_id!r}")
 
+    with ThreadPoolExecutor(max_workers=6) as executor:
+        f_ssl = executor.submit(_check_ssl, domain)
+        f_sitemap = executor.submit(_check_sitemap, domain)
+        f_robots = executor.submit(_check_robots, domain)
+        f_http2 = executor.submit(_check_http2, domain)
+        f_www = executor.submit(_check_www_redirect, domain)
+        f_llms = executor.submit(_check_llms_txt, domain)
+
+        return [
+            f_ssl.result(),
+            f_sitemap.result(),
+            f_robots.result(),
+            f_http2.result(),
+            f_www.result(),
+            f_llms.result(),
+        ]
+
+
+def store_domain_checks(site_id: str, checks: list[dict]) -> int:
+    """Record probe results as this project's domain-check state. Returns how many were stored.
+
+    Refuses to store an empty list: `stored_domain_checks` cannot tell "probed, found nothing"
+    from "never probed", and the SPA renders the latter as the "No domain checks recorded yet"
+    empty state. Blanking real state on a bad run would send the card back to that screen.
+    """
+    if not checks:
+        return 0
+    set_state(site_id, _DOMAIN_CHECKS_KEY, {"timestamp": time.time(), "checks": checks})
+    return len(checks)
+
+
+def refresh_domain_checks(site_id: str) -> list[dict]:
+    """Probe the domain and record the result, keeping the previous checks on failure.
+
+    Kept as the convenience wrapper for operators and one-off scripts. The sync path does NOT
+    use it — `domain_checks` is a real connector now, so it goes through
+    `probe_domain_checks` + `store_domain_checks` and gets a SyncLog row, a live step in the
+    refresh checklist and an honest error state, none of which this swallowing wrapper can give.
+    """
     try:
-        with ThreadPoolExecutor(max_workers=6) as executor:
-            f_ssl = executor.submit(_check_ssl, domain)
-            f_sitemap = executor.submit(_check_sitemap, domain)
-            f_robots = executor.submit(_check_robots, domain)
-            f_http2 = executor.submit(_check_http2, domain)
-            f_www = executor.submit(_check_www_redirect, domain)
-            f_llms = executor.submit(_check_llms_txt, domain)
-
-            checks = [
-                f_ssl.result(),
-                f_sitemap.result(),
-                f_robots.result(),
-                f_http2.result(),
-                f_www.result(),
-                f_llms.result(),
-            ]
-        set_state(site_id, _DOMAIN_CHECKS_KEY, {"timestamp": time.time(), "checks": checks})
-        return checks
+        checks = probe_domain_checks(site_id)
     except Exception as e:
         logger.error(f"refresh_domain_checks error: {e}", exc_info=True)
         return stored_domain_checks(site_id)
+    store_domain_checks(site_id, checks)
+    return checks
 
 
 

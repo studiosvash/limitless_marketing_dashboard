@@ -27,6 +27,12 @@
       // Values with no column behind them arrive as null; show a dash, never a stand-in number.
       const orDash = v => (v === null || v === undefined || v === '') ? '—' : v;
       const stripProto = u => ('' + (u || '')).replace(/^https?:\/\//, '');
+      // `domain_rank` off the `backlinks` table is DataForSEO's raw 0-1000 domain_from_rank.
+      // Every "AS" surface here (chip colors, the donut ring) assumes a 0-100 scale -- the same
+      // /10 conversion pipeline/services/backlinks_service.py already applies for the snapshot
+      // aggregates. Without it a rank of 703 rendered as "AS 703" against a 0-100 donut and
+      // always hit the >=60 "green" color band regardless of real standing.
+      const asOf = raw => (raw === null || raw === undefined) ? null : Math.max(0, Math.min(100, Math.round(raw / 10)));
 
       const bl = {};
       /* Every backlink surface comes from the one DataForSEO Backlinks connector. Link Gap
@@ -49,8 +55,9 @@
       bl.isGap = s.blTab === 'linkgap';
 
       // KPIs
-      bl.as = sum.authorityScore; bl.asColor = asColorOf(sum.authorityScore);
-      bl.asDash = (sum.authorityScore / 100 * 188.5).toFixed(1) + ' 188.5'; bl.asDelta = orDash(sum.asDelta);
+      const asScore = asOf(sum.authorityScore) || 0;
+      bl.as = asScore; bl.asColor = asColorOf(asScore);
+      bl.asDash = (asScore / 100 * 188.5).toFixed(1) + ' 188.5'; bl.asDelta = orDash(sum.asDelta);
       bl.refDomainsFmt = this.fmt(sum.refDomains); bl.newRdMonth = orDash(sum.newRdMonth);
       bl.backlinksFmt = this.fmt(sum.backlinks); bl.backlinksShort = shortN(sum.backlinks);
       bl.dofollowPct = sum.dofollowPct; bl.brokenFmt = this.fmt(sum.broken);
@@ -92,20 +99,23 @@
       bl.topAnchors = anchorsSrc.slice(0, 6).map(a => ({ anchor: a.anchor, pct: Math.round(((a.backlinks || 0) / maxAnchor) * 100) }));
 
       // referring domains
-      const refRow = x => ({ domain: x.domain, flag: x.flag, as: x.rank, asStyle: asChip(x.rank), backlinksFmt: this.fmt(x.backlinks), linksToUs: x.linksToUs, follow: x.follow ? 'Dofollow' : 'Nofollow', followColor: x.follow ? '#059669' : '#94a3b8', firstSeen: x.firstSeen || '', isNew: !!x.isNew, category: x.category || '' });
+      const refRow = x => { const as = asOf(x.rank) || 0; return { domain: x.domain, flag: x.flag, as: as, asStyle: asChip(as), backlinksFmt: this.fmt(x.backlinks), linksToUs: x.linksToUs, follow: x.follow ? 'Dofollow' : 'Nofollow', followColor: x.follow ? '#059669' : '#94a3b8', firstSeen: x.firstSeen || '', isNew: !!x.isNew, category: x.category || '', hasSpam: x.spam !== null && x.spam !== undefined, spam: orDash(x.spam), spamColor: (x.spam === null || x.spam === undefined) ? '#94a3b8' : spamColorOf(x.spam) }; };
       const refDomains = data.refDomains || [];
       bl.topRefDomains = refDomains.slice(0, 8).map(refRow);
       bl.allRefDomains = refDomains.map(refRow);
 
       // backlinks table — one row per stored Backlink, nothing synthesised.
-      // The source *page* URL and title are not columns on `backlinks`, so the row shows the
-      // referring domain and leaves the sub-line empty rather than inventing a deep link.
       const blRows = links.map(l => ({
         domain: l.domain,
         flag: '🌐',
         anchor: l.anchor || '—',
         urlTo: stripProto(l.target_url),
+        // The exact page carrying the link. Absent for rows synced before this column
+        // existed -- the row then links to the referring domain's homepage instead.
+        urlFrom: l.url_from || '',
         rank: (l.domain_rank === null || l.domain_rank === undefined) ? null : l.domain_rank,
+        pageRank: (l.page_rank === null || l.page_rank === undefined) ? null : l.page_rank,
+        spam: (l.spam_score === null || l.spam_score === undefined) ? null : l.spam_score,
         dofollow: !!l.dofollow,
         isNew: !!l.isNew,
         isLost: l.status === 'lost',
@@ -123,18 +133,23 @@
         const badges = [];
         if (x.isNew) badges.push({ label: 'NEW', color: '#059669', bg: '#ecfdf5' });
         if (x.isLost) badges.push({ label: 'LOST', color: '#dc2626', bg: '#fef2f2' });
+        // Link to the exact page that carries the backlink when we have it; otherwise fall
+        // back to the referring domain's homepage rather than showing no link at all.
+        const linkHref = x.urlFrom || ('https://' + x.domain);
+        const hasSpam = x.spam !== null && x.spam !== undefined;
+        const domainAs = asOf(x.rank);
         return {
           flag: x.flag,
           pageTitle: x.domain,
-          urlFrom: '',
+          urlFrom: linkHref,
           anchor: x.anchor,
           urlTo: x.urlTo,
-          domainRank: orDash(x.rank),
-          asStyle: asChip(x.rank || 0),
-          // No spam-score column on `backlinks`; the markup hard-codes a trailing "%", so the
-          // cell is rendered transparent until that column is removed from backlinks.html.
-          spam: '',
-          spamColor: 'transparent',
+          domainRank: orDash(domainAs),
+          asStyle: asChip(domainAs || 0),
+          pageRank: orDash(asOf(x.pageRank)),
+          hasSpam: hasSpam,
+          spam: hasSpam ? x.spam : '',
+          spamColor: hasSpam ? spamColorOf(x.spam) : 'transparent',
           follow: x.dofollow ? 'Dofollow' : 'Nofollow',
           followColor: x.dofollow ? '#059669' : '#94a3b8',
           firstSeen: x.firstSeen,

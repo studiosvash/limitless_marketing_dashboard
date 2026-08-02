@@ -151,14 +151,29 @@
           <!-- domain checks + top issues -->
           <div style="display: grid; grid-template-columns: 1fr 1.6fr; gap: 16px;">
             <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
-              <div style="padding: 14px 20px; border-bottom: 1px solid #f1f5f9;"><h2 style="font-size: 14px; font-weight: 600; margin: 0;">Domain Checks</h2><sc-if value="{{ au.srcDomChecks.show }}" hint-placeholder-val="{{ true }}"><div style="margin-top: 6px;"><span style="{{ au.srcDomChecks.style }}" title="{{ au.srcDomChecks.title }}" aria-label="{{ au.srcDomChecks.aria }}">{{ au.srcDomChecks.text }}</span></div></sc-if></div>
-              <!-- the six probes (SSL, sitemap, robots, HTTP/2, www, llms.txt) run during a
-                   crawl, never on page load — so an empty list means "not recorded yet" -->
+              <!-- "Re-run" is shown only once checks exist (the empty state has its own
+                   button). Without it the only way to re-probe was a full Site Audit crawl,
+                   which is the same over-scoping the empty-state button had. -->
+              <div style="padding: 14px 20px; border-bottom: 1px solid #f1f5f9;">
+                <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px;">
+                  <h2 style="font-size: 14px; font-weight: 600; margin: 0;">Domain Checks</h2>
+                  <sc-if value="{{ au.hasDomChecks }}" hint-placeholder-val="{{ true }}">
+                    <span onClick="{{ h.syncDomainChecks }}" role="button" aria-label="Re-run the six domain checks — takes a few seconds" style="font-size: 12px; color: #4f46e5; font-weight: 500; cursor: pointer;" style-hover="opacity:0.7">Re-run</span>
+                  </sc-if>
+                </div>
+                <sc-if value="{{ au.srcDomChecks.show }}" hint-placeholder-val="{{ true }}"><div style="margin-top: 6px;"><span style="{{ au.srcDomChecks.style }}" title="{{ au.srcDomChecks.title }}" aria-label="{{ au.srcDomChecks.aria }}">{{ au.srcDomChecks.text }}</span></div></sc-if>
+              </div>
+              <!-- the six probes (SSL, sitemap, robots, HTTP/2, www, llms.txt) run in the sync
+                   path, never on page load — so an empty list means "not recorded yet".
+                   This button runs the 'domain_checks' scope, NOT 'audit': the probes are six
+                   plain HTTPS requests to the site (~4s, no credentials, nothing metered), and
+                   firing the full crawl to fill in one card cost 20-30 minutes and a billable
+                   DataForSEO OnPage job. A full crawl still refreshes these checks too. -->
               <sc-if value="{{ au.noDomChecks }}" hint-placeholder-val="{{ false }}">
                 <div style="padding: 32px 20px; text-align: center;">
                   <div style="font-size: 13.5px; font-weight: 600; color: #0f172a;">No domain checks recorded yet</div>
-                  <div style="font-size: 12.5px; color: #64748b; max-width: 300px; margin: 6px auto 16px;">SSL, sitemap.xml, robots.txt, HTTP/2, the www redirect and llms.txt are probed while a crawl runs, so the page stays instant. Run a crawl to record them.</div>
-                  <div onClick="{{ h.syncAudit }}" role="button" aria-label="Run a crawl now to record the domain checks" style="display: inline-flex; align-items: center; gap: 8px; border-radius: 8px; background: #10b981; color: white; font-size: 13px; font-weight: 600; padding: 8px 16px; cursor: pointer; box-shadow: 0 1px 2px rgba(0,0,0,0.05);" style-hover="background:#059669">⚡ Run a Crawl Now</div>
+                  <div style="font-size: 12.5px; color: #64748b; max-width: 300px; margin: 6px auto 16px;">SSL, sitemap.xml, robots.txt, HTTP/2, the www redirect and llms.txt are probed in the background, so the page stays instant. Takes a few seconds.</div>
+                  <div onClick="{{ h.syncDomainChecks }}" role="button" aria-label="Run the six domain checks now — takes a few seconds" style="display: inline-flex; align-items: center; gap: 8px; border-radius: 8px; background: #10b981; color: white; font-size: 13px; font-weight: 600; padding: 8px 16px; cursor: pointer; box-shadow: 0 1px 2px rgba(0,0,0,0.05);" style-hover="background:#059669">⚡ Run Domain Checks</div>
                 </div>
               </sc-if>
               <sc-for list="{{ au.domChecks }}" as="d" hint-placeholder-count="5">
@@ -281,6 +296,15 @@
                   </sc-for>
                 </tbody>
               </table>
+              <sc-if value="{{ au.hasPageNav }}" hint-placeholder-val="{{ true }}">
+                <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 10px 20px; border-top: 1px solid #f1f5f9;">
+                  <span onClick="{{ au.pagePrev.click }}" role="button" aria-label="Previous page" style="{{ au.pagePrev.style }}">‹ Prev</span>
+                  <sc-for list="{{ au.pageNums }}" as="p" hint-placeholder-count="5">
+                    <span onClick="{{ p.click }}" role="button" aria-label="Go to page {{ p.label }}" style="{{ p.style }}">{{ p.label }}</span>
+                  </sc-for>
+                  <span onClick="{{ au.pageNext.click }}" role="button" aria-label="Next page" style="{{ au.pageNext.style }}">Next ›</span>
+                </div>
+              </sc-if>
               <div style="padding: 10px 20px; border-top: 1px solid #f1f5f9; font-size: 12px; color: #94a3b8;">{{ au.pageRowCount }}<sc-if value="{{ au.srcCrawled.show }}" hint-placeholder-val="{{ true }}"><div style="margin-top: 6px;"><span style="{{ au.srcCrawled.style }}" title="{{ au.srcCrawled.title }}" aria-label="{{ au.srcCrawled.aria }}">{{ au.srcCrawled.text }}</span></div></sc-if></div>
             </div>
           </sc-if>

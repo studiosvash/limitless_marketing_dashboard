@@ -54,7 +54,8 @@ class InvitationSystemTests(TestCase):
         self.assertTrue(resp.data.get("ok"))
         self.assertEqual(UserInvitation.objects.count(), 1)
         self.assertEqual(len(mail.outbox), 1)
-        self.assertIn("/#/accept-invite?token=", mail.outbox[0].body)
+        # The link must point at the server-rendered page, not the login-protected SPA route.
+        self.assertIn("/accept-invite/?token=", mail.outbox[0].body)
 
     def test_invite_resend_and_revoke(self):
         self.client.force_authenticate(user=self.owner)
@@ -109,3 +110,48 @@ class InvitationSystemTests(TestCase):
         })
         self.assertEqual(accept_resp_2.status_code, 400)
         self.assertIn("already been accepted", accept_resp_2.data["detail"])
+
+    def test_accept_without_username_uses_the_invited_email(self):
+        """The emailed page sends no username -- the account is keyed to the invited address."""
+        self.client.force_authenticate(user=self.owner)
+        self.client.post("/api/projects/fusehealth/invite", {"email": "noname@company.com", "role": "Analyst"})
+        inv = UserInvitation.objects.get(email="noname@company.com")
+
+        self.client.logout()
+        resp = self.client.post("/api/auth/accept-invite", {
+            "token": inv.token,
+            "password": "SecurePassword123!",
+        })
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["username"], "noname@company.com")
+        self.assertTrue(User.objects.get(username="noname@company.com").check_password("SecurePassword123!"))
+
+    def test_invite_link_uses_the_request_host_when_frontend_url_is_unset(self):
+        """A deployment that never set FRONTEND_URL must still mail a reachable link."""
+        self.client.force_authenticate(user=self.owner)
+        with override_settings(FRONTEND_URL="", ALLOWED_HOSTS=["limitless.example.com", "testserver"]):
+            self.client.post(
+                "/api/projects/fusehealth/invite",
+                {"email": "hosted@company.com", "role": "Analyst"},
+                HTTP_HOST="limitless.example.com",
+            )
+        self.assertIn("http://limitless.example.com/accept-invite/?token=", mail.outbox[-1].body)
+
+    def test_a_leftover_localhost_frontend_url_never_wins_over_a_real_host(self):
+        """The copied-.env case: config says localhost, the request came from the live domain."""
+        self.client.force_authenticate(user=self.owner)
+        with override_settings(FRONTEND_URL="http://localhost:8000", ALLOWED_HOSTS=["limitless.example.com", "testserver"]):
+            self.client.post(
+                "/api/projects/fusehealth/invite",
+                {"email": "stale@company.com", "role": "Analyst"},
+                HTTP_HOST="limitless.example.com",
+            )
+        self.assertIn("http://limitless.example.com/accept-invite/?token=", mail.outbox[-1].body)
+        self.assertNotIn("localhost", mail.outbox[-1].body)
+
+    def test_an_explicit_non_local_frontend_url_wins(self):
+        """A deliberate split-origin setup is still honoured."""
+        self.client.force_authenticate(user=self.owner)
+        with override_settings(FRONTEND_URL="https://app.example.com/"):
+            self.client.post("/api/projects/fusehealth/invite", {"email": "split@company.com", "role": "Analyst"})
+        self.assertIn("https://app.example.com/accept-invite/?token=", mail.outbox[-1].body)

@@ -204,7 +204,9 @@ EMAIL_HOST_USER=
 EMAIL_HOST_PASSWORD=
 EMAIL_USE_TLS=True
 DEFAULT_FROM_EMAIL=
-FRONTEND_URL=https://limitless.vashstudios.cloud
+# Khaali chhod do. Invitation / password-reset link request ke apne host se banta hai,
+# yaani deployed site se bheja invite apne aap https://limitless.vashstudios.cloud/... hoga.
+FRONTEND_URL=
 
 # --- Google Ads (Standard Access milne ke baad) ---
 GOOGLE_ADS_DEVELOPER_TOKEN=

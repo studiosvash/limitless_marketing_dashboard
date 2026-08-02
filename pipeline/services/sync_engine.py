@@ -74,7 +74,16 @@ PAGE_CONNECTORS: dict[str, list[str]] = {
     # re-inspect a stale URL list and a newly published page is never audited. The long-polling
     # paid OnPage crawl goes LAST: if it times out, the score, vitals, crawled-page list and
     # indexing breakdown have already been written.
-    "audit":       ["gsc_pages", "url_inspection", "pagespeed", "dataforseo_onpage"],
+    #
+    # `domain_checks` goes first: it is six local HTTPS requests (~4s, no credentials, no
+    # metered call), so the Domain Checks card fills in almost immediately while the three
+    # slow connectors behind it are still working. It does not disturb the gsc_pages-first
+    # requirement — gsc_pages still precedes url_inspection and pagespeed.
+    "audit":       ["domain_checks", "gsc_pages", "url_inspection", "pagespeed", "dataforseo_onpage"],
+    # Domain Checks card, on its own. The card's "Run a Crawl Now" button used to fire the
+    # whole 'audit' scope above to record six cheap probes, which meant 20-30 minutes and a
+    # billable DataForSEO OnPage crawl for about four seconds of actual work.
+    "domain_checks": ["domain_checks"],
 }
 
 # Scopes whose connectors should be narrowed to the keywords that still need measuring.
@@ -84,6 +93,7 @@ _INCREMENTAL_SCOPES: dict[str, tuple[str, ...]] = {
 }
 
 ALL_CONNECTORS: list[str] = [
+    "domain_checks",
     "gsc",
     "ga4",
     "gsc_keywords",
@@ -120,6 +130,8 @@ def _get_connector(name: str):
         "url_inspection":("pipeline.connectors.url_inspection",       "URLInspectionConnector"),
         "pagespeed":    ("pipeline.connectors.pagespeed",             "PageSpeedConnector"),
         "sitemap":      ("pipeline.connectors.sitemap",               "SitemapConnector"),
+        # Needs no credentials — it probes the customer's own domain over plain HTTPS.
+        "domain_checks":("pipeline.connectors.domain_checks",         "DomainChecksConnector"),
         # DataForSEO — included in map so they can be enabled later; not in
         # PAGE_CONNECTORS or ALL_CONNECTORS until balance is positive.
         "dataforseo_keywords":         ("pipeline.connectors.dataforseo_keywords",         "DataForSEOKeywordsConnector"),
@@ -215,26 +227,21 @@ def _run_post_sync(site_url: str, connectors_run: list[str]) -> None:
         except Exception as exc:
             logger.warning(f"[sync_engine] Technical issue rebuild failed for {site_url!r}: {exc}")
 
-    # Domain checks (SSL handshake, /sitemap.xml, /robots.txt, HTTP/2, www consolidation,
-    # /llms.txt). These are SIX LIVE NETWORK REQUESTS, so they belong here with every other
-    # outbound call and not in a page-data GET.
+    # NOTE: the six domain checks (SSL, /sitemap.xml, /robots.txt, HTTP/2, www consolidation,
+    # /llms.txt) used to run HERE, as a side effect gated on _AUDIT_SNAPSHOT_INPUTS. They are
+    # now the `domain_checks` CONNECTOR, which runs first in the 'audit' scope and is also a
+    # scope of its own. Two things were wrong with the side effect:
+    #   * it wrote no SyncLog row, so it had no step in the refresh checklist and a failed
+    #     probe was indistinguishable from a successful one;
+    #   * being reachable only as a by-product of a crawl, the Domain Checks card's own
+    #     "Run a Crawl Now" button had to fire the entire 'audit' scope — 20-30 minutes and a
+    #     metered DataForSEO OnPage crawl — to record ~4 seconds of local HTTP requests.
+    # As a connector it still runs BEFORE record_audit_snapshot below (all connectors finish
+    # before _run_post_sync is called), so the snapshot still captures this crawl's checks.
     #
-    # They used to run inside build_site_audit_response(). The 6-hour cache did not save it:
-    # nothing but a page view ever WROTE that cache, so the first Site Audit load for every new
-    # project, after every deploy, and once every 6 hours thereafter paid a TLS handshake plus
-    # five HTTP fetches (3.5 s timeouts each) before the page could render -- the one place in
-    # this codebase that reached the network while rendering, in direct violation of the
-    # database-first contract. The GET now reads stored state via stored_domain_checks().
-    #
-    # Ordering: BEFORE the snapshot block below, because the snapshot is built from the full
-    # site-audit payload and should capture this crawl's checks, not the previous crawl's.
-    if any(c in connectors_run for c in _AUDIT_SNAPSHOT_INPUTS):
-        try:
-            from apps.dashboard.services.site_audit_service import refresh_domain_checks
-            checks = refresh_domain_checks(site_url)
-            logger.info(f"[sync_engine] Domain checks for {site_url!r}: {len(checks)} check(s)")
-        except Exception as exc:
-            logger.warning(f"[sync_engine] Domain checks failed for {site_url!r}: {exc}")
+    # They must never move back into build_site_audit_response(): that GET is a page-data path,
+    # and probing there was the one place in this codebase that reached the network while
+    # rendering. The GET reads stored state via stored_domain_checks().
 
     # Record this crawl's outcome so Compare Crawls / Progress have history to read.
     # MUST run AFTER the technical-issue rebuild above: the snapshot stores the issue counts,

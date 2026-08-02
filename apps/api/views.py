@@ -75,6 +75,42 @@ def latest_data_anchor(site_id: str) -> date_cls:
         ).scalar() or date_cls.today()
 
 
+_LOCAL_HOSTS = ("localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]")
+
+
+def _is_local_origin(url: str) -> bool:
+    """True if `url`'s host is a loopback address — i.e. a link only the dev box can open."""
+    from urllib.parse import urlsplit
+    host = (urlsplit(url).hostname or "").lower()
+    return host in _LOCAL_HOSTS
+
+
+def build_frontend_link(request, path: str) -> str:
+    """Absolute link to the SPA for an outbound email.
+
+    Derived from the incoming request by default, so an invite sent from
+    https://limitless.vashstudios.cloud mails the live URL and one sent from a dev box mails
+    localhost — no per-environment config needed. Django validates the Host header against
+    ALLOWED_HOSTS before the view runs, so this can't be spoofed to point elsewhere.
+
+    `settings.FRONTEND_URL` still wins when set, for the case where the SPA is served from a
+    different origin than the API. The one exception: a FRONTEND_URL pointing at localhost
+    while the request itself came from a real host is a copied-.env mistake, not a deliberate
+    split-origin setup — mailing an unreachable localhost link is the worse failure, so the
+    request's own origin wins there.
+    """
+    from django.conf import settings
+
+    configured = (getattr(settings, "FRONTEND_URL", "") or "").strip().rstrip("/")
+    origin = request.build_absolute_uri("/").rstrip("/") if request is not None else ""
+
+    if configured and not (origin and _is_local_origin(configured) and not _is_local_origin(origin)):
+        base = configured
+    else:
+        base = origin or "http://localhost:8000"
+    return f"{base}{path}"
+
+
 def resolve_range_periods(request, slug: str):
     """Resolve a range-taking view's full request context in one call: site lookup (404 on
     unknown slug), `range` query param validation (default 30d), and period-date resolution
@@ -131,6 +167,11 @@ class ProjectListCreateView(APIView):
         with get_session() as session:
             site = session.get(Site, new_id)
             body = ProjectSerializer(site).data
+            # Everything below keys off what was STORED, not what was typed. add_site
+            # normalises the domain (https://www.x.com/ -> x.com) and that normalised string is
+            # the site_id every connector writes under -- passing the raw input to
+            # start_sync_run would file the whole first sync under a key no page ever reads.
+            site_url = site.site_url
 
         # Verify Google Search Console connectivity immediately so the UI can warn
         # the user if they added a site the connected Google Account doesn't own. The
@@ -760,17 +801,19 @@ class ProjectInviteView(APIView):
         except Exception as e:
             return Response({"detail": f"Failed to create invitation: {str(e)}"}, status=500)
 
-        frontend_url = getattr(settings, "FRONTEND_URL", "http://localhost:8000")
-        # Same link shape ProjectInviteResendView already sends, so both paths land on the
-        # accept-invite modal the SPA opens from the #/accept-invite route.
-        invite_link = f"{frontend_url.rstrip('/')}/#/accept-invite?token={invitation.token}"
+        # Same link ProjectInviteResendView sends. It points at the server-rendered
+        # /accept-invite/ page, NOT the SPA's #/accept-invite route: the SPA lives behind
+        # LoginRequiredMiddleware, so that route bounced invitees to a sign-in form they had
+        # no account for.
+        invite_link = build_frontend_link(request, f"/accept-invite/?token={invitation.token}")
 
         subject = f"Invitation to join Limitless Marketing Dashboard ({role})"
         message = (
             f"Hello,\n\n"
             f"You have been invited by {invited_by_user.username if invited_by_user else 'Owner'} to join "
             f"the Limitless Marketing Dashboard as an {role}.\n\n"
-            f"Click the link below to choose your own username and password (valid for 48 hours):\n"
+            f"Your username is this email address ({email}). Click the link below to set your "
+            f"password and sign in (valid for 48 hours):\n"
             f"{invite_link}\n\n"
             f"If you weren't expecting this invitation you can ignore this email.\n\n"
             f"Best regards,\nLimitless Team"
@@ -822,14 +865,14 @@ class ProjectInviteResendView(APIView):
         invitation.expires_at = timezone.now() + datetime.timedelta(hours=48)
         invitation.save(update_fields=["expires_at"])
 
-        frontend_url = getattr(settings, "FRONTEND_URL", "http://localhost:8000")
-        invite_link = f"{frontend_url.rstrip('/')}/#/accept-invite?token={invitation.token}"
+        invite_link = build_frontend_link(request, f"/accept-invite/?token={invitation.token}")
 
         subject = f"Reminder: Invitation to join Limitless Marketing Dashboard ({invitation.role})"
         message = (
             f"Hello,\n\n"
             f"This is a reminder that you have been invited to join the Limitless Marketing Dashboard as an {invitation.role}.\n\n"
-            f"Please click the link below to set your username and secure password (valid for 48 hours):\n"
+            f"Your username is this email address ({invitation.email}). Click the link below to set "
+            f"your password and sign in (valid for 48 hours):\n"
             f"{invite_link}\n\n"
             f"Best regards,\nLimitless Team"
         )
@@ -877,69 +920,40 @@ class AuthInviteStatusView(APIView):
 
 @method_decorator(login_not_required, name="dispatch")
 class AuthInviteAcceptView(APIView):
-    """POST /api/auth/accept-invite with {token, username, password} to activate user account."""
+    """POST /api/auth/accept-invite with {token, password} to activate a user account.
+
+    The rules live in `apps.accounts.services.accept_invitation`, shared with the
+    server-rendered /accept-invite/ page the invitation email actually links to, so the two
+    can't drift. `username` is optional and defaults to the invited email address; it is
+    still accepted because existing SPA callers send one.
+    """
     permission_classes = []
     authentication_classes = []
 
     def post(self, request):
+        from apps.accounts.services import InvitationError, accept_invitation
 
-        from django.contrib.auth.models import User
-        from apps.accounts.models import UserInvitation, UserProfile
-        from django.utils import timezone
-        from django.db import transaction
+        token = (request.data.get("token") or "").strip()
+        username = (request.data.get("username") or "").strip()
+        password = (request.data.get("password") or "").strip()
 
-        token = request.data.get("token", "").strip()
-        username = request.data.get("username", "").strip()
-        password = request.data.get("password", "").strip()
-
-        if not token or not username or not password:
-            return Response({"detail": "Token, username, and password are required."}, status=400)
-
-        if len(password) < 8:
-            return Response({"detail": "Password must be at least 8 characters long."}, status=400)
-
-        invitation = UserInvitation.objects.filter(token=token).first()
-        if not invitation:
-            return Response({"detail": "Invitation link is invalid or not found."}, status=404)
-
-        if invitation.is_accepted:
-            return Response({"detail": "This invitation has already been accepted."}, status=400)
-
-        if invitation.expires_at < timezone.now():
-            return Response({"detail": "This invitation link has expired. Please ask the owner to resend it."}, status=400)
-
-        if User.objects.filter(username__iexact=username).exists():
-            return Response({"detail": "This username is already taken. Please choose another username."}, status=400)
-
-        if User.objects.filter(email__iexact=invitation.email).exists():
-            return Response({"detail": "A user account with this email address already exists."}, status=400)
+        if not token or not password:
+            return Response({"detail": "Token and password are required."}, status=400)
 
         try:
-            with transaction.atomic():
-                user = User.objects.create_user(
-                    username=username,
-                    email=invitation.email,
-                    password=password
-                )
-                user.is_active = True
-                user.save(update_fields=["is_active"])
-
-                profile, _ = UserProfile.objects.get_or_create(user=user)
-                profile.role = invitation.role
-                profile.save(update_fields=["role"])
-
-                invitation.is_accepted = True
-                invitation.save(update_fields=["is_accepted"])
-
-            return Response({
-                "ok": True,
-                "user_id": user.id,
-                "username": user.username,
-                "email": user.email,
-                "role": invitation.role
-            })
+            user = accept_invitation(token, password, username or None)
+        except InvitationError as e:
+            return Response({"detail": e.message}, status=e.status)
         except Exception as e:
             return Response({"detail": str(e)}, status=500)
+
+        return Response({
+            "ok": True,
+            "user_id": user.id,
+            "username": user.username,
+            "email": user.email,
+            "role": user.profile.role,
+        })
 
 
 

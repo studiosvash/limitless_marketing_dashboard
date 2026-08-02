@@ -609,43 +609,75 @@
         const allDomains = [vals.ptWs.domain].concat((data.competitors && data.competitors.domains) || []);
         const colors = ['#4f46e5', '#a855f7', '#f59e0b', '#ef4444', '#10b981', '#06b6d4'];
         
-        /* Volume-weighted visibility for a single point in time. Every input is real:
-           the keyword's search volume and the domain's actual SERP position. There is
-           no fallback score — when nothing is known the card shows "—", because the old
-           randomised fallback invented a different visibility on every render. */
+        /* VISIBILITY INDEX — one 0-100 score per domain, answering the question the page
+           exists for: which competitor is ranking best across the tracked keywords.
+           Every input is real (the domain's actual SERP position on each keyword);
+           nothing is estimated, and a domain with no measurable keyword shows "—".
+
+           Scale: 100 = #1 on EVERY tracked keyword. That is the ceiling, so every card
+           always sits inside 0-100 and any two domains compare directly.
+
+           Position -> credit follows an organic click-through curve, so a position is
+           worth what it is actually worth: #1 = 31.7 points, #2 = 24.7, #5 = 9.5,
+           #10 = 1.8, past #20 almost nothing. Dividing the earned points by 31.7 (a
+           perfect #1) turns them into the index.
+
+           Two earlier formulas were wrong here, both worth not repeating:
+             1. `(100 - pos)/100` per domain — paid 55% credit for sitting at #45, so
+                five domains totalled 264% and a domain nobody can find on Google looked
+                healthy.
+             2. The same curve weighted by SEARCH VOLUME — four keywords carry 81% of
+                this project's volume, which inverted the ranking outright:
+                atneventstaffing.com (avg position 7.7, the strongest board) scored 2.21
+                while eventstaff.com (avg 18.7) scored 12.09, purely because of where the
+                volume happened to sit.
+
+           Hence EQUAL weight per keyword. Every tracked keyword is one the user chose to
+           track, so each counts once and the index measures ranking strength rather than
+           traffic potential. A keyword a domain does not rank on scores 0 but still
+           counts in the denominator — that is what makes coverage matter, and it keeps
+           the denominator identical for every domain, which is what makes the cards
+           comparable at all. */
+        const CTR_CURVE = [31.7, 24.7, 18.7, 13.3, 9.5, 6.8, 4.9, 3.5, 2.5, 1.8,
+                           1.4, 1.2, 1.0, 0.9, 0.8, 0.7, 0.6, 0.5, 0.45, 0.4];
+        const PERFECT = CTR_CURVE[0];
+        const posCredit = pos => {
+          if (pos == null || pos < 1 || pos > 100) return 0;
+          return pos <= 20 ? CTR_CURVE[pos - 1] : (pos <= 50 ? 0.05 : 0.02);
+        };
+
+        const compRows = (data.competitors && data.competitors.rows) || [];
         const scMap = allDomains.map((dom, idx) => {
-          const cells = [];
-          let volSum = 0;
-          ((data.competitors && data.competitors.rows) || []).forEach(r => {
-             const rInfo = (data.rankings || data.keywords || []).find(rk => (rk.keyword || rk.kw || '').toLowerCase() === (r.kw || '').toLowerCase()) || {};
-             const rawVol = rInfo.volume != null ? rInfo.volume : rInfo.search_volume;
-             const vol = rawVol != null ? (Number(rawVol) || 0) : 0;
-             let pos = null;
-             if (idx === 0) {
-               pos = r.you ? r.you.pos : null;
-             } else {
-               const compCell = (r.comps || []).find(c => c && c.domain === dom);
-               pos = compCell ? compCell.pos : null;
-             }
-             volSum += vol;
-             cells.push({ vol: vol, pos: pos });
+          let earned = 0;
+          let posSum = 0;
+          const ranked = [];
+          compRows.forEach(r => {
+            let pos = null;
+            if (idx === 0) {
+              pos = r.you ? r.you.pos : null;
+            } else {
+              const compCell = (r.comps || []).find(c => c && c.domain === dom);
+              pos = compCell ? compCell.pos : null;
+            }
+            if (pos != null) { ranked.push(pos); posSum += pos; }
+            earned += posCredit(pos);
           });
-          /* Volume lookup can legitimately be missing for every keyword (a brand-new
-             project). Weighting each keyword equally is then the honest reading of the
-             same real positions — it is not a substitute number, it is a stated
-             assumption about the weights, and it is stable across renders. */
-          const useVolume = volSum > 0;
-          let wSum = 0;
-          let totalScore = 0;
-          cells.forEach(c => {
-            const w = useVolume ? c.vol : 1;
-            wSum += w;
-            if (c.pos != null && c.pos > 0 && c.pos <= 100) totalScore += w * ((100 - c.pos) / 100);
-          });
-          const visScore = wSum > 0 ? (totalScore / wSum) * 100 : null;
+          /* Having no keywords at all is the only "—". A domain that IS measured but
+             ranks nowhere scores a real 0 — that is information, not a missing value. */
+          const visScore = compRows.length ? (earned / (compRows.length * PERFECT)) * 100 : null;
+          /* Coverage and average position printed under the score. The index folds both
+             together, so on its own it cannot distinguish "ranks everywhere, mid-table"
+             from "ranks on three keywords, all at #1" — two very different boards that
+             can land on the same number. The sub-line is what makes the score auditable
+             instead of something the user has to trust. */
+          const avgPos = ranked.length ? Math.round(posSum / ranked.length) : null;
           return {
             k: dom, name: dom, color: colors[idx % colors.length],
-            val: visScore != null ? visScore.toFixed(2) + '%' : '—',
+            val: visScore != null ? visScore.toFixed(1) : '—',
+            sub: visScore == null ? ''
+                 : (ranked.length
+                    ? ranked.length + '/' + compRows.length + ' keywords · avg #' + avgPos
+                    : 'no positions on ' + compRows.length + ' keywords'),
             rawVal: visScore
           };
         });
@@ -655,11 +687,17 @@
              comparison instead of printing invented calendar dates ("Jun 20 → Jul 20"
              was hardcoded). Keys kept for when the API starts returning them. */
           prevDate: '', curDate: '',
-          scoreCards: scMap.map(item => {
+          /* Sorted strongest-first so "who is winning" is the reading order of the row,
+             not something the user has to work out by scanning five numbers. Domains with
+             no measurable keyword sort last rather than to the top on a null. Your own
+             domain is NOT pinned first — its rank among the competitors is the answer the
+             user came for, and pinning it would hide a last place. */
+          scoreCards: scMap.slice().sort((a, b) => (b.rawVal == null ? -1 : b.rawVal) - (a.rawVal == null ? -1 : a.rawVal)).map(item => {
             const off = hiddenOv.includes(item.k);
             return {
-              name: item.name, valLabel: item.val,
+              name: item.name, valLabel: item.val, sub: item.sub,
               swatch: { width: '8px', height: '8px', borderRadius: '2px', background: item.color, display: 'inline-block' },
+              subStyle: { fontSize: '11px', color: '#94a3b8', marginTop: '2px', whiteSpace: 'nowrap' },
               cardValStyle: { fontSize: '24px', fontWeight: 700, color: (off || item.rawVal == null) ? '#cbd5e1' : '#0f172a' },
               legendStyle: { display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: off ? '#94a3b8' : item.color, cursor: 'pointer', userSelect: 'none', fontWeight: 600 },
               checkStyle: { width: '14px', height: '14px', borderRadius: '3px', border: '1px solid ' + (off ? '#cbd5e1' : item.color), background: off ? 'white' : item.color, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontSize: '10px', fontWeight: 700 },

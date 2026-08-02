@@ -17,7 +17,7 @@ from django.utils import timezone
 
 from apps.dashboard.models import ProjectSettings
 from apps.sync import scheduling
-from apps.sync.models import RefreshRun, RefreshStatus
+from apps.sync.models import RefreshRun, RefreshStatus, SyncLog, SyncStatus
 
 SITE = "https://fusehealth.com"
 
@@ -256,6 +256,97 @@ class PidAwareReapTests(TestCase):
         self.assertEqual(scheduling.reap_orphaned_runs(), [])
         run.refresh_from_db()
         self.assertEqual(run.status, RefreshStatus.RUNNING)
+
+
+class OrphanedSyncLogTests(TestCase):
+    """Reaping the RefreshRun was only half the job.
+
+    BaseConnector.sync() marks its SyncLog row `running` on the way in and rewrites it on the
+    way out. When the sync PROCESS is killed in between, nothing ever rewrites it -- and unlike
+    RefreshRun, SyncLog had no reaper at all, so the row stayed `running` permanently. Settings
+    -> Data pipeline reads SyncLog, so the connector that was in flight when the process died
+    reported "Last synced: never" forever, even with real rows sitting in its analytics table.
+    That is exactly what happened to pagespeed and url_inspection on premierstaff.com: three
+    consecutive audit runs were killed by server restarts, and both cards read "never" while
+    page_speed held 96 real Lighthouse rows.
+
+    The invariant that makes this safe: connector.sync() is only ever reached through
+    sync_engine.sync_all/sync_page, both of which require a run_id, and start_sync_run creates
+    that RefreshRun row BEFORE spawning the process. So a `running` SyncLog row whose site has
+    no `running` RefreshRun cannot be making progress -- it is orphaned by construction.
+    """
+
+    def _running_log(self, connector, site_url=SITE, **kwargs):
+        return SyncLog.objects.create(
+            connector=connector, site_url=site_url, status=SyncStatus.RUNNING, **kwargs
+        )
+
+    def test_running_row_with_no_run_in_flight_is_reconciled(self):
+        log = self._running_log("pagespeed")
+        scheduling.reap_orphaned_runs()
+        log.refresh_from_db()
+        self.assertEqual(log.status, SyncStatus.ERROR)
+        self.assertIn("never reported a result", log.error_message)
+
+    def test_running_row_is_left_alone_while_its_site_is_actually_syncing(self):
+        make_run(SITE, "audit", RefreshStatus.RUNNING, timedelta(minutes=5))
+        log = self._running_log("pagespeed")
+        scheduling.reap_orphaned_runs()
+        log.refresh_from_db()
+        self.assertEqual(log.status, SyncStatus.RUNNING)
+
+    def test_a_run_on_another_site_does_not_protect_this_one(self):
+        make_run("https://other.example", "audit", RefreshStatus.RUNNING, timedelta(minutes=5))
+        log = self._running_log("pagespeed")
+        scheduling.reap_orphaned_runs()
+        log.refresh_from_db()
+        self.assertEqual(log.status, SyncStatus.ERROR)
+
+    def test_reaping_a_dead_run_also_reconciles_the_connector_it_died_inside(self):
+        """The whole point: the run and the connector row are cleared by the same tick, so the
+        Settings card stops claiming `never` the moment the reaper notices the run is gone."""
+        run = make_run(SITE, "audit", RefreshStatus.RUNNING,
+                       scheduling.RUN_TIMEOUT + timedelta(hours=1))
+        log = self._running_log("pagespeed")
+        reaped = scheduling.reap_orphaned_runs()
+        self.assertEqual([r.pk for r in reaped], [run.pk])
+        log.refresh_from_db()
+        self.assertEqual(log.status, SyncStatus.ERROR)
+
+    def test_rows_in_any_other_status_are_untouched(self):
+        stamped = timezone.now() - timedelta(days=1)
+        for status in (SyncStatus.SUCCESS, SyncStatus.ERROR, SyncStatus.NEVER):
+            SyncLog.objects.create(
+                connector=f"c_{status}", site_url=SITE, status=status,
+                last_synced=stamped, records_written=7, error_message="kept",
+            )
+        scheduling.reap_orphaned_runs()
+        for status in (SyncStatus.SUCCESS, SyncStatus.ERROR, SyncStatus.NEVER):
+            log = SyncLog.objects.get(connector=f"c_{status}", site_url=SITE)
+            self.assertEqual(log.status, status)
+            self.assertEqual(log.last_synced, stamped)
+            self.assertEqual(log.error_message, "kept")
+
+    def test_what_the_dead_run_did_write_is_preserved(self):
+        """url_inspection wrote 150 rows before its process was killed. That count is a
+        measurement, not a leftover -- reconciling the status must not erase it."""
+        stamped = timezone.now() - timedelta(days=2)
+        log = self._running_log("url_inspection", records_written=150, last_synced=stamped)
+        scheduling.reap_orphaned_runs()
+        log.refresh_from_db()
+        self.assertEqual(log.records_written, 150)
+        self.assertEqual(log.last_synced, stamped)
+
+    def test_dry_run_writes_nothing(self):
+        log = self._running_log("pagespeed")
+        scheduling.reap_orphaned_runs(dry_run=True)
+        log.refresh_from_db()
+        self.assertEqual(log.status, SyncStatus.RUNNING)
+
+    def test_reconciling_is_idempotent(self):
+        self._running_log("pagespeed")
+        scheduling.reap_orphaned_runs()
+        self.assertEqual(scheduling.reconcile_orphaned_sync_logs(), [])
 
 
 class RunScheduledSyncsCommandTests(TestCase):

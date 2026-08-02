@@ -320,10 +320,15 @@ class DataForSEOLLMMentionsConnector(BaseConnector):
         out: list[dict] = []
         for entry in block.get("items") or []:
             url = (entry.get("key") or "").strip()
-            if not url or canonical_domain(url) != own_domain:
+            if not url or self._bare_host(canonical_domain(url)) != self._bare_host(own_domain):
                 # top_pages returns co-occurring pages from OTHER domains (a call for
                 # driphydration.com returns perfectb.com URLs). "Your Most-Cited Pages"
                 # means ours.
+                #
+                # Compared www-insensitively on BOTH sides. `own_domain` is the project's
+                # registered domain, which add_site now normalises to the bare host -- so a
+                # straight canonical_domain() equality dropped every cited page served from
+                # https://www.<us>.com/, i.e. our own pages, as if they were a competitor's.
                 continue
             mentions = 0
             volume = 0

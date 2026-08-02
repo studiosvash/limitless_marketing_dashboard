@@ -104,7 +104,9 @@ class DataForSEOBacklinksConnector(BaseConnector):
         records = []
         for item in items:
             domain = item.get("domain_from") or item.get("domain")
-            target_url = item.get("url_to") or item.get("url_from") or item.get("target")
+            # `url_to` is the page ON OUR SITE being linked to; `url_from` (below) is the
+            # separate, actual page that carries the link. Never conflate the two.
+            target_url = item.get("url_to") or item.get("target")
             if not domain or not target_url:
                 continue
 
@@ -112,11 +114,24 @@ class DataForSEOBacklinksConnector(BaseConnector):
                 "referring_domain": domain,
                 "target_url": target_url,
                 "anchor": item.get("anchor", ""),
-                "status": item.get("status", "live"),
+                # DataForSEO has no `status` field -- it reports `is_lost` (bool). Reading a
+                # nonexistent "status" key always fell back to the "live" default, so a
+                # backlink that had actually gone dead still showed as live forever.
+                "status": "lost" if item.get("is_lost") else "live",
                 "dofollow": 1 if item.get("dofollow") else 0,
-                "domain_rank": item.get("rank"),
+                # `domain_from_rank` is the referring DOMAIN's own authority (0-1000). The
+                # previous field, `rank`, is a per-BACKLINK score that mixes in this specific
+                # link's own signals -- unrelated domains landing on the same `rank` value was
+                # the symptom of reading the wrong field.
+                "domain_rank": item.get("domain_from_rank"),
                 "first_seen": self._parse_date(item.get("first_seen")),
                 "last_seen": self._parse_date(item.get("last_seen")),
+                # The exact page carrying the link -- lets the UI link to the real backlink,
+                # not just the bare referring domain.
+                "url_from": item.get("url_from") or "",
+                # The referring PAGE's own authority, distinct from the domain-wide rank above.
+                "page_from_rank": item.get("page_from_rank"),
+                "spam_score": item.get("backlink_spam_score"),
             })
 
         return records

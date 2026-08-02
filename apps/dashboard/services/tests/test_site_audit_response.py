@@ -156,8 +156,9 @@ class BuildSiteAuditResponseTests(TestCase):
         self._seed_real_site()
         response = build_site_audit_response(self.site_id)
 
-        # The SSL/robots/sitemap probes now run in the sync path (refresh_domain_checks), not in
-        # this GET, and nothing has been synced here -- so there is no stored result to show.
+        # The SSL/robots/sitemap probes now run in the sync path (the `domain_checks`
+        # connector), not in this GET, and nothing has been synced here -- so there is no
+        # stored result to show.
         self.assertEqual(response["domainChecks"], [])
         self.assertEqual(response["snapshots"], [])      # no crawl has been recorded for this site
 

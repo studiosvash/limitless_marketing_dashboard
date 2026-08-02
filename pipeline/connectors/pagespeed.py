@@ -1,12 +1,34 @@
 """
 pipeline/connectors/pagespeed.py — Google PageSpeed Insights Connector.
 
-Fetches REAL Core Web Vitals and Lighthouse scores for top pages.
-Uses the free PageSpeed Insights API v5 (requires GOOGLE_API_KEY).
+Fetches REAL Core Web Vitals and Lighthouse scores.
+Uses the PageSpeed Insights API v5 (requires GOOGLE_API_KEY).
 
-Scans: Top 50 pages by traffic from the pages table.
+Scans: EVERY page in the `pages` table for the site, mobile only, ordered by clicks so the
+       busiest pages are measured first. Bounded by RUN_BUDGET_SECONDS, not by a page quota.
 Returns: Performance, SEO, Accessibility scores + LCP, CLS, INP, FCP, TTFB, SI, TBT.
-Rate limit: ~400 requests/day free tier. We scan top pages only.
+
+COVERAGE, AND WHY IT IS SHAPED THIS WAY
+---------------------------------------
+This connector used to measure 15 pages of a 55-page site, and the Site Audit table showed a
+dash for the other 40. Three limits stacked up, none of them visible from the UI:
+
+  1. `WHERE clicks > 0` decided ELIGIBILITY. A page that had not yet earned a Google click
+     could never be measured -- i.e. exactly the new pages whose speed you still have time to
+     fix. That inverted the point of the audit: it only ever graded pages already doing well.
+  2. `limit=15` (lowered from 50 in commit 2718c2b) capped it again.
+  3. Every page was scanned TWICE, mobile and desktop, and nothing has ever read the desktop
+     rows: site_audit_service (x3) and overview_service all filter `strategy == "mobile"`, and
+     test_site_audit_service.test_desktop_rows_excluded asserts desktop stays out. Half of
+     every run's wall-clock and quota bought rows no screen displays.
+
+So: clicks now decide ORDER, never membership; desktop is not scanned until something reads
+it; and the run is bounded by a wall clock instead of a page count, because the thing that
+actually has to stay bounded is TIME (apps/sync/scheduling.py sizes the 2h orphan-reaper from
+these limits), not how many pages the site happens to have. A small site is measured in full;
+a large one is measured busiest-first until the budget runs out, and says how many it missed.
+
+Quota is not the binding constraint at this size: one run of a 55-page site is 55 requests.
 """
 
 import json
@@ -28,6 +50,21 @@ load_dotenv()
 
 PSI_API_URL = "https://www.googleapis.com/pagespeedonline/v5/runPagespeed"
 
+# Hard wall-clock ceiling for one run of this connector, in seconds.
+#
+# This is what keeps a slow PSI from pushing a whole sync past scheduling.RUN_TIMEOUT (2h) and
+# getting the run reaped as dead. It replaces the old page quota as the real bound: a page count
+# does not bound anything when each request can take 60s and retry, and it silently punished
+# large sites by measuring an arbitrary slice of them. 30 minutes covers ~200 pages at the
+# observed ~9s/page (PSI response + pacing), which is far more than this dashboard's sites, so
+# in practice it never bites -- and when it does, fetch() logs exactly how many pages it missed.
+RUN_BUDGET_SECONDS = 1800
+
+# Safety ceiling on pages per run, kept only so a pathological `pages` table cannot queue tens of
+# thousands of requests. It sits far above any real site here; RUN_BUDGET_SECONDS is the limit
+# that actually governs.
+MAX_PAGES_PER_RUN = 500
+
 
 class PageSpeedConnector(BaseConnector):
     name = "pagespeed"
@@ -44,51 +81,71 @@ class PageSpeedConnector(BaseConnector):
                 return site.site_url
         return os.getenv("GSC_SITE_URL", "")
 
-    def _get_top_pages(self, site_url: str, limit: int = 15) -> list[str]:
-        """Intelligently sample top pages (Home, short paths, blogs, fallback) up to the limit."""
+    def _get_top_pages(self, site_url: str, limit: int = MAX_PAGES_PER_RUN) -> list[str]:
+        """Every known page for the site, stalest first, traffic breaking ties.
+
+        The order is: never measured -> longest since measured -> most clicks -> url. Nothing is
+        excluded; ranking only decides who gets measured first when the run budget expires.
+
+        WHY STALENESS OUTRANKS TRAFFIC. Sorting by clicks alone is right only while the whole
+        site fits inside one run's budget. It does not on a 1 139-page site: a ~200-page run
+        would re-measure the same head every time and the remaining ~939 pages would never
+        receive a score at all — not "later", never. That is the same defect as the old
+        `WHERE clicks > 0` pool (some pages are structurally ineligible), reached by a different
+        route. Ranking by staleness makes each run pick up where the last one stopped, so a
+        large site is covered across consecutive runs and then rotates; a newly published page,
+        having no score at all, is first in line on the very next run.
+
+        It is also why this connector applies no content-type filter. Excluding /blog URLs was
+        considered and rejected on the data: it would still leave 792 pages on that site, so it
+        never solved the scale problem it was proposed for, while blinding the audit to 23% of
+        the site's clicks — and it would have quietly turned "site health" into "health of the
+        pages we felt like measuring".
+
+        The old body also had a "smart sample" ahead of its fallback: homepage, then five short
+        paths, then two blog URLs. It was dead code in production. It compared page URLs against
+        `site_url`, which for every site here is a GSC property string (`sc-domain:fusehealth.com`)
+        and never a URL prefix, so `u.strip('/') == site_url.strip('/')` was never true and
+        `u.replace(site_url, '')` was a no-op — leaving `path` as the whole URL, whose slash count
+        never satisfied the short-path test. Every page arrived via the fallback in clicks order
+        regardless.
+        """
         with get_session() as session:
-            # Fetch a larger pool to sample from
             rows = session.execute(
+                # LEFT JOIN, not a subquery filter: a page with no page_speed row must appear
+                # (it is the highest-priority case), so the join must not be able to drop it.
+                # Matched on strategy='mobile' because that is the only strategy this connector
+                # writes and the only one any screen reads -- joining without it would let a
+                # legacy desktop row mark a page as recently measured when its mobile score,
+                # the one Site Audit displays, does not exist.
+                #
+                # No SQL LIMIT: the true count is needed to report honestly how many pages were
+                # left out, and a URL list for one site is small next to a single PSI request.
                 text(
-                    "SELECT url FROM pages "
-                    "WHERE clicks > 0 AND site_id = :sid "
-                    "ORDER BY clicks DESC LIMIT 100"
+                    "SELECT p.url FROM pages p "
+                    "LEFT JOIN page_speed ps "
+                    "  ON ps.url = p.url AND ps.site_id = p.site_id AND ps.strategy = 'mobile' "
+                    "WHERE p.site_id = :sid "
+                    # (x IS NULL) DESC rather than relying on NULL collation: SQLite sorts NULLs
+                    # first on ASC and PostgreSQL sorts them last, and this ordering is the whole
+                    # feature -- it must not depend on which database is underneath.
+                    "ORDER BY (ps.last_checked IS NULL) DESC, ps.last_checked ASC, "
+                    "         p.clicks DESC, p.url ASC"
                 ),
                 {"sid": site_url}
             ).fetchall()
-            
-        all_urls = [r[0] for r in rows]
-        sampled = []
-        
-        # 1. Homepage
-        home = next((u for u in all_urls if u.strip('/') == site_url.strip('/')), None)
-        if home:
-            sampled.append(home)
-            
-        # 2. Main Templates (Short paths e.g., /pricing, /about)
-        main_pages = []
-        for u in all_urls:
-            if u in sampled: continue
-            path = u.replace(site_url, '').strip('/')
-            if 0 <= path.count('/') <= 1 and 'blog' not in path and 'news' not in path:
-                main_pages.append(u)
-        sampled.extend(main_pages[:5])
-        
-        # 3. Blog pages
-        blog_pages = []
-        for u in all_urls:
-            if u in sampled: continue
-            if '/blog' in u or '/news' in u or '/article' in u:
-                blog_pages.append(u)
-        sampled.extend(blog_pages[:2])
-        
-        # 4. Fallback (top traffic)
-        for u in all_urls:
-            if len(sampled) >= limit: break
-            if u not in sampled:
-                sampled.append(u)
-                
-        return sampled[:limit]
+
+        urls = [r[0] for r in rows]
+        # Truncation is never silent: a partial audit that says nothing reads as a complete one,
+        # and the pages it dropped are indistinguishable on screen from pages that are fine.
+        if len(urls) > limit:
+            self.logger.warning(
+                f"[pagespeed] {len(urls)} pages known for {site_url}, taking the {limit} "
+                f"stalest this run — the other {len(urls) - limit} keep their previous scores "
+                f"and move to the front of the queue for the next run."
+            )
+            urls = urls[:limit]
+        return urls
 
     def _fetch_psi(self, url: str, strategy: str = "mobile") -> dict | None:
         """
@@ -200,31 +257,55 @@ class PageSpeedConnector(BaseConnector):
         if not site_url:
             raise ValueError("[pagespeed] No site configured.")
 
-        pages = self._get_top_pages(site_url, limit=15)
+        pages = self._get_top_pages(site_url)
         if not pages:
             self.logger.warning(f"[pagespeed] No pages in DB for {site_url} — run gsc_pages first.")
             return []
 
-        strategies = ("mobile", "desktop")
-        total = len(pages) * len(strategies)
-        self.logger.info(f"[pagespeed] Scanning {len(pages)} pages × {len(strategies)} strategies = {total} requests for {site_url}")
+        total = len(pages)
+        self.logger.info(
+            f"[pagespeed] Scanning {total} pages (mobile) for {site_url}, "
+            f"budget {RUN_BUDGET_SECONDS}s"
+        )
 
         records = []
-        done = 0
-        for url in pages:
-            for strategy in strategies:
-                done += 1
-                self.logger.info(f"[pagespeed] [{done}/{total}] ({strategy}) {url}")
-                result = self._fetch_psi(url, strategy=strategy)
-                if result:
-                    result["site_id"] = site_url
-                    records.append(result)
+        failed = []
+        started = time.monotonic()
+        for done, url in enumerate(pages, start=1):
+            # Checked BEFORE the request, so the budget is a ceiling on when the last request
+            # starts rather than a suggestion the loop can overshoot by a full 60s timeout.
+            if time.monotonic() - started > RUN_BUDGET_SECONDS:
+                self.logger.warning(
+                    f"[pagespeed] Stopped after {done - 1}/{total} pages: the "
+                    f"{RUN_BUDGET_SECONDS}s run budget is spent. The remaining "
+                    f"{total - done + 1} keep their previous scores (or stay unmeasured) and "
+                    f"are first in the queue next run — selection is stalest-first, so "
+                    f"consecutive runs cover the site rather than repeating this one."
+                )
+                break
 
-                # Rate limiting: ~2.5 seconds between requests (safe for free tier)
-                if done < total:
-                    time.sleep(2.5)
+            self.logger.info(f"[pagespeed] [{done}/{total}] {url}")
+            result = self._fetch_psi(url, strategy="mobile")
+            if result:
+                result["site_id"] = site_url
+                records.append(result)
+            else:
+                # A URL PSI could not score used to vanish with no trace outside the debug log,
+                # so its dash on Site Audit was indistinguishable from "never sampled". Collect
+                # them and name the count on the way out.
+                failed.append(url)
 
-        self.logger.info(f"[pagespeed] Scanned {len(records)}/{total} requests on {site_url}")
+            # Rate limiting: ~2.5s between requests.
+            if done < total:
+                time.sleep(2.5)
+
+        if failed:
+            self.logger.warning(
+                f"[pagespeed] PSI returned nothing for {len(failed)} page(s) — they stay "
+                f"unmeasured on Site Audit: " + ", ".join(failed[:5])
+                + (f" (+{len(failed) - 5} more)" if len(failed) > 5 else "")
+            )
+        self.logger.info(f"[pagespeed] Scored {len(records)}/{total} pages on {site_url}")
         return records
 
     def _write_records(self, session, records: list[dict], site_id: Optional[str] = None) -> int:

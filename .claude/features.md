@@ -33,36 +33,59 @@ its API only when the user presses a button.
 
 ### Login (`/login/`)
 
-A single server-rendered page (the only one left). Fields: **Email or Username**, **Password**.
-Either identifier works — `EmailOrUsernameModelBackend` tries username first, then email,
-case-insensitively.
+Fields: **Email or Username**, **Password**. Either identifier works —
+`EmailOrUsernameModelBackend` tries username first, then email, case-insensitively.
 
 - **Success** → redirected to `/` (the SPA), or to `?next=` if present.
 - **Failure** → an inline rose-tinted banner: *"The username or password is incorrect."*
 - Already logged in → bounced straight to the dashboard.
 - Any unauthenticated URL redirects here, because `LoginRequiredMiddleware` protects everything.
+- **Forgot password?** next to the password label → `/password-reset/`.
 
 Accounts are created three ways: `python manage.py seed_users` (founder/seo/ads), the Settings →
 Team tab (direct creation or email invite), or the Django admin at `/admin/`.
 
-### Accept invitation (`/#/accept-invite?token=…`)
+The server-rendered pages are login, accept-invite and the four password-reset steps; all six
+extend `templates/registration/auth_base.html` so they stay one visual system. Everything else
+is the SPA.
 
-A full-screen modal that intercepts the SPA before anything else renders. It validates the token
-against `GET /api/auth/invite-status`, then asks for a **username** and **password**.
+### Accept invitation (`/accept-invite/?token=…`)
 
-- Shows who invited you and the role you will get.
-- **Invalid / expired / already-used token** → a red "Invalid Invitation" panel with a
-  *Return to Dashboard* link.
-- Password must be ≥ 8 characters; username must be free.
-- **Success** → a green "Account Activated!" panel, then a redirect after 2 seconds.
+The page the invitation email links to. Public — the invitee has no account yet — and rendered
+by Django, not the SPA.
 
-This modal is the normal entry point. *Invite a teammate* creates a `UserInvitation` row and
-emails a `/#/accept-invite?token=` link — it does **not** create the `User`, and it never sends a
-password. The account is created here, by the invitee, with a password only they have chosen.
+- Shows the role they were invited as, and the invited email **read-only**: that address is
+  their username. Nothing else to choose.
+- Fields: **Choose a password**, **Confirm password**. Rejected if they don't match, or if
+  Django's `AUTH_PASSWORD_VALIDATORS` reject the password (too short, too common, all numeric,
+  too close to the email).
+- **Invalid / expired / already-used token** → the form is replaced by an explanation and a
+  *Go to sign in* button (404 for unknown, 400 otherwise).
+- **Success** → the account is created with the invited role, the invite is marked accepted,
+  the user is signed in and lands on the dashboard.
 
-*(Until 2026-07 this flow emailed a generated temporary password in plaintext and a plain login
-link, created the User immediately, and wrote no invitation record — so invitees never appeared
-in the pending list and could not be revoked. Do not reintroduce that shape.)*
+*Invite a teammate* creates a `UserInvitation` row and emails this link — it does **not** create
+the `User`, and it never sends a password.
+
+The acceptance rules live in `apps/accounts/services.py` and are shared with
+`POST /api/auth/accept-invite` (the SPA's older modal path), so the two cannot drift.
+
+*(Fixed 2026-08. The email used to link to `/#/accept-invite?token=…`, a route inside the SPA —
+which is served from `/` behind `LoginRequiredMiddleware`, so invitees were redirected to a
+sign-in form they had no account for and the flow was unusable. Until 2026-07 it was worse: a
+generated temporary password mailed in plaintext, the User created immediately, and no
+invitation record. Do not reintroduce either shape.)*
+
+### Forgot password (`/password-reset/`)
+
+Django's standard four-step flow, branded: enter your email → *Check your email* (worded so it
+never confirms whether an address is registered) → the emailed one-time link → set a new
+password → *Password updated*. Reached from the login page; needs SMTP configured
+(`EMAIL_HOST_USER` etc.), and falls back to printing the email to the console in dev without it.
+
+Both this email's link and the invitation link are built from the **host the request came in
+on** — `http://localhost:8000/...` in dev, `https://limitless.vashstudios.cloud/...` on the
+deployed site — so neither needs per-environment configuration.
 
 ### Change password
 
@@ -394,9 +417,37 @@ Three workspace tabs:
   table of keywords / coverage / avg position / top 10 / ahead-of-you / visibility. Head-to-head
   is counted only where both domains have a real captured position. With no captured rows it
   renders an empty state with a capture button — **nothing is estimated to fill it**.
-- Per-domain **visibility score cards** (you + each competitor), each with a colour swatch and a
-  checkbox that toggles the domain in and out of the chart.
-- A multi-series visibility line chart over six months.
+- Per-domain **visibility index cards** (you + each competitor), sorted **strongest first** — the
+  question the tab answers is which competitor is ranking best, so that must be the reading order,
+  and your own domain is deliberately *not* pinned to the front because its rank among the rivals
+  is the answer. Each card carries a colour swatch, the index, a sub-line (`n/N keywords · avg
+  #p`), and a legend checkbox.
+  **The index is 0–100 where 100 = #1 on every tracked keyword.** Position → credit follows an
+  organic CTR curve (#1 = 31.7, #2 = 24.7, #5 = 9.5, #10 = 1.8, ~0 past #20); the earned points
+  are divided by a perfect board (`keywords × 31.7`). A keyword the domain does not rank on scores
+  0 but stays in the denominator, so coverage counts alongside position and the denominator is
+  identical for every domain — which is the only reason the cards are comparable.
+  **Every keyword is weighted equally, and that is deliberate.** Two earlier formulas were wrong
+  and must not come back: (1) `(100 − pos)/100` per domain paid 55% credit for sitting at #45, so
+  five domains totalled 264% under a caption reading "share"; (2) the CTR curve **weighted by
+  search volume** inverted the ranking outright on real data — four keywords carry 81% of the
+  Premier Staff project's volume, which scored atneventstaffing.com (avg position 7.7, the
+  strongest board) at 2.21 while eventstaff.com (avg 18.7) scored 12.09. Every tracked keyword is
+  one the user chose to track, so the index measures **ranking strength, not traffic potential**.
+  The sub-line exists because the index alone cannot separate "ranks everywhere, mid-table" from
+  "ranks on three keywords, all #1" — both can land on the same number.
+  Unticking a legend entry only greys its card and hides its (future) chart series; it never
+  changes anyone's number.
+- A multi-series visibility line chart — **dormant**: `/api/positions` returns no per-date series,
+  so `hasHistory` is hard-`false` and an empty state renders instead. The SVG is kept as the target
+  shape; populate it only from real positions, never a generator.
+  It *is* buildable without a new table: `competitor_keyword_rankings` stores a row per
+  (keyword, domain, **date**), so the index can be recomputed for each capture date. The trap is
+  that capture sets differ between dates — the Premier Staff project has 6 keywords captured on
+  2026-07-23 and 15 on 2026-07-26 — so an index computed over "whatever was captured that day"
+  moves when the keyword set moves, not when the rankings do. Any implementation must fix the
+  denominator across dates (or plot the keyword count alongside) or the line will report sync
+  coverage as if it were performance.
 - A **competitor grid**: one row per keyword, one column per domain, each cell a position badge
   with a day-over-day diff arrow. Clicking a cell opens a URL popover with a copy button.
   Clicking the SERP icon opens the **live SERP drawer** — a real-time top-15 organic result list
@@ -416,6 +467,15 @@ Three workspace tabs:
   state rather than a picture. Do not reintroduce it in any form.
 - The Overview tab's visibility trend, deltas and the Pages tab's traffic/change figures are
   **derived approximations**, not stored history.
+- The Overview visibility cards are **per-domain indices, not a share**. Each is independently
+  0–100 against the same perfect board, so they do not sum to 100 and are not meant to. Do not
+  "fix" that by normalising the set to total 100%: it was tried, and it makes a domain's number
+  move whenever an unrelated competitor is added or removed, which is worse than the gap.
+  Verified against the real Premier Staff payload: #1 on every keyword = exactly 100.0, ranking
+  nowhere = exactly 0.0, and the highest live card is 9.4.
+- **Low index values are usually true, not a scaling bug.** On the Premier Staff project the best
+  domain scores 9.4 because it ranks on 7 of 24 keywords at an average of #8. The pre-2026-08
+  formula printed 80.41% for an average position of *38* — that number was the bug, not this one.
 - This page performs a **live DataForSEO lookup** to backfill missing volume/KD, so it can be
   slower than other pages on first load after adding keywords.
 - **Delete project** works (fixed 2026-07 — it previously called `FuseAPI.delete`, which does not
@@ -439,25 +499,30 @@ links you do not.
 1. **Overview** — Authority Score gauge with a delta, referring domains, total backlinks,
    dofollow %, broken links, spam score; a new/lost bar chart by month; a link-type donut
    (Text / Image / Redirect); an authority-distribution histogram (0–20 … 81–100); and the top
-   anchors by share.
-2. **Backlinks** — the link table: source page title, source URL, anchor, target URL, domain
-   rank chip, spam score, dofollow/nofollow, first-seen, and NEW/LOST/BROKEN badges. Two filter
-   rows: status (All · New · Lost · Broken) and follow type (All links · Dofollow · Nofollow).
-   Capped at 60 rows.
-3. **Referring Domains** — domain, authority chip, backlink count, links-to-us, follow type,
-   first-seen, category.
+   anchors by share. These five cards/charts come from the `BacklinksSnapshot` blob, not the
+   `Backlink` table — they render empty until `manage.py refresh_backlinks <slug>` has been run
+   at least once for that site (the page's own Refresh action calls the same path).
+2. **Backlinks** — the link table: the referring domain (linked to the exact page that carries
+   the backlink — `url_from` — falling back to the domain's homepage when a row predates that
+   column), anchor, target URL, domain-authority chip (0-100, scaled from DataForSEO's raw
+   0-1000 `domain_from_rank`), per-link spam score, dofollow/nofollow, first-seen, and NEW/LOST
+   badges. Two filter rows: status (All · New · Lost) and follow type (All links · Dofollow ·
+   Nofollow). Capped at 60 rows. ("Broken" is not tracked — no HTTP-status column exists yet.)
+3. **Referring Domains** — domain (linked to its homepage), authority chip, per-domain spam
+   score (averaged across that domain's stored links), backlink count, links-to-us, follow type,
+   first-seen. `category` stays empty — no column/connector backs it.
 4. **Anchors** — anchor text, classified type (Branded / URL / Keyword / Generic / Empty),
-   backlinks, referring domains, dofollow %.
-5. **Link Gap** — a matrix of you vs each tracked competitor per domain, with an opportunity
-   rating (High / Medium / Low / Have it). A toggle restricts the view to gaps only (domains you
-   lack that ≥ 2 competitors have).
+   backlinks, referring domains, dofollow %. Sourced from the snapshot; empty until
+   `refresh_backlinks` has run.
+5. **Link Gap** — needs each tracked competitor's own referring-domain list, which nothing syncs
+   yet, so `gapDomains` is always empty and the tab shows its empty state.
 
-**Edge cases.** Empty state when no backlinks are stored. ⚠️ **The Backlinks table rows are
-generated deterministically from the referring-domain list** — page titles, source paths, anchors
-and NEW/LOST/BROKEN flags are synthesised, not real link records. `firstSeen`, `spam`, `isNew`
-and `category` on referring domains are fixed placeholder values. Treat the Overview and
-Referring Domains tabs as directional and the Backlinks tab as illustrative until a richer
-backlink feed is wired in.
+**Edge cases.** Empty state when no backlinks are stored. Every value on this page is a real
+column or a real DataForSEO aggregate — nothing is fabricated to fill a shape. `domain_rank` /
+`page_rank` (per link) and `rank` (per referring domain) are DataForSEO's raw 0-1000 scale in
+the API response; the SPA scales to 0-100 for display. A `Backlink` row synced before the
+`url_from`/`page_from_rank`/`spam_score` columns existed reads those as unknown (empty/null),
+not zero — re-running the connector backfills them.
 
 **Permissions.** All roles. **Related pages.** Off-site SEO (referrers), Position Tracking.
 
@@ -493,7 +558,14 @@ assignable work list with fix instructions.
 - **Domain Checks** — six checks run **during sync**, not at request time: SSL certificate (with
   days to expiry), sitemap.xml, robots.txt (with rule count), HTTP/2, www-redirect consolidation,
   and llms.txt. The page reads the stored result, so opening Site Audit never waits on the
-  network. Before the first sync the card shows an empty state with a *Run a Crawl Now* action.
+  network.
+
+  This card **refreshes on its own**, via the `domain_checks` scope — *Run Domain Checks* in the
+  empty state, *Re-run* in the header once checks exist. That scope is one credential-free
+  connector making six plain HTTPS requests to the site: a few seconds, nothing metered. It used
+  to be wired to the full `audit` scope, so filling in this one card cost a 20-30 minute crawl
+  and a billable DataForSEO OnPage job. A full Site Audit crawl still refreshes these checks
+  (`domain_checks` runs first in the `audit` scope), so nothing was traded away for the speed.
 - **Top Issues** — the six highest-impact failing checks.
 
 ### Issues
@@ -505,9 +577,24 @@ totals and from Overview's error count, and persist per project.
 
 ### Crawled Pages
 Two views. **Table**: URL, score chip, HTTP status chip, an `nE · nW · nN` issue summary, crawl
-depth, in-links and load time, filterable by URL and sortable on five columns, capped at 40 rows
-with a clear note when more exist. **Tree**: a folder rollup with page counts, average score and
-issue counts.
+depth, in-links and load time, filterable by URL, sortable on five columns, and **paginated at
+40 rows a page** (`‹ Prev`, a 7-wide window of page numbers with first/last always reachable,
+`Next ›`). The footer reads "Showing 1–40 of 1 139 pages · N of 1 139 Lighthouse-scored across
+the whole list" — the coverage count spans the entire filtered list, not the visible page, so
+clicking through does not make coverage look like it is changing. Filtering or re-sorting
+returns to page 1, and a stale page index is clamped rather than rendering an empty table.
+Before 2026-08-02 the table rendered `rows.slice(0, 40)` and told the reader to export a CSV for
+the rest, which on the largest site made 96% of an already-downloaded payload unreachable.
+**Tree**: a folder rollup with page counts, average score and issue counts.
+
+**Sorting puts unmeasured rows last, in both directions** (`App.sortRows`, tested in
+`static/spa/tests/sort_rows.test.js`). Only a sampled subset of crawled pages is ever
+Lighthouse-scored, so `score` and `loadTimeMs` are `null` on the rest; `inLinks` is `null` on
+every page the OnPage crawl did not reach. The comparator used to substitute `-1` for `null`,
+which is below every real metric, so the default score-ascending sort ranked all unmeasured
+pages as worse than the worst measured one and the 40-row cap hid every real score below the
+fold — the table read as an empty column of dashes on a site that had a full set of
+measurements. A real `0` is still a result (an orphan page has 0 in-links) and sorts as `0`.
 
 Clicking a row opens the **page detail drawer**: score, status, six stats (crawl depth, in-links,
 load time, internal links, external links, word count), Core Web Vitals, and the list of failed
@@ -517,14 +604,30 @@ checks — each of which jumps back into the Issues tab focused on that check.
 Two averages (page score, load time) plus three distribution charts: HTTP status codes, crawl
 depth and load time bands.
 
-*"Avg. internal links", "Avg. word count" and the "Content length" chart were **removed**, not
-blanked — they were computed from `performance_score × 0.4` and `fcp_ms × 1.5`, i.e. a Lighthouse
-score and a paint timing relabelled as a link count and a word count. The `inLinks` column is
-gone from the Crawled Pages table for the same reason. They return when the OnPage connector
-persists the real `internal_links_count` / `plain_text_word_count` it already receives.*
+*"Avg. internal links", "Avg. word count" and the "Content length" chart were once removed for
+being computed from `performance_score × 0.4` and `fcp_ms × 1.5` — a Lighthouse score and a paint
+timing relabelled as a link count and a word count. They are back as real measurements now that
+`dataforseo_onpage` persists `internal_links_count` / `inbound_links_count` /
+`plain_text_word_count` to `page_crawl_meta` (`upsert_page_crawl_meta`).*
 
-⚠️ The two surviving KPIs are currently skewed: only ~15 of 154 pages have a `PageSpeed` row, and
-the rest are counted as `score: 0` / `loadTimeMs: 0` rather than excluded — see plan item 5.4i.
+Every KPI and chart here is computed over **measured pages only** and prints how many that was
+("across N pages measured by Lighthouse"). Unmeasured pages are excluded rather than counted as
+a perfect `score: 0` / `loadTimeMs: 0`, which used to drag the averages down and stack every
+distribution's fastest bucket.
+
+**How many pages get a score.** `pagespeed` scans every page in the `pages` table, mobile only,
+**stalest first** (never measured → oldest measured → most clicks), bounded by a 30-minute wall
+clock rather than a page quota. A site bigger than one run is therefore covered across
+consecutive runs and then rotates, so no page is permanently unscored: fusehealth's 55 pages
+finish in one run (~8 min), premierstaff's 1 139 take several. Before 2026-08-02 it scanned 15
+pages of a 55-page site — a `WHERE clicks > 0` pool meant a page had to already have Google
+traffic to be eligible for a speed audit at all, which excluded exactly the new pages worth
+fixing.
+
+The `pages` table itself still comes from GSC (`gsc_pages`), so a page Search Console has never
+reported is not in the inventory and cannot be audited by any of these connectors; that is the
+remaining coverage limit. The `sitemap` connector exists and would close it, but is not in any
+scope.
 
 ### Compare Crawls & Progress
 Compare two crawl snapshots side by side, and chart five metrics over time. Both read real
@@ -536,8 +639,12 @@ exist, because a comparison and a trend both need at least two points; that is a
 ### Edge cases
 
 - Empty state when no crawl data exists, with a fetch prompt.
-- `in-links` is always `0`; internal-link count, word count and TBT are **derived from PageSpeed
-  timings**, not measured directly.
+- `in-links`, internal links and word count come from `page_crawl_meta`, written only by
+  `dataforseo_onpage`. On a site where that connector has never run, the table has no
+  `page_crawl_meta` rows at all and **every** in-links cell is a dash — that is "we did not
+  look", not "no inbound links" (a real `0` is an orphan page and renders amber). Check
+  `SyncLog` for a `dataforseo_onpage` row before treating an all-dash column as a bug;
+  **Re-crawl now** runs it (billable OnPage crawl, ~$0.00125/page).
 - Checks whose id starts with `lh:` are dynamic Lighthouse audits; their fix text comes straight
   from Lighthouse.
 
@@ -560,11 +667,15 @@ exist, because a comparison and a trend both need at least two points; that is a
 - **Trend chart** — sessions vs engaged sessions over the range, with an area fill.
 - **Channel mix** — every GA4 default channel group as a labelled bar, with off-site channels
   emphasised, plus two rollups: the off-site share of all sessions and off-site key events.
-- **LinkedIn spotlight** — impressions, click-throughs, CTR and key events. When the LinkedIn
-  connector toggle is off, impressions read "—" and the badge links to Settings → Connections.
+- **LinkedIn spotlight** — impressions, click-throughs, CTR and key events. No LinkedIn
+  connector is wired, so impressions and CTR read "—", the badge reads *"No connector"* (grey,
+  not styled as a link — it still opens Settings → Connections, where the explanation lives,
+  but nothing there can be pressed), and the subtitle says sessions come from GA4 while
+  impressions & CTR need the LinkedIn API. Sessions, key events and revenue are real GA4 numbers.
 - **Social & video platforms** table — LinkedIn, Reddit, YouTube, X/Twitter: impressions,
-  sessions, engagement, key events, revenue. Unconnected platforms show a *"connector needed"*
-  link instead of a number. Exportable to CSV.
+  sessions, engagement, key events, revenue. Impressions read *"connector needed"* (grey text,
+  not a link) for every platform — no platform connector exists, so that is the permanent state
+  until one is built. Exportable to CSV.
 - **Top referring domains** — domain, DR, sessions, engagement, key events, revenue and an
   open-in-new-tab link. Sortable on sessions, key events and revenue. Exportable.
 - **Where off-site traffic lands** — landing page, top source, sessions, engagement, key events.
@@ -821,9 +932,20 @@ before reaching the API; it now reads `this.state.projectId`).
 Google Authorization status; the **data pipeline** connector grid — one card per connector with
 its real status colour (green = success, red = error, grey = never/running), last sync time,
 record count and error text; and **Social & platform connectors** — LinkedIn, Reddit, YouTube,
-X, Facebook, Instagram, Meta Ads — each a Connect/Disconnect toggle. ⚠️ These toggles are
-preference flags only; they gate whether the Off-site page shows an impressions column. They do
-not authenticate anything.
+X, Facebook, Instagram, Meta Ads — each an **inert row reading "Connector not built yet"**, with
+a footnote explaining that Off-site SEO already shows the GA4 sessions from these platforms and
+what is missing is on-platform impressions & CTR.
+
+These were Connect/Disconnect buttons until 2026-08-02. They authenticated nothing: the click
+flipped a `platformConnectors` boolean in `ProjectSettings.data`, the row instantly read
+"Connected", and the only downstream effect was a `connected: true` flag on the Off-site page —
+whose `impressions` are `null` for every platform regardless. Two connectors exist as code
+(`pipeline/connectors/linkedin.py`, `meta.py`) but neither is in `PAGE_CONNECTORS` /
+`ALL_CONNECTORS`, so no refresh runs them, and LinkedIn's writes `ad_metrics` rather than
+off-site impressions; Reddit, YouTube and X have no connector module. A control that looks like
+a connection but only sets a display flag is the "never fabricate data to fill a shape" rule
+broken with a widget instead of a number. Replace the row with a real credential flow when a
+connector is genuinely wired — not with the boolean.
 
 ### Automation
 A **sync schedule** row per module (Position tracking, Backlinks, Site audit crawl, Keyword
@@ -1022,9 +1144,12 @@ stored thresholds. See §14 and the Alerts & Rules section.)*
   implementation exists and a stored `true` would assert a security guarantee that is not real.
   The UI now surfaces the refusal and reverts the control instead of animating success.
 
-**Derived rather than measured** — remaining clearly-flagged approximations in Backlinks (link
-rows, first-seen, spam) and Ads (monthly budget, conversion value). Each is labelled in the UI
-as derived; none is presented as a measurement.
+**Derived rather than measured** — remaining clearly-flagged approximations in Ads (monthly
+budget, conversion value). Each is labelled in the UI as derived; none is presented as a
+measurement.
+*(Backlinks link rows, first-seen and spam score were on this list — as of 2026-08-01 the
+`dataforseo_backlinks` connector captures `url_from`, `domain_from_rank`, `page_from_rank` and
+`backlink_spam_score` for real, so those rows are now measured, not derived. See §8.)*
 
 **Not offered by the data source, not a code gap**
 - AI Optimization's per-platform mention tracking covers **Google AI Overviews and ChatGPT

@@ -21,7 +21,6 @@
       const sec = s.secDraft || data.security;
       const dp = s.dataDraft || data.dataPrefs;
       const syncCfg = s.syncCfg || data.syncConfig;
-      const platConn = s.platConn || data.platformConnectors;
       const rulesArr = (s.rules || data.alertRules || []);
       const cur = s.settingsSub || 'general';
 
@@ -464,17 +463,34 @@
               : (data.connectors.some(c => c.status === 'stale_error')
                   ? 'A credential was fixed since the last run — press Refresh to apply it.'
                   : 'All healthy.')),
-        platRows: PLAT.map(p => {
-          const on = !!platConn[p[0]]; const tg = toggle(on);
-          return {
-            key: p[0], name: p[1], desc: p[2], connected: on,
-            statusLabel: on ? 'Connected' : 'Not connected',
-            statusStyle: { fontSize: '11px', fontWeight: 600, padding: '2px 9px', borderRadius: '9999px', background: on ? '#ecfdf5' : '#f1f5f9', color: on ? '#059669' : '#94a3b8' },
-            actionLabel: on ? 'Disconnect' : 'Connect',
-            actionStyle: { padding: '7px 14px', border: '1px solid ' + (on ? '#e2e8f0' : '#c7d2fe'), background: on ? 'white' : '#eef2ff', color: on ? '#64748b' : '#4338ca', borderRadius: '8px', fontSize: '13px', fontWeight: 600, cursor: 'pointer' },
-            toggle: () => this.togglePlatform(p[0])
-          };
-        }),
+        /* ---- connections: social & platform connectors ----------------------------------
+           These were "Connect" buttons that authenticated nothing. `togglePlatform` flipped a
+           boolean into ProjectSettings.data.platformConnectors and the row immediately read
+           "Connected" -- no OAuth, no credential form, no verification, and no data. Off-site
+           SEO's `impressions` is hardcoded None for every platform regardless of the toggle
+           (apps/dashboard/services/offsite_service.py), so pressing Connect changed a green
+           pill and nothing else. That is the "never fabricate data to fill a shape" rule
+           applied to a control instead of a number: a switch that looks like a connection but
+           is only a display preference is the same lie.
+
+           Only two of the seven have connector code at all -- pipeline/connectors/linkedin.py
+           and meta.py -- and neither is listed in PAGE_CONNECTORS or ALL_CONNECTORS
+           (pipeline/services/sync_engine.py), so no refresh in this app runs them; LinkedIn's
+           also writes ad_metrics, not off-site impressions. Reddit, YouTube, X, Instagram and
+           Facebook have no connector module whatsoever.
+
+           So the row is now inert and says so. When a connector is genuinely wired, replace
+           this with a real credential flow -- not with the boolean. */
+        platRows: PLAT.map(p => ({
+          key: p[0], name: p[1], desc: p[2], connected: false,
+          statusLabel: 'Not connected',
+          statusStyle: { fontSize: '11px', fontWeight: 600, padding: '2px 9px', borderRadius: '9999px', background: '#f1f5f9', color: '#94a3b8' },
+          actionLabel: 'Connector not built yet',
+          // `default` cursor, muted palette, no hover, no handler: nothing about it should
+          // read as pressable, because there is nothing behind it to press.
+          actionStyle: { padding: '7px 14px', border: '1px dashed #e2e8f0', background: '#f8fafc', color: '#94a3b8', borderRadius: '8px', fontSize: '12.5px', fontWeight: 600, cursor: 'default' }
+        })),
+        platNote: 'None of these have a working connector yet, so there is deliberately no button here that would appear to connect one and do nothing. Off-site SEO already shows the GA4 sessions arriving from these platforms; what is missing is on-platform impressions & CTR, which only each platform’s own API can report.',
         adsCards: adsCards,
         adsIntro: 'Google Ads and Meta Ads credentials live in the server’s .env file, not in this database — so these are status cards, not forms. Each one reads its real SyncLog row and tells you which problem you actually have.',
 

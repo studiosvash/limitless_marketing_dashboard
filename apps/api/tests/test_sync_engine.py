@@ -10,8 +10,9 @@ daemon thread died silently, and the RefreshRun row stayed at status='running'/c
 forever. scope='all' was 100% broken in production and no test noticed.
 
 These tests run the loop against fake connectors, so they need no network and no analytics DB.
-`_run_post_sync` is patched out because refresh_domain_checks() inside it makes six live
-network requests.
+`_run_post_sync` is patched out because its aggregate/snapshot rebuilds want the analytics DB.
+(The six domain-check probes used to live in there too; they are the `domain_checks` connector
+now, and `_stub_connectors` replaces it along with every other one.)
 """
 from unittest.mock import patch
 
@@ -204,3 +205,35 @@ class SyncEngineTests(TestCase):
         run.refresh_from_db()
         self.assertEqual(run.status, RefreshStatus.SUCCESS)
         self.assertIsNotNone(run.finished_at)
+
+    # ------------------------------------------------------- domain_checks scope
+
+    def test_domain_checks_scope_runs_only_the_probes(self):
+        """The Domain Checks card's button must not buy a whole Site Audit crawl.
+
+        Its six probes are cheap local HTTP requests; `gsc_pages`, `url_inspection`,
+        `pagespeed` and the long-polling, metered `dataforseo_onpage` are not. Before this
+        scope existed the card's only button was `audit`, so recording six checks that take
+        about four seconds cost a 20-30 minute run and a billable OnPage crawl.
+        """
+        self._stub_connectors()
+        run = self._run_row(scope="domain_checks")
+
+        summary = sync_page("domain_checks", SITE_URL, run.pk)
+
+        self.assertEqual(list(self.built), ["domain_checks"])
+        for expensive in ("gsc_pages", "url_inspection", "pagespeed", "dataforseo_onpage"):
+            self.assertNotIn(expensive, self.built)
+        self.assertEqual(summary["completed"], 1)
+        run.refresh_from_db()
+        self.assertEqual(run.status, RefreshStatus.SUCCESS)
+
+    def test_audit_scope_still_records_domain_checks(self):
+        """Narrowing the card's button must not stop a full crawl from refreshing the checks —
+        that is where they came from before this scope existed."""
+        self.assertIn("domain_checks", PAGE_CONNECTORS["audit"])
+
+    def test_refresh_all_records_domain_checks(self):
+        """`Refresh all` used to pick the probes up as a `_run_post_sync` side effect. Now that
+        they are a connector they must be in ALL_CONNECTORS, or 'all' would silently do less."""
+        self.assertIn("domain_checks", ALL_CONNECTORS)

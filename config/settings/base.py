@@ -380,7 +380,12 @@ EMAIL_HOST_PASSWORD = env("EMAIL_HOST_PASSWORD", "")
 EMAIL_USE_TLS = str(env("EMAIL_USE_TLS", "True")).lower() in ("true", "1", "yes")
 EMAIL_USE_SSL = str(env("EMAIL_USE_SSL", "False")).lower() in ("true", "1", "yes")
 DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", "Limitless Dashboard <no-reply@fusehealth.com>")
-FRONTEND_URL = env("FRONTEND_URL", "http://localhost:8000")
+# Base URL used in outbound emails (invitations). Left empty on purpose: with no value,
+# apps/api/views.py:build_frontend_link derives the origin from the incoming request, so a
+# dev box mails localhost links and the deployed site mails https://<domain> links without
+# anyone having to remember this variable. Set it only when the SPA is served from a
+# different origin than the API.
+FRONTEND_URL = env("FRONTEND_URL", "")
 
 # If running locally with no SMTP user configured, gracefully fall back to console print
 # so dev doesn't crash with ConnectionRefused on localhost:25 when testing.

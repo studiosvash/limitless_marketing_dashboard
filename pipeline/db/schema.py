@@ -206,9 +206,20 @@ class Backlink(Base):
     anchor = Column(Text, nullable=True)
     status = Column(String(20), default="live")
     dofollow = Column(Integer, default=1)
+    # The referring DOMAIN's authority (DataForSEO `domain_from_rank`), 0-1000. Was populated
+    # from `rank` -- a different, per-BACKLINK score -- which is why unrelated domains showed
+    # identical values here; see ensure_backlinks_columns() for the added columns below.
     domain_rank = Column(Integer, nullable=True)
     first_seen = Column(Date, nullable=True)
     last_seen = Column(Date, nullable=True)
+    # The exact page that carries the link (DataForSEO `url_from`). Without this the Backlinks
+    # table could only show the referring DOMAIN, never a link to the actual page.
+    url_from = Column(Text, nullable=True)
+    # The referring PAGE's own authority (DataForSEO `page_from_rank`), 0-1000 -- distinct from
+    # `domain_rank` above, which is domain-wide.
+    page_from_rank = Column(Integer, nullable=True)
+    # Per-backlink spam score (DataForSEO `backlink_spam_score`), 0-100.
+    spam_score = Column(Integer, nullable=True)
 
     __table_args__ = (
         UniqueConstraint("site_id", "referring_domain", "target_url", name="uq_backlink_site"),
@@ -858,6 +869,16 @@ _PAGE_SPEED_ADDED_COLUMNS = (
     ("tbt_ms", "FLOAT", None),
 )
 
+# `backlinks.url_from` / `page_from_rank` / `spam_score` — DataForSEO returns all three on
+# every backlink row (see pipeline/connectors/dataforseo_backlinks.py), but the original table
+# had no columns for them, so they were fetched and then discarded. Nullable, no default: a
+# backlink synced before this migration has genuinely unknown values, not zero.
+_BACKLINKS_ADDED_COLUMNS = (
+    ("url_from", "TEXT", None),
+    ("page_from_rank", "INTEGER", None),
+    ("spam_score", "INTEGER", None),
+)
+
 
 def _alter_missing_columns(conn, table: str, specs) -> list[str]:
     """Add each missing column of `table` on the given Connection. Returns the names added.
@@ -919,6 +940,16 @@ def ensure_page_speed_columns(session_or_engine) -> list[str]:
     return _run_alter(session_or_engine, "page_speed", _PAGE_SPEED_ADDED_COLUMNS)
 
 
+def ensure_backlinks_columns(session_or_engine) -> list[str]:
+    """Bring an existing `backlinks` table up to date with the Backlink model. Idempotent.
+
+    Same contract as `ensure_site_columns`/`ensure_page_speed_columns`: `select(Backlink)`
+    against a database created before `url_from`/`page_from_rank`/`spam_score` existed fails
+    with "no such column" otherwise.
+    """
+    return _run_alter(session_or_engine, "backlinks", _BACKLINKS_ADDED_COLUMNS)
+
+
 def init_db(engine: Engine) -> None:
     """Create all analytics tables if they don't exist, then reconcile columns added later.
 
@@ -928,3 +959,4 @@ def init_db(engine: Engine) -> None:
     Base.metadata.create_all(engine)
     ensure_site_columns(engine)
     ensure_page_speed_columns(engine)
+    ensure_backlinks_columns(engine)

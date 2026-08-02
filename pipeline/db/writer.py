@@ -32,7 +32,7 @@ from pipeline.db.schema import (
     LLMCitedPage, LLMMentionMetric,
     SavedKeyword, BacklinksSnapshot,
     AuditSnapshot, AdSearchTerm, GA4CampaignDaily, ConnectorCost,
-    PageCrawlMeta, ensure_page_speed_columns,
+    PageCrawlMeta, ensure_page_speed_columns, ensure_backlinks_columns,
 )
 from pipeline.utils.logger import get_logger
 
@@ -265,6 +265,10 @@ def upsert_backlinks(session: Session, records: list[dict], site_id: Optional[st
     """Upsert backlinks. Unique on (site_id, referring_domain, target_url)."""
     if not records:
         return 0
+
+    # `select(Backlink)` / `insert(Backlink)` reference url_from/page_from_rank/spam_score,
+    # which do not exist on a `backlinks` table created before those columns were added.
+    ensure_backlinks_columns(session)
 
     _ensure_site_id(records, site_id)
     for r in records:

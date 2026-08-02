@@ -17,6 +17,26 @@ def _resolve_site_ids(site_id: str) -> list[str]:
     return resolve_site_ids(site_id)
 
 
+def _is_offsite_channel(channel: str) -> bool:
+    """This page's own definition of "off-site": referral, social and video traffic GA4
+    attributes to another site or platform sending you visitors -- not search-engine, direct
+    or paid traffic. Matched on GA4's `sessionDefaultChannelGroup` name (a substring check,
+    because custom channel groupings vary the exact string -- "Social"/"Organic Social" and
+    "Video"/"Organic Video" both occur in practice).
+
+    Excludes "Organic Search" specifically even though it also contains "Organic" -- that is
+    on-site SEO (driven by your own ranking), and the one thing this page explicitly is not.
+    Excludes any "Paid *" channel for the same reason a paid campaign isn't earned/off-site
+    just because its name also contains "Social" or "Video".
+
+    Single source of truth for every off-site figure on this page (channel-mix flags, KPI
+    totals, the trend chart, revenue) so none of them can drift apart on what counts.
+    """
+    ch = channel or ""
+    is_offsite_name = ("Organic" in ch or "Referral" in ch or "Social" in ch or "Video" in ch)
+    return is_offsite_name and ch != "Organic Search" and "Paid" not in ch
+
+
 # --- revenue --------------------------------------------------------------
 # Revenue exists in exactly one place: ga4_traffic_source_daily.revenue, written
 # from GA4's `totalRevenue` metric. seo_daily has no revenue column, so the
@@ -46,30 +66,15 @@ def _engagement(engaged: int, sessions: int) -> dict:
 
 
 def _revenue_total_raw(site_ids: list[str], start, end) -> float:
-    """Real GA4 revenue for the whole period, or 0.0 when GA4 reported none."""
-    try:
-        with get_session() as session:
-            row = session.execute(
-                select(func.sum(GA4TrafficSourceDaily.revenue).label("revenue"))
-                .where(
-                    GA4TrafficSourceDaily.site_id.in_(site_ids),
-                    GA4TrafficSourceDaily.date >= start,
-                    GA4TrafficSourceDaily.date <= end,
-                )
-            ).first()
-            return round(float(row.revenue or 0.0), 2) if row else 0.0
-    except Exception as e:
-        logger.error(f"_revenue_total_raw error: {e}", exc_info=True)
-        return 0.0
-
-
-def _revenue_by_date_raw(site_ids: list[str], start, end) -> dict:
-    """Real GA4 revenue per day, keyed by ISO date string. Missing day -> no revenue."""
+    """Real GA4 revenue attributed to off-site channels for the whole period, or 0.0 when GA4
+    reported none. Grouped by channel (rather than a flat SUM) so `_is_offsite_channel` can
+    filter out Organic Search / Direct / Paid revenue before it's totalled -- this is "Off-
+    site SEO"'s Attributed Revenue card, not the site's whole revenue."""
     try:
         with get_session() as session:
             rows = session.execute(
                 select(
-                    GA4TrafficSourceDaily.date,
+                    GA4TrafficSourceDaily.channel,
                     func.sum(GA4TrafficSourceDaily.revenue).label("revenue"),
                 )
                 .where(
@@ -77,79 +82,157 @@ def _revenue_by_date_raw(site_ids: list[str], start, end) -> dict:
                     GA4TrafficSourceDaily.date >= start,
                     GA4TrafficSourceDaily.date <= end,
                 )
-                .group_by(GA4TrafficSourceDaily.date)
+                .group_by(GA4TrafficSourceDaily.channel)
             ).all()
-            return {str(r.date): round(float(r.revenue or 0.0), 2) for r in rows}
+            total = sum(float(r.revenue or 0.0) for r in rows if _is_offsite_channel(r.channel))
+            return round(total, 2)
+    except Exception as e:
+        logger.error(f"_revenue_total_raw error: {e}", exc_info=True)
+        return 0.0
+
+
+def _revenue_by_date_raw(site_ids: list[str], start, end) -> dict:
+    """Real GA4 revenue per day, off-site channels only (see `_revenue_total_raw`), keyed by
+    ISO date string. Missing day -> no revenue."""
+    try:
+        with get_session() as session:
+            rows = session.execute(
+                select(
+                    GA4TrafficSourceDaily.date,
+                    GA4TrafficSourceDaily.channel,
+                    func.sum(GA4TrafficSourceDaily.revenue).label("revenue"),
+                )
+                .where(
+                    GA4TrafficSourceDaily.site_id.in_(site_ids),
+                    GA4TrafficSourceDaily.date >= start,
+                    GA4TrafficSourceDaily.date <= end,
+                )
+                .group_by(GA4TrafficSourceDaily.date, GA4TrafficSourceDaily.channel)
+            ).all()
+            out: dict = {}
+            for r in rows:
+                if not _is_offsite_channel(r.channel):
+                    continue
+                key = str(r.date)
+                out[key] = round(out.get(key, 0.0) + float(r.revenue or 0.0), 2)
+            return out
     except Exception as e:
         logger.error(f"_revenue_by_date_raw error: {e}", exc_info=True)
         return {}
 
 
 def query_offsite_totals_raw(site_id: str, start, end) -> dict:
+    """Off-site totals: sessions/engagement/key events attributed to off-site channels only
+    (Referral, Organic Social, Social, Organic Video, Video -- see `_is_offsite_channel`), not
+    the whole site.
+
+    Sourced from `ga4_traffic_source_daily`, which carries GA4's channel dimension --
+    `seo_daily` (used elsewhere on this page for landing pages, which have no channel of
+    their own) has none, so it cannot answer an off-site-only question. This used to sum
+    `seo_daily.sessions`, i.e. every session on the site including Organic Search, Direct and
+    Paid -- so the "Off-site sessions" KPI was really "total site sessions" mislabeled.
+
+    `users` has no equivalent here: `ga4_traffic_source_daily` has no per-channel user count,
+    and there is no honest way to attribute a site-wide user total to "off-site" alone, so it
+    is None rather than the same whole-site number under a new label.
+    """
     site_ids = _resolve_site_ids(site_id)
+    sessions = engaged = conversions = 0
     try:
         with get_session() as session:
-            row = session.execute(
+            rows = session.execute(
                 select(
-                    func.sum(SEODaily.sessions).label("sessions"),
-                    func.sum(SEODaily.users).label("users"),
-                    func.avg(SEODaily.engagement_rate).label("engagement_rate"),
-                    func.sum(SEODaily.conversions).label("conversions"),
+                    GA4TrafficSourceDaily.channel,
+                    func.sum(GA4TrafficSourceDaily.sessions).label("sessions"),
+                    func.sum(GA4TrafficSourceDaily.engaged_sessions).label("engaged_sessions"),
+                    func.sum(GA4TrafficSourceDaily.conversions).label("conversions"),
                 )
-                .where(SEODaily.site_id.in_(site_ids), SEODaily.date >= start, SEODaily.date <= end)
-            ).first()
+                .where(
+                    GA4TrafficSourceDaily.site_id.in_(site_ids),
+                    GA4TrafficSourceDaily.date >= start,
+                    GA4TrafficSourceDaily.date <= end,
+                )
+                .group_by(GA4TrafficSourceDaily.channel)
+            ).all()
+        for r in rows:
+            if not _is_offsite_channel(r.channel):
+                continue
+            sessions += int(r.sessions or 0)
+            engaged += int(r.engaged_sessions or 0)
+            conversions += int(r.conversions or 0)
     except Exception as e:
         logger.error(f"query_offsite_totals_raw error: {e}", exc_info=True)
-        row = None
 
-    sessions = int(row.sessions or 0) if row else 0
-    engagement_rate = float(row.engagement_rate or 0.0) if row else 0.0
     ref_domains = len(query_referring_domains_raw(site_id))
+    eng = _engagement(engaged, sessions)
     return {
         "sessions": sessions,
-        "users": int(row.users or 0) if row else 0,
-        "engagementRate": round(engagement_rate * 100, 1),
-        "engagedSessions": round(sessions * engagement_rate),
-        "keyEvents": int(row.conversions or 0) if row else 0,
-        # Real GA4 totalRevenue, not conversions x an invented average order value.
+        "users": None,
+        "engagementRate": eng["engagementRate"] if eng["engagementRate"] is not None else 0.0,
+        "engagedSessions": engaged,
+        "keyEvents": conversions,
+        # Real GA4 totalRevenue attributed to off-site channels, not conversions x an
+        # invented average order value, and not the site's whole revenue.
         "revenue": _revenue_total_raw(site_ids, start, end),
         "referringDomains": ref_domains,
     }
 
 
 def query_offsite_trend_raw(site_id: str, start, end) -> list[dict]:
+    """Per-day off-site sessions/engagement/key events -- same off-site channel filter as
+    `query_offsite_totals_raw`, so the trend line and the KPI card can never disagree about
+    what is being measured (see `_is_offsite_channel`).
+
+    Grouped by (date, channel): a day is kept in the output as soon as GA4 reported ANY
+    channel for it, with its off-site sum defaulting to 0 when every channel that day was
+    Organic Search/Direct/Paid. Filtering rows first and only THEN grouping by date would
+    silently drop that day from the x-axis instead of showing a real zero -- the chart plots
+    points by array index, not by date, so a missing day would compress the timeline rather
+    than show a gap.
+    """
     site_ids = _resolve_site_ids(site_id)
     try:
         with get_session() as session:
             rows = session.execute(
                 select(
-                    SEODaily.date,
-                    func.sum(SEODaily.sessions).label("sessions"),
-                    func.avg(SEODaily.engagement_rate).label("engagement_rate"),
-                    func.sum(SEODaily.conversions).label("conversions"),
+                    GA4TrafficSourceDaily.date,
+                    GA4TrafficSourceDaily.channel,
+                    func.sum(GA4TrafficSourceDaily.sessions).label("sessions"),
+                    func.sum(GA4TrafficSourceDaily.engaged_sessions).label("engaged_sessions"),
+                    func.sum(GA4TrafficSourceDaily.conversions).label("conversions"),
                 )
-                .where(SEODaily.site_id.in_(site_ids), SEODaily.date >= start, SEODaily.date <= end)
-                .group_by(SEODaily.date)
-                .order_by(SEODaily.date.asc())
+                .where(
+                    GA4TrafficSourceDaily.site_id.in_(site_ids),
+                    GA4TrafficSourceDaily.date >= start,
+                    GA4TrafficSourceDaily.date <= end,
+                )
+                .group_by(GA4TrafficSourceDaily.date, GA4TrafficSourceDaily.channel)
             ).all()
     except Exception as e:
         logger.error(f"query_offsite_trend_raw error: {e}", exc_info=True)
         return []
 
-    # Real GA4 totalRevenue per day; days GA4 reported no revenue for stay at 0.0.
+    by_date: dict = {}
+    for r in rows:
+        d = by_date.setdefault(str(r.date), {"sessions": 0, "engaged": 0, "conversions": 0})
+        if not _is_offsite_channel(r.channel):
+            continue
+        d["sessions"] += int(r.sessions or 0)
+        d["engaged"] += int(r.engaged_sessions or 0)
+        d["conversions"] += int(r.conversions or 0)
+
+    # Real GA4 totalRevenue per day, off-site channels only; days GA4 reported none stay 0.0.
     revenue_by_date = _revenue_by_date_raw(site_ids, start, end)
 
     out = []
-    for r in rows:
-        sessions = int(r.sessions or 0)
-        er = float(r.engagement_rate or 0.0)
-        convs = int(r.conversions or 0)
+    for date_str in sorted(by_date):
+        d = by_date[date_str]
         out.append({
-            "date": str(r.date),
-            "sessions": sessions,
-            "engagedSessions": round(sessions * er),
-            "keyEvents": convs,
-            "revenue": revenue_by_date.get(str(r.date), 0.0),
+            "date": date_str,
+            "sessions": d["sessions"],
+            "engagedSessions": d["engaged"],
+            "keyEvents": d["conversions"],
+            "revenue": revenue_by_date.get(date_str, 0.0),
         })
     return out
 
@@ -270,8 +353,6 @@ def build_offsite_response(site_id: str, curr_start, curr_end, prev_start, prev_
     landing_pages = query_offsite_landing_pages_raw(site_id, curr_start, curr_end)
     traffic_sources = query_traffic_sources_raw(site_id, curr_start, curr_end)
 
-    tot_sessions = max(1, totals["sessions"])
-    
     # Real channel aggregation from GA4
     channel_agg = {}
     for r in traffic_sources:
@@ -281,6 +362,11 @@ def build_offsite_response(site_id: str, curr_start, curr_end, prev_start, prev_
         channel_agg[ch]["sessions"] += r["sessions"]
         channel_agg[ch]["engaged"] += r["engaged_sessions"]
         channel_agg[ch]["conversions"] += r["conversions"]
+
+    # `pct` is each channel's share of ALL channels shown in this same list -- `totals`
+    # above is off-site sessions only (see query_offsite_totals_raw), which would make an
+    # on-site channel like Organic Search read as >100% of a smaller denominator.
+    tot_sessions = max(1, sum(d["sessions"] for d in channel_agg.values()))
 
     channels = []
     for ch, data in channel_agg.items():
@@ -292,7 +378,7 @@ def build_offsite_response(site_id: str, curr_start, curr_end, prev_start, prev_
             "pct": round(sess / tot_sessions * 100),
             "engagementRate": er,
             "keyEvents": data["conversions"],
-            "offsite": "Organic" in ch or "Referral" in ch or "Social" in ch or "Video" in ch
+            "offsite": _is_offsite_channel(ch)
         })
         
     # No placeholder row when ga4_traffic_source_daily is empty: an "Organic Search
@@ -335,14 +421,20 @@ def build_offsite_response(site_id: str, curr_start, curr_end, prev_start, prev_
             "revenue": rev,
         })
 
-    from apps.dashboard.services.settings_service import build_settings_response
-    settings_data = build_settings_response(site_id)
-    plat_conn = settings_data.get("platformConnectors", {})
-    li_conn = bool(plat_conn.get("linkedin", False))
-    reddit_conn = bool(plat_conn.get("reddit", False))
-    yt_conn = bool(plat_conn.get("youtube", False))
-    x_conn = bool(plat_conn.get("x", False))
-    
+    # `connected` used to be read from ProjectSettings.data["platformConnectors"] — a boolean
+    # the user flipped on the Settings page with a "Connect" button that authenticated nothing.
+    # It made this page announce "Connector live · impressions + click-throughs" for a platform
+    # whose impressions are None and whose connector does not run, which is the fabrication this
+    # module exists to avoid. No platform connector is wired into the sync engine (neither
+    # pipeline/connectors/linkedin.py nor meta.py is listed in PAGE_CONNECTORS/ALL_CONNECTORS,
+    # and Reddit/YouTube/X have no module at all), so the honest value is False for all of them
+    # — including on projects that still have a stale `true` stored from the old toggle, which
+    # the now-inert Settings row can no longer clear.
+    #
+    # Flip these to a real per-connector check (a SyncLog row, as the Ads cards do) at the same
+    # time as the connector is registered — not before.
+    li_conn = reddit_conn = yt_conn = x_conn = False
+
     # Social mapping
     def get_social_metrics(domain_keyword: str):
         matches = [r for r in traffic_sources if domain_keyword in r["source"]]
@@ -381,9 +473,10 @@ def build_offsite_response(site_id: str, curr_start, curr_end, prev_start, prev_
         "referrers": referrers,
         "social": social,
         "landingPages": landing_pages,
+        # All False, for the reason given above the li_conn/reddit_conn block.
         "connectors": {
             "linkedin": li_conn, "reddit": reddit_conn, "youtube": yt_conn,
-            "x": x_conn, "facebook": bool(plat_conn.get("facebook", False)), "instagram": bool(plat_conn.get("instagram", False)),
+            "x": x_conn, "facebook": False, "instagram": False,
         },
         # `lastUpdated` used to be `totals["engagementRate"]` -- the engagement-rate PERCENTAGE
         # under a key the frontend renders as a timestamp. Now it is the real last successful

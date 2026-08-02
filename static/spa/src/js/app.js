@@ -42,6 +42,10 @@
     offSort: { key: 'sessions', dir: -1 },
     pgSort: { key: 'clicks', dir: -1 },
     auSub: 'overview', auSev: 'all', auCat: 'all', auSearch: '', auOpen: null, auView: 'table', auPgSearch: '', auPgSort: { key: 'score', dir: 1 },
+    /* Crawled Pages table, 0-indexed. The table used to render `rows.slice(0, 40)` full stop:
+       on a 1 139-page site that hid 96% of a payload the browser already had, and the footer
+       told you to "export the full list" to see your own pages. */
+    auPgPage: 0,
     /* id of the audit check whose affected-page list is fully expanded (null = preview only) */
     auAllPages: null,
     auCmpA: null, auCmpB: null, auCmpFilter: 'all', auProg: { score: true, errors: true, warnings: true, notices: false, pages: false },
@@ -60,7 +64,7 @@
     prefs: null, prefsFor: null,
     settingsSub: 'general', setFor: null,
     wsDraft: null, notifDraft: null, aiDraft: null, secDraft: null, dataDraft: null, teamDraft: null,
-    syncCfg: null, platConn: null, budgetCap: 75, budgetEnforce: true,
+    syncCfg: null, budgetCap: 75, budgetEnforce: true,
     savedWs: false, savedNotif: false, savedAi: false, savedData: false, savedBudget: false,
     inviteEmail: '', inviteRole: 'Analyst', newTokenName: '',
     inviteMode: 'email', inviteStatusMsg: null, inviteErrorMsg: null,
@@ -298,7 +302,6 @@
             next.dataDraft = Object.assign({}, data.dataPrefs);
             next.teamDraft = JSON.parse(JSON.stringify(data.team));
             next.syncCfg = Object.assign({}, data.syncConfig);
-            next.platConn = Object.assign({}, data.platformConnectors);
             next.budgetCap = data.budget.cap;
             next.budgetEnforce = data.budget.enforce;
             next.setFor = pid;
@@ -414,10 +417,31 @@
     }));
   }
 
-  /* Bare domain, normalised the same way everywhere it's used (submit validation, the
-     duplicate check, and the connection-check call) so the three agree. */
+  /* The registration form of a domain — the client-side twin of
+     pipeline/utils/site_ids.normalize_domain(). Keep the two in step: this one decides what the
+     user sees, that one decides what gets stored, and a disagreement shows up as "That site is
+     already added" on a domain the dropdown doesn't list (or worse, the reverse).
+
+     https://premierstaff.com   http://premierstaff.com   premierstaff.com
+     https://www.premierstaff.com   http://www.premierstaff.com   www.premierstaff.com
+     all mean ONE site: premierstaff.com. Stripping `www.` is the part that was missing, and it
+     is why premierstaff.com and www.premierstaff.com could both be added as separate projects. */
+  _normalizeDomain(value) {
+    return String(value || '')
+      .trim().toLowerCase()
+      .replace(/^sc-domain:/, '')
+      .replace(/^[a-z][a-z0-9+.-]*:\/\//, '')  // any scheme, not just http(s)
+      .replace(/^[^/@]*@/, '')                 // user:pass@
+      .split('/')[0]                           // path
+      .split(':')[0]                           // port
+      .replace(/\.+$/, '')                     // fully-qualified trailing dot
+      .replace(/^www\./, '');
+  }
+
+  /* Normalised the same way everywhere it's used (submit validation, the duplicate check, and
+     the connection-check call) so the three agree. */
   _addSiteDomain() {
-    return this.state.addSiteDomain.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/$/, '');
+    return this._normalizeDomain(this.state.addSiteDomain);
   }
 
   /* Step 1 -> 2. This step is pure client-side validation, matching what addSiteSubmit always
@@ -429,8 +453,12 @@
       this.setState({ addSiteError: 'Enter a valid domain, e.g. example.com' });
       return;
     }
-    if (this.state.projects.some(p => p.domain === domain)) {
-      this.setState({ addSiteError: 'That site is already added' });
+    // Normalise the stored side too, not just the typed side. A project registered before
+    // normalize_domain existed still carries `www.` in its domain, and comparing the raw value
+    // would let the user add its non-www twin -- the exact duplicate this check exists to stop.
+    const dupe = this.state.projects.find(p => this._normalizeDomain(p.domain) === domain);
+    if (dupe) {
+      this.setState({ addSiteError: 'That site is already added as ' + dupe.domain });
       return;
     }
     this.setState({ addSiteStep: 2, addSiteError: null });
@@ -659,7 +687,7 @@
           this.loadSyncLog(pid);
           const proj = this.state.projects.find(p => p.id === pid) || {};
           const dom = proj.domain || pid;
-          const scopeNotif = { audit: 'Crawl complete — Site Audit refreshed for ' + dom, positions: 'Positioning data refreshed for ' + dom, positions_new: 'New keywords measured for ' + dom, positioning_new: 'New keywords measured for ' + dom, positioning: 'Positioning data refreshed for ' + dom, keywords: 'Keywords data refreshed for ' + dom, backlinks: 'Backlinks data refreshed for ' + dom, ads: 'Ads data refreshed for ' + dom, ai: 'AI Optimization data refreshed for ' + dom, overview: 'Overview data refreshed for ' + dom, seo: 'SEO data refreshed for ' + dom };
+          const scopeNotif = { domain_checks: 'Domain checks refreshed for ' + dom, audit: 'Crawl complete — Site Audit refreshed for ' + dom, positions: 'Positioning data refreshed for ' + dom, positions_new: 'New keywords measured for ' + dom, positioning_new: 'New keywords measured for ' + dom, positioning: 'Positioning data refreshed for ' + dom, keywords: 'Keywords data refreshed for ' + dom, backlinks: 'Backlinks data refreshed for ' + dom, ads: 'Ads data refreshed for ' + dom, ai: 'AI Optimization data refreshed for ' + dom, overview: 'Overview data refreshed for ' + dom, seo: 'SEO data refreshed for ' + dom };
           this.notify(scopeNotif[scope] || (scope === 'all' ? ('All modules refreshed for ' + dom) : (scope + ' refreshed for ' + dom)));
         } else {
           this.setState(s => ({ sync: Object.assign({}, s.sync, {
@@ -1419,11 +1447,10 @@
     this.setState({ syncCfg: next });
     this.putSettings({ syncConfig: next }, 'Sync schedule updated');
   }
-  togglePlatform(key) {
-    const next = Object.assign({}, this.state.platConn, { [key]: !this.state.platConn[key] });
-    this.setState({ platConn: next });
-    this.putSettings({ platformConnectors: next }, (next[key] ? 'Connected ' : 'Disconnected ') + key);
-  }
+  /* `togglePlatform` used to live here. It flipped a platformConnectors boolean and reported
+     "Connected <platform>" without authenticating anything -- see the platRows comment in
+     pages/settings.js for why that row is now inert. It also passed no `revert` to
+     putSettings, so a failed save left the pill reading "Connected" until a reload. */
   setBudgetCap(v) {
     const cap = Math.max(5, parseInt(v, 10) || 5);
     this.setState({ budgetCap: cap, savedBudget: false });
@@ -1760,15 +1787,65 @@
     });
   }
 
+  /* The one comparator behind every sortable table here (Crawled Pages, Keywords, Campaigns,
+     Search Terms, Referring domains). Tested in static/spa/tests/sort_rows.test.js.
+
+     UNMEASURED ROWS SINK TO THE BOTTOM IN BOTH DIRECTIONS. This used to substitute -1 for a
+     null before subtracting, which is lower than every real metric on this dashboard (scores
+     0-100, milliseconds, link counts, sessions) — so ascending order ranked every unmeasured
+     row as worse than the worst measured one. On Site Audit -> Crawled Pages, which defaults
+     to score-ascending and renders only the first 40 rows, that put all 28 never-Lighthoused
+     pages on top and pushed all 27 real scores below the fold: the table read as an empty
+     column of dashes on a site that had a full set of measurements.
+
+     Everywhere else this codebase is careful that null means "not measured, and that is not
+     zero" — it never renders null as 0 and never lets it into an average. Ranking null as
+     worse-than-zero broke the same rule the moment a user sorted. An unmeasured row is not the
+     best and not the worst; it is not a result, so it goes last either way and the ordering of
+     the real values is unaffected. A real 0 is a result (an orphan page has 0 in-links) and
+     still sorts as 0. */
   sortRows(rows, sort) {
     const dir = sort.dir;
+    const unmeasured = v => v == null || v === '';
     return rows.slice().sort((a, b) => {
       const av = a[sort.key], bv = b[sort.key];
-      if (typeof av === 'string' || typeof bv === 'string') return String(av || '').localeCompare(String(bv || '')) * dir;
-      return ((av == null ? -1 : av) - (bv == null ? -1 : bv)) * dir;
+      const am = unmeasured(av), bm = unmeasured(bv);
+      if (am || bm) return (am && bm) ? 0 : (am ? 1 : -1);
+      if (typeof av === 'string' || typeof bv === 'string') return String(av).localeCompare(String(bv)) * dir;
+      return (av - bv) * dir;
     });
   }
   arrow(sort, keyName) { return sort.key === keyName ? (sort.dir === -1 ? ' ↓' : ' ↑') : ''; }
+
+  /* Pagination helpers, shared so a second paginated table cannot invent its own arithmetic.
+     Tested in static/spa/tests/page_window.test.js, which extracts these two methods from this
+     file rather than restating them — a restated copy passes forever after the original drifts.
+
+     `pageSlice` CLAMPS rather than trusting the requested index: filtering can shrink a list
+     under a reader who is on page 12, and an out-of-range slice renders an empty table that is
+     indistinguishable from "nothing matched your filter". */
+  pageSlice(total, requestedPage, size) {
+    const pageCount = Math.max(1, Math.ceil(total / size));
+    const pageIdx = Math.min(Math.max(0, requestedPage || 0), pageCount - 1);
+    const from = pageIdx * size;
+    return { pageCount: pageCount, pageIdx: pageIdx, from: from, shown: Math.max(0, Math.min(size, total - from)) };
+  }
+
+  /* Which page numbers to draw: a window of 7 around the current page, with first and last
+     always reachable, and an ellipsis marking each gap. Returns [] for a single page so the
+     nav row can be hidden entirely rather than drawing a lone "1". */
+  pageWindow(pageCount, pageIdx) {
+    const out = [];
+    if (pageCount <= 1) return out;
+    const WINDOW = 7;
+    let lo = Math.max(0, pageIdx - Math.floor(WINDOW / 2));
+    const hi = Math.min(pageCount - 1, lo + WINDOW - 1);
+    lo = Math.max(0, Math.min(lo, hi - WINDOW + 1));
+    if (lo > 0) { out.push(0); if (lo > 1) out.push('gap'); }
+    for (let n = lo; n <= hi; n++) out.push(n);
+    if (hi < pageCount - 1) { if (hi < pageCount - 2) out.push('gap'); out.push(pageCount - 1); }
+    return out;
+  }
 
   /* ================= Data source badges =================================================
      Every metric surface has to answer two questions without the user asking anyone:
@@ -1967,10 +2044,13 @@
       style: this.srcStyle('live')
     };
   }
-  mkSortHandler(stateKey, keyName) {
+  mkSortHandler(stateKey, keyName, resetKey) {
     return () => this.setState(s => {
       const cur = s[stateKey];
-      return { [stateKey]: { key: keyName, dir: cur.key === keyName ? -cur.dir : -1 } };
+      const next = { [stateKey]: { key: keyName, dir: cur.key === keyName ? -cur.dir : -1 } };
+      // Paginated tables pass the name of their page-index state so re-sorting returns to page 1.
+      if (resetKey) next[resetKey] = 0;
+      return next;
     });
   }
 
@@ -2184,6 +2264,17 @@
       campaigns: 'Fetch Campaigns',
       terms: 'Fetch Terms'
     };
+    /* What the progress banner calls the run in flight. Keyed on the SCOPE, not on the tab:
+       the label used to be `tabToLabel[tab]`, so any narrow scope started from a card on the
+       Site Audit page announced itself as "Syncing Site Audit" — which reads as "this is
+       refreshing the whole page" and is how a cheap, targeted refresh gets mistaken for the
+       expensive one. Unlisted scopes fall back to the scope name itself rather than to the
+       tab, so a new scope is never mislabelled as an existing one. */
+    const scopeToLabel = {
+      overview: 'Overview', keywords: 'Keywords', positions: 'Positions',
+      positions_new: 'new keywords', backlinks: 'Backlinks', audit: 'Site Audit',
+      domain_checks: 'Domain Checks', ai: 'AI Data', ads: 'Ads',
+    };
     const pageScope = tabToScope[tab];
 
     const data = s.cache[this.key(tab)];
@@ -2297,6 +2388,13 @@
       prefEmail: () => this.togglePref('email_alerts'),
       prefDigest: () => this.togglePref('weekly_digest'),
       syncAudit: () => this.startSync('audit'),
+      /* The Domain Checks card only needs its six probes (SSL, sitemap.xml, robots.txt,
+         HTTP/2, www redirect, llms.txt) — about four seconds of plain HTTPS requests against
+         the site itself, no credentials and no metered call. It used to call syncAudit, so
+         filling in one card cost the whole 20-30 minute crawl including the billable
+         DataForSEO OnPage job. A full 'audit' still refreshes these checks; this scope is the
+         cheap way to refresh only them. */
+      syncDomainChecks: () => this.startSync('domain_checks'),
       syncAi: () => this.startSync('ai'),
       copyKws: () => this.copySelectedKws(),
       copySummary: () => this.copySummary(),
@@ -2307,13 +2405,16 @@
       ncViewAll: () => { this.setState({ ncOpen: false }); this.go('alerts'); },
       exportTopPages: () => { const d = s.cache[this.key('overview')]; if (d) this.downloadCsv(project.domain + '-top-pages.csv', [['page', 'url'], ['clicks', 'clicks'], ['impressions', 'impressions'], ['ctr', 'ctr']], d.topPages); },
       exportKeywords: () => { const d = s.cache[this.key('keywords')]; if (d) this.downloadCsv(project.domain + '-keywords.csv', [['keyword', 'kw'], ['intent', 'intent'], ['position', 'pos'], ['volume', 'volume'], ['kd', 'kd'], ['cpc', 'cpc'], ['clicks', 'clicks'], ['url', 'url']], d.keywords); },
-      exportBacklinks: () => { const d = s.cache[this.key('backlinks')]; if (d) this.downloadCsv(project.domain + '-backlinks.csv', [['domain', 'domain'], ['anchor', 'anchor'], ['status', 'status'], ['dofollow', 'dofollow'], ['rank', 'rank'], ['first_seen', 'firstSeen'], ['target', 'target']], d.links); },
+      exportBacklinks: () => { const d = s.cache[this.key('backlinks')]; if (d) this.downloadCsv(project.domain + '-backlinks.csv', [['domain', 'domain'], ['url_from', 'url_from'], ['anchor', 'anchor'], ['status', 'status'], ['dofollow', 'dofollow'], ['domain_rank', 'rank'], ['page_rank', 'page_rank'], ['spam_score', 'spam_score'], ['first_seen', 'firstSeen'], ['target', 'target']], d.links); },
       exportReferrers: () => { const d = s.cache[this.key('offsite')]; if (d) this.downloadCsv(project.domain + '-referring-domains.csv', [['domain', 'domain'], ['domain_rank', 'rank'], ['sessions', 'sessions'], ['engaged_sessions', 'engagedSessions'], ['engagement_rate', 'engagedRate'], ['key_events', 'keyEvents'], ['revenue', 'revenue'], ['tracked_as_backlink', 'tracked']], d.referrers); },
       exportSocial: () => { const d = s.cache[this.key('offsite')]; if (d) this.downloadCsv(project.domain + '-off-site-social.csv', [['platform', 'platform'], ['source', 'source'], ['channel', 'channel'], ['impressions', 'impressions'], ['sessions', 'sessions'], ['engagement_rate', 'engagedRate'], ['key_events', 'keyEvents'], ['revenue', 'revenue']], d.social); },
       exportPages: () => { const d = s.cache[this.key('pages')]; if (d) this.downloadCsv(project.domain + '-crawled-pages.csv', [['url', 'url'], ['score', 'score'], ['status', 'statusCode'], ['errors', 'errors'], ['warnings', 'warnings'], ['notices', 'notices'], ['depth', 'depth'], ['in_links', 'inLinks'], ['load_ms', 'loadTimeMs']], d.crawledPages); },
       auGoIssues: () => { this.setState({ auSub: 'issues', auSev: 'all', auCat: 'all' }); this.pushNav({ auSub: 'issues' }); },
       auSearch: e => this.setState({ auSearch: e.target.value }),
-      auPgSearch: e => this.setState({ auPgSearch: e.target.value }),
+      /* Back to page 1 on every filter change: typing a filter while on page 12 of the
+         unfiltered list would otherwise land you past the end of a 3-page result and show an
+         empty table that looks like "no matches". */
+      auPgSearch: e => this.setState({ auPgSearch: e.target.value, auPgPage: 0 }),
       auViewTable: () => this.setState({ auView: 'table' }),
       auViewTree: () => this.setState({ auView: 'tree' }),
       auCmpA: e => this.setState({ auCmpA: parseInt(e.target.value, 10) }),
@@ -2504,7 +2605,7 @@
       refreshBtnStyle: { display: 'inline-flex', alignItems: 'center', gap: '8px', borderRadius: '8px', background: isAllSyncing ? '#818cf8' : '#4f46e5', color: 'white', fontSize: '14px', fontWeight: 500, padding: '8px 16px', boxShadow: '0 1px 2px rgba(0,0,0,0.05)', cursor: isAllSyncing ? 'default' : 'pointer' },
       refreshIconStyle: isAllSyncing ? { animation: 'fuseSpin 1s linear infinite' } : {},
       freshness: s.freshness,
-      syncing, syncScopeLabel: activeScope === 'all' ? 'all modules' : (tabToLabel[tab] || activeScope || '').replace('Fetch ', ''), syncStep: s.sync.step, syncPct: Math.round(s.sync.progress * 100),
+      syncing, syncScopeLabel: activeScope === 'all' ? 'all modules' : (scopeToLabel[activeScope] || activeScope || ''), syncStep: s.sync.step, syncPct: Math.round(s.sync.progress * 100),
       syncPctText: Math.round(s.sync.progress * 100) + '%', syncCostText: this.money(s.sync.cost), syncEtaText,
       syncElapsedText, syncSteps, syncStepsCount: syncSteps.length,
       syncPanelOpen: s.syncPanelOpen,
@@ -2536,7 +2637,9 @@
       sortPg: { clicks: this.mkSortHandler('pgSort', 'clicks'), speed: this.mkSortHandler('pgSort', 'speed') },
       pgArrow: { clicks: this.arrow(s.pgSort, 'clicks'), speed: this.arrow(s.pgSort, 'speed') },
       pd: { show: false },
-      auSort: { score: this.mkSortHandler('auPgSort', 'score'), issues: this.mkSortHandler('auPgSort', 'issues'), depth: this.mkSortHandler('auPgSort', 'depth'), inLinks: this.mkSortHandler('auPgSort', 'inLinks'), loadTimeMs: this.mkSortHandler('auPgSort', 'loadTimeMs') },
+      /* Re-sorting reshuffles which rows live on which page, so staying on page 7 would show an
+         arbitrary slice of the new order. `resetKey` sends the table back to the top. */
+      auSort: { score: this.mkSortHandler('auPgSort', 'score', 'auPgPage'), issues: this.mkSortHandler('auPgSort', 'issues', 'auPgPage'), depth: this.mkSortHandler('auPgSort', 'depth', 'auPgPage'), inLinks: this.mkSortHandler('auPgSort', 'inLinks', 'auPgPage'), loadTimeMs: this.mkSortHandler('auPgSort', 'loadTimeMs', 'auPgPage') },
       auArrow: { score: this.arrow(s.auPgSort, 'score'), issues: this.arrow(s.auPgSort, 'issues'), depth: this.arrow(s.auPgSort, 'depth'), inLinks: this.arrow(s.auPgSort, 'inLinks'), loadTimeMs: this.arrow(s.auPgSort, 'loadTimeMs') },
       ptView: s.ptView || 'list', ptSearch: s.ptSearch || '', ptFilter: s.ptFilter || 'all', ptWizOpen: !!s.ptWizOpen, ptWizStep: s.ptWizStep || 1, ptWizDomain: s.ptWizDomain || '', ptWizName: s.ptWizName || '', ptWizEngine: s.ptWizEngine || 'Google', ptWizLang: s.ptWizLang || 'English', ptWizLoc: s.ptWizLoc || 'United States', ptWizDevice: s.ptWizDevice || 'Desktop', ptWizKwMode: s.ptWizKwMode || 'paste', ptWizKwText: s.ptWizKwText || '', ptWizListId: s.ptWizListId || null, ptWizComps: s.ptWizComps || [], ptWizCompInput: s.ptWizCompInput || '', ptWizBusy: !!s.ptWizBusy,
       toast: s.toast

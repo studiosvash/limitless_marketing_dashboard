@@ -80,6 +80,8 @@ security boundary.
 | `/` | `apps.dashboard.spa_views.spa_index` | `@login_required` | Serves the SPA. Expands `#include` directives, injects the auth bootstrap script. Named `spa`. |
 | `/login/` | `apps.accounts.views.LoginView` | public | Branded Django login. Accepts username **or** email. |
 | `/logout/` | `apps.accounts.views.LogoutView` | public, CSRF-exempt | Logs out, redirects to `/login/`. |
+| `/accept-invite/?token=…` | `apps.accounts.views.AcceptInviteView` | public | Where the invitation email lands. Shows the invited email read-only (it **is** the username) and asks only for a password; on success signs the new user in and redirects to `/`. |
+| `/password-reset/`, `/password-reset/sent/`, `/reset/<uidb64>/<token>/`, `/reset/done/` | `apps.accounts.views.PasswordReset*View` | public | Django's four-step reset, branded. Reached from *Forgot password?* on the login form. |
 | `/admin/` | Django admin | staff | Registers `User`+`UserProfile` inline, `Insight`, `SyncLog`, `RefreshRun`. |
 | `/app/` | `RedirectView` | — | Redirects to `/` (legacy bookmark support). |
 
@@ -144,18 +146,33 @@ and still creates the site — that's a supported, honest choice, not an error s
 
 **Behaviour**
 
-1. `add_site()` inserts the row, generating a unique slug via `slugify_unique()`. Any of the
-   three credential fields that were sent are stored as given; omitted ones fall back to the
-   same defaults as before (`gsc_property` → bare domain, `ga4_property_id` → `NULL`,
-   `dataforseo_target_domain` → bare domain). If any existing site normalises to the same bare
-   domain it raises `ValueError` → **400**.
-2. `resolve_gsc_property()` is called against whichever `gsc_property` was stored; on
+1. `add_site()` **normalises `domain` before storing it**:
+   `pipeline/utils/site_ids.normalize_domain()` strips the scheme, `sc-domain:`, a leading
+   `www.`, any path, port, trailing dot and trailing slash, and lowercases. So
+   `https://www.example.com/`, `http://example.com`, `www.example.com` and `example.com` all
+   store `sites.site_url = "example.com"` — one project, whichever the user typed. Input with no
+   readable host (`""`, `"https://"`) raises `ValueError` → **400** rather than storing an empty
+   join key.
+2. The duplicate check compares that same normalised form against every existing row, so a
+   second spelling of an already-registered site raises `ValueError` → **400** with
+   `{"detail": "Site already exists: <the stored spelling>"}`. This is the fix for the bug
+   where `premierstaff.com` and `www.premierstaff.com` were both accepted and one site became
+   two projects.
+3. The row is inserted with a unique slug from `slugify_unique()`. Any of the three credential
+   fields that were sent are stored as given; omitted ones fall back to the same defaults as
+   before (`gsc_property` → bare domain, `ga4_property_id` → `NULL`, `dataforseo_target_domain`
+   → bare domain). **`gsc_property` is never normalised** — it is a Search Console property
+   identifier and the account may genuinely own the `https://www.example.com/` URL-prefix
+   property.
+4. `resolve_gsc_property()` is called against whichever `gsc_property` was stored; on
    `ValueError` the response carries `gsc_connected: false`. Any other exception also reports
    `false` — it used to assume `true` on any non-`ValueError` exception, which hid the one case
    this check exists to catch (a real connectivity problem that doesn't happen to raise
    `ValueError`) behind a false "connected" claim.
-3. `start_sync_run(site_url, "all")` is fired. Failure is swallowed and `sync_task_id` is `null`
-   — a sync problem never blocks site creation.
+5. `start_sync_run(site_url, "all")` is fired, where `site_url` is read back off the **stored**
+   row, not the request body — passing the raw typed string would file the whole first sync
+   under a key no page ever reads. Failure is swallowed and `sync_task_id` is `null`: a sync
+   problem never blocks site creation.
 
 **Response `201`** — the `ProjectSerializer` body plus:
 
@@ -445,13 +462,20 @@ unchanged by rules**; only which items are present changes. See `features.md` �
 
 ### `GET /api/projects/<slug>/backlinks`
 
-`backlinks_service.build_backlinks_response`, derived from the `Backlink` table (matched against
-both the `site_id` and its `sc-domain:`-toggled variant).
+`backlinks_service.build_backlinks_response` (`apps/dashboard/services/backlinks_service.py`).
+Two honest sources, never blended: **listings** (`links`, `refDomains`) come from the `Backlink`
+table (matched against both the `site_id` and its `sc-domain:`-toggled variant); **distributions**
+(`months`, `types`, `asBuckets`, `anchors`) come from the `BacklinksSnapshot` JSON blob that
+`manage.py refresh_backlinks <slug>` writes via `pipeline/services/backlinks_service.py`. A site
+that has synced individual backlinks but never run `refresh_backlinks` will have real `links`/
+`refDomains` and *empty* `months`/`types`/`asBuckets`/`anchors` — that is correct, not a bug;
+run the command (or wire up its own Refresh action) to populate them.
 
 ```json
 {
   "kpis":      {"total", "live", "lost", "referring_domains", "avg_rank"},
-  "links":     [{"domain","target_url","anchor","status","dofollow","domain_rank"}],
+  "links":     [{"domain","target_url","url_from","anchor","status","dofollow",
+                 "domain_rank","page_rank","spam_score","first_seen","last_seen"}],
   "summary":   {"authorityScore","asDelta","refDomains","backlinks","dofollowPct",
                 "broken","spamScore","newRdMonth","lastUpdated"},
   "months":    [{"label","nw","lost"}],
@@ -461,21 +485,20 @@ both the `site_id` and its `sc-domain:`-toggled variant).
                  "firstSeen","isNew","category","spam"}],
   "anchors":   [{"anchor","backlinks","refDomains","type","dofollowPct"}],
   "competitors": ["a.com"],
-  "gapDomains":  [{"domain","flag","rank","you","comp":[bool]}]
+  "gapDomains":  []
 }
 ```
 
-⚠️ **Several fields here are synthesised, not measured.** `refDomains[].firstSeen` is the
-literal string `"2026-06-15"`; `spam` is always `1`; `isNew` is always `false`; `category` is
-always `"General / Health"`. `summary.asDelta` is `avg_dr × 0.05` and `newRdMonth` is
-`unique_domains × 0.15`. When `BacklinksSnapshot` has no rows, `months` is a formula-generated
-six-month trajectory. `gapDomains` alternates booleans by index, and falls back to a hard-coded
-list of health domains when there are no referring domains at all. Treat this endpoint as
-partially illustrative.
-
-`pipeline/services/backlinks_service.py` fetches richer DataForSEO aggregates and stores them as
-a `BacklinksSnapshot` JSON blob (via `manage.py refresh_backlinks`), but **the API does not read
-that payload** — it only reads `fetched_at` for month labels.
+Every field is real; nothing is synthesised. `refDomains[].category` and `gapDomains` are
+genuinely empty — no column/connector backs them yet (Link Gap needs a competitor-backlinks
+sync that doesn't exist). `kpis.avg_rank`, `links[].domain_rank`/`page_rank`, and
+`refDomains[].rank` are DataForSEO's **raw 0-1000 rank scale** (`domain_from_rank` /
+`page_from_rank` from `backlinks/backlinks/live`) — the SPA (`backlinks.js`'s `asOf()`) divides
+by 10 and clamps to 0-100 wherever it renders an "AS" chip or the authority donut; API
+consumers doing their own math must apply the same scaling. `spam_score` is DataForSEO's
+`backlink_spam_score`, already 0-100. `summary.authorityScore` is `avg(domain_rank)` over the
+raw `Backlink` rows (also 0-1000, pre-scaling) — it does NOT come from the snapshot's own
+(already-scaled) authority score, by design (see the module docstring's "two honest sources").
 
 ### `GET /api/projects/<slug>/audit`
 
@@ -507,8 +530,13 @@ that payload** — it only reads `fetched_at` for month labels.
 - `domainChecks` is a **pure state read** — `stored_domain_checks()`, straight out of
   `ProjectSettings.data["domainChecksCache"]`. The six live probes (SSL handshake,
   `/sitemap.xml`, `/robots.txt`, HTTP/2 reachability, www-vs-non-www consolidation, `/llms.txt`)
-  now live in `refresh_domain_checks()`, called from `_run_post_sync` with every other outbound
-  request. Until a sync has run, the card shows a §10 empty state rather than a blank.
+  live in the **`domain_checks` connector** (`pipeline/connectors/domain_checks.py`), which runs
+  with every other outbound request in the sync path. Until it has run, the card shows a §10
+  empty state rather than a blank.
+
+  The card's own button runs the `domain_checks` **scope**, not `audit`: the probes are cheap
+  and credential-free, so refreshing one card must not cost a full crawl. `audit` and `all`
+  still include the connector, so a full crawl refreshes the checks too.
 
   *Why this changed:* the probes used to run inside the GET. The 6-hour cache did not protect
   anything, because **nothing but a page view ever wrote that cache** — so the first Site Audit
@@ -575,8 +603,18 @@ which is a measurement nobody took. A rate of `0.0` over real sessions is a genu
 returned as `0.0`. The SPA renders `null` as an em dash. This matters most on `referrers[]`, where
 a domain is listed because it *links* to us — most drive no measured GA4 sessions at all.
 
-`channels[].offsite` flags Organic/Referral/Social/Video. `connectors` mirrors the
-`platformConnectors` toggles from Settings — which are user-set booleans, not live connections.
+`channels[].offsite` flags Organic/Referral/Social/Video. **`connectors` (and every
+`social[].connected`) is hard-`False` for all six platforms.** It used to mirror the
+`platformConnectors` booleans from Settings, which a "Connect" button set without authenticating
+anything — so a `true` made the page announce "Connector live · impressions + click-throughs"
+next to an impressions value of `null`. No platform connector is registered in the sync engine
+(neither `pipeline/connectors/linkedin.py` nor `meta.py` appears in `PAGE_CONNECTORS` /
+`ALL_CONNECTORS`; Reddit/YouTube/X have no module at all), so `False` is the only honest value —
+including for projects still carrying a stale `true`, which the now-inert Settings row cannot
+clear. Flip these to a real per-connector check (a `SyncLog` row, as the Ads status cards do)
+in the same change that registers the connector — not before.
+`ProjectSettings.data["platformConnectors"]` is still accepted by `PUT .../settings` for
+backwards compatibility, but nothing in the UI writes it and nothing reads it.
 
 ### `GET /api/projects/<slug>/ads` — *range-aware*
 
@@ -962,11 +1000,22 @@ Body `{"email", "role"}`. Invalid email (no `@`) → **400**. Existing user with
 **400**.
 
 Behaviour: deletes any prior unaccepted invitation for the email, creates a **`UserInvitation`**
-row carrying a random token and an expiry, and emails a
-`FRONTEND_URL/#/accept-invite?token=<token>` link — the link the accept-invite modal expects.
+row carrying a random token and an expiry, and emails a `<base>/accept-invite/?token=<token>`
+link pointing at the server-rendered accept page (`apps.accounts.views.AcceptInviteView`).
 It does **not** create the `User`; the account is created by the invitee when they accept, with a
 password only they have chosen. SMTP failure is logged as a warning, not surfaced.
 Returns `{"ok": true, "id": <invitation_id>}`.
+
+`<base>` comes from `build_frontend_link` (`apps/api/views.py`): the origin of the incoming
+request, so a dev box mails `http://localhost:8000/...` and the deployed site mails
+`https://limitless.vashstudios.cloud/...` with no config. `settings.FRONTEND_URL` overrides it
+when set — **except** when it points at localhost while the request came from a real host, which
+is a copied-`.env` mistake, not a split-origin deployment.
+
+*(Fixed 2026-08. The link used to be `FRONTEND_URL/#/accept-invite?token=…`, a route inside the
+SPA — which is served from `/` behind `LoginRequiredMiddleware`, so every invitee was 302'd to
+a sign-in form they had no account for. The URL fragment never reaches the server, so no
+middleware exception could have rescued that shape.)*
 
 *(Rewritten 2026-07. The previous handler generated a `secrets.token_urlsafe(10)` temporary
 password, created the `User` and `UserProfile` immediately, and emailed the plaintext password
@@ -977,8 +1026,8 @@ response is what the resend/revoke tests key off.)*
 ### `POST /api/projects/<slug>/invite/<invite_id>/resend`
 
 **Permission:** `check_owner_only`. Unknown/accepted invitation → **404**. Extends
-`expires_at` by 48 hours and re-sends an email containing
-`FRONTEND_URL/#/accept-invite?token=<token>`. Returns `{"ok": true, "link": "..."}`.
+`expires_at` by 48 hours and re-sends an email containing the same
+`<base>/accept-invite/?token=<token>` link. Returns `{"ok": true, "link": "..."}`.
 
 ### `DELETE /api/projects/<slug>/invite/<invite_id>`
 
@@ -999,15 +1048,20 @@ Returns `{"ok": true}`.
 
 ### `POST /api/auth/accept-invite`
 
-**Public.** Body `{"token", "username", "password"}`.
+**Public.** Body `{"token", "password"}` — `username` is optional and **defaults to the
+invitation's email address**, which is what the emailed page relies on.
 
-Validation: all three required (**400**); password ≥ 8 chars (**400**); token must exist
-(**404**), be unaccepted (**400**) and unexpired (**400**); username must be free (**400**);
-no existing user may hold the invitation's email (**400**).
+Validation: token + password required (**400**); token must exist (**404**), be unaccepted
+(**400**) and unexpired (**400**); username must be free (**400**); no existing user may hold
+the invitation's email (**400**); password must pass `AUTH_PASSWORD_VALIDATORS` (**400**) —
+the same rules `/admin` and the password-reset flow apply, not a bare length check.
 
 On success (inside `transaction.atomic()`): creates an active `User`, sets `UserProfile.role`
 from the invitation, marks the invitation accepted. Returns
 `{"ok": true, "user_id", "username", "email", "role"}`, or **500** on an unexpected error.
+
+The rules live in `apps/accounts/services.py::accept_invitation`, shared with the
+server-rendered `/accept-invite/` page so the two entry points cannot drift.
 
 ### `POST /api/auth/password`
 
@@ -1106,6 +1160,42 @@ than `PID_GRACE` (2 min) are never pid-checked, because `start_sync_run` creates
 exactly the bug this exists to prevent. A row with no pid (predates this column, or the race
 window itself) still falls back to `RUN_TIMEOUT`.
 
+Callers: app startup (`apps/sync/apps.py`, once per web process, on the first request),
+`run_scheduled_syncs`, and `sync_api_service` before it starts or reports a run.
+
+#### Orphaned-connector reconciliation (`reconcile_orphaned_sync_logs`)
+
+Reaping the run was only half the job. `BaseConnector.sync()` sets its `SyncLog` row to
+`running` on the way in and rewrites it on the way out; when the process is killed in between,
+nothing rewrites it — and unlike `RefreshRun`, **nothing used to reap it**, so the row stayed
+`running` permanently. Settings → Data pipeline reads `SyncLog`, so the connector that happened
+to be in flight when the process died reported *"Last synced: never · 0 records"* forever, even
+with real rows in its analytics table. Observed on `premierstaff.com`: `pagespeed` and
+`url_inspection` were stuck from 2026-07-24, while `page_speed` held 96 real Lighthouse rows
+written by those very runs.
+
+`reconcile_orphaned_sync_logs()` runs at the end of every `reap_orphaned_runs()` call — including
+the ticks that reap nothing, since an orphaned `SyncLog` outlives the run it belonged to. A row
+is orphaned when **its site has no `RefreshRun` at `running`**. That is a fact, not a timeout:
+`connector.sync()` is reachable only through `sync_engine.sync_all`/`sync_page`, both of which
+require a `run_id`, and `start_sync_run` creates the `RefreshRun` row *before* spawning the
+process — so a live connector always has a live run behind it.
+
+Only `status` (→ `error`) and `error_message` are written. `records_written` and `last_synced`
+are left untouched: what a killed run managed to write before dying is a real measurement.
+
+#### `SyncLog.last_synced` means *last finished*, never *last started*
+
+Only the `success`/`error` writes stamp it. A start deliberately leaves the stored value alone,
+so a running connector reads *"last synced &lt;then&gt;, running now"*. It used to be overwritten
+with `None` on every start, which destroyed that answer the instant a sync began — and if the
+process was then killed, the loss was permanent (the bug above). A connector that has genuinely
+never finished still has `NULL`, because the column defaults to `NULL` on insert.
+
+This is what `_step_details`' `last_synced >= run.started_at` test relies on to tell *this* run's
+row from a previous run's: a finished connector is always stamped after `run.started_at`, and a
+connector skipped for missing credentials is never written at all.
+
 ### Scope → connector registry
 
 From `pipeline/services/sync_engine.PAGE_CONNECTORS`:
@@ -1115,24 +1205,38 @@ From `pipeline/services/sync_engine.PAGE_CONNECTORS`:
 | `overview` | `gsc`, `ga4` |
 | `seo` | `gsc`, `ga4` |
 | `alerts` | `gsc`, `ga4` |
-| `ads` | `google_ads`, `ga4` |
+| `ads` | `google_ads`, `google_ads_search_terms`, `ga4` |
 | `keywords` | `gsc_keywords`, `dataforseo_ai_keywords` |
 | `pages` | `gsc_pages`, `url_inspection`, `pagespeed` |
 | `backlinks` | `dataforseo_backlinks` |
 | `positioning` (alias `positions`) | `gsc_keywords`, `dataforseo_serp`, `dataforseo_keywords`, `dataforseo_labs_competitors`, `dataforseo_serp_competitors` |
-| `ai` | `dataforseo_ai_keywords` |
-| `audit` | `dataforseo_onpage` |
+| `positioning_new` (alias `positions_new`) | `dataforseo_serp`, `dataforseo_keywords`, `dataforseo_serp_competitors` — narrowed to keywords never measured |
+| `ai` | `dataforseo_ai_keywords`, `dataforseo_llm_mentions` |
+| `audit` | `domain_checks`, `gsc_pages`, `url_inspection`, `pagespeed`, `dataforseo_onpage` |
+| `domain_checks` | `domain_checks` |
 | `insights`, `settings` | *(none — succeed immediately)* |
-| `all` | the 14 connectors in `ALL_CONNECTORS` |
+| `all` | the 16 connectors in `ALL_CONNECTORS` |
 
-`ALL_CONNECTORS` = `gsc, ga4, gsc_keywords, dataforseo_serp, dataforseo_keywords, gsc_pages,
-url_inspection, pagespeed, sitemap, dataforseo_labs_competitors, dataforseo_serp_competitors,
-dataforseo_backlinks, dataforseo_onpage, dataforseo_ai_keywords`.
+`ALL_CONNECTORS` = `domain_checks, gsc, ga4, gsc_keywords, dataforseo_serp, dataforseo_keywords,
+gsc_pages, url_inspection, pagespeed, sitemap, dataforseo_labs_competitors,
+dataforseo_serp_competitors, dataforseo_backlinks, dataforseo_onpage, dataforseo_ai_keywords,
+dataforseo_llm_mentions`.
+
+**`domain_checks` is the one scope that exists for a single card.** Its connector needs no
+credentials and makes no metered call — six plain HTTPS requests to the customer's own domain,
+about four seconds in total. It exists because the Domain Checks card's button used to fire
+`audit`, i.e. 20-30 minutes and a billable DataForSEO OnPage crawl, to record those six
+booleans. `audit` still runs it (first, so the card fills in while the slow connectors work),
+so a full crawl refreshes the checks exactly as before.
 
 **Post-sync processing** (`_run_post_sync`, all failures logged and swallowed):
-when `gsc` or `ga4` ran → rebuild `SEOAggregate`, run anomaly detection, rebuild
-`TechnicalIssue`; when any of `gsc`/`ga4`/`gsc_pages`/`url_inspection` ran → generate the
-OpenAI weekly summary.
+when `gsc` or `ga4` ran → rebuild `SEOAggregate` and run anomaly detection; when any of
+`gsc`/`ga4`/`gsc_pages`/`url_inspection`/`pagespeed` ran → rebuild `TechnicalIssue`; when any of
+`url_inspection`/`pagespeed`/`dataforseo_onpage` ran → write the `AuditSnapshot`; when any of
+`gsc`/`ga4`/`gsc_pages`/`url_inspection` ran → generate the OpenAI weekly summary.
+The domain checks used to be a fourth hook here and are now the `domain_checks` connector —
+which is what gives them a `SyncLog` row, a step in the refresh checklist and a visible error
+state, none of which a swallowed side effect had.
 
 A connector that cannot be instantiated (missing credentials) is **skipped silently** —
 `completed_count` advances and the run can still report `success`.
@@ -1235,6 +1339,25 @@ Behaviours worth knowing:
   the connector raises rather than falling back to `.env` — the fallback once wrote 6 654 rows of
   one site's data under another site's id.
 - GA4 sends **one batched request per report** to conserve its 14 000-token/hour quota.
+- **`pagespeed` measures every known page, mobile only, stalest first.** Order is: never
+  measured → longest since measured → most clicks → url. Staleness outranks traffic so that a
+  site larger than one run's budget is covered *across consecutive runs* and then rotates —
+  ordering by clicks alone would re-measure the same head forever and leave the tail with no
+  score, permanently. A newly published page, having no score at all, is first in line on the
+  next run. **No content-type filter**: excluding `/blog` URLs was considered and rejected on
+  the data — it would still have left 792 of premierstaff's 1 139 pages, so it never solved the
+  scale problem it was proposed for, while hiding 23% of that site's clicks and quietly turning
+  "site health" into "health of the pages we chose to measure". Its bound is
+  `RUN_BUDGET_SECONDS` (1 800 s, checked before each request), not a page quota, so covering
+  more pages costs coverage inside the budget and never more wall-clock — which is what lets
+  `apps/sync/scheduling.py` size the 2 h orphan-reaper against it. Three earlier limits made it
+  measure 15 pages of a 55-page site and are worth not reintroducing: a `WHERE clicks > 0` pool
+  that made "has traffic already" a condition of ever being audited; a `limit=15`; and a second
+  scan of every page at `strategy="desktop"` that nothing reads — every consumer filters
+  `strategy == "mobile"` (`site_audit_service` ×3, `overview_service`), so half of each run's
+  time bought rows no screen displays. Truncation by budget, truncation by
+  `MAX_PAGES_PER_RUN`, and URLs PSI could not score are each logged with a count; none of them
+  is silent, because on Site Audit an unmeasured page and a healthy page look identical.
 
 ### DataForSEO — HTTP Basic, base `https://api.dataforseo.com/v3`
 

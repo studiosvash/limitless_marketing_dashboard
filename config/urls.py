@@ -5,7 +5,8 @@ templates/dashboard/*.html) has been removed. The SPA at /app/ is now the only f
 it talks exclusively to the JSON API under /api/.
 
   /          -> the SPA (login-protected; logged-out visitors get the login page)
-  /login/    -> login page (the one remaining server-rendered template)
+  /login/    -> login page, plus the public auth pages that must work without an account:
+                /accept-invite/ (the invitation email's target) and the password-reset steps
   /api/...   -> JSON API the SPA consumes (incl. Refresh/Sync + Keyword Explorer)
   /admin/    -> Django admin
 """

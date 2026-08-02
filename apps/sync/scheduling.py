@@ -29,7 +29,7 @@ from datetime import datetime, timedelta
 
 from django.utils import timezone
 
-from apps.sync.models import RefreshRun, RefreshStatus
+from apps.sync.models import RefreshRun, RefreshStatus, SyncLog, SyncStatus
 from pipeline.services.sync_engine import ALL_CONNECTORS, PAGE_CONNECTORS
 
 logger = logging.getLogger(__name__)
@@ -97,14 +97,23 @@ def _covered_by_all_scope(module: str) -> bool:
 #
 # The timeout is picked from the real worst case of a scope='all' run, adding up the
 # connectors' own hard limits rather than guessing:
-#     pagespeed              15 pages x (60s request + 60s retry + rate-limit sleeps)  ~ 1950s
+#     pagespeed              self-capped by RUN_BUDGET_SECONDS, checked before each page ~ 1800s
 #     dataforseo_serp        20 polls x 15s + per-task task_get calls                  ~  600s
 #     dataforseo_serp_comp.  same polling budget                                       ~  600s
 #     dataforseo_onpage      600s crawl poll + 3 x 30s requests                        ~  690s
 #     url_inspection         50 pages x (request + 0.2s pacing)                        ~  300s
-#     the 9 remaining connectors at their 30-60s request timeouts                      ~  400s
+#     domain_checks          6 probes in parallel at a 3.5s timeout each               ~    4s
+#     the 10 remaining connectors at their 30-60s request timeouts                     ~  450s
 #     post-sync rebuild: aggregates + anomalies + technical issues + AI summary        ~  120s
-#                                                                            total    ~ 4700s (~80 min)
+#                                                                            total    ~ 4550s (~76 min)
+#
+# The pagespeed line is a real ceiling now, not an estimate that could be exceeded. It used to
+# read "15 pages x (60s request + 60s retry)  ~1950s", which understated the shipped worst case
+# by 2x: the connector scanned each page twice (mobile AND desktop), so 15 pages was 30 requests
+# and ~3900s, and raising its page coverage would have silently pushed a slow run past this
+# timeout and had it reaped as dead. It now scans mobile only and stops on its own wall clock
+# (pipeline/connectors/pagespeed.py RUN_BUDGET_SECONDS), so page count no longer enters this sum
+# at all — covering more pages costs coverage inside that budget, never more time.
 #
 # 2 hours is ~1.5x that absolute worst case, so a legitimately slow run is never killed, while
 # a genuinely dead row is cleared within one or two scheduler ticks instead of never. It is
@@ -118,6 +127,15 @@ REAP_MESSAGE = (
     "Sync did not report a result within {hours:.0f}h and was marked failed by the scheduler. "
     "The most likely cause is a server restart while the sync was running. Re-run the refresh "
     "to try again."
+)
+
+# Shown on a connector row (SyncLog) whose sync process died mid-connector. Deliberately says
+# what is and is not known: the connector may well have written rows before it was killed (both
+# pagespeed and url_inspection had), so this must not read as "this connector produced nothing".
+ORPHANED_CONNECTOR_MESSAGE = (
+    "This connector was still running when its sync process ended, and never reported a "
+    "result — most likely a server restart mid-sync. Any rows it had already written were "
+    "kept. Re-run the refresh to complete it."
 )
 
 # Used when the pid is gone: this is not a guess, so it does not hedge.
@@ -245,6 +263,10 @@ def reap_orphaned_runs(now: datetime | None = None, dry_run: bool = False) -> li
 
     stale = timed_out + dead
     if not stale or dry_run:
+        # Still sweep the connector rows. An orphaned SyncLog outlives the run it belonged to
+        # (that run is already `error`), so gating this on "was anything reaped this tick?"
+        # would leave every row orphaned before today stuck at `running` for good.
+        reconcile_orphaned_sync_logs(dry_run=dry_run)
         return stale
 
     if timed_out:
@@ -270,7 +292,57 @@ def reap_orphaned_runs(now: datetime | None = None, dry_run: bool = False) -> li
             run.pk, run.scope, run.site_url, run.started_at.isoformat(), run.pid,
             "timeout" if run.pk in timed_out_ids else "dead-process",
         )
+
+    # AFTER the reap, so the connector that died inside a run just cleared is cleared by this
+    # same tick rather than the next one.
+    reconcile_orphaned_sync_logs()
     return stale
+
+
+def reconcile_orphaned_sync_logs(dry_run: bool = False) -> list[SyncLog]:
+    """Resolve every SyncLog row stuck at `running` whose sync can no longer be in flight.
+
+    Reaping the RefreshRun was only half the job. A connector's own row is set to `running` by
+    BaseConnector.sync() on the way in and rewritten on the way out; when the sync process is
+    killed in between, nothing rewrites it and -- unlike RefreshRun -- nothing ever reaped it.
+    The row stayed `running` permanently, and since Settings -> Data pipeline reads SyncLog,
+    the connector that happened to be in flight when the process died reported "Last synced:
+    never" forever. On premierstaff.com that was pagespeed and url_inspection, stuck since
+    three consecutive audit runs were killed by server restarts on 2026-07-24, while
+    `page_speed` held 96 real Lighthouse rows written by those very runs.
+
+    "Can no longer be in flight" is decided by exactly one fact, not by a timeout: the site has
+    no RefreshRun at `running`. That is sound because connector.sync() is reachable only
+    through sync_engine.sync_all/sync_page, both of which require a run_id, and start_sync_run
+    creates the RefreshRun row BEFORE spawning the process -- so a live connector always has a
+    live run behind it. Running this AFTER the reap in the same tick is what lets a just-reaped
+    run's connector be cleared immediately rather than on the following tick.
+
+    Only `status` and `error_message` are written. `records_written` and `last_synced` are left
+    exactly as they are: what a killed run managed to write before dying is a real measurement,
+    and erasing it would trade one false "never" for another.
+    """
+    live_sites = set(
+        RefreshRun.objects.filter(status=RefreshStatus.RUNNING).values_list("site_url", flat=True)
+    )
+    orphaned = list(
+        SyncLog.objects.filter(status=SyncStatus.RUNNING).exclude(site_url__in=live_sites)
+    )
+    if not orphaned or dry_run:
+        return orphaned
+
+    # Filtered on status='running' again so a connector that finishes between the SELECT and the
+    # UPDATE keeps its own result -- the same concurrency rule reap_orphaned_runs() follows.
+    SyncLog.objects.filter(
+        pk__in=[log.pk for log in orphaned], status=SyncStatus.RUNNING
+    ).update(status=SyncStatus.ERROR, error_message=ORPHANED_CONNECTOR_MESSAGE)
+
+    for log in orphaned:
+        logger.warning(
+            "[scheduler] Reconciled orphaned SyncLog %s@%s (records_written=%s kept)",
+            log.connector, log.site_url, log.records_written,
+        )
+    return orphaned
 
 
 def is_sync_running(site_url: str, ignore_ids: list[int] | None = None) -> bool:
