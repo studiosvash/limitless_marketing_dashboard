@@ -139,6 +139,15 @@ ORPHANED_CONNECTOR_MESSAGE = (
     "kept. Re-run the refresh to complete it."
 )
 
+# The same situation as ORPHANED_CONNECTOR_MESSAGE -- a connector's SyncLog row left at
+# `running` because its process died mid-connector -- but with a KNOWN, deliberate cause.
+# Reporting a user's own Stop click as an infrastructure failure is how the next person
+# spends an hour looking for a server problem that never happened.
+CANCELLED_CONNECTOR_MESSAGE = (
+    "This connector was running when the refresh was cancelled, so it never reported a "
+    "result. Any rows it had already written were kept. Run the refresh again to complete it."
+)
+
 # Used when the pid is gone: this is not a guess, so it does not hedge.
 DEAD_PROCESS_MESSAGE = (
     "The sync process (pid {pid}) is no longer running but never reported a result. It was most "
@@ -366,7 +375,11 @@ def reap_orphaned_runs(now: datetime | None = None, dry_run: bool = False) -> li
     return stale
 
 
-def reconcile_orphaned_sync_logs(dry_run: bool = False) -> list[SyncLog]:
+def reconcile_orphaned_sync_logs(
+    dry_run: bool = False,
+    site_url: str | None = None,
+    message: str = ORPHANED_CONNECTOR_MESSAGE,
+) -> list[SyncLog]:
     """Resolve every SyncLog row stuck at `running` whose sync can no longer be in flight.
 
     Reaping the RefreshRun was only half the job. A connector's own row is set to `running` by
@@ -388,13 +401,19 @@ def reconcile_orphaned_sync_logs(dry_run: bool = False) -> list[SyncLog]:
     Only `status` and `error_message` are written. `records_written` and `last_synced` are left
     exactly as they are: what a killed run managed to write before dying is a real measurement,
     and erasing it would trade one false "never" for another.
+
+    `site_url` scopes the sweep to one project, and `message` says why. Both exist for
+    cancellation: cancelling site A must not relabel site B's genuinely-orphaned rows
+    with "you cancelled this". Called with neither, the behaviour is unchanged -- which
+    is what the scheduler's own periodic call relies on.
     """
     live_sites = set(
         RefreshRun.objects.filter(status=RefreshStatus.RUNNING).values_list("site_url", flat=True)
     )
-    orphaned = list(
-        SyncLog.objects.filter(status=SyncStatus.RUNNING).exclude(site_url__in=live_sites)
-    )
+    candidates = SyncLog.objects.filter(status=SyncStatus.RUNNING).exclude(site_url__in=live_sites)
+    if site_url is not None:
+        candidates = candidates.filter(site_url=site_url)
+    orphaned = list(candidates)
     if not orphaned or dry_run:
         return orphaned
 
@@ -402,7 +421,7 @@ def reconcile_orphaned_sync_logs(dry_run: bool = False) -> list[SyncLog]:
     # UPDATE keeps its own result -- the same concurrency rule reap_orphaned_runs() follows.
     SyncLog.objects.filter(
         pk__in=[log.pk for log in orphaned], status=SyncStatus.RUNNING
-    ).update(status=SyncStatus.ERROR, error_message=ORPHANED_CONNECTOR_MESSAGE)
+    ).update(status=SyncStatus.ERROR, error_message=message)
 
     for log in orphaned:
         logger.warning(

@@ -12,9 +12,10 @@ from unittest import mock
 from django.test import TestCase
 
 from apps.sync import scheduling
-from apps.sync.models import RefreshRun, RefreshStatus
+from apps.sync.models import RefreshRun, RefreshStatus, SyncLog, SyncStatus
 
 SITE_URL = "sc-domain:fusehealth.com"
+OTHER_SITE = "sc-domain:premierstaff.com"
 
 
 class RefreshRunCancelFieldsTests(TestCase):
@@ -110,3 +111,46 @@ class TerminateSyncProcessTests(TestCase):
              mock.patch.object(scheduling, "_windows_process_alive", return_value=True):
             scheduling._process_alive(4321)
         win.assert_not_called()
+
+
+class ReconcileScopingTests(TestCase):
+    def _running_log(self, site, connector):
+        return SyncLog.objects.create(connector=connector, site_url=site,
+                                      status=SyncStatus.RUNNING, records_written=42)
+
+    def test_site_url_scopes_the_reconcile(self):
+        """Cancelling one site must not relabel another site's orphaned rows."""
+        mine = self._running_log(SITE_URL, "pagespeed")
+        theirs = self._running_log(OTHER_SITE, "pagespeed")
+
+        scheduling.reconcile_orphaned_sync_logs(
+            site_url=SITE_URL, message=scheduling.CANCELLED_CONNECTOR_MESSAGE
+        )
+
+        mine.refresh_from_db()
+        theirs.refresh_from_db()
+        self.assertEqual(mine.status, SyncStatus.ERROR)
+        self.assertEqual(mine.error_message, scheduling.CANCELLED_CONNECTOR_MESSAGE)
+        self.assertEqual(theirs.status, SyncStatus.RUNNING, "other site was touched")
+
+    def test_unscoped_call_still_clears_every_site(self):
+        """The scheduler's own periodic call must keep its existing whole-fleet behaviour."""
+        self._running_log(SITE_URL, "pagespeed")
+        self._running_log(OTHER_SITE, "url_inspection")
+
+        scheduling.reconcile_orphaned_sync_logs()
+
+        self.assertEqual(
+            SyncLog.objects.filter(status=SyncStatus.RUNNING).count(), 0
+        )
+
+    def test_records_written_is_never_erased(self):
+        """What a stopped connector managed to write is a real measurement."""
+        log = self._running_log(SITE_URL, "pagespeed")
+        scheduling.reconcile_orphaned_sync_logs(site_url=SITE_URL)
+        log.refresh_from_db()
+        self.assertEqual(log.records_written, 42)
+
+    def test_the_cancel_message_does_not_blame_a_server_restart(self):
+        self.assertNotIn("restart", scheduling.CANCELLED_CONNECTOR_MESSAGE.lower())
+        self.assertIn("cancel", scheduling.CANCELLED_CONNECTOR_MESSAGE.lower())
