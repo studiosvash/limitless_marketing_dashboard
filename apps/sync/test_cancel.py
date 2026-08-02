@@ -6,8 +6,12 @@ scheduling.FAILED_RUN_BACKOFF holds a module off for 6 hours after a failed run 
 recording a cancel as an error would lock you out of the restart you cancelled in order
 to make.
 """
+import signal
+from unittest import mock
+
 from django.test import TestCase
 
+from apps.sync import scheduling
 from apps.sync.models import RefreshRun, RefreshStatus
 
 SITE_URL = "sc-domain:fusehealth.com"
@@ -57,3 +61,52 @@ class RefreshRunCancelFieldsTests(TestCase):
                 [RefreshStatus.SUCCESS, RefreshStatus.ERROR, RefreshStatus.RUNNING],
             )
         )
+
+
+class TerminateSyncProcessTests(TestCase):
+    def test_no_pid_kills_nothing(self):
+        """A run created before the pid field existed, or caught mid-spawn, has no pid.
+        There is nothing safe to kill, and killing pid 0 or -1 is catastrophic."""
+        with mock.patch.object(scheduling.os, "kill") as killer:
+            self.assertFalse(scheduling.terminate_sync_process(None))
+            self.assertFalse(scheduling.terminate_sync_process(0))
+            self.assertFalse(scheduling.terminate_sync_process(-1))
+        killer.assert_not_called()
+
+    def test_posix_sends_sigterm(self):
+        with mock.patch.object(scheduling.sys, "platform", "linux"), \
+             mock.patch.object(scheduling.os, "kill") as killer:
+            self.assertTrue(scheduling.terminate_sync_process(4321))
+        killer.assert_called_once_with(4321, signal.SIGTERM)
+
+    def test_posix_already_gone_counts_as_terminated(self):
+        with mock.patch.object(scheduling.sys, "platform", "linux"), \
+             mock.patch.object(scheduling.os, "kill", side_effect=ProcessLookupError):
+            self.assertTrue(scheduling.terminate_sync_process(4321))
+
+    def test_posix_permission_error_reports_failure(self):
+        """We could not kill it, so we must not claim we did -- the DB flag is what
+        actually stops the run in that case."""
+        with mock.patch.object(scheduling.sys, "platform", "linux"), \
+             mock.patch.object(scheduling.os, "kill", side_effect=PermissionError):
+            self.assertFalse(scheduling.terminate_sync_process(4321))
+
+    def test_windows_never_calls_os_kill(self):
+        """The mirror of test_windows_never_calls_os_kill for _process_alive, from the
+        other direction: killing on Windows must go through TerminateProcess explicitly,
+        not through os.kill's accidental mapping onto it."""
+        with mock.patch.object(scheduling.sys, "platform", "win32"), \
+             mock.patch.object(scheduling, "_windows_terminate", return_value=True) as win, \
+             mock.patch.object(scheduling.os, "kill") as killer:
+            self.assertTrue(scheduling.terminate_sync_process(4321))
+        win.assert_called_once_with(4321)
+        killer.assert_not_called()
+
+    def test_liveness_check_is_not_the_kill_helper(self):
+        """_process_alive must never terminate anything. It runs on every
+        GET /api/sync/active, i.e. every couple of seconds during a sync."""
+        with mock.patch.object(scheduling.sys, "platform", "win32"), \
+             mock.patch.object(scheduling, "_windows_terminate") as win, \
+             mock.patch.object(scheduling, "_windows_process_alive", return_value=True):
+            scheduling._process_alive(4321)
+        win.assert_not_called()

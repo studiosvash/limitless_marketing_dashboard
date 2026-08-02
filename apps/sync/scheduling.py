@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import logging
 import os
+import signal
 import sys
 from datetime import datetime, timedelta
 
@@ -223,6 +224,72 @@ def _process_alive(pid: int) -> bool:
         except Exception:
             return True
     return True
+
+
+def _windows_terminate(pid: int) -> bool:
+    """Kill `pid` through the Win32 API. Returns True if it is now gone.
+
+    Deliberately explicit rather than relying on `os.kill`'s accidental mapping onto
+    TerminateProcess. `_process_alive` documents at length why that mapping is a trap; a
+    kill path that depends on the same trap would be one refactor away from becoming a
+    liveness check again.
+    """
+    import ctypes
+
+    PROCESS_TERMINATE = 0x0001
+    ERROR_INVALID_PARAMETER = 87
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    handle = kernel32.OpenProcess(PROCESS_TERMINATE, False, pid)
+    if not handle:
+        # No such pid means the job is already done; anything else means we could not.
+        return ctypes.get_last_error() == ERROR_INVALID_PARAMETER
+    try:
+        return bool(kernel32.TerminateProcess(handle, 1))
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def terminate_sync_process(pid: int | None) -> bool:
+    """Stop the `manage.py run_sync` process behind a cancelled run.
+
+    Returns True when we believe the process is gone (including "it had already exited").
+    False means we could not kill it -- which is not fatal: cancellation sets
+    RefreshRun.status='cancelled' FIRST, and sync_all/sync_page re-read that between
+    connectors, so an unkillable process still stops before the next connector. The kill
+    is what makes Stop feel immediate rather than "immediate once this 600-second
+    DataForSEO poll finishes".
+
+    Callers must only reach here after a conditional status update changed exactly one
+    row -- that is the pid-reuse guard. Without it, a recycled pid means killing an
+    unrelated process.
+
+    **This is NOT a liveness check.** See `_process_alive` for why the two must stay
+    apart on Windows.
+    """
+    if not pid or pid <= 0:
+        return False
+
+    if sys.platform == "win32":
+        try:
+            return _windows_terminate(pid)
+        except Exception:
+            logger.warning("[sync] Windows terminate failed for pid %s", pid, exc_info=True)
+            return False
+
+    try:
+        # SIGTERM, not SIGKILL: run_sync holds no lock and buffers no analytics writes, so
+        # the default terminate is enough and leaves a clean exit in the per-run log file.
+        # The child is its own session (start_new_session=True) but spawns no children of
+        # its own -- connectors are in-process HTTP calls -- so the bare pid is the whole
+        # process tree.
+        os.kill(pid, signal.SIGTERM)
+        return True
+    except ProcessLookupError:
+        return True          # already gone; the outcome we wanted
+    except Exception:
+        logger.warning("[sync] could not terminate pid %s", pid, exc_info=True)
+        return False
 
 
 def reap_orphaned_runs(now: datetime | None = None, dry_run: bool = False) -> list[RefreshRun]:
