@@ -11,6 +11,7 @@ from unittest import mock
 
 from django.test import TestCase
 
+from apps.dashboard.services.sync_api_service import cancel_sync_run
 from apps.sync import scheduling
 from apps.sync.models import RefreshRun, RefreshStatus, SyncLog, SyncStatus
 
@@ -154,3 +155,77 @@ class ReconcileScopingTests(TestCase):
     def test_the_cancel_message_does_not_blame_a_server_restart(self):
         self.assertNotIn("restart", scheduling.CANCELLED_CONNECTOR_MESSAGE.lower())
         self.assertIn("cancel", scheduling.CANCELLED_CONNECTOR_MESSAGE.lower())
+
+
+class CancelSyncRunTests(TestCase):
+    def _running_run(self, pid=4321):
+        return RefreshRun.objects.create(site_url=SITE_URL, scope="audit",
+                                         status=RefreshStatus.RUNNING, pid=pid,
+                                         total_count=5, completed_count=2)
+
+    def test_cancelling_marks_the_run_and_kills_the_process(self):
+        run = self._running_run()
+        with mock.patch.object(scheduling, "terminate_sync_process", return_value=True) as kill:
+            result = cancel_sync_run(SITE_URL)
+
+        self.assertTrue(result["cancelled"])
+        self.assertEqual(result["task_id"], run.pk)
+        kill.assert_called_once_with(4321)
+        run.refresh_from_db()
+        self.assertEqual(run.status, RefreshStatus.CANCELLED)
+        self.assertIsNotNone(run.finished_at)
+        self.assertIsNone(run.current_connector)
+
+    def test_records_written_so_far_are_kept(self):
+        run = self._running_run()
+        RefreshRun.objects.filter(pk=run.pk).update(records_written=154)
+        with mock.patch.object(scheduling, "terminate_sync_process", return_value=True):
+            cancel_sync_run(SITE_URL)
+        run.refresh_from_db()
+        self.assertEqual(run.records_written, 154)
+        self.assertEqual(run.completed_count, 2, "progress so far must not be rewritten")
+
+    def test_nothing_running_is_not_an_error_and_kills_nothing(self):
+        with mock.patch.object(scheduling, "terminate_sync_process") as kill:
+            result = cancel_sync_run(SITE_URL)
+        self.assertFalse(result["cancelled"])
+        kill.assert_not_called()
+
+    def test_a_finished_run_is_never_killed(self):
+        """THE pid-reuse guard. If the run resolved between our SELECT and our UPDATE, the
+        pid may now belong to an unrelated process and must not be touched."""
+        run = self._running_run()
+
+        def finish_it(*_args, **_kwargs):
+            RefreshRun.objects.filter(pk=run.pk).update(status=RefreshStatus.SUCCESS)
+            return 0
+
+        with mock.patch.object(scheduling, "terminate_sync_process") as kill, \
+             mock.patch("apps.dashboard.services.sync_api_service._claim_for_cancel",
+                        side_effect=finish_it):
+            result = cancel_sync_run(SITE_URL)
+
+        self.assertFalse(result["cancelled"])
+        kill.assert_not_called()
+
+    def test_second_cancel_kills_nothing(self):
+        self._running_run()
+        with mock.patch.object(scheduling, "terminate_sync_process", return_value=True) as kill:
+            first = cancel_sync_run(SITE_URL)
+            second = cancel_sync_run(SITE_URL)
+
+        self.assertTrue(first["cancelled"])
+        self.assertFalse(second["cancelled"])
+        self.assertEqual(kill.call_count, 1)
+
+    def test_the_in_flight_connector_row_is_resolved_with_the_cancel_message(self):
+        self._running_run()
+        log = SyncLog.objects.create(connector="dataforseo_onpage", site_url=SITE_URL,
+                                     status=SyncStatus.RUNNING, records_written=7)
+        with mock.patch.object(scheduling, "terminate_sync_process", return_value=True):
+            cancel_sync_run(SITE_URL)
+
+        log.refresh_from_db()
+        self.assertEqual(log.status, SyncStatus.ERROR)
+        self.assertEqual(log.error_message, scheduling.CANCELLED_CONNECTOR_MESSAGE)
+        self.assertEqual(log.records_written, 7)
