@@ -2879,7 +2879,7 @@
         broad: { ep: 'dataforseo_labs/google/keyword_ideas', desc: 'Category-relevance search \u2014 widest net, includes terms that don\u2019t contain your seed' },
         phrase: { ep: 'dataforseo_labs/google/keyword_suggestions', desc: 'Full-text long-tail search \u2014 every result contains your seed phrase' },
         exact: { ep: 'keywords_data/google_ads/search_volume', desc: 'Metrics for the literal seed phrase only' },
-        questions: { ep: 'keyword_suggestions + filter', desc: 'Long-tail suggestions filtered to question prefixes (how / what / is / can\u2026)' },
+        questions: { ep: 'keyword_ideas + question filters', desc: 'Questions people ask in this topic (how / what / is / can\u2026), filtered server-side by DataForSEO' },
         related: { ep: 'dataforseo_labs/google/related_keywords', desc: 'Semantic neighbors from Google\u2019s \u201csearches related to\u201d graph' }
       };
       const algo = ALGO[s.matchType] || ALGO.broad;

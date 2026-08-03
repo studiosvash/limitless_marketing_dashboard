@@ -315,14 +315,21 @@ class DataForSEOKeywordsConnector(BaseConnector):
 
     @with_retry(max_retries=2, base_delay=3.0)
     def _fetch_related_keywords(self, seed: str, location_name: str, limit: int) -> dict:
-        """Labs related_keywords/live call (searches related to graph). Takes a single string keyword."""
+        """Labs related_keywords/live call (searches related to graph). Takes a single string keyword.
+
+        The order_by path is `keyword_data.keyword_info...` — this endpoint nests each item
+        under `keyword_data`, unlike keyword_ideas/keyword_suggestions where the same fields
+        sit at the top level. With the un-nested path the API rejects the whole task with
+        40501 "Invalid Field: 'order_by'", the warning was swallowed upstream, and the
+        Explorer's Related tab silently showed zero results forever (found 2026-08-03).
+        """
         payload = [{
             "keyword": (seed or "").lower().strip(),
             "location_name": location_name,
             "language_name": "English",
             "include_serp_info": True,
             "limit": max(1, min(limit, 500)),
-            "order_by": ["keyword_info.search_volume,desc"],
+            "order_by": ["keyword_data.keyword_info.search_volume,desc"],
         }]
         resp = requests.post(
             f"{DATAFORSEO_BASE}/dataforseo_labs/google/related_keywords/live",
@@ -349,6 +356,46 @@ class DataForSEOKeywordsConnector(BaseConnector):
             auth=self.auth,
             json=payload,
             timeout=45,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    # The Questions tab's prefixes. Exactly eight: DataForSEO Labs allows at most eight
+    # conditions in one filter group, so this is the API ceiling, not an arbitrary pick.
+    _QUESTION_PREFIXES = ("how %", "what %", "why %", "is %",
+                          "can %", "does %", "where %", "when %")
+
+    @with_retry(max_retries=2, base_delay=3.0)
+    def _fetch_question_ideas(self, seeds: list[str], location_name: str, limit: int) -> dict:
+        """Labs keyword_ideas/live filtered to question-prefixed keywords, for the Questions
+        tab.
+
+        Why not keyword_suggestions: suggestions only returns keywords CONTAINING the full
+        seed phrase, and real questions rarely embed a phrase like "event staffing services"
+        verbatim — filtering suggestions to question prefixes returned zero rows on a live
+        test. keyword_ideas is category-relevance (the seed's topic, not its exact words), so
+        question-filtering it yields real questions people ask in the seed's category. One
+        extra metered task (~$0.01–0.02), same price class as the other three calls.
+        """
+        filters: list = []
+        for i, prefix in enumerate(self._QUESTION_PREFIXES):
+            if i:
+                filters.append("or")
+            filters.append(["keyword", "like", prefix])
+        payload = [{
+            "keywords": [s.lower() for s in seeds][:200],
+            "location_name": location_name,
+            "language_name": "English",
+            "include_serp_info": True,
+            "limit": max(1, min(limit, 1000)),
+            "filters": filters,
+            "order_by": ["keyword_info.search_volume,desc"],
+        }]
+        resp = requests.post(
+            f"{DATAFORSEO_BASE}/dataforseo_labs/google/keyword_ideas/live",
+            auth=self.auth,
+            json=payload,
+            timeout=60,
         )
         resp.raise_for_status()
         return resp.json()
@@ -416,16 +463,16 @@ class DataForSEOKeywordsConnector(BaseConnector):
         # DataForSEO location_name. Normalise for the API, keep the display form in the response.
         api_location = normalize_location_name(location_name)
 
-        question_seeds = []
-        for s in cleaned[:2]:
-            for q in ["how", "what", "how much", "why", "can", "is", "where", "when", "does"]:
-                question_seeds.append(f"{q} {s}")
-
         ideas_payload, related_payload, questions_payload = {}, {}, {}
         with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
             f_ideas = pool.submit(self._fetch_keyword_ideas, cleaned, api_location, limit)
             f_related = pool.submit(self._fetch_related_keywords, cleaned[0], api_location, min(limit, 50))
-            f_questions = pool.submit(self._fetch_keyword_suggestions, cleaned, api_location, min(limit, 50))
+            # Question-filtered keyword_ideas, NOT keyword_suggestions — suggestions requires
+            # the full seed phrase inside every result, which excludes almost every real
+            # question; see _fetch_question_ideas. (An earlier revision built question-
+            # prefixed seed strings here and then never passed them anywhere, so the
+            # Questions tab was empty from the day it shipped.)
+            f_questions = pool.submit(self._fetch_question_ideas, cleaned, api_location, min(limit, 50))
 
             try:
                 ideas_payload = f_ideas.result()
