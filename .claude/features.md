@@ -954,6 +954,17 @@ X, Facebook, Instagram, Meta Ads — each an **inert row reading "Connector not 
 a footnote explaining that Off-site SEO already shows the GA4 sessions from these platforms and
 what is missing is on-platform impressions & CTR.
 
+**Ads platforms** (Google Ads / Meta Ads) is a real credential-entry form as of
+2026-08-03 — not a display: each platform has its own fields (Google Ads: Developer
+Token, Customer ID, optional Manager/MCC Customer ID; Meta Ads: Access Token, Ad Account
+ID), a **Test connection** button that makes one real, cheap API call against whatever is
+currently in the form (or the already-saved value if nothing was edited), and a **Save**
+button. Credentials are encrypted at rest in `ProjectSettings.data["adsCredentials"]`
+(never round-tripped back to the browser — only a last-4-characters mask) and are what
+`GoogleAdsConnector`/`MetaConnector` actually use during a sync, falling back to the
+server's `.env` values for any site with nothing saved. See
+`docs/superpowers/specs/2026-08-03-ads-credentials-design.md`.
+
 These were Connect/Disconnect buttons until 2026-08-02. They authenticated nothing: the click
 flipped a `platformConnectors` boolean in `ProjectSettings.data`, the row instantly read
 "Connected", and the only downstream effect was a `connected: true` flag on the Off-site page —
