@@ -751,7 +751,9 @@ class AdsCredentialTestView(APIView):
             return Response({"detail": "Testing Ads credentials requires Owner or Admin access."},
                             status=403)
 
-        from apps.dashboard.services.ads_credentials import get_decrypted_credential, record_test_result
+        from apps.dashboard.services.ads_credentials import (
+            PLATFORM_FIELDS, get_decrypted_credential, record_test_result,
+        )
         from apps.dashboard.services.connection_check_service import (
             test_google_ads_credential, test_meta_ads_credential,
         )
@@ -766,7 +768,19 @@ class AdsCredentialTestView(APIView):
             if fields is None:
                 return Response({"ok": False, "detail": "No saved credential to test."})
         else:
-            fields = request.data
+            # Start from whatever is already saved (nothing, if this site has never saved
+            # this platform) and overlay only the fields the caller actually typed. Without
+            # this, rotating just one field -- e.g. an expiring access_token -- while
+            # leaving an already-saved ad_account_id untouched sent a request missing
+            # ad_account_id entirely, and the tester below returns its generic "X and Y are
+            # both required" for a credential that is, in fact, fully configured. Same
+            # "merge over stored" rule apply_settings_update's save path already applies,
+            # just reused here for the test path.
+            fields = dict(get_decrypted_credential(site_id, platform) or {})
+            for field in PLATFORM_FIELDS.get(platform, ()):
+                value = (request.data.get(field) or "").strip()
+                if value:
+                    fields[field] = value
 
         tester = test_google_ads_credential if platform == "google_ads" else test_meta_ads_credential
         result = tester(fields)
