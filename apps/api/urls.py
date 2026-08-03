@@ -21,6 +21,7 @@ urlpatterns = [
     path("projects/<slug:slug>/ai", views.ProjectAIView.as_view(), name="project-ai"),
     path("projects/<slug:slug>/ai/<str:action>", views.ProjectAIActionView.as_view(), name="project-ai-action"),
     path("projects/<slug:slug>/settings", views.ProjectSettingsView.as_view(), name="project-settings"),
+    path("projects/<slug:slug>/ads-credentials/test", views.AdsCredentialTestView.as_view(), name="ads-credentials-test"),
     path("projects/<slug:slug>/team", views.ProjectTeamView.as_view(), name="project-team"),
     path("projects/<slug:slug>/team/<int:user_id>", views.ProjectTeamView.as_view(), name="project-team-detail"),
     path("projects/<slug:slug>/invite", views.ProjectInviteView.as_view(), name="project-invite"),
