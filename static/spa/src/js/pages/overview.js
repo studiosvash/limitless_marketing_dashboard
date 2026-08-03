@@ -101,6 +101,8 @@
           };
         }),
         topPages: (data.topPages || []).map(r => ({ url: r.url, clicksFmt: this.fmt(r.clicks), imprFmt: this.fmt(r.impressions), ctrFmt: r.ctr + '%' })),
+        topPagesEmpty: (data.topPages || []).length === 0,
+        trendEmpty: (data.trend || []).length === 0,
 
         /* Top keywords — build_top_keywords_api returns raw numbers (or null), so this
            table formats them exactly like every other Overview table: this.fmt() for

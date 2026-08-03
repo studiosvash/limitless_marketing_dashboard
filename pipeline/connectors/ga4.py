@@ -233,11 +233,71 @@ class GA4Connector(BaseConnector):
         campaign_records = self._normalize_campaigns(response3, site_url)
         self.logger.info(f"[ga4] Fetched {len(campaign_records)} campaign rows for {site_url}")
 
+        # FOURTH request — session-scoped truth, for ga4_daily_totals. Request1's grain
+        # includes pagePath, and sessions are NOT additive across pages: one visit that viewed
+        # three pages is three rows, so summing request1 overstated sessions at 158% of the
+        # GA4 UI (21,077 vs 13,333, 2026-06-01..07-27). date × country carries no such
+        # inflation — a session has exactly one of each — and matches the UI within GA4's own
+        # "(other)"-bucket noise. Headline session/user figures must come from THIS table;
+        # request1's rows stay for page-level drill-down only. Same split, same reason, as
+        # seo_daily_totals vs seo_daily on the Search Console side.
+        #
+        # Window is days × 2: every Overview KPI is shown against the preceding period of the
+        # same length, and fetching only the visible window is exactly the missing-baseline
+        # mistake the GSC totals made (see gsc.py) — the comparison fell through to the
+        # inflated breakdown and the dashboard announced +2361% growth.
+        #
+        # Non-fatal: the three reports above are the expensive part of the sync; losing them
+        # because the cheapest report failed would be the worse outcome. The totals keep
+        # their last good values and the next run's full re-read repairs them.
+        totals_records: list[dict] = []
+        try:
+            totals_start, _ = ga4_safe_range(days * 2)
+            request4 = RunReportRequest(
+                property=f"properties/{property_id}",
+                dimensions=[Dimension(name="date"), Dimension(name="country")],
+                metrics=[
+                    Metric(name="sessions"),
+                    Metric(name="screenPageViews"),
+                    Metric(name="conversions"),
+                    # Real for its own (date, country) cell and stored as such. Never sum it
+                    # across dates or countries — unique users are not additive; see
+                    # GA4DailyTotal's docstring.
+                    Metric(name="totalUsers"),
+                ],
+                date_ranges=[DateRange(start_date=totals_start, end_date=end_str)],
+                limit=100000,
+            )
+            totals_records = self._normalize_totals(client.run_report(request4), site_url)
+            self.logger.info(f"[ga4] Fetched {len(totals_records)} daily-total rows for {site_url}")
+        except Exception:
+            self.logger.warning(
+                f"[ga4] daily-totals fetch failed for {site_url}; keeping previously stored "
+                f"totals and continuing with the breakdown reports", exc_info=True
+            )
+
         return {
             "seo_daily": seo_records,
             "offsite_daily": offsite_records,
             "campaign_daily": campaign_records,
+            "daily_totals": totals_records,
         }
+
+    def _normalize_totals(self, response, site_url: str) -> list[dict]:
+        """Convert the date × country report to ga4_daily_totals rows."""
+        records = []
+        for row in response.rows:
+            raw_date = row.dimension_values[0].value
+            records.append({
+                "date": date(int(raw_date[:4]), int(raw_date[4:6]), int(raw_date[6:])),
+                "site_id": site_url,
+                "country": row.dimension_values[1].value or "(not set)",
+                "sessions": int(row.metric_values[0].value or 0),
+                "pageviews": int(row.metric_values[1].value or 0),
+                "conversions": int(float(row.metric_values[2].value or 0)),
+                "users": int(row.metric_values[3].value or 0),
+            })
+        return records
 
     # GA4 returns these placeholders in sessionCampaignName for traffic that has no campaign
     # at all. They are not campaigns and must never reach the Attribution table, where they
@@ -403,6 +463,13 @@ class GA4Connector(BaseConnector):
         # Records already carry the site_url resolved in fetch(); the site_id arg is only a
         # setdefault fallback, so it can never overwrite the correct value.
         total += upsert_ga4_campaign_daily(session, campaign_records, site_id=site_id)
+
+        # Written in the same transaction as the breakdowns so the two can never drift to
+        # different dates — same rule as the GSC connector's seo_daily_totals.
+        from pipeline.db.schema import GA4DailyTotal
+        from pipeline.db.writer import ensure_tables, upsert_ga4_daily_totals
+        ensure_tables(session, GA4DailyTotal)
+        total += upsert_ga4_daily_totals(session, payload.get("daily_totals", []), site_id=site_id)
 
         return total
 

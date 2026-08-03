@@ -17,13 +17,13 @@ themselves don't include it.
 from datetime import datetime, date, timezone
 from typing import Optional
 
-from sqlalchemy import func
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from pipeline.db.dialect import max_batch_size, upsert_insert
 from pipeline.db.schema import (
     Base,
-    SEODaily, SEODailyTotal, KeywordRanking, Page, AdMetricDaily,
+    SEODaily, SEODailyTotal, GA4DailyTotal, KeywordRanking, Page, AdMetricDaily,
     Backlink, TechnicalIssue, AISummary,
     CompetitorVisibility, CompetitorDomain,
     PageSpeed, IndexingStatus, SEOAggregate,
@@ -43,12 +43,55 @@ logger = get_logger("db.writer")
 # Internal helper
 # ─────────────────────────────────────────────
 
+def _canonical_site_map() -> dict:
+    """Every known spelling of a site → its canonical `Site.site_url`.
+
+    A site is reachable by at least three strings: its `site_url` (the key every page reads
+    by), its `gsc_property` (`sc-domain:...`), and historically the URL-prefix form
+    (`https://.../`). Connectors that stamped a non-canonical spelling created a full second
+    copy of a site's history that no page read and any two-spelling query double-counted —
+    123,396 seo_daily rows for one site, removed 2026-08-03. Mapping is rebuilt per write
+    call (one small query against `sites`) rather than cached, so a site added mid-process
+    is picked up.
+    """
+    from pipeline.db.schema import Site
+    from pipeline.utils.db_connection import get_session
+    mapping: dict[str, str] = {}
+    with get_session() as s:
+        rows = s.execute(select(Site.site_url, Site.gsc_property)).all()
+    for site_url, gsc_property in rows:
+        mapping[site_url] = site_url
+        bare = site_url.replace("sc-domain:", "")
+        for alias in (gsc_property, f"sc-domain:{bare}", bare,
+                      f"https://{bare}/", f"https://{bare}", f"http://{bare}/"):
+            if alias:
+                mapping.setdefault(alias, site_url)
+    return mapping
+
+
 def _ensure_site_id(records: list[dict], site_id: Optional[str]) -> list[dict]:
-    """If site_id is provided and not already in each record, inject it."""
-    if not records or not site_id:
+    """Inject `site_id` where missing, then canonicalise EVERY record's spelling.
+
+    Canonicalisation is unconditional — not just for the injected default — because the
+    duplicated-history incident above was caused by records that already carried a site_id,
+    just the wrong spelling of it. A spelling that matches no known site passes through
+    unchanged: refusing to write would turn a missing Site row into silent data loss.
+    """
+    if not records:
+        return records
+    if site_id:
+        for r in records:
+            r.setdefault("site_id", site_id)
+    try:
+        mapping = _canonical_site_map()
+    except Exception:
+        logger.warning("[writer] could not build the canonical site map; writing site_id "
+                       "as given", exc_info=True)
         return records
     for r in records:
-        r.setdefault("site_id", site_id)
+        sid = r.get("site_id")
+        if sid and sid in mapping and mapping[sid] != sid:
+            r["site_id"] = mapping[sid]
     return records
 
 
@@ -190,6 +233,39 @@ def upsert_seo_daily_totals(session: Session, records: list[dict], site_id: Opti
         total_written += len(batch)
 
     logger.debug(f"[writer] seo_daily_totals: upserted {total_written} rows")
+    return total_written
+
+
+def upsert_ga4_daily_totals(session: Session, records: list[dict], site_id: Optional[str] = None) -> int:
+    """Upsert session-scoped GA4 daily figures. Unique on (date, site_id, country).
+
+    An upsert for the same reason as seo_daily_totals: GA4 revises a recent day's numbers
+    after first reporting them, so re-fetching an already-stored date must overwrite it.
+    """
+    if not records:
+        return 0
+
+    _ensure_site_id(records, site_id)
+    for r in records:
+        r.setdefault("country", "(not set)")
+
+    insert = upsert_insert(session)
+    BATCH_SIZE = max_batch_size(session, 8)
+    _upsert_keys = ("date", "site_id", "country")
+    records = _dedupe_by_keys(records, _upsert_keys)
+    update_cols = [k for k in records[0] if k not in _upsert_keys]
+    total_written = 0
+    for i in range(0, len(records), BATCH_SIZE):
+        batch = records[i:i + BATCH_SIZE]
+        stmt = insert(GA4DailyTotal).values(batch)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=list(_upsert_keys),
+            set_={k: stmt.excluded[k] for k in update_cols},
+        )
+        session.execute(stmt)
+        total_written += len(batch)
+
+    logger.debug(f"[writer] ga4_daily_totals: upserted {total_written} rows")
     return total_written
 
 

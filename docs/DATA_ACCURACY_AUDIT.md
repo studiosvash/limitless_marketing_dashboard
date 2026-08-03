@@ -1,5 +1,27 @@
 # Data accuracy audit — 2026-08-03
 
+> **Status update, same day:** C1, C2, H1, H2, H3 and M1/M2 are FIXED and verified.
+> C1: 663 fabricated rows (23,268 sessions — the 7 mockup sources plus fixture-inflated
+> `yahoo` days) deleted after per-row verification against GA4, then a full re-sync;
+> the source list is now entirely real. C2: `ga4_daily_totals` added at (date, country)
+> grain; `ga4_reconcile` now ties out at 98.7–101.8% of the GA4 UI (GA4's own grains differ
+> by ~2% from each other — HyperLogLog estimation), pageviews/conversions exact. H1/H2:
+> ratio arithmetic fixed. M1: the writer now canonicalises every record's `site_id` against
+> the `sites` table, making the duplicate-spelling incident unrepresentable. M2:
+> eventstaff.com's 114,500 rows deleted on the owner's decision. Also fixed while in there:
+> `query_top_ga4_pages_weekly_raw`'s "location" was `MAX(country)` — the alphabetically
+> last country, not the top one — now the country with the most sessions for that page.
+> Backlinks verified against `/backlinks/summary/live` the same day: the page's KPIs counted
+> the `backlinks` ROW TABLE — a dofollow-filtered, 1000-capped listing sample — and labelled
+> the count "total": 362 shown where DataForSEO reports 729. Fixed: whole-profile KPIs
+> (total, referring domains, authority, dofollow %, broken, spam) now come from the stored
+> summary snapshot, which holds what DataForSEO's own summary endpoint reported; row counts
+> remain only as the never-synced fallback. Page now shows 706/374 (snapshot of 2026-08-01;
+> live was 729/376 — two days of profile drift, refreshed by the next sync).
+> PageSpeed verified structurally: 96 rows / 50 URLs, real mobile+desktop Lighthouse scores
+> (38–100), last run 2026-07-24. Lighthouse varies ±5 between runs by design, so freshness +
+> structure is the honest check there, not exact-match.
+
 Every figure below was measured against the live Google APIs, not inferred from reading code.
 Reproduce any of it with `manage.py gsc_reconcile` / `manage.py ga4_reconcile`.
 

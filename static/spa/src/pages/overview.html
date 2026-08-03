@@ -101,6 +101,7 @@
               </div>
             </div>
             <div style="position: relative; width: 100%; height: 260px; padding: 10px 40px 20px 40px; box-sizing: border-box; font-family: sans-serif;">
+              <sc-if value="{{ !ov.trendEmpty }}" hint-placeholder-val="{{ true }}">
               <div style="position: absolute; left: 0; top: 10px; height: 220px; width: 40px; display: flex; flex-direction: column; justify-content: space-between; text-align: right; font-size: 11px; color: #64748b; padding-right: 8px;">
                 <div style="position: absolute; top: -18px; right: 8px; color: #475569;">Clicks</div>
                 <sc-for list="{{ ov.yTicksC }}" as="yt"><span>{{ yt }}</span></sc-for>
@@ -109,7 +110,12 @@
                 <div style="position: absolute; top: -18px; left: 8px; color: #475569;">Impressions</div>
                 <sc-for list="{{ ov.yTicksI }}" as="yt"><span>{{ yt }}</span></sc-for>
               </div>
-              
+              </sc-if>
+
+              <sc-if value="{{ ov.trendEmpty }}" hint-placeholder-val="{{ false }}">
+                <div style="height: 220px; display: flex; align-items: center; justify-content: center; text-align: center; font-size: 13px; color: #94a3b8; padding: 0 40px;">No daily data for this period yet — the trend appears after the first Search Console sync covering this window.</div>
+              </sc-if>
+              <sc-if value="{{ !ov.trendEmpty }}" hint-placeholder-val="{{ true }}">
               <div style="position: relative; width: 100%; height: 220px;">
                 <svg viewBox="0 0 600 220" preserveAspectRatio="none" style="width: 100%; height: 100%; display: block; overflow: visible;" onMouseLeave="{{ h.chartHoverOut }}">
                   <line x1="0" y1="0" x2="600" y2="0" stroke="#f1f5f9" stroke-width="1"></line>
@@ -145,6 +151,7 @@
                   <span style="position: absolute; left: {{ xt.pct }}%; transform: translateX(-50%); font-size: 11px; color: #64748b;">{{ xt.label }}</span>
                 </sc-for>
               </div>
+              </sc-if>
             </div>
           </div>
 
@@ -256,6 +263,9 @@
           <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
             <thead><tr style="text-align: left; color: #94a3b8; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;"><th style="font-weight: 500; padding: 10px 20px;">Page</th><th style="font-weight: 500; padding: 10px 20px; text-align: right;">Clicks</th><th style="font-weight: 500; padding: 10px 20px; text-align: right;">Impressions</th><th style="font-weight: 500; padding: 10px 20px; text-align: right;">CTR</th></tr></thead>
             <tbody>
+              <sc-if value="{{ ov.topPagesEmpty }}" hint-placeholder-val="{{ false }}">
+                <tr><td colspan="4" style="padding: 28px 20px; text-align: center; font-size: 13px; color: #94a3b8;">No page data for this period yet — Search Console hasn't been synced for this window. Run a refresh to fetch it.</td></tr>
+              </sc-if>
               <sc-for list="{{ ov.topPages }}" as="r" hint-placeholder-count="3">
                 <tr style="border-top: 1px solid #f1f5f9;">
                   <td style="padding: 12px 20px; font-weight: 500;"><a href="https://{{ projectDomain }}{{ r.url }}" target="_blank" rel="noopener" title="Open live page" style="color: #334155; text-decoration: none;" style-hover="color:#4f46e5;text-decoration:underline">{{ r.url }}</a></td>

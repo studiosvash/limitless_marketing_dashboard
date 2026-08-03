@@ -60,13 +60,17 @@ def query_seo_by_dimension_raw(site_id: str, start_date: date, end_date: date) -
     """Raw numeric SEO metrics by country and device for the period."""
     try:
         with get_session() as session:
+            # CTR and position are ratios, so both are DERIVED from the group's own totals,
+            # never AVG()ed over its (date, page) rows — an unweighted mean let a 3-impression
+            # row count as much as a 9,000-impression one and overstated USA's CTR by 43%
+            # (0.63% shown, 0.44% real) and GBR's by 600% (0.14% vs 0.02%), measured
+            # 2026-08-03. Same rule as the Overview KPIs and seo_daily_totals.
             by_country = session.execute(
                 select(
                     SEODaily.country,
                     func.sum(SEODaily.clicks).label("total_clicks"),
                     func.sum(SEODaily.impressions).label("total_impressions"),
-                    func.avg(SEODaily.ctr).label("avg_ctr"),
-                    func.avg(SEODaily.avg_position).label("avg_position"),
+                    func.sum(SEODaily.avg_position * SEODaily.impressions).label("weighted_position"),
                 )
                 .where(SEODaily.site_id == site_id, SEODaily.date >= start_date, SEODaily.date <= end_date, SEODaily.country.isnot(None))
                 .group_by(SEODaily.country)
@@ -79,23 +83,28 @@ def query_seo_by_dimension_raw(site_id: str, start_date: date, end_date: date) -
                     SEODaily.device,
                     func.sum(SEODaily.clicks).label("total_clicks"),
                     func.sum(SEODaily.impressions).label("total_impressions"),
-                    func.avg(SEODaily.ctr).label("avg_ctr"),
                 )
                 .where(SEODaily.site_id == site_id, SEODaily.date >= start_date, SEODaily.date <= end_date, SEODaily.device.isnot(None))
                 .group_by(SEODaily.device)
                 .order_by(func.sum(SEODaily.clicks).desc())
             ).all()
 
+            def _ctr(clicks, impressions):
+                return round(clicks / impressions * 100, 2) if impressions else 0.0
+
             return {
                 "by_country": [
                     {"country": r.country or "Unknown", "clicks": int(r.total_clicks or 0),
                      "impressions": int(r.total_impressions or 0),
-                     "ctr": round((r.avg_ctr or 0) * 100, 2), "avg_position": round(r.avg_position or 0, 1)}
+                     "ctr": _ctr(int(r.total_clicks or 0), int(r.total_impressions or 0)),
+                     "avg_position": round((r.weighted_position or 0) / r.total_impressions, 1)
+                                     if r.total_impressions else 0.0}
                     for r in by_country
                 ],
                 "by_device": [
                     {"device": r.device or "Unknown", "clicks": int(r.total_clicks or 0),
-                     "impressions": int(r.total_impressions or 0), "ctr": round((r.avg_ctr or 0) * 100, 2)}
+                     "impressions": int(r.total_impressions or 0),
+                     "ctr": _ctr(int(r.total_clicks or 0), int(r.total_impressions or 0))}
                     for r in by_device
                 ],
             }

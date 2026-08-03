@@ -148,6 +148,43 @@ class GA4TrafficSourceDaily(Base):
     )
 
 
+class GA4DailyTotal(Base):
+    """Session-scoped GA4 figures at (site, date, country) grain — the GA4 counterpart of
+    `SEODailyTotal`, and it exists for the same measured reason.
+
+    GA4 sessions are not additive across `pagePath`: one visit that viewed three pages is one
+    session but three rows, so summing the (date, country, device, page) breakdown in
+    `seo_daily` overstates sessions — measured at 158% of what the GA4 UI reports
+    (21,077 vs 13,333 over 2026-06-01..07-27). Grouped by date alone the API returned 13,067
+    — within 2% of the UI figure, the residue being GA4's own "(other)" bucketing.
+
+    Country is in the grain rather than a separate table because a session has exactly one
+    country, so sessions stay additive when countries are summed — one table serves both the
+    headline total (sum over countries) and the top-locations card (group by country), which
+    previously summed the page breakdown and inflated every country by its page count.
+
+    `users` is stored as GA4 reported it for that (date, country) and MUST NOT be summed
+    across dates or countries — unique users are not additive along either axis (a returning
+    visitor is one user in the window, two in the sum). Anything needing a window-level user
+    count has to ask GA4 for that window; until then surfaces show None, never a sum.
+    """
+    __tablename__ = "ga4_daily_totals"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    date = Column(Date, nullable=False, index=True)
+    site_id = Column(String(255), nullable=False, index=True)
+    country = Column(String(100), nullable=False, default="(not set)")
+    sessions = Column(Integer, default=0)
+    pageviews = Column(Integer, default=0)
+    conversions = Column(Integer, default=0)
+    users = Column(Integer, default=0)
+
+    __table_args__ = (
+        UniqueConstraint("date", "site_id", "country", name="uq_ga4_daily_totals_date_site_country"),
+        Index("ix_ga4_daily_totals_site_date", "site_id", "date"),
+    )
+
+
 class KeywordRanking(Base):
     """Daily keyword rankings: GSC engagement + DataForSEO market data."""
     __tablename__ = "keyword_rankings"

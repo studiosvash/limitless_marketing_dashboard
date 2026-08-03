@@ -245,7 +245,11 @@ def query_offsite_landing_pages_raw(site_id: str, start, end) -> list[dict]:
                 select(
                     SEODaily.landing_page.label("url"),
                     func.sum(SEODaily.sessions).label("sessions"),
-                    func.avg(SEODaily.engagement_rate).label("engagement_rate"),
+                    # Session-weighted: engagement rate is a ratio, and AVG() over this
+                    # page's (date, country, device) rows let a 2-session cell count as much
+                    # as a 900-session one — measured at 77.6% shown vs 72.3% real across a
+                    # 28-day window. Divided by the same SUM(sessions) selected above.
+                    func.sum(SEODaily.engagement_rate * SEODaily.sessions).label("weighted_engagement"),
                     func.sum(SEODaily.conversions).label("conversions"),
                 )
                 .where(
@@ -272,7 +276,8 @@ def query_offsite_landing_pages_raw(site_id: str, start, end) -> list[dict]:
             # renders it as a dash.
             "topSource": "",
             "sessions": int(r.sessions or 0),
-            "engagedRate": round(float(r.engagement_rate or 0.0), 4),
+            "engagedRate": round(float(r.weighted_engagement or 0.0) / r.sessions, 4)
+                           if r.sessions else 0.0,
             "keyEvents": int(r.conversions or 0),
         }
         for r in rows

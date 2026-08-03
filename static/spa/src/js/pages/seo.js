@@ -16,9 +16,14 @@
         lowCtrCount: data.kpis.low_ctr, anomalyCount: data.kpis.anomalies,
         criticalCount: data.kpis.critical, quickWins: data.quickWinKws,
         lowCtrRows: data.lowCtrPages.map(r => ({ url: r.url, imprFmt: this.fmt(r.impressions), clicks: r.clicks, ctrFmt: r.ctr + '%', avgPos: r.avg_pos })),
+        /* Empty flags: every table states WHY it is empty rather than rendering headers over
+           nothing — an unexplained blank is indistinguishable from a rendering bug. */
+        emptyLowCtr: (data.lowCtrPages || []).length === 0,
+        emptyCountries: (data.countries || []).length === 0,
+        emptyAnomalies: (data.anomalies || []).length === 0,
         countries: data.countries.map(c => ({ country: c.country, clicksFmt: this.fmt(c.clicks), ctrFmt: c.ctr + '%' })),
         // GSC hands us 'desktop'/'mobile'/'tablet' lowercase — title-case here, never in the template.
-        hasDevices: (data.devices || []).length > 0,
+        emptyDevices: (data.devices || []).length === 0,
         devices: (data.devices || []).map(d => {
           const name = String(d.device || '');
           return {

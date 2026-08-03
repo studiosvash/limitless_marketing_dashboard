@@ -253,16 +253,31 @@ def build_backlinks_response(site_id: str) -> dict:
     fetched_at, snap = _load_snapshot(site_id)
     snap_summary = snap.get("summary") or {}
 
-    total = summary_raw["total"]
+    # Whole-profile figures come from the snapshot FIRST — it stores what DataForSEO's own
+    # summary endpoint reported for the entire profile. The `backlinks` row table is a
+    # dofollow-filtered, 1000-capped SAMPLE fetched for the listing, so counting it and
+    # labelling the count "total" showed 362 where DataForSEO's site says 729 (measured
+    # 2026-08-03 against /backlinks/summary/live). Row counts remain only as the fallback for
+    # a site whose snapshot has never synced — and they are then the honest lower bound of
+    # what we hold, not a claim about the profile.
+    total = snap_summary.get("backlinks") or summary_raw["total"]
+    ref_domains_total = snap_summary.get("refDomains") or summary_raw["unique_domains"]
+    authority = snap_summary.get("authorityScore")
+    if authority is None:
+        authority = summary_raw["avg_dr"]
     kpis = {
         "total": total,
         "live": summary_raw["live"],
         "lost": summary_raw["lost"],
-        "referring_domains": summary_raw["unique_domains"],
-        "avg_rank": summary_raw["avg_dr"],
+        "referring_domains": ref_domains_total,
+        "avg_rank": authority,
     }
 
-    dofollow_pct = round(query_dofollow_count_raw(site_id) / total * 100) if total else 0
+    if snap_summary.get("dofollowPct") is not None:
+        dofollow_pct = snap_summary["dofollowPct"]
+    else:
+        sample_total = summary_raw["total"]
+        dofollow_pct = round(query_dofollow_count_raw(site_id) / sample_total * 100) if sample_total else 0
 
     # New / lost history: the snapshot's real DataForSEO history first, otherwise derived from
     # the first_seen / last_seen columns, otherwise nothing.
@@ -300,12 +315,13 @@ def build_backlinks_response(site_id: str) -> dict:
         "kpis": kpis,
         "links": links,
         "summary": {
-            "authorityScore": summary_raw["avg_dr"],
-            "asDelta": None,          # one snapshot row per site — no history to diff against
-            "refDomains": summary_raw["unique_domains"],
+            "authorityScore": authority,
+            "asDelta": snap_summary.get("asDelta"),   # None unless the snapshot recorded one
+            "refDomains": ref_domains_total,
             "backlinks": total,
             "dofollowPct": dofollow_pct,
-            "broken": summary_raw["lost"],
+            "broken": snap_summary.get("broken") if snap_summary.get("broken") is not None
+                      else summary_raw["lost"],
             "spamScore": snap_summary.get("spamScore"),
             "newRdMonth": new_rd_month,
             "lastUpdated": last_updated,

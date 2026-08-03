@@ -104,7 +104,27 @@ class Command(BaseCommand):
         return out
 
     def _stored(self, site_key, start, end):
+        """What a session-total surface reads: ga4_daily_totals (session-scoped, additive),
+        falling back to the page-grain breakdown only when the totals are empty — the
+        fallback figure is the inflated one, which is exactly what the output should expose
+        on a database that has not synced since the totals table was added."""
+        from pipeline.db.schema import GA4DailyTotal
+        from pipeline.db.writer import ensure_tables
         with get_session() as session:
+            ensure_tables(session, GA4DailyTotal)
+            row = session.execute(
+                select(
+                    func.coalesce(func.sum(GA4DailyTotal.sessions), 0),
+                    func.coalesce(func.sum(GA4DailyTotal.pageviews), 0),
+                    func.coalesce(func.sum(GA4DailyTotal.conversions), 0),
+                    func.count(GA4DailyTotal.id),
+                ).where(GA4DailyTotal.site_id == site_key,
+                        GA4DailyTotal.date >= start, GA4DailyTotal.date <= end)
+            ).one()
+            if int(row[3]):
+                return {"sessions": float(row[0]), "screenPageViews": float(row[1]),
+                        "conversions": float(row[2]), "totalUsers": None}
+
             row = session.execute(
                 select(
                     func.coalesce(func.sum(SEODaily.sessions), 0),
@@ -113,6 +133,9 @@ class Command(BaseCommand):
                 ).where(SEODaily.site_id == site_key,
                         SEODaily.date >= start, SEODaily.date <= end)
             ).one()
+        self.stdout.write(self.style.WARNING(
+            "  (no ga4_daily_totals rows for this window — showing the page-grain "
+            "breakdown sum, which inflates sessions; run the GA4 sync)"))
         return {"sessions": float(row[0]), "screenPageViews": float(row[1]),
                 "conversions": float(row[2]), "totalUsers": None}
 

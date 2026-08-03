@@ -194,7 +194,16 @@ def query_top_pages_raw(site_id: str, start_date: date, end_date: date, limit: i
 
 
 def query_top_ga4_pages_weekly_raw(site_id: str) -> list[dict]:
-    """Top 10 GA4 pages this week with location and traffic count (sessions)."""
+    """Top 10 GA4 pages this week with location and traffic count (sessions).
+
+    Per-page sessions summed over dates/countries/devices are legitimate — a session has one
+    of each, so no double-count. (Summing across PAGES would inflate; nothing here does.)
+
+    `location` is the country that actually sent this page the most sessions. It used to be
+    `MAX(country)` — the alphabetically last country name to ever visit the page — which put
+    "USA" on rows whose traffic was overwhelmingly Indian and generally decorated real
+    traffic numbers with a fabricated-looking fact.
+    """
     today = date.today()
     start_date = today - timedelta(days=7)
     try:
@@ -202,12 +211,11 @@ def query_top_ga4_pages_weekly_raw(site_id: str) -> list[dict]:
             rows = session.execute(
                 select(
                     SEODaily.landing_page,
-                    func.max(SEODaily.country).label("top_location"),
                     func.sum(SEODaily.sessions).label("total_traffic")
                 )
                 .where(
-                    SEODaily.site_id == site_id, 
-                    SEODaily.date >= start_date, 
+                    SEODaily.site_id == site_id,
+                    SEODaily.date >= start_date,
                     SEODaily.date <= today,
                     SEODaily.landing_page.isnot(None),
                     SEODaily.sessions > 0
@@ -216,10 +224,30 @@ def query_top_ga4_pages_weekly_raw(site_id: str) -> list[dict]:
                 .order_by(func.sum(SEODaily.sessions).desc())
                 .limit(10)
             ).all()
+            if not rows:
+                return []
+
+            pages = [r.landing_page for r in rows]
+            # One grouped query for the ten pages, top country picked in Python — simpler
+            # than a window function and the result set is at most pages x countries.
+            country_rows = session.execute(
+                select(SEODaily.landing_page, SEODaily.country,
+                       func.sum(SEODaily.sessions).label("s"))
+                .where(SEODaily.site_id == site_id,
+                       SEODaily.date >= start_date, SEODaily.date <= today,
+                       SEODaily.landing_page.in_(pages),
+                       SEODaily.country.isnot(None), SEODaily.sessions > 0)
+                .group_by(SEODaily.landing_page, SEODaily.country)
+            ).all()
+            top_country: dict = {}
+            for lp, country, s in country_rows:
+                if s > top_country.get(lp, (None, -1))[1]:
+                    top_country[lp] = (country, s)
+
             return [
                 {
                     "url": row.landing_page,
-                    "location": row.top_location or "Unknown",
+                    "location": top_country.get(row.landing_page, ("Unknown", 0))[0] or "Unknown",
                     "traffic": int(row.total_traffic or 0)
                 }
                 for row in rows

@@ -21,6 +21,9 @@
                   <td style="padding: 12px 20px; text-align: right; color: #64748b;">{{ r.avgPos }}</td>
                 </tr>
               </sc-for>
+              <sc-if value="{{ seo.emptyLowCtr }}" hint-placeholder-val="{{ false }}">
+                <tr><td colspan="5" style="padding: 28px 20px; text-align: center; font-size: 13px; color: #94a3b8;">No low-CTR pages in this period — either every page with 100+ impressions is above 2% CTR, or Search Console data hasn't synced for this window yet. Run a refresh to be sure.</td></tr>
+              </sc-if>
             </tbody>
           </table>
         </div>
@@ -38,10 +41,12 @@
                     <td style="padding: 12px 20px; text-align: right; color: #475569;">{{ c.ctrFmt }}</td>
                   </tr>
                 </sc-for>
+                <sc-if value="{{ seo.emptyCountries }}" hint-placeholder-val="{{ false }}">
+                  <tr><td colspan="3" style="padding: 28px 20px; text-align: center; font-size: 13px; color: #94a3b8;">No country data for this period — Search Console hasn't been synced for this window yet.</td></tr>
+                </sc-if>
               </tbody>
             </table>
           </div>
-          <sc-if value="{{ seo.hasDevices }}" hint-placeholder-val="{{ true }}">
           <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
             <div style="padding: 16px 20px; border-bottom: 1px solid #f1f5f9;"><h2 style="font-size: 15px; font-weight: 600; margin: 0;">Performance by Device</h2><sc-if value="{{ seo.srcDevices.show }}" hint-placeholder-val="{{ true }}"><div style="margin-top: 6px;"><span style="{{ seo.srcDevices.style }}" title="{{ seo.srcDevices.title }}" aria-label="{{ seo.srcDevices.aria }}">{{ seo.srcDevices.text }}</span></div></sc-if></div>
             <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
@@ -55,10 +60,12 @@
                     <td style="padding: 12px 20px; text-align: right; color: #475569;">{{ d.ctrFmt }}</td>
                   </tr>
                 </sc-for>
+                <sc-if value="{{ seo.emptyDevices }}" hint-placeholder-val="{{ false }}">
+                  <tr><td colspan="4" style="padding: 28px 20px; text-align: center; font-size: 13px; color: #94a3b8;">No device data for this period — Search Console hasn't been synced for this window yet.</td></tr>
+                </sc-if>
               </tbody>
             </table>
           </div>
-          </sc-if>
           <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
             <div style="padding: 16px 20px; border-bottom: 1px solid #f1f5f9; display: flex; align-items: center; justify-content: space-between;"><div><h2 style="font-size: 15px; font-weight: 600; margin: 0;">Recent Anomalies</h2><sc-if value="{{ seo.srcAnomalies.show }}" hint-placeholder-val="{{ true }}"><div style="margin-top: 6px;"><span style="{{ seo.srcAnomalies.style }}" title="{{ seo.srcAnomalies.title }}" aria-label="{{ seo.srcAnomalies.aria }}">{{ seo.srcAnomalies.text }}</span></div></sc-if></div><a href="#alerts" style="font-size: 12px; color: #4f46e5; text-decoration: none; font-weight: 500;">All alerts →</a></div>
             <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
@@ -72,6 +79,9 @@
                     <td style="padding: 12px 20px; text-align: right; font-weight: 500;"><span style="{{ a.devStyle }}">{{ a.deviation }}</span></td>
                   </tr>
                 </sc-for>
+                <sc-if value="{{ seo.emptyAnomalies }}" hint-placeholder-val="{{ false }}">
+                  <tr><td colspan="4" style="padding: 28px 20px; text-align: center; font-size: 13px; color: #94a3b8;">No anomalies detected — clicks and impressions have stayed within their normal range for this period. Anomalies are recomputed after every sync.</td></tr>
+                </sc-if>
               </tbody>
             </table>
           </div>
