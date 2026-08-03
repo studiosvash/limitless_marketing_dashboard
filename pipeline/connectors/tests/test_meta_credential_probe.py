@@ -24,8 +24,18 @@ class ProbeCredentialTests(TestCase):
         self.assertFalse(ok)
         self.assertIn("Invalid OAuth access token", detail)
 
-    @patch("pipeline.connectors.meta.requests.get", side_effect=Exception("timed out"))
+    @patch(
+        "pipeline.connectors.meta.requests.get",
+        side_effect=Exception(
+            "connection failed to https://graph.facebook.com/v18.0/act_999"
+            "?fields=name&access_token=SECRET123"
+        ),
+    )
     def test_fail_when_network_error(self, mock_get):
-        ok, detail = probe_credential("tok123", "act_999")
+        ok, detail = probe_credential("SECRET123", "act_999")
         self.assertFalse(ok)
-        self.assertIn("timed out", detail)
+        # The detail string must never carry the token (or any other raw exception
+        # text) -- it is both returned to the browser and persisted unencrypted via
+        # record_test_result. Only the exception type name is surfaced.
+        self.assertNotIn("SECRET123", detail)
+        self.assertIn("Exception", detail)

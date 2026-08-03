@@ -31,10 +31,19 @@ GRAPH_API_BASE = "https://graph.facebook.com/v18.0"
 def probe_credential(access_token: str, ad_account_id: str) -> tuple[bool, str]:
     """Can this Meta System User token actually read this ad account? Never raises."""
     try:
-        resp = requests.get(f"{GRAPH_API_BASE}/{ad_account_id}",
-                            params={"fields": "name", "access_token": access_token}, timeout=15)
+        resp = requests.get(
+            f"{GRAPH_API_BASE}/{ad_account_id}",
+            params={"fields": "name"},
+            headers={"Authorization": f"Bearer {access_token}"},
+            timeout=15,
+        )
     except Exception as exc:
-        return False, f"Could not reach the Meta Graph API: {exc}"
+        # Never interpolate the raw exception: requests/urllib3 embed the failing URL
+        # (and, for the query-param auth style we deliberately moved away from, the
+        # token itself) in some exception messages/reprs. Only the exception type is
+        # safe to surface -- this string is both returned to the browser AND persisted
+        # unencrypted in ProjectSettings.data via record_test_result.
+        return False, f"Could not reach the Meta Graph API ({type(exc).__name__})."
     if resp.status_code == 200:
         name = resp.json().get("name", ad_account_id)
         return True, f'Verified — reached ad account "{name}".'

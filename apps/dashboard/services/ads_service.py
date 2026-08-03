@@ -15,6 +15,7 @@ import os
 from datetime import date, timedelta
 from sqlalchemy import case, func, select
 
+from apps.dashboard.services.ads_credentials import get_decrypted_credential
 from apps.dashboard.services.mutation_state import get_state, set_state
 from pipeline.db.schema import AdMetricDaily, AdSearchTerm, GA4CampaignDaily, SEODaily
 from pipeline.utils.db_connection import get_session
@@ -478,7 +479,15 @@ def build_ads_response(site_id: str, curr_start: date, curr_end: date, prev_star
     # zeros. Honestly empty until the Ads connector persists landing-page performance.
     landing_pages = []
 
-    connected = bool(os.getenv("GOOGLE_ADS_CUSTOMER_ID") and os.getenv("GOOGLE_ADS_DEVELOPER_TOKEN")) or tot_spend > 0
+    # A site whose Google Ads credential lives only in Settings (saved through the
+    # encrypted per-site store, never in .env) has not necessarily synced spend yet --
+    # without this check it would show "Test connection: OK" in Settings but "not
+    # connected" here, for the exact same site and platform.
+    connected = (
+        bool(os.getenv("GOOGLE_ADS_CUSTOMER_ID") and os.getenv("GOOGLE_ADS_DEVELOPER_TOKEN"))
+        or bool(get_decrypted_credential(site_id, "google_ads"))
+        or tot_spend > 0
+    )
 
     return {
         "totals": totals,
