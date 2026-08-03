@@ -140,192 +140,84 @@
       }
 
       /* ---- connections: Ads platforms (Google Ads / Meta Ads) -------------------------
-         These are STATUS CARDS, not credential forms, and that is deliberate.
-
-         There is no endpoint anywhere in this app that saves an Ads credential, and there
-         should not be one: the connectors read their secrets from the process environment
-         (`os.getenv` in GoogleAdsConnector.__init__ / MetaConnector.__init__, after
-         `load_dotenv()`), so a token typed into a box here and stored in
-         ProjectSettings.data would be read by nothing, ever. Rendering an input that looks
-         like it connects Google Ads and connects nothing is precisely the defect just
-         removed from the Security tab. A card that tells the truth beats a form that lies.
-
-         What IS honestly knowable from the real /settings payload:
-
-         `data.connectors` is a straight reshape of SyncLog (settings_service
-         .query_connectors_raw). A SyncLog row can only exist if BaseConnector.sync() ran,
-         which sync_engine only reaches once `_get_connector()` actually CONSTRUCTED the
-         class -- and GoogleAdsConnector.__init__ raises ValueError unless BOTH
-         GOOGLE_ADS_CUSTOMER_ID and GOOGLE_ADS_DEVELOPER_TOKEN are set (MetaConnector
-         likewise for META_ACCESS_TOKEN / META_AD_ACCOUNT_ID); on a raise the factory
-         returns None and the engine skips the connector WITHOUT writing a log row.
-
-         So "a row exists at all" is real evidence that the credentials were present at the
-         last attempt. That is exactly the missing-credentials vs credentials-present-but-
-         no-data-synced distinction the user needs -- derived from real rows, not invented.
-         The states, in the order they are tested:
-
-           no row            -> credentials missing, or an Ads sync has never been run
-           status 'running'  -> a sync is in flight right now
-           status 'error'    -> credentials present, last attempt failed (real error shown)
-           'success', 0 recs -> credentials present, API answered, returned nothing
-                                (what an unapproved access level looks like)
-           'success', n recs -> connected
-           status 'never'    -> row exists but no run has finished
-
-         The ONE thing genuinely not derivable is the customer / ad-account ID itself: the
-         Settings response carries no Ads credential fields at all. That row says so rather
-         than showing a plausible-looking number. See the task report for the precise
-         backend addition that would supply it.
-
-         Colour reuses `dataConnectors`' three card looks exactly (green success / red error
-         / grey otherwise) so this is not a second visual language; the finer states are
-         carried by the status pill, which is the same 11px/600 pill as `platRows`. */
-      const connByName = {};
-      data.connectors.forEach(c => { connByName[c.name] = c; });
-      const adsTime = iso => (iso ? (iso.slice(0, 10) + ' ' + iso.slice(11, 16)) : 'never');
-      const adsState = row => {
-        if (!row) return 'absent';
-        if (row.status === 'running') return 'running';
-        if (row.status === 'error') return 'failing';
-        if (row.status === 'success') return row.records > 0 ? 'connected' : 'nodata';
-        return 'attempted';
-      };
-      const ADS_TONE = {
-        connected: { label: 'Connected', dot: '#22c55e', pillBg: '#ecfdf5', pillFg: '#059669' },
-        nodata: { label: 'No data returned', dot: '#f59e0b', pillBg: '#fffbeb', pillFg: '#b45309' },
-        failing: { label: 'Last sync failed', dot: '#dc2626', pillBg: '#fef2f2', pillFg: '#b91c1c' },
-        running: { label: 'Syncing…', dot: '#6366f1', pillBg: '#eef2ff', pillFg: '#4338ca' },
-        attempted: { label: 'Not synced yet', dot: '#cbd5e1', pillBg: '#f1f5f9', pillFg: '#64748b' },
-        absent: { label: 'Not connected', dot: '#cbd5e1', pillBg: '#f1f5f9', pillFg: '#94a3b8' }
-      };
+         A real credential-entry form: fields are typed here, saved via
+         PUT /settings {adsCredentials: {...}} (settings_service.apply_settings_update),
+         and tested via this.testAdsCredential -> POST .../ads-credentials/test, either
+         against the typed-in draft or (if nothing was edited) the already-saved value.
+         See docs/superpowers/specs/2026-08-03-ads-credentials-design.md. */
+      const adsSaved = data.adsCredentials || {};
+      const adsDraft = s.adsCreds || { google_ads: {}, meta_ads: {} };
+      const adsTesting = s.adsTesting || {};
+      const adsSaving = s.adsSaving || {};
+      const adsTestResult = s.adsTestResult || {};
+      const SECRET_FIELD_BY_PLATFORM = { google_ads: 'developer_token', meta_ads: 'access_token' };
       const adsPill = tone => ({ fontSize: '11px', fontWeight: 600, padding: '2px 9px', borderRadius: '9999px', background: tone.pillBg, color: tone.pillFg });
-      const adsStepNum = { flexShrink: 0, width: '18px', height: '18px', borderRadius: '9999px', background: '#eef2ff', color: '#4338ca', fontSize: '11px', fontWeight: 700, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', marginTop: '1px' };
-      const ADS_SECTION_LABEL = { fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#94a3b8', margin: '14px 0 6px' };
+      const adsBtn = (busy, bg) => ({ display: 'inline-flex', padding: '8px 16px', background: bg, color: 'white', fontSize: '13px', fontWeight: 600, borderRadius: '8px', cursor: busy ? 'default' : 'pointer', opacity: busy ? 0.6 : 1 });
+      const adsResultBox = ok => ({ marginTop: '10px', fontSize: '12px', lineHeight: 1.5, padding: '8px 10px', borderRadius: '6px', color: ok ? '#15803d' : '#b91c1c', background: ok ? '#f0fdf4' : '#fff1f2', border: '1px solid ' + (ok ? '#bbf7d0' : '#fecaca') });
 
       const ADS_PLATFORMS = [
         {
           key: 'google_ads',
           name: 'Google Ads',
-          desc: 'Campaign spend, clicks, conversions and the real search terms your ads matched.',
-          cls: 'GoogleAdsConnector',
-          envPair: 'GOOGLE_ADS_CUSTOMER_ID and GOOGLE_ADS_DEVELOPER_TOKEN',
-          accountLabel: 'Customer ID',
-          accountEnv: 'GOOGLE_ADS_CUSTOMER_ID',
-          connectors: [
-            ['google_ads', 'Daily campaign spend/clicks/conversions → ad_metrics_daily'],
-            ['google_ads_search_terms', 'search_term_view queries → ad_search_terms']
+          fields: [
+            { name: 'developer_token', label: 'Developer Token', placeholder: 'Issued in Google Ads → Tools → API Center' },
+            { name: 'customer_id', label: 'Customer ID', placeholder: 'e.g. 1234567890' },
+            { name: 'login_customer_id', label: 'Manager (MCC) Customer ID — optional', placeholder: 'Only if the account sits under a manager account' },
           ],
-          accessTitle: 'Standard Access approval is required before any data flows',
-          accessBody: 'A new developer token is issued at Basic Access, which returns report data for test accounts only — it authenticates fine and hands back an empty report for a real account. Google must approve Standard Access before this connector returns live campaign, spend or search-term rows. Apply at developers.google.com/google-ads/api/docs/access-levels; approval usually takes several business days.',
-          steps: [
-            'Add GOOGLE_ADS_CUSTOMER_ID and GOOGLE_ADS_DEVELOPER_TOKEN to .env on the server. Add GOOGLE_ADS_LOGIN_CUSTOMER_ID too if the account sits under a manager (MCC) account.',
-            'Make sure GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET and GOOGLE_REFRESH_TOKEN are already set — the Ads connector reuses the same OAuth credentials as Search Console. Regenerate them with: python pipeline/utils/auth.py --generate-token',
-            'Apply for Standard Access and wait for Google’s approval. Until it lands, syncs succeed and write zero rows.',
-            'Restart the server. .env is read once, when the connector module is first imported — editing the file on a running process changes nothing.',
-            'Press “Run Ads sync now” below and watch this card.'
-          ],
-          envRows: [
-            ['GOOGLE_ADS_CUSTOMER_ID', 'The account reports are pulled for. Digits only — dashes are stripped.'],
-            ['GOOGLE_ADS_DEVELOPER_TOKEN', 'Issued to your Google Ads manager account. Starts at Basic Access.'],
-            ['GOOGLE_ADS_LOGIN_CUSTOMER_ID', 'Optional. Only when the account is under a manager (MCC) account.'],
-            ['GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET / GOOGLE_REFRESH_TOKEN', 'Shared with the Search Console + GA4 connectors — already set if those sync.']
-          ],
-          syncScope: 'ads',
-          syncNote: 'Runs google_ads, google_ads_search_terms and ga4. Note that the top-right “Refresh all” does NOT include the Ads connectors — only this button and the Ads pages’ own refresh run them.'
+          instruction: 'Get your developer token from Google Ads → Tools → API Center. Customer ID is the 10-digit account number shown top-right in Google Ads.',
         },
         {
           key: 'meta_ads',
           name: 'Meta Ads',
-          desc: 'Daily campaign spend, clicks, impressions and purchases from the Meta Marketing API.',
-          cls: 'MetaConnector',
-          envPair: 'META_ACCESS_TOKEN and META_AD_ACCOUNT_ID',
-          accountLabel: 'Ad account',
-          accountEnv: 'META_AD_ACCOUNT_ID',
-          connectors: [
-            ['meta', 'Daily campaign insights → ad_metrics_daily (platform=meta)']
+          fields: [
+            { name: 'access_token', label: 'Access Token', placeholder: 'System User token (Business Manager)' },
+            { name: 'ad_account_id', label: 'Ad Account ID', placeholder: 'act_XXXXXXXXXX' },
           ],
-          accessTitle: 'Ads Management Standard Access is required before any data flows',
-          accessBody: 'The Development tier allows 300 points/hour, which is not enough to complete a single sync. Apply for Ads Management Standard Access (100K points/hour) in Business Manager → App Review.',
-          steps: [
-            'Create a System User in Meta Business Manager and issue it a token. A personal token expires and the connector will stop without warning.',
-            'Add META_ACCESS_TOKEN and META_AD_ACCOUNT_ID (in Meta’s act_XXXXXXXXXX form) to .env on the server.',
-            'Apply for Ads Management Standard Access in Business Manager → App Review.',
-            'Register the connector: “meta” is not listed in any scope in PAGE_CONNECTORS (pipeline/services/sync_engine.py), so today no refresh in this app runs it — which is why this card has no sync button.',
-            'Restart the server.'
-          ],
-          envRows: [
-            ['META_ACCESS_TOKEN', 'A Business Manager System User token. Personal tokens will not do.'],
-            ['META_AD_ACCOUNT_ID', 'The ad account, in Meta’s act_XXXXXXXXXX form.']
-          ],
-          syncScope: null,
-          syncNote: 'No refresh in this app runs the Meta connector yet, so there is deliberately no button here that would appear to and do nothing. The “Meta Ads” switch under Social & platform connectors below is a display preference stored with your settings — it does not authenticate anything.'
-        }
+          instruction: 'Create a System User token in Business Manager → System Users — a personal token will expire. Ad Account ID is in Business Manager → Ad Accounts, in the act_XXXXXXXXXX form.',
+        },
       ];
 
       const adsCards = ADS_PLATFORMS.map(p => {
-        const primary = connByName[p.connectors[0][0]] || null;
-        const state = adsState(primary);
-        const tone = ADS_TONE[state];
-        const ok = state === 'connected';
-        const bad = state === 'failing';
-        const proven = 'A sync attempt was recorded for ' + p.connectors[0][0] + ', which the engine only reaches after ' + p.cls + ' constructed successfully — so ' + p.envPair + ' were both set at that attempt.';
-        const why = {
-          absent: ['Why it is not connected: no credentials, or never run', 'No sync has ever been logged for ' + p.connectors[0][0] + '. The sync engine skips any connector it cannot construct, and ' + p.cls + ' refuses to construct unless ' + p.envPair + ' are both set — and a skipped connector writes no log row. So the absence of a row means either the credentials are missing, or an Ads sync has simply never been run on this site.'],
-          attempted: ['Why it is not connected: nothing has finished yet', 'A log row exists for ' + p.connectors[0][0] + ' but no run has completed, so there is nothing to report. ' + proven],
-          running: ['A sync is running right now', 'This card updates as soon as the run finishes.'],
-          failing: ['Why it is not connected: credentials are set, the last sync failed', proven + ' The last attempt returned the error below — fix that, not the credentials.'],
-          nodata: ['Why there is no data: credentials are set, the API returned nothing', proven + ' The last sync succeeded and wrote 0 records. That is exactly what an unapproved access level looks like: the token authenticates, the query runs, and the report comes back empty. It also looks like this if the account genuinely had no spend in the window.'],
-          connected: ['Connected', this.fmt(primary ? primary.records : 0) + ' records written by the last sync, at ' + adsTime(primary ? primary.last_sync : null) + '. ' + proven]
-        }[state];
+        const saved = adsSaved[p.key] || { configured: false, masked: null };
+        const draft = adsDraft[p.key] || {};
+        const testing = !!adsTesting[p.key];
+        const saving = !!adsSaving[p.key];
+        const result = adsTestResult[p.key];
+        const tone = saved.configured
+          ? { label: 'Credential saved', dot: '#22c55e', pillBg: '#ecfdf5', pillFg: '#059669' }
+          : { label: 'Not connected', dot: '#cbd5e1', pillBg: '#f1f5f9', pillFg: '#94a3b8' };
+
         return {
           name: p.name,
-          desc: p.desc,
           statusLabel: tone.label,
           statusStyle: adsPill(tone),
           dotStyle: { width: '9px', height: '9px', borderRadius: '9999px', background: tone.dot, flexShrink: 0 },
-          whyTitle: why[0],
-          whyBody: why[1],
-          whyStyle: {
-            marginTop: '12px', padding: '12px 14px', borderRadius: '8px',
-            background: bad ? '#fff1f2' : (ok ? '#f0fdf4' : '#f8fafc'),
-            border: '1px solid ' + (bad ? '#fecaca' : (ok ? '#bbf7d0' : '#e2e8f0'))
-          },
-          whyTitleStyle: { fontSize: '12.5px', fontWeight: 600, color: bad ? '#b91c1c' : (ok ? '#15803d' : '#334155') },
-          whyBodyStyle: { fontSize: '12px', color: '#475569', lineHeight: 1.55, marginTop: '4px' },
-          hasError: !!(primary && primary.error),
-          errorText: (primary && primary.error) || '',
-          accountLabel: p.accountLabel,
-          accountValue: 'Not returned by the Settings API',
-          accountNote: 'It is configured on the server as ' + p.accountEnv + ' in .env. GET /settings carries no Ads credential fields, so this screen cannot show the real value — it is not being hidden, it is not there.',
-          connectorRows: p.connectors.map(c => {
-            const r = connByName[c[0]] || null;
-            const t = ADS_TONE[adsState(r)];
+          fields: p.fields.map(f => {
+            const isSecret = f.name === SECRET_FIELD_BY_PLATFORM[p.key];
+            const placeholder = (isSecret && saved.configured)
+              ? ('Saved: ' + saved.masked + ' — leave blank to keep it')
+              : f.placeholder;
             return {
-              name: c[0], desc: c[1],
-              statusLabel: r ? t.label : 'Never run',
-              statusStyle: adsPill(t),
-              meta: r ? (this.fmt(r.records) + ' records · last run ' + adsTime(r.last_sync)) : 'No sync log row exists for this connector'
+              label: f.label,
+              value: draft[f.name] || '',
+              placeholder: placeholder,
+              onInput: e => this.setState(prev => ({
+                adsCreds: Object.assign({}, prev.adsCreds, {
+                  [p.key]: Object.assign({}, (prev.adsCreds || {})[p.key], { [f.name]: e.target.value }),
+                }),
+              })),
             };
           }),
-          accessTitle: p.accessTitle,
-          accessBody: p.accessBody,
-          showSetup: !ok,
-          steps: ok ? [] : p.steps.map((text, i) => ({ n: String(i + 1), text: text, numStyle: adsStepNum })),
-          envRows: ok ? [] : p.envRows.map(e => ({ name: e[0], purpose: e[1] })),
-          sectionLabelStyle: ADS_SECTION_LABEL,
-          stepsLabel: 'How to connect it',
-          envLabel: 'Environment variables',
-          showSync: !!p.syncScope,
-          syncLabel: syncing ? 'Sync in progress…' : 'Run Ads sync now',
-          syncAria: syncing ? 'A sync is already running' : 'Run the Ads sync now for ' + p.name,
-          syncStyle: {
-            display: 'inline-flex', padding: '8px 16px', background: '#10b981', color: 'white',
-            fontSize: '13px', fontWeight: 600, borderRadius: '8px',
-            cursor: syncing ? 'default' : 'pointer', opacity: syncing ? 0.5 : 1
-          },
-          runSync: () => { if (!syncing && p.syncScope) this.startSync(p.syncScope); },
-          syncNote: p.syncNote
+          testLabel: testing ? 'Testing…' : 'Test connection',
+          testBtnStyle: adsBtn(testing, '#4f46e5'),
+          onTest: () => { if (!testing) this.testAdsCredential(p.key); },
+          saveLabel: saving ? 'Saving…' : 'Save',
+          saveBtnStyle: adsBtn(saving, '#10b981'),
+          onSave: () => { if (!saving) this.saveAdsCredential(p.key); },
+          hasTestResult: !!result,
+          testResultText: result ? result.detail : '',
+          testResultStyle: result ? adsResultBox(result.ok) : {},
+          instruction: p.instruction,
         };
       });
 
@@ -492,7 +384,7 @@
         })),
         platNote: 'None of these have a working connector yet, so there is deliberately no button here that would appear to connect one and do nothing. Off-site SEO already shows the GA4 sessions arriving from these platforms; what is missing is on-platform impressions & CTR, which only each platform’s own API can report.',
         adsCards: adsCards,
-        adsIntro: 'Google Ads and Meta Ads credentials live in the server’s .env file, not in this database — so these are status cards, not forms. Each one reads its real SyncLog row and tells you which problem you actually have.',
+        adsIntro: 'Enter your Ads platform credentials, then test the connection.',
 
         /* ---- automation: sync + crawl ---- */
         // A scheduler DOES exist now (`manage.py run_scheduled_syncs`, driven hourly from the
