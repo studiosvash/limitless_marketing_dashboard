@@ -235,31 +235,6 @@ Backed by `apps/dashboard/services/connection_check_service.py`. Never raises �
 wrapped, because the entire point of this endpoint is to survive the failures it describes.
 Also has a CLI twin: `python manage.py check_connections [<slug>]`.
 
-### `POST /api/projects/<slug>/ads-credentials/test`
-
-Live-probes a Google Ads / Meta Ads credential — either freshly typed into the Settings
-form (not yet saved) or the credential already stored for this site (`useSaved: true`).
-**Permission:** `check_owner_admin` → **403** for an `Analyst` (same gate as the settings
-PUT, since this spends a real API call against the platform's quota).
-
-**Request**
-
-```json
-{ "platform": "google_ads", "developer_token": "...", "customer_id": "1234567890" }
-```
-or
-```json
-{ "platform": "meta_ads", "useSaved": true }
-```
-
-**Response:** `{ "ok": true, "detail": "Verified — customer 1234567890 is reachable." }`
-
-Backed by `apps/dashboard/services/connection_check_service.py::test_google_ads_credential`
-/ `test_meta_ads_credential`, which delegate to `pipeline/connectors/{google_ads,meta}.py`'s
-`probe_credential()`. Every result (pass or fail) is recorded as `last_test` on the site's
-stored `adsCredentials` entry via `ads_credentials.record_test_result`, so it survives a
-page reload.
-
 ### `DELETE /api/projects/<slug>`
 
 Hard-deletes the `Site` row (`delete_site(site.id, hard=True)`). Analytics rows keyed on the old
@@ -848,7 +823,6 @@ Accepts a partial body; each recognised top-level key is routed to its backing s
 | `project.name` / `project.location` | `update_site()` |
 | `team` | Sets `UserProfile.role` for each `{id, role}` where role ∈ `Admin|Analyst`; `Owner` rows are excluded |
 | `budgetCap` / `budgetEnforce` | Written into the blob's `budget` sub-object |
-| `adsCredentials` | Per-platform (`google_ads`/`meta_ads`) fields, encrypted and merged into `ProjectSettings.data` — see `apps/dashboard/services/ads_credentials.py`. A blank submitted field leaves the stored value alone. |
 | `workspace`, `prefs`, `notifications`, `aiConfig`, `dataPrefs`, `syncConfig`, `platformConnectors`, `alertRules`, `crawl` | Stored verbatim in `ProjectSettings.data` |
 | `security` | **Per-field.** `session_timeout` persists like any other preference. `twofa`, `sso`, `sessions`, `tokens` are refused → **400** with a message naming the refused fields |
 
