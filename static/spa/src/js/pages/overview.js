@@ -266,7 +266,15 @@
         ttX: s.chartHoverIndex !== null ? ((s.chartHoverIndex * (600 / Math.max(1, (data.trend || []).length - 1))) < 300 ? (s.chartHoverIndex * (600 / Math.max(1, (data.trend || []).length - 1))) + 15 : (s.chartHoverIndex * (600 / Math.max(1, (data.trend || []).length - 1))) - 150) : 0,
         ttData: s.chartHoverIndex !== null ? data.trend[s.chartHoverIndex] : null,
         ttClicksFmt: s.chartHoverIndex !== null && data.trend[s.chartHoverIndex] ? this.fmt(data.trend[s.chartHoverIndex].clicks) : '',
-        ttImprFmt: s.chartHoverIndex !== null && data.trend[s.chartHoverIndex] ? this.fmt(data.trend[s.chartHoverIndex].impressions) : ''
+        ttImprFmt: s.chartHoverIndex !== null && data.trend[s.chartHoverIndex] ? this.fmt(data.trend[s.chartHoverIndex].impressions) : '',
+        // CTR and position come down per-day with the trend, so the hover shows the same
+        // four figures Search Console's own chart does without another request.
+        ttCtrFmt: s.chartHoverIndex !== null && data.trend[s.chartHoverIndex]
+          ? (data.trend[s.chartHoverIndex].ctr != null ? data.trend[s.chartHoverIndex].ctr.toFixed(2) + '%' : '—') : '',
+        ttPosFmt: s.chartHoverIndex !== null && data.trend[s.chartHoverIndex]
+          ? (data.trend[s.chartHoverIndex].position ? data.trend[s.chartHoverIndex].position.toFixed(1) : '—') : '',
+        ttDateFmt: s.chartHoverIndex !== null && data.trend[s.chartHoverIndex]
+          ? data.trend[s.chartHoverIndex].date : ''
       };
     }
 

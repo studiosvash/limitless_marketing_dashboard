@@ -242,16 +242,43 @@
       const wizComps = s.ptWizComps || [];
       const wizSteps = ['Site', 'Tracking area', 'Keywords', 'Competitors'];
       const segStyleFn = (on) => ({ flex: 1, textAlign: 'center', padding: '8px', fontSize: '13px', fontWeight: 500, borderRadius: '6px', cursor: 'pointer', background: on ? '#ffffff' : 'transparent', color: on ? '#4338ca' : '#64748b', boxShadow: on ? '0 1px 2px rgba(0,0,0,0.06)' : 'none' });
+      
+      vals.ptLocSearchOpen = !!s.ptLocSearchOpen;
+      vals.ptLocSearchTarget = s.ptLocSearchTarget;
+      
+      vals.ptLocFocusWiz = () => this.setState({ ptLocSearchOpen: true, ptLocSearchTarget: 'wiz' });
+      vals.ptLocFocusEdit = () => this.setState({ ptLocSearchOpen: true, ptLocSearchTarget: 'edit' });
+      vals.ptLocBlur = () => this.setState({ ptLocSearchOpen: false });
+      
+      let searchResults = [];
+      if (s.ptLocSearchOpen && s.allUsCities) {
+        const q = ((s.ptLocSearchTarget === 'wiz' ? s.ptWizLoc : s.ptEditLoc) || '').toLowerCase();
+        searchResults = q ? s.allUsCities.filter(c => c.toLowerCase().includes(q)).slice(0, 100) : ['United States', 'Canada', 'United Kingdom', 'Australia'].concat(s.allUsCities.slice(0, 96));
+      }
+      vals.ptLocSearchResults = searchResults.map(c => {
+        let label = c;
+        if (c.startsWith("United States - ")) {
+          label = c.substring(16) + ", United States";
+        }
+        return {
+          val: c,
+          label: label,
+          onPick: () => {
+            if (s.ptLocSearchTarget === 'wiz') {
+              this.setState({ ptWizLoc: c, ptLocSearchOpen: false });
+            } else if (s.ptLocSearchTarget === 'edit') {
+              this.setState({ ptEditLoc: c, ptLocSearchOpen: false });
+            }
+          }
+        };
+      });
+
       vals.ptWiz = {
         stepItems: wizSteps.map((nm, i2) => { const n = i2 + 1; const st2 = n < s.ptWizStep ? 'done' : n === s.ptWizStep ? 'active' : 'todo'; return { label: nm, n, circleStyle: { width: '26px', height: '26px', borderRadius: '9999px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', fontWeight: 600, background: st2 === 'todo' ? '#f1f5f9' : '#4f46e5', color: st2 === 'todo' ? '#94a3b8' : 'white', flexShrink: 0 }, labelStyle: { fontSize: '13px', fontWeight: st2 === 'active' ? 600 : 400, color: st2 === 'todo' ? '#94a3b8' : '#334155', whiteSpace: 'nowrap' } }; }),
         isStep1: s.ptWizStep === 1, isStep2: s.ptWizStep === 2, isStep3: s.ptWizStep === 3, isStep4: s.ptWizStep === 4,
         domain: s.ptWizDomain, name: s.ptWizName,
         engine: s.ptWizEngine, language: s.ptWizLang, location: s.ptWizLoc, device: s.ptWizDevice,
         engineOpts: ['Google', 'Bing'], langOpts: ['English', 'Spanish', 'French'], 
-        locOpts: s.allUsCities ? (s.ptWizLoc ? s.allUsCities.filter(c => c.toLowerCase().includes(s.ptWizLoc.toLowerCase())).slice(0, 100) : ['United States', 'Canada', 'United Kingdom', 'Australia'].concat(s.allUsCities.slice(0, 96))) : [
-          'United States', 'Canada', 'United Kingdom', 'Australia',
-          'United States - Alabama', 'United States - Alaska', 'United States - Arizona', 'United States - Arkansas', 'United States - California', 'United States - Colorado', 'United States - Connecticut', 'United States - Delaware', 'United States - Florida', 'United States - Georgia', 'United States - Hawaii', 'United States - Idaho', 'United States - Illinois', 'United States - Indiana', 'United States - Iowa', 'United States - Kansas', 'United States - Kentucky', 'United States - Louisiana', 'United States - Maine', 'United States - Maryland', 'United States - Massachusetts', 'United States - Michigan', 'United States - Minnesota', 'United States - Mississippi', 'United States - Missouri', 'United States - Montana', 'United States - Nebraska', 'United States - Nevada', 'United States - New Hampshire', 'United States - New Jersey', 'United States - New Mexico', 'United States - New York', 'United States - North Carolina', 'United States - North Dakota', 'United States - Ohio', 'United States - Oklahoma', 'United States - Oregon', 'United States - Pennsylvania', 'United States - Rhode Island', 'United States - South Carolina', 'United States - South Dakota', 'United States - Tennessee', 'United States - Texas', 'United States - Utah', 'United States - Vermont', 'United States - Virginia', 'United States - Washington', 'United States - West Virginia', 'United States - Wisconsin', 'United States - Wyoming'
-        ],
         deviceOpts: ['Desktop', 'Mobile'],
         kwMode: s.ptWizKwMode, kwPaste: s.ptWizKwMode === 'paste', kwList: s.ptWizKwMode === 'list',
         kwText: s.ptWizKwText, kwCount: ptSplitKws(s.ptWizKwText).length,
@@ -726,7 +753,7 @@
             xTicks: [],
             series: []
           },
-          domains: allDomains.filter(d => !hiddenOv.includes(d)).map(d => ({ name: d, style: { textAlign: 'center', color: d === vals.ptWs.domain ? '#4338ca' : '#64748b' } })),
+          domains: allDomains.filter(d => !hiddenOv.includes(d)).map(d => ({ name: d, style: { textAlign: 'center', color: d === vals.ptWs.domain ? '#4338ca' : '#64748b', fontSize: '9.5px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } })),
           gridCols: 'minmax(180px, 1.4fr) 90px 88px repeat(' + allDomains.filter(d => !hiddenOv.includes(d)).length + ', 1fr)',
           rows: vals.pt.compRows.map(row => {
             const rInfo = (vals.pt.rankings || []).find(r => (r.kw || '').toLowerCase() === (row.kw || '').toLowerCase()) || {};

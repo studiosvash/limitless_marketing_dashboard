@@ -173,6 +173,55 @@ class AuditToggleCheckTests(MutationTestBase):
         self.assertEqual(resp.status_code, 400)
 
 
+class AuditToggleResolvedTests(MutationTestBase):
+    def test_toggle_resolves_check_and_excludes_it_from_totals(self):
+        before = self.client_auth.get("/api/projects/fusehealth/audit").json()
+        self.assertEqual(before["totals"]["errors"], 1)
+
+        resp = self.client_auth.post("/api/projects/fusehealth/audit/toggle-resolved",
+                                     {"checkId": "not_found_404"}, format="json")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json(), {"resolved": ["not_found_404"]})
+
+        after = self.client_auth.get("/api/projects/fusehealth/audit").json()
+        check = next(c for c in after["checks"] if c["id"] == "not_found_404")
+        self.assertTrue(check["resolved"])
+        self.assertEqual(after["totals"]["errors"], 0)  # excluded from totals like hidden checks
+
+    def test_second_toggle_unresolves(self):
+        self.client_auth.post("/api/projects/fusehealth/audit/toggle-resolved",
+                              {"checkId": "not_found_404"}, format="json")
+        resp = self.client_auth.post("/api/projects/fusehealth/audit/toggle-resolved",
+                                     {"checkId": "not_found_404"}, format="json")
+        self.assertEqual(resp.json(), {"resolved": []})
+
+    def test_missing_checkid_is_400(self):
+        resp = self.client_auth.post("/api/projects/fusehealth/audit/toggle-resolved", {}, format="json")
+        self.assertEqual(resp.status_code, 400)
+
+    def test_recurrence_auto_unresolves(self):
+        """A resolved check whose affected pages changed since it was marked resolved (the
+        issue recurred, or a new page tripped the same check) must render active again on
+        the next read -- it must not silently stay buried in the Resolved tab."""
+        self.client_auth.post("/api/projects/fusehealth/audit/toggle-resolved",
+                              {"checkId": "not_found_404"}, format="json")
+        resolved = self.client_auth.get("/api/projects/fusehealth/audit").json()
+        check = next(c for c in resolved["checks"] if c["id"] == "not_found_404")
+        self.assertTrue(check["resolved"])
+
+        # A new page trips the same check -- simulates the next crawl finding a fresh 404
+        # under an issue_type that was previously marked resolved with a different page set.
+        with get_session() as session:
+            session.add(TechnicalIssue(site_id=SITE, url="https://fusehealth.com/b",
+                                       issue_type="not_found_404", severity="high",
+                                       description="404 page", detected_at=datetime(2026, 7, 3, 9)))
+
+        after = self.client_auth.get("/api/projects/fusehealth/audit").json()
+        check_after = next(c for c in after["checks"] if c["id"] == "not_found_404")
+        self.assertFalse(check_after["resolved"])
+        self.assertEqual(after["totals"]["errors"], 2)  # both pages counted again
+
+
 class AdsMutationTests(MutationTestBase):
     def test_budget_rounds_to_int_min_1(self):
         resp = self.client_auth.post("/api/projects/fusehealth/ads/budget",

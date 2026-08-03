@@ -29,6 +29,10 @@ from sqlalchemy import select, func
 
 load_dotenv()
 
+# The daily totals cover this many periods: the one on screen, plus the one every KPI is
+# compared against. Two, because the Overview shows a single period-over-period delta.
+COMPARISON_PERIODS = 2
+
 
 class GSCConnector(BaseConnector):
     name = "gsc"
@@ -261,9 +265,16 @@ class GSCConnector(BaseConnector):
         #     the 3-day figure as the 28-day one. Covering the full window makes that
         #     unrepresentable rather than merely unlikely, which is what an upgrade on a site
         #     that already has months of `seo_daily` needs.
-        # The cost is one request returning at most `days` rows, against the tens of
+        # The window is days x COMPARISON_PERIODS, not days: every Overview KPI is shown
+        # against the preceding period of the same length, so a 90-day view needs 180 days of
+        # totals to have a baseline. Fetching only `days` left the comparison window empty,
+        # the previous period fell through to the undercounted breakdown, and the Decision
+        # Signals panel announced "Organic traffic up 2361.6%" on a site that had not grown.
+        #
+        # The cost is one request returning at most days x 2 rows, against the tens of
         # thousands the breakdown above already paged through.
-        totals_start, totals_end = (date.fromisoformat(d) for d in gsc_safe_range(days))
+        totals_start, totals_end = (date.fromisoformat(d)
+                                    for d in gsc_safe_range(days * COMPARISON_PERIODS))
         self._totals = []
         if totals_start <= totals_end:
             try:

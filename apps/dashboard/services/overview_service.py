@@ -64,17 +64,26 @@ def get_kpi_raw(site_id: str, curr_start: date, curr_end: date,
     withholds sub-threshold rows from a grouped response, so summing it undercounts — 41% of
     clicks and 78% of impressions on a measured day. See SEODailyTotal for the numbers.
 
-    A window with no totals rows falls back to the breakdown so a site synced before this
-    table existed still renders, but the fallback is logged: the figures it produces are the
-    undercounted ones, and the fix is to run the sync, not to trust them.
+    A site synced before this table existed falls back to the breakdown so its pages still
+    render, but the fallback is logged: the figures it produces are the undercounted ones and
+    the fix is to run the sync, not to trust them.
+
+    **Both periods always come from the same table.** Reading the current period from the
+    totals and the previous one from the breakdown compares a complete figure against a
+    41%-of-reality one, and the difference surfaces as growth: the Decision Signals panel
+    reported "Organic traffic up 2361.6%, clicks grew from 437 to 10,757" on a site whose
+    traffic had barely moved. When the totals cannot cover both windows, the previous period
+    is returned empty — a missing baseline shows as no delta, which is honest, where a
+    mismatched one invents a trend.
     """
     try:
         with get_session() as session:
-            def get_stats(start, end):
-                totals = query_gsc_totals(session, site_id, start, end)
-                if totals.pop("found"):
-                    return totals
+            def from_totals(start, end):
+                stats = query_gsc_totals(session, site_id, start, end)
+                found = stats.pop("found")
+                return stats, found
 
+            def from_breakdown(start, end):
                 row = session.execute(
                     select(
                         func.coalesce(func.sum(SEODaily.clicks), 0),
@@ -84,13 +93,6 @@ def get_kpi_raw(site_id: str, curr_start: date, curr_end: date,
                             SEODaily.date >= start, SEODaily.date <= end)
                 ).one()
                 clicks, impressions, weighted = int(row[0]), int(row[1]), float(row[2])
-                if impressions:
-                    logger.warning(
-                        "[overview] no seo_daily_totals for %s %s..%s — falling back to the "
-                        "(date, country, device, page) breakdown, which undercounts Search "
-                        "Console. Run the GSC sync to populate the totals.",
-                        site_id, start, end,
-                    )
                 return {
                     "clicks": clicks,
                     "impressions": impressions,
@@ -98,7 +100,28 @@ def get_kpi_raw(site_id: str, curr_start: date, curr_end: date,
                     "avg_position": (weighted / impressions) if impressions else 0.0,
                 }
 
-            return get_stats(curr_start, curr_end), get_stats(prev_start, prev_end)
+            curr, curr_found = from_totals(curr_start, curr_end)
+            if curr_found:
+                prev, prev_found = from_totals(prev_start, prev_end)
+                if not prev_found:
+                    logger.warning(
+                        "[overview] %s has totals for %s..%s but none for the comparison "
+                        "window %s..%s — reporting no baseline rather than comparing against "
+                        "the undercounted breakdown. Extend the GSC totals backfill.",
+                        site_id, curr_start, curr_end, prev_start, prev_end,
+                    )
+                    prev = {}
+                return curr, prev
+
+            curr = from_breakdown(curr_start, curr_end)
+            if curr["impressions"]:
+                logger.warning(
+                    "[overview] no seo_daily_totals for %s %s..%s — falling back to the "
+                    "(date, country, device, page) breakdown, which undercounts Search "
+                    "Console. Run the GSC sync to populate the totals.",
+                    site_id, curr_start, curr_end,
+                )
+            return curr, from_breakdown(prev_start, prev_end)
     except Exception as e:
         logger.error(f"Error: {e}", exc_info=True)
         return {}, {}
@@ -256,26 +279,59 @@ def query_top_audit_pages_raw(site_id: str, limit: int = 10) -> list[dict]:
 
 
 def query_daily_traffic_raw(site_id: str, start_date: date, end_date: date) -> list[dict]:
-    """Raw [{date, clicks, impressions}] points — the API `trend[]` shape and also the
-    source data for the old view's Plotly chart dict."""
+    """Raw [{date, clicks, impressions, ctr, position}] points — the API `trend[]` shape and
+    also the source data for the old view's Plotly chart dict.
+
+    Reads `seo_daily_totals` for the same reason the KPIs do, and it matters more here than
+    it looks: a chart summed from the breakdown would put a different number on the same day
+    than the card above it, and the user's whole reason for this dashboard is not having to
+    open Search Console to find out which one is right.
+
+    Every point carries the day's own CTR and position too, so a hover can show all four
+    figures without a second request.
+    """
     try:
         with get_session() as session:
+            ensure_tables(session, SEODailyTotal)
             rows = session.execute(
-                select(
-                    SEODaily.date,
-                    func.sum(SEODaily.clicks).label("total_clicks"),
-                    func.sum(SEODaily.impressions).label("total_impressions"),
-                )
-                .where(SEODaily.site_id == site_id, SEODaily.date >= start_date, SEODaily.date <= end_date)
-                .group_by(SEODaily.date)
-                .order_by(SEODaily.date.asc())
+                select(SEODailyTotal.date, SEODailyTotal.clicks, SEODailyTotal.impressions,
+                       SEODailyTotal.ctr, SEODailyTotal.avg_position)
+                .where(SEODailyTotal.site_id == site_id,
+                       SEODailyTotal.date >= start_date, SEODailyTotal.date <= end_date)
+                .order_by(SEODailyTotal.date.asc())
             ).all()
+
+            if not rows:
+                rows = session.execute(
+                    select(
+                        SEODaily.date,
+                        func.sum(SEODaily.clicks),
+                        func.sum(SEODaily.impressions),
+                        # Per-day ratios, derived rather than averaged — the same rule the
+                        # window-level aggregates follow.
+                        (func.sum(SEODaily.clicks) * 1.0
+                         / func.nullif(func.sum(SEODaily.impressions), 0)),
+                        (func.sum(SEODaily.avg_position * SEODaily.impressions)
+                         / func.nullif(func.sum(SEODaily.impressions), 0)),
+                    )
+                    .where(SEODaily.site_id == site_id,
+                           SEODaily.date >= start_date, SEODaily.date <= end_date)
+                    .group_by(SEODaily.date)
+                    .order_by(SEODaily.date.asc())
+                ).all()
+
             return [
-                {"date": str(r.date), "clicks": int(r.total_clicks or 0), "impressions": int(r.total_impressions or 0)}
+                {
+                    "date": str(r[0]),
+                    "clicks": int(r[1] or 0),
+                    "impressions": int(r[2] or 0),
+                    "ctr": round(float(r[3] or 0.0) * 100, 2),
+                    "position": round(float(r[4] or 0.0), 1),
+                }
                 for r in rows
             ]
     except Exception as e:
-        import logging; logging.getLogger(__name__).error(f"Error: {e}", exc_info=True)
+        logger.error(f"Error: {e}", exc_info=True)
         return []
 
 
@@ -625,9 +681,13 @@ def build_pillars(site_id: str, kpis_current: dict, kpis_previous: dict, top3_co
         if previous_clicks else 0, 1,
     )
     return [
+        # Impressions ride along in the subtitle rather than taking a pillar of their own:
+        # clicks without the impressions behind them can't be read (400 clicks is good news
+        # on 5,000 impressions and bad news on 500,000), and the two always move together.
         {"label": "Organic clicks", "target": "overview", "valueKind": "num",
          "value": int(current_clicks), "delta": clicks_delta, "deltaUnit": "%",
-         "sub": f"clicks", "state": "ok"},
+         "sub": f"clicks · {int(kpis_current.get('impressions', 0)):,} impressions",
+         "state": "ok"},
         {"label": "Avg. position", "target": "positioning", "valueKind": "pos",
          "value": round(kpis_current.get("avg_position", 0.0), 1), "delta": None, "deltaUnit": "pos",
          "sub": f"{top3_count} keywords in top 3", "state": "ok"},

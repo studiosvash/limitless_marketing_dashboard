@@ -513,7 +513,7 @@ raw `Backlink` rows (also 0-1000, pre-scaling) — it does NOT come from the sna
   "breakdown":    {"healthy","withIssues","broken","redirected","blocked"},
   "catScore":     {"Performance": 80, "SEO": 92, …},
   "cwv": {"lcp": {…}, "cls": {…}, "tbt": {…}},
-  "checks":       [{"id","severity","category","title","howToFix","count","hidden","pages":[…]}],
+  "checks":       [{"id","severity","category","title","howToFix","count","hidden","resolved","pages":[…]}],
   "totals":       {"errors","warnings","notices"},
   "crawledPages": [{"id","url","score","statusCode","errors","warnings","notices","depth",
                     "inLinks","internalLinks","wordCount","loadTimeMs","kind"}],
@@ -919,6 +919,24 @@ Idempotent: re-acking reports success.
 Body `{"checkId": "not_found_404"}` (missing → **400**). Toggles the id in
 `ProjectSettings.data["auditHidden"]`. Returns `{"hidden": ["..."]}` — the full list.
 Hidden checks are excluded from `/audit`'s `totals` and from the Overview error count.
+
+### `POST /api/projects/<slug>/audit/toggle-resolved`
+
+Body `{"checkId": "not_found_404"}` (missing → **400**). Marks/unmarks a check resolved.
+Returns `{"resolved": ["..."]}` — the full list of currently-resolved check ids.
+
+Persisted in `ProjectSettings.data["auditResolved"]` as `{check_id: [affected urls at the
+moment it was resolved]}`, not a plain id list — the URL snapshot is what lets
+`build_site_audit_response` distinguish "still genuinely fixed" from "recurred" on the next
+crawl **without a background job**: on every `/audit` read, a resolved check's current
+affected-page URLs are diffed against the stored snapshot. Same set → stays resolved. Any
+change (pages fixed, new pages tripping the same check) → renders active again this request
+("auto-unresolve"); the stale snapshot is left in place rather than written back from the GET,
+keeping `/audit` a pure read.
+
+Resolved checks get `checks[].resolved: true` and are excluded from `/audit`'s `totals` and the
+Overview error count — same treatment as hidden checks. The Issues tab's severity filter gets a
+5th pill, `Resolved (n)`, alongside `Hidden (n)`.
 
 ### `POST /api/projects/<slug>/ads/status`
 
@@ -1453,7 +1471,7 @@ entirely Django's.
 | `/positions` | Position Tracking |
 | `/alerts` | Alerts + the sidebar unacknowledged badge (prefetched on every project change) |
 | `/backlinks` | Backlinks |
-| `/audit` + `/audit/toggle-check` | Site Audit |
+| `/audit` + `/audit/toggle-check` + `/audit/toggle-resolved` | Site Audit |
 | `/offsite` | Off-site SEO |
 | `/ads` + `/ads/{status,budget,negatives,promote}` | Paid Overview, Campaigns, Search Terms, Attribution |
 | `/ai` + `/ai/<action>` | AI Optimization |

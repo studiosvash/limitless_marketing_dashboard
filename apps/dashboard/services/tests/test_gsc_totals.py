@@ -130,6 +130,37 @@ class GetKpiRawSourceTests(AnalyticsDBTestCase):
         self.assertEqual(curr["clicks"], 55)
         self.assertAlmostEqual(curr["ctr"], 55 / 9_921, places=6)
 
+    def test_never_compares_totals_against_the_breakdown(self):
+        """The 2361.6% bug: the current period read the totals while the comparison period,
+        having none, fell through to the breakdown. A complete figure measured against a
+        41%-of-reality one reads as explosive growth on a site that has not moved."""
+        curr_day, prev_day = date(2026, 5, 10), date(2026, 4, 10)
+        # Both periods have breakdown rows; only the current one has totals.
+        self._seed_breakdown(curr_day, clicks=437, impressions=50_000, position=25.5)
+        self._seed_breakdown(prev_day, clicks=430, impressions=49_000, position=25.6)
+        with get_session() as session:
+            session.add(_total(curr_day, clicks=10_757, impressions=1_100_000, position=19.8))
+            session.commit()
+
+        curr, prev = get_kpi_raw(SITE, curr_day, curr_day, prev_day, prev_day)
+
+        self.assertEqual(curr["clicks"], 10_757)
+        # Not 437. An absent baseline must read as "unknown", not as a number from the
+        # other table that would manufacture a +2361% delta.
+        self.assertEqual(prev.get("clicks", 0), 0)
+
+    def test_uses_the_breakdown_for_both_when_no_totals_exist_at_all(self):
+        """Consistency cuts the other way too: with no totals anywhere, both periods come
+        from the breakdown, so the delta between them is still meaningful."""
+        curr_day, prev_day = date(2026, 5, 10), date(2026, 4, 10)
+        self._seed_breakdown(curr_day, clicks=200, impressions=10_000, position=20.0)
+        self._seed_breakdown(prev_day, clicks=100, impressions=9_000, position=22.0)
+
+        curr, prev = get_kpi_raw(SITE, curr_day, curr_day, prev_day, prev_day)
+
+        self.assertEqual(curr["clicks"], 200)
+        self.assertEqual(prev["clicks"], 100)
+
     def test_fallback_position_is_impression_weighted_across_breakdown_rows(self):
         day = date(2026, 5, 10)
         self._seed_breakdown(day, clicks=0, impressions=100, position=90.0)

@@ -127,7 +127,15 @@
                   <sc-if value="{{ ov.hasHover }}">
                     <line x1="{{ ov.hoverX }}" y1="10" x2="{{ ov.hoverX }}" y2="210" stroke="#94a3b8" stroke-width="1" stroke-dasharray="4"></line>
                     <circle cx="{{ ov.hoverX }}" cy="210" r="3" fill="#94a3b8"></circle>
-
+                    <foreignObject x="{{ ov.ttX }}" y="12" width="150" height="104">
+                      <div xmlns="http://www.w3.org/1999/xhtml" style="background: #0f172a; color: white; border-radius: 8px; padding: 8px 10px; font-size: 11px; line-height: 1.6; box-shadow: 0 4px 12px rgba(0,0,0,0.18); pointer-events: none;">
+                        <div style="font-weight: 600; margin-bottom: 4px; color: #e2e8f0;">{{ ov.ttDateFmt }}</div>
+                        <div style="display: flex; justify-content: space-between; gap: 10px;"><span style="color: #93c5fd;">Clicks</span><span style="font-weight: 600;">{{ ov.ttClicksFmt }}</span></div>
+                        <div style="display: flex; justify-content: space-between; gap: 10px;"><span style="color: #c4b5fd;">Impressions</span><span style="font-weight: 600;">{{ ov.ttImprFmt }}</span></div>
+                        <div style="display: flex; justify-content: space-between; gap: 10px;"><span style="color: #94a3b8;">CTR</span><span style="font-weight: 600;">{{ ov.ttCtrFmt }}</span></div>
+                        <div style="display: flex; justify-content: space-between; gap: 10px;"><span style="color: #94a3b8;">Position</span><span style="font-weight: 600;">{{ ov.ttPosFmt }}</span></div>
+                      </div>
+                    </foreignObject>
                   </sc-if>
                 </svg>
               </div>
