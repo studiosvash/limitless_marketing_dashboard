@@ -48,15 +48,17 @@ def probe_credential(access_token: str, ad_account_id: str) -> tuple[bool, str]:
 class MetaConnector(BaseConnector):
     name = "meta"
 
-    def __init__(self):
+    def __init__(self, credentials: dict | None = None):
         super().__init__()
-        self.access_token = os.getenv("META_ACCESS_TOKEN")
-        self.ad_account_id = os.getenv("META_AD_ACCOUNT_ID")  # Format: act_XXXXXXXXXX
+        credentials = credentials or {}
+        self.access_token = credentials.get("access_token") or os.getenv("META_ACCESS_TOKEN")
+        self.ad_account_id = credentials.get("ad_account_id") or os.getenv("META_AD_ACCOUNT_ID")
 
         if not self.access_token or not self.ad_account_id:
             raise ValueError(
-                "[meta] Missing META_ACCESS_TOKEN or META_AD_ACCOUNT_ID in .env. "
-                "Must use a System User token — not a personal token."
+                "[meta] Missing META_ACCESS_TOKEN or META_AD_ACCOUNT_ID. Set them in .env, "
+                "or save a credential in Settings → Connections. Must use a System User "
+                "token — not a personal token."
             )
 
     @with_retry(max_retries=3, base_delay=5.0)

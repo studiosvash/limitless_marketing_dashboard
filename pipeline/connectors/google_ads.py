@@ -34,15 +34,19 @@ load_dotenv()
 class GoogleAdsConnector(BaseConnector):
     name = "google_ads"
 
-    def __init__(self):
+    def __init__(self, credentials: dict | None = None):
         super().__init__()
-        self.customer_id = os.getenv("GOOGLE_ADS_CUSTOMER_ID", "").replace("-", "")
-        self.developer_token = os.getenv("GOOGLE_ADS_DEVELOPER_TOKEN")
-        self.login_customer_id = os.getenv("GOOGLE_ADS_LOGIN_CUSTOMER_ID", "").replace("-", "")
+        credentials = credentials or {}
+        self.customer_id = (credentials.get("customer_id")
+                           or os.getenv("GOOGLE_ADS_CUSTOMER_ID", "")).replace("-", "")
+        self.developer_token = credentials.get("developer_token") or os.getenv("GOOGLE_ADS_DEVELOPER_TOKEN")
+        self.login_customer_id = (credentials.get("login_customer_id")
+                                 or os.getenv("GOOGLE_ADS_LOGIN_CUSTOMER_ID", "")).replace("-", "")
 
         if not self.customer_id or not self.developer_token:
             raise ValueError(
-                "[google_ads] Missing GOOGLE_ADS_CUSTOMER_ID or GOOGLE_ADS_DEVELOPER_TOKEN in .env. "
+                "[google_ads] Missing GOOGLE_ADS_CUSTOMER_ID or GOOGLE_ADS_DEVELOPER_TOKEN. "
+                "Set them in .env, or save a credential in Settings → Connections. "
                 "Also ensure Standard Access has been approved."
             )
 
