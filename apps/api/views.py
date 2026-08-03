@@ -15,11 +15,12 @@ logger = logging.getLogger(__name__)
 from pipeline.services.site_service import add_site, list_sites
 from pipeline.utils.db_connection import get_session
 from pipeline.db.schema import (
-    Site, SEODaily, KeywordRanking, Page, AdMetricDaily, Backlink,
+    Site, SEODaily, SEODailyTotal, KeywordRanking, Page, AdMetricDaily, Backlink,
     TechnicalIssue, PageSpeed, IndexingStatus, SEOAggregate, AISummary,
     Anomaly, ComparativeMetrics, CompetitorKeywordRanking, TrackedCompetitor,
     AIKeywordData, SavedKeyword, MetricForecast, KeywordOpportunity, RiskSignal
 )
+from pipeline.db.writer import ensure_tables
 
 from apps.dashboard.services.overview_service import (
     get_kpi_raw, build_kpis_api, build_top_pages_api, query_daily_traffic_raw,
@@ -68,11 +69,23 @@ def resolve_project_or_404(slug: str) -> Site:
 
 def latest_data_anchor(site_id: str) -> date_cls:
     """Most recent date we have SEO data for, or today if none — periods anchor to this so
-    the API never defaults to a window that postdates the data."""
+    the API never defaults to a window that postdates the data.
+
+    Takes the later of the two SEO tables. `seo_daily_totals` is what the headline KPIs read
+    and it is re-fetched further forward than the (date, country, device, page) breakdown, so
+    anchoring on `seo_daily` alone would hold every window back to the breakdown's last date
+    and silently report a stale week as if it were the current one.
+    """
     with get_session() as session:
-        return session.execute(
+        ensure_tables(session, SEODailyTotal)
+        breakdown = session.execute(
             select(func.max(SEODaily.date)).where(SEODaily.site_id == site_id)
-        ).scalar() or date_cls.today()
+        ).scalar()
+        totals = session.execute(
+            select(func.max(SEODailyTotal.date)).where(SEODailyTotal.site_id == site_id)
+        ).scalar()
+        candidates = [d for d in (breakdown, totals) if d is not None]
+        return max(candidates) if candidates else date_cls.today()
 
 
 _LOCAL_HOSTS = ("localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]")
@@ -113,7 +126,7 @@ def build_frontend_link(request, path: str) -> str:
 
 def resolve_range_periods(request, slug: str):
     """Resolve a range-taking view's full request context in one call: site lookup (404 on
-    unknown slug), `range` query param validation (default 30d), and period-date resolution
+    unknown slug), `range` query param validation (default 28d), and period-date resolution
     anchored to the latest data date. Returns (site_id, curr_start, curr_end, prev_start,
     prev_end). Used by every apps.api view that takes both a `slug` and a `range` param."""
     site_id = resolve_project_or_404(slug).site_url
@@ -295,7 +308,7 @@ class ProjectSEOView(APIView):
     def get(self, request, slug):
         site_id = resolve_project_or_404(slug).site_url
         anchor = latest_data_anchor(site_id)
-        curr_start, curr_end, _, _ = range_to_period_dates("30d", anchor)
+        curr_start, curr_end, _, _ = range_to_period_dates("28d", anchor)
 
         return Response(build_seo_response(site_id, curr_start, curr_end))
 
@@ -305,7 +318,7 @@ class ProjectKeywordsView(APIView):
     def get(self, request, slug):
         site_id = resolve_project_or_404(slug).site_url
         anchor = latest_data_anchor(site_id)
-        curr_start, curr_end, prev_start, prev_end = range_to_period_dates("30d", anchor)
+        curr_start, curr_end, prev_start, prev_end = range_to_period_dates("28d", anchor)
 
         return Response(build_keywords_response(site_id, curr_start, curr_end, prev_start, prev_end))
 
@@ -1336,6 +1349,20 @@ class AuditToggleCheckView(APIView):
         if not check_id:
             return Response({"detail": "checkId is required"}, status=400)
         return Response({"hidden": toggle_audit_check(site_id, check_id)})
+
+
+@method_decorator(login_not_required, name="dispatch")
+class AuditToggleResolvedView(APIView):
+    """POST /api/projects/<slug>/audit/toggle-resolved {checkId} -> {resolved: [...]}."""
+
+    def post(self, request, slug):
+        from apps.dashboard.services.site_audit_service import toggle_resolved_check
+
+        site_id = resolve_project_or_404(slug).site_url
+        check_id = (request.data.get("checkId") or "").strip()
+        if not check_id:
+            return Response({"detail": "checkId is required"}, status=400)
+        return Response({"resolved": toggle_resolved_check(site_id, check_id)})
 
 
 @method_decorator(login_not_required, name="dispatch")

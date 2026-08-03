@@ -31,6 +31,7 @@ urlpatterns = [
     path("projects/<slug:slug>/data", views.ProjectDataCleanView.as_view(), name="project-data-clean"),
     # Mutations (HANDOFF_SPEC 1)
     path("projects/<slug:slug>/audit/toggle-check", views.AuditToggleCheckView.as_view(), name="audit-toggle-check"),
+    path("projects/<slug:slug>/audit/toggle-resolved", views.AuditToggleResolvedView.as_view(), name="audit-toggle-resolved"),
     path("projects/<slug:slug>/ads/status", views.AdsStatusView.as_view(), name="ads-status"),
     path("projects/<slug:slug>/ads/budget", views.AdsBudgetView.as_view(), name="ads-budget"),
     path("projects/<slug:slug>/ads/negatives", views.AdsNegativesView.as_view(), name="ads-negatives"),

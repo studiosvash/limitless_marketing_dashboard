@@ -63,6 +63,18 @@ class GscIncrementalCursorTests(TestCase):
 
         self.connector._fetch_date_range = record
 
+        # The daily-totals call is a second, independent request to the same API. It has its
+        # own window (it re-reads past the cursor by RESTATEMENT_DAYS) and would otherwise go
+        # out over the network from these tests. Recorded separately so asserting on
+        # `self.requested` still describes only the breakdown cursor this class is about.
+        self.totals_requested = []
+
+        def record_totals(site_url, canonical, start_str, end_str):
+            self.totals_requested.append((start_str, end_str))
+            return []
+
+        self.connector._fetch_totals = record_totals
+
     def _seed(self, day: date, *, impressions: int, sessions: int):
         with get_session() as session:
             session.add(SEODaily(date=day, site_id=SITE, country="USA", device="mobile",

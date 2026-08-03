@@ -57,7 +57,9 @@ description of it. `FEATURES.md` (project root), `docs/superpowers/`, `Design_fe
 | Every API view needs `@method_decorator(login_not_required, name="dispatch")` | `LoginRequiredMiddleware` runs before DRF; without it, token requests are 302'd to the login page |
 | Never fabricate data to fill a shape — return empty, `null`, or `state: "setup"` | An invented number that looks real is worse than a visible gap |
 | Never commit `.env` or hardcode a secret | Secrets come from `.env` (dev) / real env vars (prod) only |
-| `default` DB = `django_internal.db` (Django ORM) · analytics = `data/fusehealth.db` (SQLAlchemy) | Django plumbing stays separate from analytics data; the join key is the `site_url` string |
+| One database. `POSTGRES_DB` set → Django ORM *and* analytics both use that Postgres. Unset → both fall back to SQLite (`django_internal.db` + `data/fusehealth.db`) | Two engines, one store. The join key between them is the `site_url` string. Stale SQLite files left on disk after a Postgres switchover are read by nothing — don't diagnose against them |
+| Headline Search Console KPIs come from `seo_daily_totals`, never from summing `seo_daily` | Google withholds sub-threshold rows from a dimension-grouped response, so the (date, country, device, page) breakdown undercounts its own totals — measured at 41% of clicks on one site. `seo_daily` is for drill-down only |
+| CTR is `SUM(clicks)/SUM(impressions)`; average position is impression-weighted. Never `AVG()` either one | Both are ratios. An unweighted mean lets a 10-impression day count as much as a 10,000-impression one, which is how the dashboard came to disagree with Search Console |
 | Analytics writes always go through a `pipeline/db/writer.py` upsert | Re-syncs must update, never duplicate |
 | Reuse the pipeline (`connectors/`, `db/`, `services/`, `utils/`) — don't rewrite working API logic | The pipeline is proven |
 | Views resolve and delegate; services compute; connectors fetch; writers persist | One concern per file |

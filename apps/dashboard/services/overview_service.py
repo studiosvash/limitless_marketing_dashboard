@@ -3,38 +3,104 @@ DRF API view) plus the old view's presentation formatters. Query logic lives her
 exactly once; each caller formats it however its output needs (see
 .claude/api-reference.md §2.2)."""
 
+import logging
 from datetime import date, timedelta
 
 from sqlalchemy import func, select
 
-from pipeline.db.schema import SEODaily, AISummary, PageSpeed
+from pipeline.db.schema import SEODaily, SEODailyTotal, AISummary, PageSpeed
+from pipeline.db.writer import ensure_tables
 from pipeline.utils.db_connection import get_session
+
+logger = logging.getLogger(__name__)
+
+
+def query_gsc_totals(session, site_id: str, start: date, end: date) -> dict:
+    """Search Console's own figures for a window, read from `seo_daily_totals`.
+
+    Both derived metrics are recomputed across the window rather than averaged over the
+    stored per-day values, because both are ratios:
+
+      CTR      = SUM(clicks) / SUM(impressions)
+      position = SUM(position x impressions) / SUM(impressions)
+
+    A plain `AVG()` over days weights a 200-impression Sunday the same as a 15,000-impression
+    Tuesday, which is what made the dashboard's CTR and average position disagree with Search
+    Console even on the days it had fully synced.
+
+    `found` is False when the window has no rows at all. Callers must not read that as a real
+    zero — it means the totals have not been synced for this window yet.
+    """
+    ensure_tables(session, SEODailyTotal)
+    row = session.execute(
+        select(
+            func.coalesce(func.sum(SEODailyTotal.clicks), 0),
+            func.coalesce(func.sum(SEODailyTotal.impressions), 0),
+            func.coalesce(func.sum(SEODailyTotal.avg_position * SEODailyTotal.impressions), 0.0),
+            func.count(SEODailyTotal.id),
+        ).where(
+            SEODailyTotal.site_id == site_id,
+            SEODailyTotal.date >= start,
+            SEODailyTotal.date <= end,
+        )
+    ).one()
+
+    clicks, impressions, weighted_position, days = int(row[0]), int(row[1]), float(row[2]), int(row[3])
+    return {
+        "clicks": clicks,
+        "impressions": impressions,
+        "ctr": (clicks / impressions) if impressions else 0.0,
+        "avg_position": (weighted_position / impressions) if impressions else 0.0,
+        "found": days > 0,
+    }
 
 
 def get_kpi_raw(site_id: str, curr_start: date, curr_end: date,
                  prev_start: date, prev_end: date) -> tuple[dict, dict]:
-    """Raw current/previous period stats: clicks, impressions, ctr, avg_position."""
+    """Raw current/previous period stats: clicks, impressions, ctr, avg_position.
+
+    Reads `seo_daily_totals`, which holds what Search Console itself reports. It does NOT
+    sum `seo_daily`: that table is stored at (date, country, device, page) grain and Google
+    withholds sub-threshold rows from a grouped response, so summing it undercounts — 41% of
+    clicks and 78% of impressions on a measured day. See SEODailyTotal for the numbers.
+
+    A window with no totals rows falls back to the breakdown so a site synced before this
+    table existed still renders, but the fallback is logged: the figures it produces are the
+    undercounted ones, and the fix is to run the sync, not to trust them.
+    """
     try:
         with get_session() as session:
             def get_stats(start, end):
+                totals = query_gsc_totals(session, site_id, start, end)
+                if totals.pop("found"):
+                    return totals
+
                 row = session.execute(
                     select(
-                        func.sum(SEODaily.clicks).label("clicks"),
-                        func.sum(SEODaily.impressions).label("impressions"),
-                        func.avg(SEODaily.ctr).label("ctr"),
-                        func.avg(SEODaily.avg_position).label("avg_position"),
+                        func.coalesce(func.sum(SEODaily.clicks), 0),
+                        func.coalesce(func.sum(SEODaily.impressions), 0),
+                        func.coalesce(func.sum(SEODaily.avg_position * SEODaily.impressions), 0.0),
+                    ).where(SEODaily.site_id == site_id,
+                            SEODaily.date >= start, SEODaily.date <= end)
+                ).one()
+                clicks, impressions, weighted = int(row[0]), int(row[1]), float(row[2])
+                if impressions:
+                    logger.warning(
+                        "[overview] no seo_daily_totals for %s %s..%s — falling back to the "
+                        "(date, country, device, page) breakdown, which undercounts Search "
+                        "Console. Run the GSC sync to populate the totals.",
+                        site_id, start, end,
                     )
-                    .where(SEODaily.site_id == site_id, SEODaily.date >= start, SEODaily.date <= end)
-                ).first()
                 return {
-                    "clicks": row.clicks or 0,
-                    "impressions": row.impressions or 0,
-                    "ctr": row.ctr or 0.0,
-                    "avg_position": row.avg_position or 0.0,
+                    "clicks": clicks,
+                    "impressions": impressions,
+                    "ctr": (clicks / impressions) if impressions else 0.0,
+                    "avg_position": (weighted / impressions) if impressions else 0.0,
                 }
+
             return get_stats(curr_start, curr_end), get_stats(prev_start, prev_end)
     except Exception as e:
-        import logging; logging.getLogger(__name__).error(f"Error: {e}", exc_info=True)
+        logger.error(f"Error: {e}", exc_info=True)
         return {}, {}
 
 
@@ -79,7 +145,6 @@ def query_top_pages_raw(site_id: str, start_date: date, end_date: date, limit: i
                     SEODaily.landing_page,
                     func.sum(SEODaily.clicks).label("total_clicks"),
                     func.sum(SEODaily.impressions).label("total_impressions"),
-                    func.avg(SEODaily.ctr).label("avg_ctr"),
                 )
                 .where(SEODaily.site_id == site_id, SEODaily.date >= start_date, SEODaily.date <= end_date,
                        SEODaily.landing_page.isnot(None))
@@ -92,7 +157,11 @@ def query_top_pages_raw(site_id: str, start_date: date, end_date: date, limit: i
                     "page": row.landing_page or "/",
                     "clicks": int(row.total_clicks or 0),
                     "impressions": int(row.total_impressions or 0),
-                    "ctr": round((row.avg_ctr or 0) * 100, 1),
+                    # Derived from this page's own totals, not AVG(ctr) over its daily rows:
+                    # a day with 3 impressions and 1 click would otherwise drag a 33% CTR into
+                    # the mean alongside a day with 9,000 impressions.
+                    "ctr": round((row.total_clicks / row.total_impressions) * 100, 1)
+                           if row.total_impressions else 0.0,
                 }
                 for row in rows
             ]
@@ -298,19 +367,27 @@ def parse_ai_summary(text: str) -> list[dict]:
 
 
 def range_to_period_dates(range_key: str, anchor: date) -> tuple[date, date, date, date]:
-    """Maps the API's stateless `range` query param (7d/30d/90d) to
+    """Maps the API's stateless `range` query param (7d/28d/90d) to
     (curr_start, curr_end, prev_start, prev_end), anchored to the latest data date.
     Unlike the old view, this never reads/writes Django session state — the API is
-    stateless per HANDOFF_SPEC.md's caching model (cache key includes `range`)."""
+    stateless per HANDOFF_SPEC.md's caching model (cache key includes `range`).
+
+    28 days, not 30: Search Console's Performance report offers 7 / 28 / 90-day windows, and
+    the dashboard exists so nobody has to open Search Console to check a number. A 30-day
+    window would put two different figures on two screens and leave the user to work out
+    which one is wrong. `"30d"` is still accepted from older clients and means exactly the
+    same 28-day window — one window, one number, whichever key asked for it.
+    """
     from pipeline.utils.period_utils import get_period_dates
 
     if range_key == "7d":
         return get_period_dates("weekly", 0, anchor=anchor)
-    if range_key == "90d":
-        custom_end = anchor - timedelta(days=1)
-        custom_start = custom_end - timedelta(days=89)
-        return get_period_dates("custom", 0, custom_start=custom_start, custom_end=custom_end, anchor=anchor)
-    return get_period_dates("monthly", 0, anchor=anchor)  # "30d" and any unrecognized value
+
+    days = 90 if range_key == "90d" else 28
+    custom_end = anchor - timedelta(days=1)
+    custom_start = custom_end - timedelta(days=days - 1)
+    return get_period_dates("custom", 0, custom_start=custom_start,
+                            custom_end=custom_end, anchor=anchor)
 
 
 def build_kpis_api(current: dict, previous: dict) -> list[dict]:

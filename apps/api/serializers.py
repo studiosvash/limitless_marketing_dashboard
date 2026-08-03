@@ -109,4 +109,7 @@ class ProjectCreateSerializer(serializers.Serializer):
 
 
 class OverviewQuerySerializer(serializers.Serializer):
-    range = serializers.ChoiceField(choices=["7d", "30d", "90d"], required=False, default="30d")
+    # 28d, matching Search Console's own window choices — see range_to_period_dates for why.
+    # "30d" stays accepted so a cached SPA build or bookmarked URL keeps working; it resolves
+    # to the same 28-day window rather than a second, slightly different one.
+    range = serializers.ChoiceField(choices=["7d", "28d", "30d", "90d"], required=False, default="28d")

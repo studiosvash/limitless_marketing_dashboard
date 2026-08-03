@@ -21,7 +21,10 @@ def query_low_ctr_pages_raw(site_id: str, start_date: date, end_date: date,
                     SEODaily.landing_page,
                     func.sum(SEODaily.clicks).label("clicks"),
                     func.sum(SEODaily.impressions).label("impressions"),
-                    func.avg(SEODaily.avg_position).label("avg_position"),
+                    # Impression-weighted, the way Search Console computes it. A plain AVG
+                    # over this page's daily rows lets a day it surfaced once at position 90
+                    # count as much as a day it drew 9,000 impressions at position 4.
+                    func.sum(SEODaily.avg_position * SEODaily.impressions).label("weighted_position"),
                 )
                 .where(
                     SEODaily.site_id == site_id,
@@ -44,7 +47,7 @@ def query_low_ctr_pages_raw(site_id: str, start_date: date, end_date: date,
                         "clicks": clicks,
                         "impressions": impr,
                         "ctr": round(ctr * 100, 2),
-                        "avg_position": round(r.avg_position or 0, 1),
+                        "avg_position": round((r.weighted_position or 0) / impr, 1) if impr else 0.0,
                     })
             out.sort(key=lambda x: x["impressions"], reverse=True)
             return out[:limit]

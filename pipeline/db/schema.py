@@ -89,6 +89,44 @@ class SEODaily(Base):
     )
 
 
+class SEODailyTotal(Base):
+    """The unfiltered per-day Search Console figures — one row per (site, date).
+
+    Why this exists alongside `seo_daily`: that table is stored at
+    (date, country, device, page) grain, and Google drops rows below its privacy threshold
+    from a dimension-grouped response while still counting them in the unfiltered total. The
+    finer the slice, the more it drops, so summing `seo_daily` cannot reproduce what the
+    Search Console UI shows. Measured on premierstaff.com for 2026-07-13: the 4-dimension
+    breakdown held 55 of 135 clicks (41%) and 9,921 of 12,761 impressions (78%).
+
+    A second, cheap `dimensions=["date"]` call has no such loss — verified equal to the
+    no-dimension total on every window tested (135/135, 455/455, 2652/2652, 10594/10594).
+    Those figures land here and are what every headline KPI reads, so the dashboard matches
+    Search Console exactly. `seo_daily` stays as the drill-down source (top pages, countries,
+    devices), where a breakdown that is internally consistent matters more than a total that
+    ties out.
+
+    `ctr` and `avg_position` are stored as Google reported them for the day rather than
+    recomputed, so a single day needs no arithmetic at all. Across several days, CTR must be
+    re-derived as SUM(clicks)/SUM(impressions) and position as the impression-weighted mean —
+    averaging the stored per-day values would be wrong. See `query_gsc_totals`.
+    """
+    __tablename__ = "seo_daily_totals"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    date = Column(Date, nullable=False, index=True)
+    site_id = Column(String(255), nullable=False, index=True)
+    clicks = Column(Integer, default=0)
+    impressions = Column(Integer, default=0)
+    ctr = Column(Float, default=0.0)
+    avg_position = Column(Float, default=0.0)
+
+    __table_args__ = (
+        UniqueConstraint("date", "site_id", name="uq_seo_daily_totals_date_site"),
+        Index("ix_seo_daily_totals_site_date", "site_id", "date"),
+    )
+
+
 class GA4TrafficSourceDaily(Base):
     """GA4 Traffic by sessionDefaultChannelGroup and sessionSource."""
     __tablename__ = "ga4_traffic_source_daily"

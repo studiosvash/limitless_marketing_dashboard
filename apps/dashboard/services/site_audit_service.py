@@ -611,6 +611,41 @@ def toggle_audit_check(site_id: str, check_id: str) -> list[str]:
     return hidden
 
 
+def _current_check_urls(site_id: str, check_id: str) -> list[str]:
+    """Every URL `TechnicalIssue` currently reports for this check, sorted. This is the
+    snapshot `toggle_resolved_check` stores, and what `build_site_audit_response` diffs
+    future crawls against to decide whether a resolved check has recurred."""
+    try:
+        with get_session() as session:
+            rows = session.execute(
+                select(TechnicalIssue.url).where(
+                    TechnicalIssue.site_id.in_(_site_id_variants(site_id)),
+                    TechnicalIssue.issue_type == check_id,
+                )
+            ).scalars().all()
+    except Exception as e:
+        logger.error(f"_current_check_urls error: {e}", exc_info=True)
+        return []
+    return sorted(set(rows))
+
+
+def toggle_resolved_check(site_id: str, check_id: str) -> list[str]:
+    """Mark/unmark a check as resolved (HANDOFF_SPEC POST audit/toggle-resolved). Persisted
+    per project as `{check_id: [affected urls at the moment it was resolved]}` rather than a
+    plain id list -- the URL snapshot is what lets `build_site_audit_response` tell "still
+    genuinely fixed" apart from "recurred, same or different pages" on the next crawl without
+    a background job. Returns the sorted list of currently-resolved check ids, matching
+    `toggle_audit_check`'s response shape."""
+    resolved = get_state(site_id, "auditResolved", {})
+    resolved = dict(resolved)
+    if check_id in resolved:
+        del resolved[check_id]
+    else:
+        resolved[check_id] = _current_check_urls(site_id, check_id)
+    set_state(site_id, "auditResolved", resolved)
+    return sorted(resolved.keys())
+
+
 def query_audit_snapshots(site_id: str, limit: int = 30) -> list[dict]:
     """Real audit history, OLDEST FIRST — the exact shape `site_audit.js` reads.
 
@@ -791,14 +826,24 @@ def build_site_audit_response(site_id: str) -> dict:
     checks = []
     totals = {"errors": 0, "warnings": 0, "notices": 0}
     hidden_ids = set(get_state(site_id, "auditHidden", []))
+    # {check_id: [urls at the moment it was resolved]}. A resolved check stays resolved only
+    # while its current affected-page set matches the snapshot exactly; any change (pages
+    # fixed, new pages added) means the check recurred and it renders as active again --
+    # auto-unresolve, computed fresh on every read rather than written back from a GET.
+    resolved_snapshots = get_state(site_id, "auditResolved", {})
     for issue_type, items in sorted(by_type.items(), key=lambda kv: -len(kv[1])):
         title, category, how_to_fix = _humanize(issue_type)
         if issue_type.startswith("lh:") and items[0].description:
             how_to_fix = items[0].description
-            
+
         severity = _SEVERITY_MAP.get((items[0].severity or "").lower(), "notice")
         is_hidden = issue_type in hidden_ids
-        if not is_hidden:  # HANDOFF_SPEC 2.4: totals over non-hidden checks only
+        current_urls = sorted({i.url for i in items})
+        is_resolved = (
+            issue_type in resolved_snapshots
+            and resolved_snapshots[issue_type] == current_urls
+        )
+        if not is_hidden and not is_resolved:  # HANDOFF_SPEC 2.4: totals over active checks only
             totals[_TOTALS_KEY[severity]] += len(items)
         checks.append({
             "id": issue_type,
@@ -808,6 +853,7 @@ def build_site_audit_response(site_id: str) -> dict:
             "howToFix": how_to_fix,
             "count": len(items),
             "hidden": is_hidden,
+            "resolved": is_resolved,
             "pages": [{
                 "url": i.url,
                 # None, not 0, when Lighthouse never scored this page -- same rule as

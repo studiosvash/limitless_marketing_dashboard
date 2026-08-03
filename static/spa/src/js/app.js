@@ -12,7 +12,7 @@
     addSiteOpen: false, addSiteDomain: '', addSiteName: '', addSiteError: null, addSiteBusy: false,
     addSiteStep: 1, addSiteGsc: '', addSiteGa4: '', addSiteDataforseo: '',
     addSiteGscOptions: [], addSiteChecking: false, addSiteCheckResult: null,
-    range: '30d',
+    range: '28d',
     cache: {}, loading: true, error: null, chartHoverIndex: null,
     /* Real SyncLog rows ({name, status, records, last_sync, error}) for the selected project,
        read from GET /api/projects/<id>/settings -> `connectors`. Kept OUT of `cache` on
@@ -206,7 +206,7 @@
       }
     }
     const tab = this.VALID.includes(hh) ? hh : this.state.tab;
-    const range = ['7d', '30d', '90d'].includes(this.props.defaultRange) ? this.props.defaultRange : this.state.range;
+    const range = ['7d', '28d', '90d'].includes(this.props.defaultRange) ? this.props.defaultRange : this.state.range;
     let kwLists = [];
     try { kwLists = JSON.parse(localStorage.getItem('fh_keyword_lists') || '[]') || []; } catch (e) {}
     if (!kwLists.length) kwLists = [{ id: 'l1', name: 'Priority targets', keywords: [] }];
@@ -2390,7 +2390,7 @@
       addSiteCheck: () => this.addSiteCheck(),
       addSiteSubmit: () => this.addSiteSubmit(),
       addSiteSkip: () => this.addSiteSkip(),
-      range7: () => this.setRange('7d'), range30: () => this.setRange('30d'), range90: () => this.setRange('90d'),
+      range7: () => this.setRange('7d'), range28: () => this.setRange('28d'), range90: () => this.setRange('90d'),
       refreshPage: () => { if (pageScope) this.startSync(pageScope); },
       /* Incremental positions refresh. The full 'positions' scope re-queries EVERY tracked
          keyword against every competitor, which is what makes picking up a handful of newly
@@ -2659,7 +2659,7 @@
       projectId: s.projectId, projectDomain: project.domain,
       addSiteOpen: s.addSiteOpen, addSiteDomain: s.addSiteDomain, addSiteName: s.addSiteName, addSiteError: s.addSiteError,
       addSite: this.addSiteVals(s),
-      rangeStyle: { d7: s.range === '7d' ? rActive : rBase, d30: s.range === '30d' ? rActive : rBase, d90: s.range === '90d' ? rActive : rBase },
+      rangeStyle: { d7: s.range === '7d' ? rActive : rBase, d28: s.range === '28d' ? rActive : rBase, d90: s.range === '90d' ? rActive : rBase },
       hasPageRefresh: !!pageScope,
       refreshPageLabel: isPageSyncing ? 'Syncing…' : (tabToLabel[tab] || 'Fetch page'),
       refreshPageBtnStyle: { display: 'inline-flex', alignItems: 'center', gap: '8px', borderRadius: '8px', background: isPageSyncing ? '#6ee7b7' : '#10b981', color: 'white', fontSize: '14px', fontWeight: 500, padding: '8px 16px', boxShadow: '0 1px 2px rgba(0,0,0,0.05)', cursor: isPageSyncing ? 'default' : 'pointer' },

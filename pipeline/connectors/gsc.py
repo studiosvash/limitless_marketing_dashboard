@@ -23,11 +23,16 @@ from pipeline.utils.auth import get_google_credentials
 from pipeline.utils.retry import with_retry
 from pipeline.utils.date_helpers import gsc_safe_range, iso
 from pipeline.utils.db_connection import get_session
-from pipeline.db.writer import upsert_seo_daily
+from pipeline.db.writer import upsert_seo_daily, upsert_seo_daily_totals
 from pipeline.db.schema import SEODaily
 from sqlalchemy import select, func
 
 load_dotenv()
+
+# How far back the daily-totals query re-reads past the incremental cursor. Search Console
+# revises a day's clicks and impressions for roughly this long after first publishing them,
+# so anything inside this window is provisional and must be re-fetched, not trusted.
+RESTATEMENT_DAYS = 7
 
 
 class GSCConnector(BaseConnector):
@@ -167,6 +172,48 @@ class GSCConnector(BaseConnector):
 
         return records
 
+    def _fetch_totals(self, site_url: str, canonical: str, start_str: str, end_str: str) -> list[dict]:
+        """The unfiltered per-day figures, for `seo_daily_totals`.
+
+        One extra call, grouped by date alone. It exists because the 4-dimension breakdown
+        this connector's main query fetches cannot be summed back into Search Console's
+        reported total — Google drops sub-threshold rows from a grouped response but still
+        counts them in the total, and the loss grows with every added dimension. Grouping by
+        date alone showed no loss at all when checked against the no-dimension summary
+        (`manage.py gsc_reconcile`), so these are the figures every headline KPI reads.
+
+        Cheap by construction: one row per day, so a 90-day backfill is a single page.
+        """
+        creds = get_google_credentials()
+        service = build("searchconsole", "v1", credentials=creds, cache_discovery=False)
+        response = (
+            service.searchanalytics()
+            .query(siteUrl=site_url, body={
+                "startDate": start_str,
+                "endDate": end_str,
+                "dimensions": ["date"],
+                "rowLimit": 25000,
+            })
+            .execute()
+        )
+
+        records = []
+        for row in response.get("rows", []):
+            keys = row.get("keys", [])
+            if not keys or not keys[0]:
+                continue
+            records.append({
+                "date":         date.fromisoformat(keys[0]),
+                "site_id":      canonical,
+                "clicks":       int(row.get("clicks", 0)),
+                "impressions":  int(row.get("impressions", 0)),
+                # Stored as Google reported them for that single day. Across a multi-day
+                # window these must be re-derived, not averaged — see SEODailyTotal.
+                "ctr":          float(row.get("ctr", 0.0)),
+                "avg_position": float(row.get("position", 0.0)),
+            })
+        return records
+
     def fetch(self, site_id: Optional[str] = None, days: int = 90) -> list[dict]:
         """
         Fetch GSC data. Skips dates already stored in SQLite (append-only strategy).
@@ -210,11 +257,42 @@ class GSCConnector(BaseConnector):
         raw_rows = self._fetch_date_range(site_url, start_str, end_str)
         records = self._normalize(raw_rows, canonical)
 
+        # Totals deliberately ignore the incremental cursor for a trailing window: Google
+        # keeps revising a day's figures for a few days after first reporting it, and the
+        # append-only rule above would otherwise freeze the dashboard on the provisional
+        # numbers. Re-reading a handful of single-row days costs one call.
+        totals_start = date.fromisoformat(start_str)
+        if last_date:
+            totals_start = min(totals_start, last_date - timedelta(days=RESTATEMENT_DAYS))
+        totals_end = date.fromisoformat(end_str)
+        self._totals = []
+        if totals_start <= totals_end:
+            try:
+                self._totals = self._fetch_totals(site_url, canonical, iso(totals_start), end_str)
+                self.logger.info(
+                    f"[gsc] Fetched {len(self._totals)} daily totals for {site_url} "
+                    f"({iso(totals_start)} → {end_str})"
+                )
+            except Exception:
+                # Non-fatal on purpose. The breakdown rows above are the expensive part of a
+                # sync that can run for half an hour; losing all of them because a one-row-
+                # per-day follow-up call failed would be the worse outcome. The totals simply
+                # stay at their last good values and the next run re-reads this window
+                # anyway — that is what RESTATEMENT_DAYS already guarantees.
+                self.logger.warning(
+                    f"[gsc] daily-totals fetch failed for {site_url}; keeping the previously "
+                    f"stored totals and continuing with the breakdown", exc_info=True
+                )
+
         self.logger.info(f"[gsc] Fetched {len(records)} rows for {site_url}")
         return records
 
     def _write_records(self, session, records: list[dict], site_id: Optional[str] = None) -> int:
-        return upsert_seo_daily(session, records, site_id=site_id)
+        written = upsert_seo_daily(session, records, site_id=site_id)
+        # Written here rather than from a connector of their own so the two can never drift
+        # to different dates: one fetch, one transaction, both tables.
+        upsert_seo_daily_totals(session, getattr(self, "_totals", []), site_id=site_id)
+        return written
 
 
 if __name__ == "__main__":

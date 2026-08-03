@@ -455,7 +455,8 @@ class ResolveRangePeriodsTests(APITestCase):
         self.assertEqual(site_id, "sc-domain:fusehealth.com")
         self.assertEqual((curr_end - curr_start).days, 6)
 
-    def test_defaults_range_to_30d_when_absent(self):
+    def test_defaults_range_to_28d_when_absent(self):
+        """28 days inclusive (a 27-day span), matching Search Console's own window."""
         from django.test import RequestFactory
         from rest_framework.request import Request
         from apps.api.views import resolve_range_periods
@@ -463,7 +464,19 @@ class ResolveRangePeriodsTests(APITestCase):
         django_request = RequestFactory().get("/api/projects/fusehealth/positions")
         request = Request(django_request)
         _, curr_start, curr_end, _, _ = resolve_range_periods(request, "fusehealth")
-        self.assertEqual((curr_end - curr_start).days, 29)
+        self.assertEqual((curr_end - curr_start).days, 27)
+
+    def test_legacy_30d_resolves_to_the_same_28d_window(self):
+        """An older SPA build or a bookmarked ?range=30d must not get a second, different
+        window — the whole point of moving to 28d is that one number exists, not two."""
+        from django.test import RequestFactory
+        from rest_framework.request import Request
+        from apps.api.views import resolve_range_periods
+
+        legacy = Request(RequestFactory().get("/api/projects/fusehealth/positions?range=30d"))
+        current = Request(RequestFactory().get("/api/projects/fusehealth/positions?range=28d"))
+        self.assertEqual(resolve_range_periods(legacy, "fusehealth"),
+                         resolve_range_periods(current, "fusehealth"))
 
     def test_unknown_slug_raises_404(self):
         from django.http import Http404

@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 from pipeline.db.dialect import max_batch_size, upsert_insert
 from pipeline.db.schema import (
     Base,
-    SEODaily, KeywordRanking, Page, AdMetricDaily,
+    SEODaily, SEODailyTotal, KeywordRanking, Page, AdMetricDaily,
     Backlink, TechnicalIssue, AISummary,
     CompetitorVisibility, CompetitorDomain,
     PageSpeed, IndexingStatus, SEOAggregate,
@@ -157,6 +157,39 @@ def upsert_seo_daily(session: Session, records: list[dict], site_id: Optional[st
         total_written += len(batch)
 
     logger.debug(f"[writer] seo_daily: upserted {total_written} rows")
+    return total_written
+
+
+def upsert_seo_daily_totals(session: Session, records: list[dict], site_id: Optional[str] = None) -> int:
+    """Upsert the unfiltered per-day Search Console figures. Unique on (date, site_id).
+
+    Always an upsert, never an insert-only: Google keeps adjusting a day's numbers for a
+    couple of days after it first reports them, so a re-fetch of an already-stored date has
+    to overwrite it. Storing the first observation and skipping later ones would freeze the
+    dashboard on provisional figures that Search Console itself has since revised.
+    """
+    if not records:
+        return 0
+
+    _ensure_site_id(records, site_id)
+
+    insert = upsert_insert(session)
+    BATCH_SIZE = max_batch_size(session, 6)
+    _upsert_keys = ("date", "site_id")
+    records = _dedupe_by_keys(records, _upsert_keys)
+    update_cols = [k for k in records[0] if k not in _upsert_keys]
+    total_written = 0
+    for i in range(0, len(records), BATCH_SIZE):
+        batch = records[i:i + BATCH_SIZE]
+        stmt = insert(SEODailyTotal).values(batch)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=list(_upsert_keys),
+            set_={k: stmt.excluded[k] for k in update_cols},
+        )
+        session.execute(stmt)
+        total_written += len(batch)
+
+    logger.debug(f"[writer] seo_daily_totals: upserted {total_written} rows")
     return total_written
 
 
