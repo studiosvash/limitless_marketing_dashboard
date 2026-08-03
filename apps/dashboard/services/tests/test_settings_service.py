@@ -387,3 +387,48 @@ class ApplySettingsUpdateSecurityRejectedTests(TestCase):
         result = apply_settings_update(SITE_ID, {"security": {"twofa": True}})
         self.assertEqual(result, {"error": "not_yet_available"})
         self.assertFalse(ProjectSettings.objects.filter(site_url=SITE_ID).exists())
+
+
+class AdsCredentialsSettingsTests(TestCase):
+    def setUp(self):
+        _new_analytics_db(self)
+
+    def test_save_then_get_returns_masked_value_not_plaintext(self):
+        from apps.dashboard.services.settings_service import apply_settings_update, build_settings_response
+        result = apply_settings_update(SITE_ID, {"adsCredentials": {"google_ads": {
+            "developer_token": "supersecrettoken1234", "customer_id": "123-456-7890",
+        }}})
+        self.assertEqual(result, {"ok": True})
+
+        response = build_settings_response(SITE_ID)
+        google = response["adsCredentials"]["google_ads"]
+        self.assertTrue(google["configured"])
+        self.assertEqual(google["masked"], "••••1234")
+        self.assertNotIn("supersecrettoken1234", str(response))
+
+    def test_missing_required_field_is_refused(self):
+        from apps.dashboard.services.settings_service import apply_settings_update
+        result = apply_settings_update(SITE_ID, {"adsCredentials": {"meta_ads": {
+            "access_token": "tok123",
+        }}})  # ad_account_id missing
+        self.assertIn("error", result)
+
+    def test_blank_field_on_resave_does_not_erase_existing_value(self):
+        from apps.dashboard.services.settings_service import apply_settings_update, build_settings_response
+        apply_settings_update(SITE_ID, {"adsCredentials": {"meta_ads": {
+            "access_token": "tok123", "ad_account_id": "act_999",
+        }}})
+        # Re-save with access_token blank -- must keep the previously stored token.
+        result = apply_settings_update(SITE_ID, {"adsCredentials": {"meta_ads": {
+            "access_token": "", "ad_account_id": "act_999",
+        }}})
+        self.assertEqual(result, {"ok": True})
+        response = build_settings_response(SITE_ID)
+        self.assertTrue(response["adsCredentials"]["meta_ads"]["configured"])
+        self.assertEqual(response["adsCredentials"]["meta_ads"]["masked"], "••••k123")
+
+    def test_unconfigured_platform_is_honest_not_a_crash(self):
+        from apps.dashboard.services.settings_service import build_settings_response
+        response = build_settings_response(SITE_ID)
+        self.assertEqual(response["adsCredentials"]["google_ads"],
+                         {"configured": False, "masked": None, "updated_at": None, "last_test": None})

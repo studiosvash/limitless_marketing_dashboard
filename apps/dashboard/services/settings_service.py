@@ -47,6 +47,9 @@ from apps.dashboard.models import ProjectSettings
 from apps.sync.models import SyncLog
 from pipeline.db.schema import Site
 from pipeline.services.competitor_service import get_tracked_competitors, set_tracked_competitors
+from apps.dashboard.services.ads_credentials import (
+    SECRET_FIELD, PLATFORM_FIELDS, PLATFORM_REQUIRED_FIELDS, decrypt_fields, encrypt_fields, mask,
+)
 from pipeline.services.site_service import update_site
 from pipeline.utils.db_connection import get_session
 
@@ -630,6 +633,28 @@ def build_settings_response(site_id: str) -> dict:
         **{k: (list(v) if isinstance(v, list) else v) for k, v in _SECURITY_UNSUPPORTED.items()},
     }
 
+    # Masked, GET-only view of the encrypted adsCredentials sub-blob -- overwritten here,
+    # same pattern as blob["security"] above, so the raw `enc` token never reaches the
+    # returned dict via the **blob spread below.
+    ads_credentials = {}
+    stored_ads = blob.get("adsCredentials", {})
+    for platform, secret_field in SECRET_FIELD.items():
+        entry = stored_ads.get(platform) or {}
+        token = entry.get("enc")
+        masked_value = None
+        if token:
+            try:
+                masked_value = mask(decrypt_fields(token).get(secret_field, ""))
+            except Exception:
+                masked_value = None
+        ads_credentials[platform] = {
+            "configured": bool(token and masked_value is not None),
+            "masked": masked_value,
+            "updated_at": entry.get("updated_at"),
+            "last_test": entry.get("last_test"),
+        }
+    blob["adsCredentials"] = ads_credentials
+
     return {
         "project": project,
         "credentials": credentials,
@@ -748,6 +773,43 @@ def apply_settings_update(site_id: str, body: dict) -> dict:
         supported = {k: v for k, v in body["security"].items() if k in _SECURITY_PERSISTABLE}
         if supported:
             data["security"] = {**data.get("security", {}), **supported}
+
+    if "adsCredentials" in body and isinstance(body["adsCredentials"], dict):
+        # NOTE: validated here, near the end of the function -- an error return at this
+        # point does NOT roll back team/credentials/project changes already applied above
+        # in this same call. That matches this function's existing behaviour (only the
+        # `security` block aborts the whole update up front); it is not a new gap.
+        stored_ads = data.get("adsCredentials", {})
+        updated_ads = dict(stored_ads)
+        save_errors = []
+        for platform, incoming in body["adsCredentials"].items():
+            if platform not in PLATFORM_FIELDS or not isinstance(incoming, dict):
+                continue
+            existing_token = stored_ads.get(platform, {}).get("enc")
+            try:
+                merged = decrypt_fields(existing_token) if existing_token else {}
+            except Exception:
+                merged = {}
+            for field in PLATFORM_FIELDS[platform]:
+                if field in incoming:
+                    value = (incoming.get(field) or "").strip()
+                    # Blank means "leave the stored value alone" -- the SPA never sends a
+                    # value it didn't get from the user typing into that field.
+                    if value:
+                        merged[field] = value
+            missing = [f for f in PLATFORM_REQUIRED_FIELDS[platform] if not merged.get(f)]
+            if missing:
+                save_errors.append(f"{platform}: {', '.join(missing)} required")
+                continue
+            updated_ads[platform] = {
+                **stored_ads.get(platform, {}),
+                "enc": encrypt_fields(merged),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+        if save_errors:
+            return {"error": "Could not save Ads credentials — " + "; ".join(save_errors)}
+        data["adsCredentials"] = updated_ads
+
     blob_obj.data = data
     blob_obj.save(update_fields=["data", "updated_at"])
 
