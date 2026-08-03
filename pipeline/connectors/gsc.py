@@ -29,11 +29,6 @@ from sqlalchemy import select, func
 
 load_dotenv()
 
-# How far back the daily-totals query re-reads past the incremental cursor. Search Console
-# revises a day's clicks and impressions for roughly this long after first publishing them,
-# so anything inside this window is provisional and must be re-fetched, not trusted.
-RESTATEMENT_DAYS = 7
-
 
 class GSCConnector(BaseConnector):
     name = "gsc"
@@ -257,28 +252,32 @@ class GSCConnector(BaseConnector):
         raw_rows = self._fetch_date_range(site_url, start_str, end_str)
         records = self._normalize(raw_rows, canonical)
 
-        # Totals deliberately ignore the incremental cursor for a trailing window: Google
-        # keeps revising a day's figures for a few days after first reporting it, and the
-        # append-only rule above would otherwise freeze the dashboard on the provisional
-        # numbers. Re-reading a handful of single-row days costs one call.
-        totals_start = date.fromisoformat(start_str)
-        if last_date:
-            totals_start = min(totals_start, last_date - timedelta(days=RESTATEMENT_DAYS))
-        totals_end = date.fromisoformat(end_str)
+        # Totals ignore the incremental cursor entirely and re-read the whole window every
+        # run. Two reasons, and both matter more than the saving:
+        #   * Google keeps revising a day's figures for days after first publishing them, so
+        #     anything recent that was stored once is provisional.
+        #   * A partially-filled totals table is worse than an empty one. `query_gsc_totals`
+        #     cannot tell "28 days, 3 of them synced" from "28 quiet days" — it would report
+        #     the 3-day figure as the 28-day one. Covering the full window makes that
+        #     unrepresentable rather than merely unlikely, which is what an upgrade on a site
+        #     that already has months of `seo_daily` needs.
+        # The cost is one request returning at most `days` rows, against the tens of
+        # thousands the breakdown above already paged through.
+        totals_start, totals_end = (date.fromisoformat(d) for d in gsc_safe_range(days))
         self._totals = []
         if totals_start <= totals_end:
             try:
-                self._totals = self._fetch_totals(site_url, canonical, iso(totals_start), end_str)
+                self._totals = self._fetch_totals(site_url, canonical, iso(totals_start), iso(totals_end))
                 self.logger.info(
                     f"[gsc] Fetched {len(self._totals)} daily totals for {site_url} "
-                    f"({iso(totals_start)} → {end_str})"
+                    f"({iso(totals_start)} → {iso(totals_end)})"
                 )
             except Exception:
                 # Non-fatal on purpose. The breakdown rows above are the expensive part of a
                 # sync that can run for half an hour; losing all of them because a one-row-
                 # per-day follow-up call failed would be the worse outcome. The totals simply
-                # stay at their last good values and the next run re-reads this window
-                # anyway — that is what RESTATEMENT_DAYS already guarantees.
+                # stay at their last good values, and because every run re-reads the whole
+                # window rather than only new dates, the next one repairs them.
                 self.logger.warning(
                     f"[gsc] daily-totals fetch failed for {site_url}; keeping the previously "
                     f"stored totals and continuing with the breakdown", exc_info=True

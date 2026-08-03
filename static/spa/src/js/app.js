@@ -1848,6 +1848,17 @@
       this.notify(this.errText(err, 'Could not hide that check'));
     });
   }
+  toggleResolvedCheck(checkId) {
+    const pid = this.state.projectId;
+    window.FuseAPI.post('/api/projects/' + pid + '/audit/toggle-resolved', { checkId }).then(() => {
+      if (!this._alive) return;
+      this.setState({ auOpen: null, auAllPages: null });
+      this.fetchTab('pages', pid, this.state.range, true);
+    }).catch(err => {
+      if (!this._alive) return;
+      this.notify(this.errText(err, 'Could not update that check'));
+    });
+  }
 
   /* The one comparator behind every sortable table here (Crawled Pages, Keywords, Campaigns,
      Search Terms, Referring domains). Tested in static/spa/tests/sort_rows.test.js.

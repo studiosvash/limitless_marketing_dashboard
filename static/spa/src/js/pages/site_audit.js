@@ -58,8 +58,9 @@
       const totalIssues = data.totals.errors + data.totals.warnings + data.totals.notices;
       const goSub = v => { this.setState({ auSub: v }); this.pushNav({ auSub: v }); };
       const subBase = { padding: '10px 16px', fontSize: '13px', fontWeight: 600, cursor: 'pointer', color: '#64748b', borderBottom: '2px solid transparent', marginBottom: '-1px' };
-      const activeChecks = data.checks.filter(c => !c.hidden && c.count > 0);
+      const activeChecks = data.checks.filter(c => !c.hidden && !c.resolved && c.count > 0);
       const hiddenChecks = data.checks.filter(c => c.hidden);
+      const resolvedChecks = data.checks.filter(c => c.resolved);
       const crawlDate = data.crawl.startedAt;
 
       /* Provenance. This page is the clearest case for naming the OLDEST contributing source
@@ -209,7 +210,8 @@
           ['error', 'Errors (' + activeChecks.filter(c => c.severity === 'error').length + ')'],
           ['warning', 'Warnings (' + activeChecks.filter(c => c.severity === 'warning').length + ')'],
           ['notice', 'Notices (' + activeChecks.filter(c => c.severity === 'notice').length + ')'],
-          ['hidden', 'Hidden (' + hiddenChecks.length + ')']
+          ['hidden', 'Hidden (' + hiddenChecks.length + ')'],
+          ['resolved', 'Resolved (' + resolvedChecks.length + ')']
         ].map(f => ({ label: f[1], style: s.auSev === f[0] ? fActive : fBase, click: () => this.setState({ auSev: f[0], auOpen: null }) }));
         const chipBase = { padding: '5px 11px', fontSize: '12px', fontWeight: 500, borderRadius: '999px', cursor: 'pointer', color: '#64748b', border: '1px solid #e2e8f0', background: 'white' };
         const chipActive = Object.assign({}, chipBase, { borderColor: '#4f46e5', color: '#4f46e5', background: '#eef2ff' });
@@ -218,7 +220,9 @@
           style: s.auCat === cat ? chipActive : chipBase,
           click: () => this.setState({ auCat: cat, auOpen: null })
         }));
-        let list = s.auSev === 'hidden' ? hiddenChecks : activeChecks.filter(c => s.auSev === 'all' || c.severity === s.auSev);
+        let list = s.auSev === 'hidden' ? hiddenChecks
+          : s.auSev === 'resolved' ? resolvedChecks
+          : activeChecks.filter(c => s.auSev === 'all' || c.severity === s.auSev);
         if (s.auCat !== 'all') list = list.filter(c => c.category === s.auCat);
         if (s.auSearch) { const q = s.auSearch.toLowerCase(); list = list.filter(c => c.title.toLowerCase().includes(q) || c.category.toLowerCase().includes(q)); }
         list = list.slice().sort((a, b2) => sevRank[a.severity] - sevRank[b2.severity] || b2.count - a.count);
@@ -244,7 +248,12 @@
           return {
             title: c.title, category: c.category, open, howToFix: c.howToFix,
             dot: dot(c.hidden ? '#cbd5e1' : SEVC[c.severity]),
-            rowStyle: { display: 'flex', alignItems: 'center', gap: '12px', padding: '13px 20px', cursor: 'pointer', opacity: c.hidden ? 0.6 : 1 },
+            rowStyle: { display: 'flex', alignItems: 'center', gap: '12px', padding: '13px 20px', cursor: 'pointer', opacity: (c.hidden || c.resolved) ? 0.6 : 1 },
+            resolved: c.resolved,
+            resolveAria: (c.resolved ? 'Unresolve' : 'Mark resolved') + ': ' + c.title,
+            checkboxStyle: { width: '15px', height: '15px', borderRadius: '4px', border: '1.5px solid ' + (c.resolved ? '#059669' : '#cbd5e1'), background: c.resolved ? '#059669' : 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, color: 'white', fontSize: '10px', fontWeight: 700, cursor: 'pointer' },
+            resolveToggle: (e) => { if (e && e.stopPropagation) e.stopPropagation(); this.toggleResolvedCheck(c.id); },
+            resolveLabel: c.resolved ? 'Unresolve' : 'Mark as resolved',
             countLabel: this.fmt(c.count) + ' page' + (c.count === 1 ? '' : 's'),
             countStyle: { fontSize: '12px', fontWeight: 700, color: c.hidden ? '#94a3b8' : SEVC[c.severity], minWidth: '60px', textAlign: 'right' },
             chev: { color: '#cbd5e1', fontSize: '18px', transform: open ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s ease' },
