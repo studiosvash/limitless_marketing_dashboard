@@ -418,6 +418,40 @@ class ProjectKeywordsView(APIView):
 
 
 @method_decorator(login_not_required, name="dispatch")
+class ProjectKeywordListsView(APIView):
+    """Research keyword lists — site-scoped and shared by the team.
+
+    These used to live in each browser's localStorage, which made them per-person, wiped by
+    a cache clear, and invisible to the backend (so the portfolio KPIs could not count
+    them). GET returns them all; PUT replaces them all — the SPA edits lists as whole
+    objects and persists the complete state, exactly as it did against localStorage.
+    """
+
+    def get(self, request, slug):
+        from apps.dashboard.services.keywords_service import get_keyword_lists_raw
+        site_id = resolve_project_or_404(slug).site_url
+        return Response({"lists": get_keyword_lists_raw(site_id)})
+
+    def put(self, request, slug):
+        from pipeline.db.writer import replace_keyword_lists
+        site_id = resolve_project_or_404(slug).site_url
+        lists = request.data.get("lists")
+        if not isinstance(lists, list):
+            return Response({"detail": "lists array required"}, status=400)
+        cleaned = []
+        for lst in lists:
+            if not isinstance(lst, dict) or not (lst.get("name") or "").strip():
+                continue
+            kws = lst.get("keywords")
+            cleaned.append({"name": lst["name"].strip(),
+                            "keywords": kws if isinstance(kws, list) else []})
+        with get_session() as session:
+            written = replace_keyword_lists(session, site_id, cleaned)
+            session.commit()
+        return Response({"ok": True, "lists": len(cleaned), "keywords": written})
+
+
+@method_decorator(login_not_required, name="dispatch")
 class ProjectPositionsView(APIView):
     def get(self, request, slug):
         site_id, curr_start, curr_end, prev_start, prev_end = resolve_range_periods(request, slug)

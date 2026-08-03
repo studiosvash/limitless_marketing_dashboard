@@ -207,9 +207,11 @@
     }
     const tab = this.VALID.includes(hh) ? hh : this.state.tab;
     const range = ['7d', '28d', '90d'].includes(this.props.defaultRange) ? this.props.defaultRange : this.state.range;
-    let kwLists = [];
-    try { kwLists = JSON.parse(localStorage.getItem('fh_keyword_lists') || '[]') || []; } catch (e) {}
-    if (!kwLists.length) kwLists = [{ id: 'l1', name: 'Priority targets', keywords: [] }];
+    /* Keyword lists come from the SERVER now (site-scoped, shared by the team) — they are
+       fetched per project in openProject via loadKeywordLists. localStorage is read exactly
+       once more, as a MIGRATION source: lists built before this change live only in this
+       browser, and abandoning them would delete a colleague's research without warning. */
+    let kwLists = [{ id: 'l1', name: 'Priority targets', keywords: [] }];
     /* Which project to open. A remembered choice is a real prior decision by this user, so
        it is opened straight away and its data loads in parallel with the project list. With
        NO remembered choice there is nothing to go on, so the app waits for /api/projects
@@ -228,6 +230,7 @@
       if (tab !== 'alerts') this.fetchTab('alerts', id, range, false);
       this.loadSyncLog(id);
       this.resumeActiveSync(id);
+      this.loadKeywordLists(id);
     };
 
     api.get('/api/projects').then(ps => {
@@ -980,7 +983,52 @@
     return this.matchRows().filter(r => set.has(r.kw));
   }
 
-  persistLists(lists) { try { localStorage.setItem('fh_keyword_lists', JSON.stringify(lists)); } catch (e) {} }
+  /* Lists are server state now (site-scoped, shared). Every mutation already updates
+     this.state.kwLists and then calls persistLists with the complete new array — the same
+     wholesale model the localStorage version used — so persistence is one PUT of everything.
+     A failed save is SAID OUT LOUD and the server copy re-fetched, so the screen never
+     drifts from what is actually stored. */
+  persistLists(lists) {
+    const pid = this.state.projectId;
+    if (!pid) return;
+    window.FuseAPI.put('/api/projects/' + pid + '/keyword-lists', {
+      lists: lists.map(l => ({
+        name: l.name,
+        keywords: (l.keywords || []).map(k => typeof k === 'string' ? { keyword: k }
+          : { keyword: k.kw || k.keyword, volume: k.volume, kd: k.kd, cpc: k.cpc, intent: k.intent })
+      }))
+    }).catch(err => {
+      if (!this._alive) return;
+      this.notify(this.errText(err, 'Could not save keyword lists'));
+      this.loadKeywordLists(pid);
+    });
+  }
+
+  loadKeywordLists(pid) {
+    window.FuseAPI.get('/api/projects/' + pid + '/keyword-lists').then(resp => {
+      if (!this._alive) return;
+      let lists = (resp && resp.lists) || [];
+      /* One-time migration: lists created before they moved server-side exist only in this
+         browser's localStorage. If the server has none and this browser has real ones, push
+         them up ONCE, then drop the local copy so it can never shadow the shared state. An
+         empty local default ("Priority targets" with no keywords) is not worth migrating. */
+      if (!lists.length) {
+        let legacy = [];
+        try { legacy = JSON.parse(localStorage.getItem('fh_keyword_lists') || '[]') || []; } catch (e) {}
+        const real = legacy.filter(l => (l.keywords || []).length);
+        if (real.length) {
+          legacy = legacy.map(l => Object.assign({}, l, {
+            keywords: (l.keywords || []).map(k => typeof k === 'string' ? { kw: k } : k) }));
+          lists = legacy;
+          this.persistLists(legacy);
+          this.notify('Keyword lists moved to the server — they are now shared with your team');
+        }
+      }
+      try { localStorage.removeItem('fh_keyword_lists'); } catch (e) {}
+      if (!lists.length) lists = [{ id: 'l1', name: 'Priority targets', keywords: [] }];
+      this.setState({ kwLists: lists.map(l => ({ id: l.id || l.name, name: l.name, keywords: l.keywords || [] })) });
+    }).catch(() => { /* keep the in-memory default; the next navigation retries */ });
+  }
 
   // add a batch of keywords to a project's tracking (Position Tracking)
   sendKwsToTracking(pid, rows) {
@@ -1026,11 +1074,14 @@
   }
 
   addKwsToList(listId, rows) {
-    const kws = rows.map(r => r.kw);
+    /* Full row objects, not bare names: volume/KD/intent captured at save time are what
+       lets the server count list keywords in the portfolio KPIs. */
+    const kws = rows.map(r => ({ kw: r.kw, volume: r.volume, kd: r.kd, cpc: r.cpc, intent: r.intent }));
     const lists = this.state.kwLists.map(l => {
       if (l.id !== listId) return l;
       const merged = l.keywords.slice();
-      kws.forEach(k => { if (!merged.includes(k)) merged.push(k); });
+      const have = new Set(merged.map(k => (k.kw || k).toLowerCase()));
+      kws.forEach(k => { if (!have.has(k.kw.toLowerCase())) { merged.push(k); have.add(k.kw.toLowerCase()); } });
       return Object.assign({}, l, { keywords: merged });
     });
     this.persistLists(lists);
@@ -1042,7 +1093,8 @@
   createListWith(name, rows) {
     const nm = (name || '').trim() || 'Keyword list ' + (this.state.kwLists.length + 1);
     const id = 'l' + Date.now();
-    const lists = this.state.kwLists.concat([{ id, name: nm, keywords: rows.map(r => r.kw) }]);
+    const lists = this.state.kwLists.concat([{ id, name: nm,
+      keywords: rows.map(r => ({ kw: r.kw, volume: r.volume, kd: r.kd, cpc: r.cpc, intent: r.intent })) }]);
     this.persistLists(lists);
     this.setState({ kwLists: lists, newListName: '', selectedKws: [], sendOpen: false, sendSub: null });
     this.notify('Created "' + nm + '" with ' + rows.length + ' keyword' + (rows.length === 1 ? '' : 's'));
@@ -1056,7 +1108,7 @@
   }
 
   removeKwFromList(listId, kw) {
-    const lists = this.state.kwLists.map(l => l.id === listId ? Object.assign({}, l, { keywords: l.keywords.filter(k => k !== kw) }) : l);
+    const lists = this.state.kwLists.map(l => l.id === listId ? Object.assign({}, l, { keywords: l.keywords.filter(k => (k.kw || k) !== kw) }) : l);
     this.persistLists(lists);
     this.setState({ kwLists: lists });
   }
@@ -1064,7 +1116,8 @@
   sendListToTracking(listId) {
     const l = this.state.kwLists.find(x => x.id === listId);
     if (!l || !l.keywords.length) { this.notify('This list is empty'); return; }
-    this.sendKwsToTracking(this.state.projectId, l.keywords.map(kw => ({ kw })));
+    this.sendKwsToTracking(this.state.projectId, l.keywords.map(k => typeof k === 'string' ? { kw: k }
+      : { kw: k.kw, volume: k.volume, kd: k.kd, cpc: k.cpc, intent: k.intent }));
   }
 
   // export selected (or all visible) rows as CSV or Excel-readable .xls
@@ -2735,7 +2788,7 @@
         name: l.name, count: l.keywords.length, empty: l.keywords.length === 0,
         onDelete: () => this.deleteList(l.id),
         onSendPt: () => this.sendListToTracking(l.id),
-        keywords: l.keywords.map(kw => ({ kw, onRemove: () => this.removeKwFromList(l.id, kw) }))
+        keywords: l.keywords.map(k => { const kw = k.kw || k; return { kw, onRemove: () => this.removeKwFromList(l.id, kw) }; })
       }));
     }
 

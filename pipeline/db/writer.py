@@ -236,6 +236,59 @@ def upsert_seo_daily_totals(session: Session, records: list[dict], site_id: Opti
     return total_written
 
 
+def replace_keyword_lists(session: Session, site_id: str, lists: list[dict]) -> int:
+    """Replace a site's research keyword lists wholesale. Returns entries written.
+
+    Delete-then-insert rather than an upsert, deliberately: the SPA edits lists as whole
+    objects (rename, remove keyword, delete list) and persists the complete new state, so
+    the stored state must become exactly what was sent — an upsert would resurrect entries
+    the user just removed. The delete and inserts share one transaction; a failed save
+    leaves the previous lists intact.
+
+    `lists`: [{"name": str, "keywords": [{"keyword", "search_volume", "keyword_difficulty",
+    "cpc", "intent"}, ...]}, ...]. Keywords are deduplicated case-insensitively within a
+    list; the same keyword MAY appear in several lists (that is what "lists" mean) — the
+    portfolio KPIs deduplicate across them at read time instead.
+    """
+    from pipeline.db.schema import KeywordListEntry
+
+    ensure_tables(session, KeywordListEntry)
+    _canonical = _canonical_site_map().get(site_id, site_id)
+    session.execute(
+        KeywordListEntry.__table__.delete().where(KeywordListEntry.site_id == _canonical)
+    )
+
+    rows = []
+    for lst in lists or []:
+        name = (lst.get("name") or "").strip()
+        if not name:
+            continue
+        seen: set[str] = set()
+        for item in lst.get("keywords") or []:
+            if isinstance(item, str):
+                item = {"keyword": item}
+            kw = (item.get("keyword") or item.get("kw") or "").strip()
+            if not kw or kw.lower() in seen:
+                continue
+            seen.add(kw.lower())
+            rows.append({
+                "site_id": _canonical,
+                "list_name": name,
+                "keyword": kw,
+                "search_volume": item.get("search_volume", item.get("volume")),
+                "keyword_difficulty": item.get("keyword_difficulty", item.get("kd")),
+                "cpc": item.get("cpc"),
+                "intent": item.get("intent"),
+            })
+
+    if rows:
+        BATCH = max_batch_size(session, 7)
+        for i in range(0, len(rows), BATCH):
+            session.execute(KeywordListEntry.__table__.insert().values(rows[i:i + BATCH]))
+    logger.debug(f"[writer] keyword_list_entries: replaced with {len(rows)} rows for {site_id}")
+    return len(rows)
+
+
 def upsert_ga4_daily_totals(session: Session, records: list[dict], site_id: Optional[str] = None) -> int:
     """Upsert session-scoped GA4 daily figures. Unique on (date, site_id, country).
 

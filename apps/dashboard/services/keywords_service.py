@@ -222,6 +222,139 @@ def get_keyword_intelligence_raw(site_id: str, curr_start: date, curr_end: date,
         }
 
 
+def get_keyword_lists_raw(site_id: str) -> list[dict]:
+    """The site's research lists, in the shape the SPA holds them:
+    [{"id", "name", "keywords": [{"kw", "volume", "kd", "cpc", "intent"}]}]. `id` is the
+    list name — names are unique per site by construction (one row per (site, list, kw))."""
+    from pipeline.db.schema import KeywordListEntry
+    from pipeline.db.writer import ensure_tables
+    try:
+        with get_session() as session:
+            ensure_tables(session, KeywordListEntry)
+            rows = session.execute(
+                select(KeywordListEntry.list_name, KeywordListEntry.keyword,
+                       KeywordListEntry.search_volume, KeywordListEntry.keyword_difficulty,
+                       KeywordListEntry.cpc, KeywordListEntry.intent)
+                .where(KeywordListEntry.site_id == site_id)
+                .order_by(KeywordListEntry.list_name, KeywordListEntry.id)
+            ).all()
+    except Exception:
+        import logging; logging.getLogger(__name__).error("get_keyword_lists_raw failed", exc_info=True)
+        return []
+
+    lists: dict[str, list] = {}
+    for name, kw, vol, kd, cpc, intent in rows:
+        lists.setdefault(name, []).append(
+            {"kw": kw, "volume": vol, "kd": kd, "cpc": cpc, "intent": intent})
+    return [{"id": name, "name": name, "keywords": kws} for name, kws in lists.items()]
+
+
+def _bucket_intent(value, counts: dict) -> None:
+    key = str(value or "").lower().strip()
+    if key in counts:
+        counts[key] += 1
+    elif "info" in key:
+        counts["informational"] += 1
+    elif "comm" in key:
+        counts["commercial"] += 1
+    elif "trans" in key:
+        counts["transactional"] += 1
+    elif "nav" in key:
+        counts["navigational"] += 1
+
+
+def query_keyword_portfolio_raw(site_id: str) -> dict:
+    """Portfolio-wide KPI inputs over EVERY keyword saved for this site — the position-
+    tracking list (`saved_keywords`) ∪ every research list (`keyword_list_entries`) —
+    deduplicated case-insensitively across all of them.
+
+    Scope decided by the product owner (2026-08-03): "Total keywords / Total volume /
+    intent / difficulty should represent not just keywords tracked in position tracking but
+    overall keywords saved in lists; repeats across lists must not be double-counted."
+    Average position is deliberately NOT here — a list keyword has no measured position, so
+    that KPI stays tracked-only.
+
+    Per-keyword metrics prefer `keyword_rankings` (synced, freshest) over the saved/list
+    snapshot taken when the keyword was filed. A keyword nowhere synced keeps its snapshot
+    values; one with no known volume anywhere contributes 0 volume but still counts as a
+    keyword — membership is the fact being counted, metrics are best-known.
+    """
+    from pipeline.db.schema import KeywordListEntry, SavedKeyword
+    from pipeline.db.writer import ensure_tables
+
+    portfolio: dict[str, dict] = {}   # lower(kw) -> {volume, kd, intent, rank}
+    RANK_LIST, RANK_SAVED, RANK_SYNCED = 0, 1, 2
+
+    def _absorb(kw, volume, kd, intent, rank):
+        key = (kw or "").strip().lower()
+        if not key:
+            return
+        cur = portfolio.setdefault(key, {"volume": None, "kd": None, "intent": None, "rank": -1})
+        # Per-field: a higher-priority source wins; a lower one only fills gaps.
+        for field, val in (("volume", volume), ("kd", kd), ("intent", intent)):
+            if val is None or (isinstance(val, str) and not val.strip()):
+                continue
+            if rank >= cur["rank"] or cur[field] is None:
+                cur[field] = val
+        cur["rank"] = max(cur["rank"], rank)
+
+    try:
+        with get_session() as session:
+            ensure_tables(session, KeywordListEntry)
+            for kw, vol, kd, intent in session.execute(
+                select(KeywordListEntry.keyword, KeywordListEntry.search_volume,
+                       KeywordListEntry.keyword_difficulty, KeywordListEntry.intent)
+                .where(KeywordListEntry.site_id == site_id)
+            ):
+                _absorb(kw, vol, kd, intent, RANK_LIST)
+
+            for kw, vol, kd, intent in session.execute(
+                select(SavedKeyword.keyword, SavedKeyword.search_volume,
+                       SavedKeyword.keyword_difficulty, SavedKeyword.intent)
+                .where(SavedKeyword.site_id == site_id)
+            ):
+                _absorb(kw, vol, kd, intent, RANK_SAVED)
+
+            if portfolio:
+                # Synced metrics for exactly the portfolio's members. No date filter:
+                # volume/KD/intent are research attributes, not a time series — the newest
+                # non-null ever synced is the best-known value.
+                for kw, vol, kd, intent in session.execute(
+                    select(KeywordRanking.keyword,
+                           func.max(KeywordRanking.search_volume),
+                           func.max(KeywordRanking.keyword_difficulty),
+                           func.max(KeywordRanking.intent))
+                    .where(KeywordRanking.site_id == site_id,
+                           func.lower(KeywordRanking.keyword).in_(list(portfolio.keys())))
+                    .group_by(KeywordRanking.keyword)
+                ):
+                    _absorb(kw, vol, kd, intent, RANK_SYNCED)
+    except Exception:
+        import logging; logging.getLogger(__name__).error("query_keyword_portfolio_raw failed", exc_info=True)
+        return {"total": 0, "total_volume": 0,
+                "intents": {"informational": 0, "commercial": 0, "transactional": 0, "navigational": 0},
+                "difficulty": {"easy": 0, "medium": 0, "hard": 0}}
+
+    intents = {"informational": 0, "commercial": 0, "transactional": 0, "navigational": 0}
+    easy = medium = hard = 0
+    total_volume = 0
+    for m in portfolio.values():
+        total_volume += int(m["volume"] or 0)
+        if m["intent"]:
+            _bucket_intent(m["intent"], intents)
+        if m["kd"] is not None:
+            kd = float(m["kd"])
+            if kd < 30:
+                easy += 1
+            elif kd < 60:
+                medium += 1
+            else:
+                hard += 1
+
+    return {"total": len(portfolio), "total_volume": total_volume,
+            "intents": intents, "difficulty": {"easy": easy, "medium": medium, "hard": hard}}
+
+
 def build_keywords_response(site_id: str, curr_start: date, curr_end: date,
                              prev_start: date, prev_end: date) -> dict:
     """HANDOFF_SPEC.md `keywords` view shape — verified against the real fixture's
@@ -229,15 +362,24 @@ def build_keywords_response(site_id: str, curr_start: date, curr_end: date,
     .claude/api-reference.md for the field mapping."""
     intel = get_keyword_intelligence_raw(site_id, curr_start, curr_end, prev_start, prev_end, tracked_only=True)
 
+    # Portfolio scope (owner decision, 2026-08-03): total / volume / intent / difficulty
+    # cover every keyword saved anywhere for this site (tracked ∪ lists, deduplicated).
+    # avg_pos and total_clicks stay tracked-only — only tracked keywords have measured
+    # positions and click attribution. A site with nothing saved falls back to the synced-
+    # rankings figures so its page is not blanked by the scope change.
+    portfolio = query_keyword_portfolio_raw(site_id)
+    has_portfolio = portfolio["total"] > 0
+
     return {
         "kpis": {
-            "total": intel["total_tracked"],
+            "total": portfolio["total"] if has_portfolio else intel["total_tracked"],
             "avg_pos": intel["avg_position"],
-            "total_volume": intel["total_volume"],
+            "total_volume": portfolio["total_volume"] if has_portfolio else intel["total_volume"],
             "total_clicks": intel["total_clicks"],
         },
-        "intents": intel["intent_distribution"],
-        "difficulty": {"easy": intel["kd_easy"], "medium": intel["kd_medium"], "hard": intel["kd_hard"]},
+        "intents": portfolio["intents"] if has_portfolio else intel["intent_distribution"],
+        "difficulty": portfolio["difficulty"] if has_portfolio
+                      else {"easy": intel["kd_easy"], "medium": intel["kd_medium"], "hard": intel["kd_hard"]},
         "segments": {
             "quick_wins": [kw_id(r) for r in intel["quick_wins"]],
             "striking": [kw_id(r) for r in intel["striking"]],
@@ -245,4 +387,5 @@ def build_keywords_response(site_id: str, curr_start: date, curr_end: date,
             "low_ctr": [kw_id(r) for r in intel["low_ctr"]],
         },
         "keywords": [to_api_keyword(r) for r in intel["all_keywords"]],
+        "lists": get_keyword_lists_raw(site_id),
     }

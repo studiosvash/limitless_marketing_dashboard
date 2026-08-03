@@ -676,6 +676,39 @@ class SavedKeyword(Base):
     )
 
 
+class KeywordListEntry(Base):
+    """One keyword's membership in one named research list — site-scoped and shared.
+
+    Lists used to live only in the browser (`localStorage['fh_keyword_lists']`): invisible to
+    the team, gone on a cache clear, and — the reason this table exists — invisible to the
+    backend, so the Keywords page's portfolio KPIs could not include them. The portfolio is
+    defined as *every keyword saved for this site anywhere* (position tracking ∪ lists,
+    deduplicated), so the lists had to become data the server holds.
+
+    Distinct from `saved_keywords` (the position-TRACKING list, which drives paid per-keyword
+    connector spend) on purpose: putting a keyword in a research list must never enrol it in
+    metered SERP tracking as a side effect. The metric columns are a snapshot of what the
+    Keyword Explorer knew when the keyword was sent to the list — research provenance, not
+    synced state; keywords added by bare name legitimately carry NULLs.
+    """
+    __tablename__ = "keyword_list_entries"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    site_id = Column(String(255), nullable=False, index=True)
+    list_name = Column(String(255), nullable=False)
+    keyword = Column(Text, nullable=False)
+    search_volume = Column(Integer, nullable=True)
+    keyword_difficulty = Column(Float, nullable=True)
+    cpc = Column(Float, nullable=True)
+    intent = Column(String(100), nullable=True)
+    added_at = Column(DateTime, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("site_id", "list_name", "keyword", name="uq_kw_list_entry"),
+        Index("ix_kw_list_entries_site", "site_id"),
+    )
+
+
 # ─────────────────────────────────────────────
 # Prediction & intelligence layer
 # Not filled by any API — a prediction service reads the raw/aggregate tables,
