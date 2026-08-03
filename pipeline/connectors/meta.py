@@ -28,6 +28,23 @@ load_dotenv()
 GRAPH_API_BASE = "https://graph.facebook.com/v18.0"
 
 
+def probe_credential(access_token: str, ad_account_id: str) -> tuple[bool, str]:
+    """Can this Meta System User token actually read this ad account? Never raises."""
+    try:
+        resp = requests.get(f"{GRAPH_API_BASE}/{ad_account_id}",
+                            params={"fields": "name", "access_token": access_token}, timeout=15)
+    except Exception as exc:
+        return False, f"Could not reach the Meta Graph API: {exc}"
+    if resp.status_code == 200:
+        name = resp.json().get("name", ad_account_id)
+        return True, f'Verified — reached ad account "{name}".'
+    try:
+        message = resp.json().get("error", {}).get("message", resp.text)
+    except Exception:
+        message = resp.text
+    return False, f"Meta rejected these credentials (HTTP {resp.status_code}): {message}"
+
+
 class MetaConnector(BaseConnector):
     name = "meta"
 

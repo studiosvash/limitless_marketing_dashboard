@@ -146,6 +146,41 @@ class GoogleAdsConnector(BaseConnector):
         return upsert_ad_metrics(session, records, site_id=site_id)
 
 
+def probe_credential(developer_token: str, customer_id: str,
+                     login_customer_id: str | None = None) -> tuple[bool, str]:
+    """Can these Google Ads credentials actually reach the API? Never raises -- backs a
+    "Test connection" button, same contract as ga4.probe_property.
+
+    Uses the shared Google OAuth env vars (GOOGLE_CLIENT_ID/SECRET/REFRESH_TOKEN) -- those
+    are unrelated to per-site Ads credentials (see the design spec) and are assumed already
+    configured, exactly as _build_service() above assumes for a real sync.
+    """
+    try:
+        from google.ads.googleads.client import GoogleAdsClient
+    except ImportError:
+        return False, "google-ads SDK is not installed on the server."
+
+    credentials = {
+        "developer_token": developer_token,
+        "client_id": os.getenv("GOOGLE_CLIENT_ID"),
+        "client_secret": os.getenv("GOOGLE_CLIENT_SECRET"),
+        "refresh_token": os.getenv("GOOGLE_REFRESH_TOKEN"),
+        "use_proto_plus": True,
+    }
+    if login_customer_id:
+        credentials["login_customer_id"] = login_customer_id
+
+    try:
+        client = GoogleAdsClient.load_from_dict(credentials)
+        service = client.get_service("GoogleAdsService")
+        response = service.search(customer_id=customer_id,
+                                  query="SELECT customer.id FROM customer LIMIT 1")
+        next(iter(response), None)
+    except Exception as exc:
+        return False, f"Google Ads rejected these credentials: {exc}"
+    return True, f"Verified — customer {customer_id} is reachable."
+
+
 if __name__ == "__main__":
     connector = GoogleAdsConnector()
     records = connector.fetch(days=30)
