@@ -116,11 +116,16 @@ ALL_CONNECTORS: list[str] = [
 # Connector factory
 # ---------------------------------------------------------------------------
 
-def _get_connector(name: str):
+def _get_connector(name: str, site_id: str | None = None):
     """
     Import and instantiate a connector by name.
     Returns None if the module cannot be imported or credentials are missing.
     Lazy imports avoid circular import issues at module load time.
+
+    `site_id`, when given, is used to look up this site's saved Ads credentials
+    (google_ads / google_ads_search_terms / meta) so a per-site DB-saved credential wins
+    over the process-wide .env fallback those connectors' own __init__ still falls back
+    to. Every other connector ignores it -- passing site_id costs nothing for them.
     """
     connector_map: dict[str, tuple[str, str]] = {
         "gsc":          ("pipeline.connectors.gsc",                   "GSCConnector"),
@@ -164,7 +169,14 @@ def _get_connector(name: str):
     try:
         module = importlib.import_module(module_path)
         cls = getattr(module, class_name)
-        return cls()
+        kwargs = {}
+        if site_id and name in ("google_ads", "google_ads_search_terms", "meta"):
+            from apps.dashboard.services.ads_credentials import get_decrypted_credential
+            platform = "meta_ads" if name == "meta" else "google_ads"
+            saved = get_decrypted_credential(site_id, platform)
+            if saved:
+                kwargs["credentials"] = saved
+        return cls(**kwargs)
     except (ValueError, ImportError, Exception) as exc:
         logger.warning(f"[sync_engine] Could not load connector {name!r}: {exc}")
         return None
@@ -331,7 +343,7 @@ def sync_all(site_url: str, run_id: int) -> dict:
         logger.info(f"[sync_engine] [{completed + 1}/{total}] Running connector: {name!r}")
         RefreshRun.objects.filter(pk=run_id).update(current_connector=name)
 
-        connector = _get_connector(name)
+        connector = _get_connector(name, site_id=site_url)
         if connector is None:
             logger.warning(f"[sync_engine] Connector {name!r} unavailable — skipping")
             completed += 1
@@ -480,7 +492,7 @@ def sync_page(page: str, site_url: str, run_id: int) -> dict:
         logger.info(f"[sync_engine] [{completed + 1}/{total}] Running connector: {name!r}")
         RefreshRun.objects.filter(pk=run_id).update(current_connector=name)
 
-        connector = _get_connector(name)
+        connector = _get_connector(name, site_id=site_url)
         if connector is None:
             logger.warning(f"[sync_engine] Connector {name!r} unavailable — skipping")
             completed += 1

@@ -65,6 +65,11 @@ RUNNING_TESTS = _running_tests()
 # SECRET_KEY to come from the real environment.
 SECRET_KEY = env("DJANGO_SECRET_KEY", "dev-only-insecure-key-override-in-production")
 
+# Symmetric key for encrypting Ads platform credentials at rest (Fernet — 32 url-safe
+# base64 bytes). Overridden per-environment exactly like SECRET_KEY above: local.py
+# supplies a fixed dev key, production.py requires the real environment to provide one.
+FIELD_ENCRYPTION_KEY = env("FIELD_ENCRYPTION_KEY")
+
 DEBUG = False
 ALLOWED_HOSTS: list[str] = []
 

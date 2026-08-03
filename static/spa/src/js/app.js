@@ -61,6 +61,8 @@
     alFilter: 'all',
     creds: { gsc: '', ga4: '', dataforseo: '' }, credsFor: null, credsSaved: false,
     credsTesting: false, credsTestResult: null,
+    adsCreds: { google_ads: {}, meta_ads: {} }, adsCredsFor: null,
+    adsSaving: {}, adsTesting: {}, adsTestResult: {},
     prefs: null, prefsFor: null,
     settingsSub: 'general', setFor: null,
     wsDraft: null, notifDraft: null, aiDraft: null, secDraft: null, dataDraft: null, teamDraft: null,
@@ -292,6 +294,15 @@
             };
             next.credsFor = pid;
             next.credsTestResult = null;
+          }
+          if (tab === 'settings' && s.adsCredsFor !== pid) {
+            // Fields always start blank -- the real value never comes back from the
+            // server (see build_settings_response's masking), so there is nothing to
+            // pre-fill. Typing something means "replace"; leaving it blank means "keep
+            // what's already saved" (see apply_settings_update's merge).
+            next.adsCreds = { google_ads: {}, meta_ads: {} };
+            next.adsCredsFor = pid;
+            next.adsTestResult = {};
           }
           if (tab === 'settings' && s.prefsFor !== pid) {
             next.prefs = Object.assign({}, data.prefs);
@@ -1500,6 +1511,53 @@
       if (!this._alive) return;
       this.setState({ credsTesting: false });
       this.notify(this.errText(err, 'Could not run the connection check'));
+    });
+  }
+
+  saveAdsCredential(platform) {
+    const pid = this.state.projectId;
+    const fields = this.state.adsCreds[platform] || {};
+    this.setState(s => ({ adsSaving: Object.assign({}, s.adsSaving, { [platform]: true }) }));
+    window.FuseAPI.put('/api/projects/' + pid + '/settings', {
+      adsCredentials: { [platform]: fields },
+    }).then(() => {
+      if (!this._alive) return;
+      this.setState(s => ({
+        adsSaving: Object.assign({}, s.adsSaving, { [platform]: false }),
+        adsCredsFor: null, // re-seed blank drafts + the fresh masked value from the server
+      }));
+      this.notify('Saved');
+    }).catch(err => {
+      if (!this._alive) return;
+      this.setState(s => ({ adsSaving: Object.assign({}, s.adsSaving, { [platform]: false }) }));
+      this.notify(this.errText(err, 'Could not save these credentials'));
+    });
+  }
+
+  /* Tests whatever is in the form right now: the typed draft if anything was edited,
+     otherwise the already-saved credential (useSaved) -- so re-testing a saved value
+     never requires retyping a secret the UI never shows in the clear. */
+  testAdsCredential(platform) {
+    const pid = this.state.projectId;
+    const draft = this.state.adsCreds[platform] || {};
+    const edited = Object.values(draft).some(v => (v || '').trim());
+    const body = edited
+      ? Object.assign({ platform: platform }, draft)
+      : { platform: platform, useSaved: true };
+    this.setState(s => ({
+      adsTesting: Object.assign({}, s.adsTesting, { [platform]: true }),
+      adsTestResult: Object.assign({}, s.adsTestResult, { [platform]: null }),
+    }));
+    window.FuseAPI.post('/api/projects/' + pid + '/ads-credentials/test', body).then(result => {
+      if (!this._alive) return;
+      this.setState(s => ({
+        adsTesting: Object.assign({}, s.adsTesting, { [platform]: false }),
+        adsTestResult: Object.assign({}, s.adsTestResult, { [platform]: result }),
+      }));
+    }).catch(err => {
+      if (!this._alive) return;
+      this.setState(s => ({ adsTesting: Object.assign({}, s.adsTesting, { [platform]: false }) }));
+      this.notify(this.errText(err, 'Could not run the connection test'));
     });
   }
 

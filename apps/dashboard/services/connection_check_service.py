@@ -263,6 +263,33 @@ def _check_google_ads() -> dict:
                   "Credentials are set. Not probed: the Ads API has no free validation call.")
 
 
+def test_google_ads_credential(fields: dict) -> dict:
+    """Live-probe a typed-in (not necessarily saved) Google Ads credential.
+    fields: {developer_token, customer_id, login_customer_id?}
+    """
+    from pipeline.connectors.google_ads import probe_credential
+    developer_token = (fields.get("developer_token") or "").strip()
+    customer_id = (fields.get("customer_id") or "").replace("-", "").strip()
+    login_customer_id = (fields.get("login_customer_id") or "").replace("-", "").strip() or None
+    if not developer_token or not customer_id:
+        return {"ok": False, "detail": "Developer Token and Customer ID are both required."}
+    ok, detail = probe_credential(developer_token, customer_id, login_customer_id)
+    return {"ok": ok, "detail": detail}
+
+
+def test_meta_ads_credential(fields: dict) -> dict:
+    """Live-probe a typed-in (not necessarily saved) Meta Ads credential.
+    fields: {access_token, ad_account_id}
+    """
+    from pipeline.connectors.meta import probe_credential
+    access_token = (fields.get("access_token") or "").strip()
+    ad_account_id = (fields.get("ad_account_id") or "").strip()
+    if not access_token or not ad_account_id:
+        return {"ok": False, "detail": "Access Token and Ad Account ID are both required."}
+    ok, detail = probe_credential(access_token, ad_account_id)
+    return {"ok": ok, "detail": detail}
+
+
 def check_connections(domain: str, gsc_property: str | None = None,
                       ga4_property_id: str | None = None,
                       dataforseo_target: str | None = None,

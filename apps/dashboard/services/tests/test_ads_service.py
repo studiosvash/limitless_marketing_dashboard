@@ -2,6 +2,7 @@ import calendar
 import tempfile
 from datetime import date, timedelta
 from pathlib import Path
+from unittest import mock
 
 from django.test import TestCase, override_settings
 
@@ -313,3 +314,38 @@ class BuildAdsResponseTests(TestCase):
         # Sanity: the real data actually landed where expected (not both empty by accident).
         self.assertEqual(body["totals"]["spend"], 100.0)
         self.assertEqual(body["prev"]["spend"], 60.0)
+
+
+class SyncMetaConnectedFromDbCredentialTests(TestCase):
+    """A Google Ads credential saved through Settings (encrypted, per-site, no .env
+    involvement) must make the Ads page's syncMeta.connected flag True even before any
+    sync has ever written a spend row -- otherwise Settings says "Test connection: OK"
+    while the Ads page says "not connected" for the exact same site and platform
+    (final-review finding on this feature)."""
+
+    def setUp(self):
+        db_connection._SessionFactory = None
+        self.addCleanup(setattr, db_connection, "_SessionFactory", None)
+        tmp = tempfile.mkdtemp()
+        db_path = str(Path(tmp) / "fusehealth.db")
+        init_db(get_engine(db_path))
+        self._ctx = override_settings(ANALYTICS_DB_PATH=db_path)
+        self._ctx.enable()
+        self.addCleanup(self._ctx.disable)
+        # Deliberately no seeded AdMetricDaily rows -- no sync has ever run.
+
+    @mock.patch.dict("os.environ", {"GOOGLE_ADS_CUSTOMER_ID": "", "GOOGLE_ADS_DEVELOPER_TOKEN": ""})
+    def test_connected_true_with_no_env_no_spend_but_saved_db_credential(self):
+        from apps.dashboard.services.settings_service import apply_settings_update
+        from apps.dashboard.services.ads_service import build_ads_response
+
+        result = apply_settings_update(SITE_ID, {"adsCredentials": {"google_ads": {
+            "developer_token": "supersecrettoken1234", "customer_id": "123-456-7890",
+        }}})
+        self.assertEqual(result, {"ok": True})
+
+        body = build_ads_response(
+            SITE_ID, date(2026, 6, 1), date(2026, 6, 30), date(2026, 5, 1), date(2026, 5, 31),
+        )
+        self.assertEqual(body["totals"]["spend"], 0.0)
+        self.assertIs(body["syncMeta"]["connected"], True)

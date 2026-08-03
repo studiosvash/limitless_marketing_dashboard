@@ -39,6 +39,7 @@ google-auth-httplib2>=0.2.0
 google-api-python-client>=2.125.0
 google-analytics-data>=0.18.0
 google-ads>=24.0.0          # used once Google Ads credentials are provisioned
+cryptography>=42.0.0        # encrypts Ads platform credentials at rest (ProjectSettings.data)
 
 # --- Error monitoring (optional) ----------------------------------------------
 # Only imported when SENTRY_DSN is set (see config/settings/base.py). ~14 external API

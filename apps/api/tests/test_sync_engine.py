@@ -57,7 +57,7 @@ class SyncEngineTests(TestCase):
     def _stub_connectors(self, **overrides):
         """Patch _get_connector to hand out FakeConnectors, recording each one."""
 
-        def factory(name):
+        def factory(name, site_id=None):
             if name in overrides and overrides[name] is None:
                 return None  # simulates missing credentials
             conn = overrides.get(name) or FakeConnector(name)
@@ -245,7 +245,7 @@ class SyncEngineTests(TestCase):
         start another connector -- that is what stops the money."""
         run = self._run_row(scope="audit")
 
-        def factory(name):
+        def factory(name, site_id=None):
             conn = FakeConnector(name)
             self.built[name] = conn
             # Cancel lands while the FIRST connector is running.
@@ -295,3 +295,29 @@ class SyncEngineTests(TestCase):
 
         self.assertTrue(summary["cancelled"])
         self.assertEqual(self.built, {}, "no connector should have run")
+
+
+class GetConnectorCredentialWiringTests(TestCase):
+    """_get_connector itself (not stubbed) -- does it load and pass per-site Ads
+    credentials? See docs/superpowers/specs/2026-08-03-ads-credentials-design.md."""
+
+    @patch("apps.dashboard.services.ads_credentials.get_decrypted_credential",
+          return_value={"access_token": "db-tok", "ad_account_id": "act_db"})
+    def test_meta_connector_receives_saved_credentials(self, mock_get_creds):
+        conn = sync_engine._get_connector("meta", site_id=SITE_URL)
+        self.assertIsNotNone(conn)
+        self.assertEqual(conn.access_token, "db-tok")
+        mock_get_creds.assert_called_once_with(SITE_URL, "meta_ads")
+
+    @patch("apps.dashboard.services.ads_credentials.get_decrypted_credential", return_value=None)
+    def test_meta_connector_falls_back_to_env_when_nothing_saved(self, mock_get_creds):
+        with patch.dict("os.environ", {"META_ACCESS_TOKEN": "env-tok", "META_AD_ACCOUNT_ID": "act_env"}):
+            conn = sync_engine._get_connector("meta", site_id=SITE_URL)
+        self.assertIsNotNone(conn)
+        self.assertEqual(conn.access_token, "env-tok")
+
+    def test_no_site_id_skips_the_credential_lookup_entirely(self):
+        # domain_checks needs no credentials at all -- confirms the site_id=None default
+        # (every other existing caller) still works unchanged.
+        conn = sync_engine._get_connector("domain_checks")
+        self.assertIsNotNone(conn)

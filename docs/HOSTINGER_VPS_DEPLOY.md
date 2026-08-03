@@ -171,6 +171,7 @@ Yeh daalo — **`<...>` apni values se badlo**:
 ```ini
 # --- Django ---
 DJANGO_SECRET_KEY=<niche wale command se generate karo>
+FIELD_ENCRYPTION_KEY=<niche wale command se generate karo>
 DJANGO_ALLOWED_HOSTS=limitless.vashstudios.cloud,<VPS_IP>
 DJANGO_CSRF_TRUSTED_ORIGINS=https://limitless.vashstudios.cloud
 
@@ -218,6 +219,15 @@ SECRET_KEY generate karne ke liye:
 ```bash
 cd /var/www/fusehealth && source venv/bin/activate
 python -c "from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())"
+```
+
+FIELD_ENCRYPTION_KEY generate karne ke liye (yeh saved Google Ads / Meta Ads
+credentials ko database mein encrypt karta hai — is key ko rotate karne se
+saare pehle-se-saved Ads credentials orphan ho jaayenge, dobara enter karne
+padenge):
+
+```bash
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 ```
 
 Permissions (baaki users `.env` na padh sakein):

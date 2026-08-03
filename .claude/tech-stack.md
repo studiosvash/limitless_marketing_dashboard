@@ -297,6 +297,7 @@ development on 3.13.
 | Variable | Purpose | Consumed by |
 |---|---|---|
 | `DJANGO_SECRET_KEY` | Signing key. Required in production. | `config/settings/*` |
+| `FIELD_ENCRYPTION_KEY` | Fernet key encrypting saved Ads platform credentials (Google Ads / Meta Ads) at rest. Required in production. Generate: `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`. Rotating it orphans every previously-saved Ads credential -- `get_decrypted_credential` treats an `InvalidToken` from a rotated key identically to "nothing saved". | `config/settings/*`, `apps/dashboard/services/ads_credentials.py` |
 | `DJANGO_ALLOWED_HOSTS` | Comma-separated hostnames | `production.py` |
 | `DJANGO_CSRF_TRUSTED_ORIGINS` | Comma-separated origins with scheme | `production.py` |
 | `DJANGO_INTERNAL_DB` | Override path to the Django DB | `base.py` |

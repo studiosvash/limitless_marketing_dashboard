@@ -736,6 +736,59 @@ class ProjectSettingsView(APIView):
 
 
 @method_decorator(login_not_required, name="dispatch")
+class AdsCredentialTestView(APIView):
+    """POST /api/projects/<slug>/ads-credentials/test -- live-probes a Google Ads / Meta
+    Ads credential, either freshly typed (not yet saved) or the one already stored for
+    this site. Same Owner/Admin gate as ProjectSettingsView.PUT: this spends a real API
+    call against the platform's quota, exactly like saving spends a database write.
+
+    body: {platform: "google_ads"|"meta_ads", ...fields}
+        | {platform: "google_ads"|"meta_ads", useSaved: true}
+    -> {ok: bool, detail: str}
+    """
+    def post(self, request, slug):
+        if not check_owner_admin(request.user):
+            return Response({"detail": "Testing Ads credentials requires Owner or Admin access."},
+                            status=403)
+
+        from apps.dashboard.services.ads_credentials import (
+            PLATFORM_FIELDS, get_decrypted_credential, record_test_result,
+        )
+        from apps.dashboard.services.connection_check_service import (
+            test_google_ads_credential, test_meta_ads_credential,
+        )
+
+        platform = request.data.get("platform")
+        if platform not in ("google_ads", "meta_ads"):
+            return Response({"detail": "platform must be 'google_ads' or 'meta_ads'."}, status=400)
+
+        site_id = resolve_project_or_404(slug).site_url
+        if request.data.get("useSaved"):
+            fields = get_decrypted_credential(site_id, platform)
+            if fields is None:
+                return Response({"ok": False, "detail": "No saved credential to test."})
+        else:
+            # Start from whatever is already saved (nothing, if this site has never saved
+            # this platform) and overlay only the fields the caller actually typed. Without
+            # this, rotating just one field -- e.g. an expiring access_token -- while
+            # leaving an already-saved ad_account_id untouched sent a request missing
+            # ad_account_id entirely, and the tester below returns its generic "X and Y are
+            # both required" for a credential that is, in fact, fully configured. Same
+            # "merge over stored" rule apply_settings_update's save path already applies,
+            # just reused here for the test path.
+            fields = dict(get_decrypted_credential(site_id, platform) or {})
+            for field in PLATFORM_FIELDS.get(platform, ()):
+                value = (request.data.get(field) or "").strip()
+                if value:
+                    fields[field] = value
+
+        tester = test_google_ads_credential if platform == "google_ads" else test_meta_ads_credential
+        result = tester(fields)
+        record_test_result(site_id, platform, result["ok"], result["detail"])
+        return Response(result)
+
+
+@method_decorator(login_not_required, name="dispatch")
 class ProjectTeamView(APIView):
     """Direct user creation/deletion for the Team settings tab."""
     
