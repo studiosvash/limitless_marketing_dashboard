@@ -330,6 +330,7 @@
                   <th onClick="{{ sortKw.volume }}" role="button" aria-label="Sort by search volume" style="font-weight: 600; padding: 12px; text-align: right; cursor: pointer;">Volume{{ kwArrow.volume }}</th>
                   <th style="font-weight: 600; padding: 12px; text-align: center;" title="12-month search volume trend">Trend</th>
                   <th onClick="{{ sortKw.kd }}" role="button" aria-label="Sort by keyword difficulty" style="font-weight: 600; padding: 12px; text-align: center; cursor: pointer;" title="Keyword Difficulty">KD%{{ kwArrow.kd }}</th>
+                  <th style="font-weight: 600; padding: 12px; text-align: center;" title="SERP Features">SF</th>
                   <th onClick="{{ sortKw.clicks }}" role="button" aria-label="Sort by clicks" style="font-weight: 600; padding: 12px; text-align: right; cursor: pointer;">Clicks{{ kwArrow.clicks }}</th>
                   <th style="font-weight: 600; padding: 12px 20px;">Ranking URL</th>
                 </tr>
@@ -349,6 +350,7 @@
                         <span style="font-size: 12px; color: #64748b;">{{ r.kd }}</span>
                       </div>
                     </td>
+                    <td style="padding: 12px; text-align: center; font-size: 12px; color: #64748b;" title="{{ r.sfTitle }}">{{ r.sf }}</td>
                     <td style="padding: 12px; text-align: right; font-weight: 600; color: #334155;">{{ r.clicksFmt }}</td>
                     <td style="padding: 12px 20px; color: #64748b; font-size: 12px; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="{{ r.url }}">{{ r.url }}</td>
                   </tr>

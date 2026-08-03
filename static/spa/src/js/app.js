@@ -1034,7 +1034,10 @@
   sendKwsToTracking(pid, rows) {
     if (!rows.length) return;
     const payload = {
-      keywords: rows.map(r => ({ kw: r.kw, volume: r.volume, kd: r.kd, cpc: r.cpc, intent: r.intent }))
+      /* serpFeatures/competition ride along so the tracked table keeps showing what the
+         research view knew — they were silently dropped here for months and saved as NULL. */
+      keywords: rows.map(r => ({ kw: r.kw, volume: r.volume, kd: r.kd, cpc: r.cpc, intent: r.intent,
+        serpFeatures: r.serpFeatures || [], competition: r.competition }))
     };
     /* The .catch() used to sit BEFORE this .then(), which converted every rejection into a
        resolution: a POST the server had refused still marked the rows tracked, threw away the

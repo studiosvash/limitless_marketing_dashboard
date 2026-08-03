@@ -18,7 +18,7 @@ from pipeline.db.schema import (
     Site, SEODaily, SEODailyTotal, KeywordRanking, Page, AdMetricDaily, Backlink,
     TechnicalIssue, PageSpeed, IndexingStatus, SEOAggregate, AISummary,
     Anomaly, ComparativeMetrics, CompetitorKeywordRanking, TrackedCompetitor,
-    AIKeywordData, SavedKeyword, MetricForecast, KeywordOpportunity, RiskSignal
+    AIKeywordData, SavedKeyword, KeywordOpportunity
 )
 from pipeline.db.writer import ensure_tables
 
@@ -235,7 +235,7 @@ class ProjectDataCleanView(APIView):
             SEODaily, KeywordRanking, Page, AdMetricDaily, Backlink,
             TechnicalIssue, PageSpeed, IndexingStatus, SEOAggregate, AISummary,
             Anomaly, ComparativeMetrics, CompetitorKeywordRanking, TrackedCompetitor,
-            AIKeywordData, SavedKeyword, MetricForecast, KeywordOpportunity, RiskSignal
+            AIKeywordData, SavedKeyword, KeywordOpportunity
         ]
         
         try:
@@ -345,12 +345,17 @@ class ProjectKeywordsView(APIView):
                     continue
                 if not first_kw:
                     first_kw = k
+                serp = item.get("serpFeatures") or item.get("serp_features") or []
                 rows.append({
                     "keyword": k,
                     "search_volume": item.get("volume") if item.get("volume") is not None else item.get("search_volume"),
                     "keyword_difficulty": item.get("kd") if item.get("kd") is not None else item.get("keyword_difficulty"),
                     "cpc": item.get("cpc"),
                     "intent": item.get("intent"),
+                    # Stored comma-joined (saved_keywords.serp_features is Text); the SPA sent
+                    # these all along conceptually but this mapper dropped them as NULL.
+                    "serp_features": ",".join(serp) if isinstance(serp, list) else serp,
+                    "competition": item.get("competition"),
                 })
             if not rows:
                 return Response({"detail": "keywords list is empty or invalid"}, status=400)
@@ -362,12 +367,15 @@ class ProjectKeywordsView(APIView):
         if not kw:
             return Response({"detail": "kw is required"}, status=400)
 
+        serp = request.data.get("serpFeatures") or request.data.get("serp_features") or []
         row = {
             "keyword": kw,
             "search_volume": request.data.get("volume"),
             "keyword_difficulty": request.data.get("kd"),
             "cpc": request.data.get("cpc"),
             "intent": request.data.get("intent"),
+            "serp_features": ",".join(serp) if isinstance(serp, list) else serp,
+            "competition": request.data.get("competition"),
         }
         saved = save_keywords(site_id, [row], location=location)
         # HANDOFF_SPEC 1: track-keyword returns {ok, keyword} (keyword echoed in spec shape).
@@ -405,12 +413,17 @@ class ProjectKeywordsView(APIView):
                 k = (item.get("kw") or item.get("keyword") or "").strip()
                 if not k:
                     continue
+                serp = item.get("serpFeatures") or item.get("serp_features") or []
                 rows.append({
                     "keyword": k,
                     "search_volume": item.get("volume") if item.get("volume") is not None else item.get("search_volume"),
                     "keyword_difficulty": item.get("kd") if item.get("kd") is not None else item.get("keyword_difficulty"),
                     "cpc": item.get("cpc"),
                     "intent": item.get("intent"),
+                    # Stored comma-joined (saved_keywords.serp_features is Text); the SPA sent
+                    # these all along conceptually but this mapper dropped them as NULL.
+                    "serp_features": ",".join(serp) if isinstance(serp, list) else serp,
+                    "competition": item.get("competition"),
                 })
             save_keywords(site_id, rows, location)
             

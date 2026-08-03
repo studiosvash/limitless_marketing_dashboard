@@ -59,19 +59,19 @@ class PredictionSchemaTests(unittest.TestCase):
         cls.tables = set(cls.insp.get_table_names())
 
     def test_prediction_tables_present(self):
-        for t in ["metric_forecasts", "keyword_opportunities", "risk_signals"]:
-            self.assertIn(t, self.tables, f"missing prediction table {t}")
+        """keyword_opportunities is the one prediction-layer table something actually
+        writes (positioning_service). metric_forecasts and risk_signals were removed
+        2026-08-03: months in the schema with no writer, no reader and no UI. If they
+        come back, they come back WITH the service that fills them — at which point this
+        list grows again."""
+        self.assertIn("keyword_opportunities", self.tables)
 
-    def test_metric_forecast_has_accuracy_columns(self):
-        cols = {c["name"] for c in self.insp.get_columns("metric_forecasts")}
-        self.assertTrue({"predicted_value", "lower_bound", "upper_bound",
-                         "actual_value", "error_pct"} <= cols)
-
-    def test_metric_forecast_unique_key(self):
-        keys = [set(uc["column_names"]) for uc in self.insp.get_unique_constraints("metric_forecasts")]
-        self.assertIn(
-            {"site_id", "metric_type", "period_type", "target_date", "model_name"}, keys
-        )
+    def test_phantom_prediction_tables_stay_gone(self):
+        """Guards the removal: re-adding the bare schema without a writer regresses the
+        2026-08-03 surfacing audit (phantom entities cost review time and invite code
+        that reads tables nothing fills)."""
+        self.assertNotIn("metric_forecasts", self.tables)
+        self.assertNotIn("risk_signals", self.tables)
 
     def test_keyword_opportunity_unique_key(self):
         keys = [set(uc["column_names"]) for uc in self.insp.get_unique_constraints("keyword_opportunities")]

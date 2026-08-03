@@ -711,38 +711,13 @@ class KeywordListEntry(Base):
 
 # ─────────────────────────────────────────────
 # Prediction & intelligence layer
-# Not filled by any API — a prediction service reads the raw/aggregate tables,
-# computes, and writes here. This is what makes FuseHealth a prediction platform.
 # ─────────────────────────────────────────────
-
-
-class MetricForecast(Base):
-    """
-    Predicted future value of a metric with a confidence band. actual_value and
-    error_pct are backfilled once target_date passes, so the platform self-tracks
-    how accurate its forecasts were.
-    """
-    __tablename__ = "metric_forecasts"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    site_id = Column(String(255), nullable=False, index=True)
-    metric_type = Column(String(50), nullable=False)   # clicks|impressions|sessions|avg_position|...
-    period_type = Column(String(10), nullable=False)   # daily|weekly|monthly
-    target_date = Column(Date, nullable=False)
-    predicted_value = Column(Float, nullable=False)
-    lower_bound = Column(Float, nullable=True)
-    upper_bound = Column(Float, nullable=True)
-    model_name = Column(String(100), nullable=False)
-    model_version = Column(String(50), nullable=True)
-    actual_value = Column(Float, nullable=True)         # backfilled when target_date arrives
-    error_pct = Column(Float, nullable=True)            # |actual - predicted| / actual
-    generated_at = Column(DateTime, server_default=func.now())
-
-    __table_args__ = (
-        UniqueConstraint("site_id", "metric_type", "period_type", "target_date", "model_name",
-                         name="uq_forecast_site_metric_period_date_model"),
-        Index("ix_forecast_site_metric_date", "site_id", "metric_type", "target_date"),
-    )
+# Removed 2026-08-03: `MetricForecast` and `RiskSignal` sat here for months with no writer,
+# no reader and no UI — schema for a prediction service that was never built. Phantom
+# entities cost real review time (every audit has to re-establish that they're empty) and
+# invite code that reads a table nothing fills. Restore them from git history WITH the
+# service that writes them, not before. `KeywordOpportunity` stays: positioning_service
+# genuinely computes and reads it.
 
 
 class KeywordOpportunity(Base):
@@ -765,32 +740,6 @@ class KeywordOpportunity(Base):
     __table_args__ = (
         UniqueConstraint("site_id", "keyword", name="uq_opportunity_site_keyword"),
         Index("ix_opportunity_site_score", "site_id", "opportunity_score"),
-    )
-
-
-class RiskSignal(Base):
-    """
-    Proactive early warnings & opportunities at entity level (what's coming) —
-    complements Anomaly (what already changed).
-    """
-    __tablename__ = "risk_signals"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    site_id = Column(String(255), nullable=False, index=True)
-    signal_type = Column(String(50), nullable=False)   # ranking_drop_risk|traffic_decline|indexing_risk|opportunity
-    entity_type = Column(String(20), nullable=False)   # page|keyword|site
-    entity_ref = Column(Text, nullable=False)          # URL or keyword
-    severity = Column(String(20), nullable=True)       # low|medium|high
-    confidence = Column(Float, nullable=True)          # 0-1
-    predicted_impact = Column(Text, nullable=True)
-    rationale = Column(Text, nullable=True)
-    status = Column(String(20), default="open", index=True)  # open|acknowledged|resolved
-    detected_at = Column(DateTime, server_default=func.now())
-    expires_at = Column(Date, nullable=True)
-
-    __table_args__ = (
-        Index("ix_risk_site_status", "site_id", "status"),
-        Index("ix_risk_signal_type", "signal_type"),
     )
 
 

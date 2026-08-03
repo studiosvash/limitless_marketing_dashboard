@@ -112,6 +112,10 @@
             sparkColor: k.monthly && k.monthly[11] >= k.monthly[0] ? '#22c55e' : '#ef4444',
             kd: this.dec1(k.kd),
             kdBarStyle: { height: '100%', width: Math.min(100, k.kd) + '%', background: this.kdColor(k.kd) },
+            /* SERP features captured by the Explorer when this keyword was tracked; the
+               count matches the research table's SF column, full list in the title. */
+            sf: (k.serpFeatures || []).length || '—',
+            sfTitle: (k.serpFeatures || []).join(', ') || 'No SERP features recorded',
             clicksFmt: this.fmt(k.clicks)
           };
         })

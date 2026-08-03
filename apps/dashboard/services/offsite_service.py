@@ -251,6 +251,12 @@ def query_offsite_landing_pages_raw(site_id: str, start, end) -> list[dict]:
                     # 28-day window. Divided by the same SUM(sessions) selected above.
                     func.sum(SEODaily.engagement_rate * SEODaily.sessions).label("weighted_engagement"),
                     func.sum(SEODaily.conversions).label("conversions"),
+                    # Stored by every GA4 sync and read by nothing until 2026-08-03.
+                    # bounce_rate is a ratio -> session-weighted like engagement above.
+                    # new_users IS additive: GA4 counts a user as new exactly once, on the
+                    # row where their first session started, so a per-page sum is sound.
+                    func.sum(SEODaily.bounce_rate * SEODaily.sessions).label("weighted_bounce"),
+                    func.sum(SEODaily.new_users).label("new_users"),
                 )
                 .where(
                     SEODaily.site_id.in_(site_ids),
@@ -278,6 +284,9 @@ def query_offsite_landing_pages_raw(site_id: str, start, end) -> list[dict]:
             "sessions": int(r.sessions or 0),
             "engagedRate": round(float(r.weighted_engagement or 0.0) / r.sessions, 4)
                            if r.sessions else 0.0,
+            "bounceRate": round(float(r.weighted_bounce or 0.0) / r.sessions, 4)
+                          if r.sessions else 0.0,
+            "newUsers": int(r.new_users or 0),
             "keyEvents": int(r.conversions or 0),
         }
         for r in rows

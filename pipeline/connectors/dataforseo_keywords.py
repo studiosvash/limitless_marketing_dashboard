@@ -9,6 +9,7 @@ Strategy: Batch up to 1,000 keywords per request (live endpoint is fine for meta
 Google Trends: Always use Standard method — never Live (shared 250 req/min global limit).
 """
 
+import json
 import os
 import time
 from datetime import date
@@ -573,6 +574,14 @@ class DataForSEOKeywordsConnector(BaseConnector):
                 kd_map = self._fetch_keyword_difficulty(batch)
                 for item in results:
                     kw = item.get("keyword", "")
+                    # monthly_searches rides along free on every search_volume response —
+                    # it was fetched, paid for, and DROPPED for months while the tracked
+                    # table's Trend column rendered an empty sparkline over the
+                    # keyword_rankings.trend column that sat at NULL on 215k rows
+                    # (found 2026-08-03). API order is newest-first; the sparkline reads
+                    # oldest→newest with the current month last.
+                    monthly_raw = item.get("monthly_searches") or []
+                    monthly = [int(m.get("search_volume") or 0) for m in reversed(monthly_raw)][-12:]
                     records.append({
                         "date": tracking_date,
                         "site_id": resolved_site_id,
@@ -582,6 +591,7 @@ class DataForSEOKeywordsConnector(BaseConnector):
                         "search_volume": item.get("search_volume"),
                         "keyword_difficulty": kd_map.get((kw or "").lower()),
                         "cpc": item.get("cpc"),
+                        "trend": json.dumps(monthly) if monthly else None,
                     })
             except Exception as exc:
                 self.logger.warning(f"[dataforseo_keywords] Batch {i//batch_size + 1} failed: {exc}")

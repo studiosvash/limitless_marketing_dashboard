@@ -177,6 +177,8 @@
         // not a guessed channel name.
         url: r.url, topSource: r.topSource || '—',
         sessFmt: this.fmt(r.sessions), engFmt: Math.round(r.engagedRate * 100) + '%',
+        bounceFmt: r.bounceRate == null ? '—' : Math.round(r.bounceRate * 100) + '%',
+        newUsersFmt: r.newUsers == null ? '—' : this.fmt(r.newUsers),
         keyFmt: this.fmt(Math.round(r.keyEvents))
       }));
 

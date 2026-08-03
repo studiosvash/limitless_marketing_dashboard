@@ -3,6 +3,7 @@ view) built on the existing keyword-intelligence pandas pipeline (health score, 
 distribution, action-bucket segments). See
 .claude/api-reference.md for the all_keywords/prevPos fix."""
 
+import json
 from datetime import date
 
 import pandas as pd
@@ -16,7 +17,24 @@ def kw_id(row: dict) -> str:
     return row["keyword"]
 
 
-def to_api_keyword(row: dict) -> dict:
+def _parse_trend(raw) -> list:
+    """keyword_rankings.trend holds a JSON list of 12 monthly volumes, oldest→newest,
+    written by the DataForSEO keywords connector. [] (not None) when never synced — the
+    SPA's sparkline treats an empty list as "no line", which is the honest render."""
+    if not raw:
+        return []
+    try:
+        vals = json.loads(raw) if isinstance(raw, str) else raw
+        return [int(v or 0) for v in vals][-12:] if isinstance(vals, list) else []
+    except (ValueError, TypeError):
+        return []
+
+
+def to_api_keyword(row: dict, extras: dict | None = None) -> dict:
+    """`extras`: per-keyword annotations from saved_keywords (serp_features, competition) —
+    research-time facts the sync tables don't carry. Passed in by build_keywords_response;
+    {} for callers that don't have them."""
+    extra = (extras or {}).get((row.get("keyword") or "").lower(), {})
     return {
         "id": kw_id(row),
         "kw": row["keyword"],
@@ -30,9 +48,12 @@ def to_api_keyword(row: dict) -> dict:
         "impressions": row.get("impressions"),
         "ctr": row.get("ctr"),
         "url": row.get("url"),
-        "monthly": [],       # not tracked yet — honest empty, not fabricated
+        # Row's own trend when the window caught it, else the window-independent one from
+        # extras — see query_saved_keyword_extras for why both paths exist.
+        "monthly": _parse_trend(row.get("trend") or extra.get("trend")),
         "source": "sync",    # every currently-tracked keyword comes from the sync pipeline
-        "serpFeatures": [],  # not tracked yet — honest empty, not fabricated
+        "serpFeatures": extra.get("serp_features") or [],
+        "competition": extra.get("competition"),
     }
 
 
@@ -71,6 +92,9 @@ def get_keyword_intelligence_raw(site_id: str, curr_start: date, curr_end: date,
                         func.max(KeywordRanking.cpc).label("cpc"),
                         func.max(KeywordRanking.intent).label("intent"),
                         func.max(KeywordRanking.url).label("url"),
+                        # JSON text; MAX just picks the non-null one — every row for a
+                        # keyword carries the same series from the same connector run.
+                        func.max(KeywordRanking.trend).label("trend"),
                     )
                     .where(KeywordRanking.site_id == site_id, KeywordRanking.date >= start, KeywordRanking.date <= end)
                 )
@@ -222,6 +246,45 @@ def get_keyword_intelligence_raw(site_id: str, curr_start: date, curr_end: date,
         }
 
 
+def query_saved_keyword_extras(site_id: str) -> dict:
+    """{lower(keyword): {"serp_features": [...], "competition": "LOW"|...}} from
+    saved_keywords — research-time facts the Explorer captured that the sync tables never
+    carry. They were stored on every Track click and then read by nothing; the tracked
+    table showed a keyword's SERP features in the research view and dropped them the
+    moment it was tracked (found in the 2026-08-03 surfacing audit)."""
+    from pipeline.db.schema import SavedKeyword
+    try:
+        with get_session() as session:
+            rows = session.execute(
+                select(SavedKeyword.keyword, SavedKeyword.serp_features, SavedKeyword.competition)
+                .where(SavedKeyword.site_id == site_id)
+            ).all()
+    except Exception:
+        import logging; logging.getLogger(__name__).error("query_saved_keyword_extras failed", exc_info=True)
+        return {}
+    out = {}
+    for kw, serp, competition in rows:
+        feats = [s.strip() for s in serp.split(",") if s.strip()] if isinstance(serp, str) else (serp or [])
+        out[(kw or "").lower()] = {"serp_features": feats, "competition": competition}
+
+    # 12-month trend, window-INDEPENDENT on purpose: the sync stamps it on the row for the
+    # day the sync ran, which is routinely outside the page's date window (the window is
+    # anchored to the last GSC data date, which trails a just-run keyword sync). It is a
+    # research attribute of the keyword, not a time series — reading it only through the
+    # window left the sparkline empty right after the very sync that fetched it.
+    try:
+        with get_session() as session:
+            for kw, trend in session.execute(
+                select(KeywordRanking.keyword, func.max(KeywordRanking.trend))
+                .where(KeywordRanking.site_id == site_id, KeywordRanking.trend.isnot(None))
+                .group_by(KeywordRanking.keyword)
+            ):
+                out.setdefault((kw or "").lower(), {})["trend"] = trend
+    except Exception:
+        import logging; logging.getLogger(__name__).error("trend map failed", exc_info=True)
+    return out
+
+
 def get_keyword_lists_raw(site_id: str) -> list[dict]:
     """The site's research lists, in the shape the SPA holds them:
     [{"id", "name", "keywords": [{"kw", "volume", "kd", "cpc", "intent"}]}]. `id` is the
@@ -369,6 +432,7 @@ def build_keywords_response(site_id: str, curr_start: date, curr_end: date,
     # rankings figures so its page is not blanked by the scope change.
     portfolio = query_keyword_portfolio_raw(site_id)
     has_portfolio = portfolio["total"] > 0
+    extras = query_saved_keyword_extras(site_id)
 
     return {
         "kpis": {
@@ -386,6 +450,6 @@ def build_keywords_response(site_id: str, curr_start: date, curr_end: date,
             "declining": [kw_id(r) for r in intel["declining"]],
             "low_ctr": [kw_id(r) for r in intel["low_ctr"]],
         },
-        "keywords": [to_api_keyword(r) for r in intel["all_keywords"]],
+        "keywords": [to_api_keyword(r, extras) for r in intel["all_keywords"]],
         "lists": get_keyword_lists_raw(site_id),
     }

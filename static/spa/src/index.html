@@ -404,6 +404,8 @@
               <th style="font-weight: 500; padding: 10px;">Top source</th>
               <th style="font-weight: 500; padding: 10px; text-align: right;">Sessions</th>
               <th style="font-weight: 500; padding: 10px; text-align: right;">Engagement</th>
+              <th style="font-weight: 500; padding: 10px; text-align: right;" title="Session-weighted bounce rate (GA4)">Bounce</th>
+              <th style="font-weight: 500; padding: 10px; text-align: right;" title="First-time visitors who entered on this page (GA4 newUsers)">New users</th>
               <th style="font-weight: 500; padding: 10px 20px; text-align: right;">Key events</th>
             </tr></thead>
             <tbody>
@@ -413,6 +415,8 @@
                   <td style="padding: 12px 10px; color: #64748b;">{{ r.topSource }}</td>
                   <td style="padding: 12px 10px; text-align: right; font-weight: 600; color: #0f172a;">{{ r.sessFmt }}</td>
                   <td style="padding: 12px 10px; text-align: right; color: #475569;">{{ r.engFmt }}</td>
+                  <td style="padding: 12px 10px; text-align: right; color: #475569;">{{ r.bounceFmt }}</td>
+                  <td style="padding: 12px 10px; text-align: right; color: #475569;">{{ r.newUsersFmt }}</td>
                   <td style="padding: 12px 20px; text-align: right; color: #475569;">{{ r.keyFmt }}</td>
                 </tr>
               </sc-for>

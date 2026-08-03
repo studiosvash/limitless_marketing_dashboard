@@ -485,6 +485,7 @@
         vals.pt = { setup: true, tracked: 0, avgPos: 0, traffic: 0, impressions: 0, distSegs: [], distLegend: [], improved: 0, declined: 0, added: 0, lost: 0, movers: [], compDomains: [], compGridCols: '', compRows: [], rankings: [], filteredRankings: [],
           srcKpis: this.srcBadge(null), srcDist: this.srcBadge(null), srcMovers: this.srcBadge(null),
           srcRankings: this.srcBadge(null), srcOpps: this.srcBadge(null), srcVisibility: this.srcBadge(null),
+          volCoverage: { show: false, text: '', title: '' },
           newKwNote: '', newKwBtnLabel: 'Measure new keywords', newKwBtnStyle: {} };
         vals.ptOpp = { rows: [], isEmpty: true, gridCols: '' };
         vals.ptMap = buildMap(null);
@@ -516,6 +517,14 @@
         srcDist: this.srcBadge(POS_SRC),
         srcMovers: this.srcBadge(POS_SRC),
         srcRankings: this.srcBadge(POS_SRC.concat(['dataforseo_keywords']).concat(COMP_SRC)),
+        /* Data-quality note the API has always sent and the UI never rendered: how many
+           tracked keywords still have no stored search volume, and why. Shown only when
+           there IS a gap — full coverage needs no banner. */
+        volCoverage: (data.volume_coverage && data.volume_coverage.missing_volume > 0) ? {
+          show: true,
+          text: data.volume_coverage.with_volume + ' of ' + data.volume_coverage.tracked + ' keywords have search volume',
+          title: data.volume_coverage.note || ''
+        } : { show: false, text: '', title: '' },
         /* Incremental refresh control. The page's own green Fetch button runs the FULL
            positions scope; this one runs only the keywords that have never been measured. */
         newKwNote: 'Just sent new keywords? Measure only those instead of re-querying the whole set.',
