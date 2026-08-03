@@ -18,6 +18,14 @@ if not SECRET_KEY:
         "DJANGO_SECRET_KEY is not set. Refusing to start in production without it."
     )
 
+FIELD_ENCRYPTION_KEY = env("FIELD_ENCRYPTION_KEY")
+if not FIELD_ENCRYPTION_KEY:
+    raise RuntimeError(
+        "FIELD_ENCRYPTION_KEY is not set. Refusing to start in production without it -- "
+        "saved Ads credentials would be unreadable (or silently orphaned by a freshly "
+        "generated key on every boot) without a stable value."
+    )
+
 # --- Static files (WhiteNoise) ----------------------------------------------
 # whitenoise was already a dependency but was never wired into MIDDLEWARE, so a
 # production boot served no CSS or JS at all -- the SPA is ~900 KB of static assets
