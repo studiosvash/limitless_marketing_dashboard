@@ -32,6 +32,9 @@
          keyword position names both rather than picking one and being wrong half the time. */
       const PILLAR_SRC = {
         'Organic clicks': ['gsc'],
+        /* Same source as clicks: both are read off seo_daily_totals, which is what the GSC
+           connector's dimensions=["date"] call writes. */
+        'Impressions': ['gsc'],
         /* value = seo_daily.avg_position (GSC); sub = "N keywords in top 3" off
            keyword_rankings.position (GSC queries or DataForSEO SERP). */
         'Avg. position': ['gsc', 'gsc_keywords', 'dataforseo_serp'],

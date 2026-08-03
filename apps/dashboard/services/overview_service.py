@@ -674,20 +674,26 @@ def build_pillars(site_id: str, kpis_current: dict, kpis_previous: dict, top3_co
     # .get(..., default) fallbacks: kpis_current/kpis_previous can be {} when get_kpi_raw hit
     # a DB error and returned its safe fallback (see format_kpi_cards for the same pattern) —
     # must not KeyError in that case.
+    def _delta(curr, prev):
+        """Period-over-period change. 0 when there is no baseline — get_kpi_raw returns an
+        empty previous period rather than a mismatched one, and dividing by that would be
+        the invented trend it exists to prevent."""
+        return round(((curr - prev) / prev * 100) if prev else 0, 1)
+
     current_clicks = kpis_current.get("clicks", 0)
-    previous_clicks = kpis_previous.get("clicks", 0)
-    clicks_delta = round(
-        ((current_clicks - previous_clicks) / previous_clicks * 100)
-        if previous_clicks else 0, 1,
-    )
+    current_impressions = int(kpis_current.get("impressions", 0))
+    clicks_delta = _delta(current_clicks, kpis_previous.get("clicks", 0))
     return [
-        # Impressions ride along in the subtitle rather than taking a pillar of their own:
-        # clicks without the impressions behind them can't be read (400 clicks is good news
-        # on 5,000 impressions and bad news on 500,000), and the two always move together.
         {"label": "Organic clicks", "target": "overview", "valueKind": "num",
          "value": int(current_clicks), "delta": clicks_delta, "deltaUnit": "%",
-         "sub": f"clicks · {int(kpis_current.get('impressions', 0)):,} impressions",
-         "state": "ok"},
+         "sub": "clicks", "state": "ok"},
+        # Its own card, next to clicks. The two are read together — 400 clicks is good news
+        # on 5,000 impressions and bad news on 500,000 — so impressions carry their own
+        # delta rather than sitting as a static number under the clicks figure.
+        {"label": "Impressions", "target": "overview", "valueKind": "num",
+         "value": current_impressions,
+         "delta": _delta(current_impressions, int(kpis_previous.get("impressions", 0))),
+         "deltaUnit": "%", "sub": "impressions", "state": "ok"},
         {"label": "Avg. position", "target": "positioning", "valueKind": "pos",
          "value": round(kpis_current.get("avg_position", 0.0), 1), "delta": None, "deltaUnit": "pos",
          "sub": f"{top3_count} keywords in top 3", "state": "ok"},
