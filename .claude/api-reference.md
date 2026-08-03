@@ -1222,6 +1222,32 @@ gsc_pages, url_inspection, pagespeed, sitemap, dataforseo_labs_competitors,
 dataforseo_serp_competitors, dataforseo_backlinks, dataforseo_onpage, dataforseo_ai_keywords,
 dataforseo_llm_mentions`.
 
+**Stopping a run.** `POST /api/projects/<slug>/sync/cancel` → `{cancelled, task_id}` or
+`{cancelled: false, reason}`. Always `200` — "nothing was running" is a race (the run finished
+while the user reached for the button), not a client error. Two halves, both required: the row
+is flipped to `cancelled` via a CONDITIONAL update (`filter(pk=…, status=RUNNING).update(…)`),
+and only if that changed exactly one row is the `run_sync` process killed by its stored pid.
+That condition is the pid-reuse guard — a recycled pid would otherwise mean killing an
+unrelated process. `sync_all`/`sync_page` re-read the status between connectors, so the run
+stops even when the kill fails. Records already written are kept; the connector in flight may
+already be billed. The kill goes through `scheduling.terminate_sync_process`, deliberately
+**separate** from `_process_alive` (see that function's warning about `os.kill` on Windows).
+
+`cancelled` is its own `RefreshStatus`, never `error`: Settings → Connections renders errors as
+live problems, and `FAILED_RUN_BACKOFF` would hold the module off for 6 hours — blocking the
+restart the user cancelled in order to make.
+
+**"Already fetched recently".** Before starting a MANUAL run, `start_sync_run` calls
+`scope_last_synced()`. If every connector in the scope has a `success` row inside
+`FRESH_WITHIN` (24 hours, a module constant — not configurable), no run is created and the
+response is `{"fresh": true, "scope", "last_synced"}` — a shape with **no `task_id`**. The SPA
+prompts "last fetched 40 minutes ago — refetch anyway?" and re-POSTs with `force: true`.
+A connector whose last run **errored** is never fresh, so a refresh right after fixing a
+credential always runs. `manual=False` disables the check entirely and is what
+`run_scheduled_syncs` passes: the cadences already are the scheduler's freshness logic (a 24h
+window over a 12h `ads` cadence would silently starve Ads), and it reads `info['task_id']` on
+the next line.
+
 **`domain_checks` is the one scope that exists for a single card.** Its connector needs no
 credentials and makes no metered call — six plain HTTPS requests to the customer's own domain,
 about four seconds in total. It exists because the Domain Checks card's button used to fire

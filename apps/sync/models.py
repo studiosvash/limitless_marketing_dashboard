@@ -80,17 +80,6 @@ class RefreshRun(models.Model):
     # after the row (Popen needs the run id to exist first) -- so a NULL pid means "unknown",
     # never "dead", and those rows still fall back to the timeout.
     pid = models.IntegerField(null=True, blank=True)
-    # Connectors this run will NOT execute because they synced successfully inside the
-    # manual-refresh freshness window (see sync_api_service.fresh_connectors).
-    #
-    # Decided ONCE, by start_sync_run, and stored -- not recomputed inside the sync
-    # process. Three reasons: `force` is then baked in at creation rather than being a
-    # second flag to thread across a process boundary; the row becomes an honest record
-    # of what this run decided, which is what the step checklist renders; and the rule
-    # has exactly one implementation instead of two that can drift.
-    #
-    # Empty for every scheduled run and for any run started with force=True.
-    skipped_connectors = models.JSONField(default=list, blank=True)
 
     class Meta:
         ordering = ["-started_at"]

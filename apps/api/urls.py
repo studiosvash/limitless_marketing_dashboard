@@ -43,6 +43,7 @@ urlpatterns = [
     # Refresh / Sync
     # `sync/active` before `sync` is not strictly required (different segment counts), but it
     # documents the specific-before-generic intent, matching the alerts/ack pair above.
+    path("projects/<slug:slug>/sync/cancel", views.ProjectSyncCancelView.as_view(), name="project-sync-cancel"),
     path("projects/<slug:slug>/sync/active", views.ProjectSyncActiveView.as_view(), name="project-sync-active"),
     path("projects/<slug:slug>/sync", views.ProjectSyncView.as_view(), name="project-sync"),
     path("tasks/<int:task_id>", views.TaskStatusView.as_view(), name="task-status"),

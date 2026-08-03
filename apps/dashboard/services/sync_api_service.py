@@ -20,12 +20,13 @@ import logging
 import os
 import subprocess
 import sys
+from datetime import timedelta
 from pathlib import Path
 
 from django.conf import settings
 from django.utils import timezone
 
-from apps.sync.models import RefreshRun, RefreshStatus
+from apps.sync.models import RefreshRun, RefreshStatus, SyncLog, SyncStatus
 from pipeline.services.sync_engine import (
     get_connector_names_for_page, get_all_connector_names,
 )
@@ -50,6 +51,39 @@ def _connectors_for_scope(scope: str) -> list[str]:
         return get_all_connector_names()
     page = SCOPE_ALIASES.get(scope, scope)
     return get_connector_names_for_page(page)
+
+
+# How recently a scope must have synced for a manual refresh to ask "are you sure?" instead of
+# just running. Not configurable: one number the whole team can remember beats a settings row
+# nobody visits. The SCHEDULER is unaffected -- its per-module cadences in Settings -> Automation
+# already are its freshness logic, and stacking this on top of a 12h cadence would silently
+# starve that module (see start_sync_run's `manual` argument).
+FRESH_WITHIN = timedelta(hours=24)
+
+
+def scope_last_synced(site_url: str, connectors: list[str], now=None):
+    """When this whole scope last succeeded, or None if any part of it is stale.
+
+    Returns the OLDEST of the connectors' `last_synced` values -- so the answer means "every
+    step in this refresh is at least this fresh". None the moment ANY connector is missing a
+    successful row inside the window, because then there is genuinely something to fetch.
+
+    A connector whose last run ERRORED is never fresh, however recent: clicking Refresh right
+    after fixing a credential is the most common reason to press the button, and treating a
+    fresh failure as "up to date" would make that fix impossible to verify.
+    """
+    if not connectors:
+        return None
+    cutoff = (now or timezone.now()) - FRESH_WITHIN
+    fresh = dict(
+        SyncLog.objects.filter(
+            connector__in=connectors, site_url=site_url,
+            status=SyncStatus.SUCCESS, last_synced__gte=cutoff,
+        ).values_list("connector", "last_synced")
+    )
+    if len(fresh) < len(set(connectors)):
+        return None
+    return min(fresh.values())
 
 
 def _spawn_sync_process(run_id: int) -> int | None:
@@ -93,12 +127,24 @@ def _spawn_sync_process(run_id: int) -> int | None:
     return proc.pid
 
 
-def start_sync_run(site_url: str, scope: str, user=None) -> dict:
+def start_sync_run(site_url: str, scope: str, user=None, force: bool = False,
+                   manual: bool = True) -> dict:
     """Create a RefreshRun and execute it in a SEPARATE PROCESS.
 
     Returns the JSON the SPA's startSync expects: {task_id, steps, est_cost, warnings}.
 
-    Two behaviours worth knowing about:
+    Three behaviours worth knowing about:
+
+    * **Already-fresh scopes ask first.** If every connector in the scope synced successfully
+      within FRESH_WITHIN, no run is created and the caller gets
+      `{"fresh": True, "last_synced": ...}` -- a shape with NO `task_id` -- so the SPA can show
+      "last fetched 40 minutes ago, refetch anyway?". Answering yes re-calls with `force=True`.
+
+      `manual=False` disables that check entirely and is what `run_scheduled_syncs` passes. Two
+      reasons, both load-bearing: the cadences in `syncConfig` already ARE the scheduler's
+      freshness logic (a 24h window over a 12h `ads` cadence would silently starve Ads), and
+      the scheduler reads `info['task_id']` on the line after this returns, which the fresh
+      shape does not have.
 
     * **One run per site.** If a run is already in flight for this site, its task_id is
       returned instead of starting a second one. There was no guard here at all (only the cron
@@ -138,6 +184,19 @@ def start_sync_run(site_url: str, scope: str, user=None) -> dict:
                 f"progress instead of starting another."
             ],
         }
+
+    # Checked AFTER the one-run-per-site guard: if a run is already in flight, attaching to it
+    # is what the user wanted, and answering "already up to date" would hide it.
+    if manual and not force:
+        last_synced = scope_last_synced(site_url, connectors)
+        if last_synced is not None:
+            logger.info("[sync] %r for %r is already fresh (since %s) — asking before running",
+                        scope, site_url, last_synced.isoformat())
+            return {
+                "fresh": True,
+                "scope": scope,
+                "last_synced": last_synced.isoformat(),
+            }
 
     try:
         from apps.dashboard.services.connection_check_service import requirement_warnings
@@ -327,6 +386,10 @@ def task_status(task_id: int) -> dict | None:
         step = f"Syncing {run.current_connector or '...'}"
     elif run.status == RefreshStatus.SUCCESS:
         step = f"Done -- {run.records_written:,} records written"
+    elif run.status == RefreshStatus.CANCELLED:
+        # NOT the error branch: `error` stays None so the SPA does not paint a failure over a
+        # deliberate Stop click, and the count says what was actually kept.
+        step = f"Cancelled -- {run.completed_count} of {run.total_count} steps finished"
     else:
         # Failed connectors: short readable step line (the SPA renders it verbatim);
         # the full messages ride along in `error` and in Settings -> Connections.

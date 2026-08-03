@@ -607,7 +607,7 @@
    *   preTaskId  – (optional) task_id already created server-side (e.g., from POST /api/projects).
    *                When supplied the POST /api/projects/<slug>/sync call is skipped and we go
    *                straight to polling, avoiding a redundant second sync run. */
-  startSync(scope, preTaskId) {
+  startSync(scope, preTaskId, force) {
     if (this.state.sync.active && (!this.state.sync.projectId || this.state.sync.projectId === this.state.projectId)) return;
     const pid = this.state.projectId;
     const activeScope = scope || 'all';
@@ -618,9 +618,20 @@
       return;
     }
 
-    window.FuseAPI.post('/api/projects/' + pid + '/sync', { scope: activeScope })
+    window.FuseAPI.post('/api/projects/' + pid + '/sync', { scope: activeScope, force: !!force })
       .then(t => {
         if (!this._alive) return;
+        /* Everything in this scope synced within the last 24 hours, so the server created no
+           run — there was nothing to fetch. Ask rather than silently doing nothing: "I pressed
+           Refresh and it ignored me" is worse than one prompt. This is the only place `force`
+           is ever set. */
+        if (t.fresh) {
+          if (window.confirm('This was last fetched ' + this.agoText(t.last_synced) + '.'
+              + '\n\nRefetch anyway? It will call the APIs again and re-spend any credits they cost.')) {
+            this.startSync(scope, null, true);
+          }
+          return;
+        }
         if (t.warnings && t.warnings.length) {
           // Shown once, at start, rather than repeated on every poll tick: "N steps will be
           // skipped because X credential is missing" is a fact about the whole run, not a
@@ -630,6 +641,45 @@
         this._pollSyncTask(t.task_id, activeScope, pid, t.est_cost || 0, t.steps || []);
       })
       .catch(err => { if (this._alive) this.notify(err.detail || 'Could not start sync'); });
+  }
+
+  /* "40 minutes ago" for the already-fetched prompt. Coarse on purpose — the user is deciding
+     whether a refetch is worth it, not reading a timestamp. */
+  agoText(iso) {
+    const then = Date.parse(iso);
+    if (isNaN(then)) return 'recently';
+    const mins = Math.max(0, Math.round((Date.now() - then) / 60000));
+    if (mins < 1) return 'moments ago';
+    if (mins < 60) return mins + (mins === 1 ? ' minute ago' : ' minutes ago');
+    const hrs = Math.round(mins / 60);
+    if (hrs < 24) return hrs + (hrs === 1 ? ' hour ago' : ' hours ago');
+    const days = Math.round(hrs / 24);
+    return days + (days === 1 ? ' day ago' : ' days ago');
+  }
+
+  /* Stop the run in flight. The server marks the row cancelled and kills the sync process;
+     this does NOT tear down the poll loop itself — letting the existing poller observe
+     status='cancelled' keeps one code path in charge of finishing a run. The only immediate
+     local change is the button label, so the click has visible feedback. */
+  cancelSync() {
+    const pid = this.state.sync.projectId || this.state.projectId;
+    if (!pid || this.state.sync.stopping) return;
+    this.setState(st => ({ sync: Object.assign({}, st.sync, { stopping: true }) }));
+    window.FuseAPI.post('/api/projects/' + pid + '/sync/cancel', {})
+      .then(r => {
+        if (!this._alive) return;
+        if (!r.cancelled) {
+          /* Not a failure: it finished while the click was in flight. The poller is about to
+             report it done, so only the label needs putting back. */
+          this.setState(st => ({ sync: Object.assign({}, st.sync, { stopping: false }) }));
+          this.notify(r.reason || 'That refresh had already finished');
+        }
+      })
+      .catch(err => {
+        if (!this._alive) return;
+        this.setState(st => ({ sync: Object.assign({}, st.sync, { stopping: false }) }));
+        this.notify((err && err.detail) || 'Could not stop the refresh');
+      });
   }
 
   /* Shared by a fresh start (startSync) and resuming after a reload (boot -> resumeActiveSync).
@@ -674,10 +724,17 @@
 
         if (st.done) {
           clearInterval(this._iv); this._iv = null;
+          const wasCancelled = st.status === 'cancelled';
           this.setState(s => {
             const cache = {};
             Object.keys(s.cache).forEach(k2 => { if (k2.indexOf(pid + ':') !== 0) cache[k2] = s.cache[k2]; });
-            return { sync: { active: false, scope: null, progress: 1, step: 'Done', cost: estCost, projectId: null, startTime: null, steps: [], warnings: [] }, freshness: 'Just now', cache };
+            return {
+              sync: { active: false, scope: null, progress: 1, step: 'Done', cost: estCost, projectId: null, startTime: null, steps: [], warnings: [], stopping: false },
+              /* A cancelled run did NOT refresh the page, so the freshness pill must not claim
+                 it did. Whatever it wrote before stopping is still real, hence the refetch. */
+              freshness: wasCancelled ? s.freshness : 'Just now',
+              cache,
+            };
           });
           this.fetchTab(this.state.tab, pid, this.state.range, true);
           if (this.state.tab !== 'alerts') this.fetchTab('alerts', pid, this.state.range, false);
@@ -687,8 +744,13 @@
           this.loadSyncLog(pid);
           const proj = this.state.projects.find(p => p.id === pid) || {};
           const dom = proj.domain || pid;
+          if (wasCancelled) {
+            const left = Math.max(0, (st.total || 0) - (st.completed || 0));
+            this.notify('Refresh stopped for ' + dom + (left ? ' — ' + left + ' step(s) did not run' : ''));
+          } else {
           const scopeNotif = { domain_checks: 'Domain checks refreshed for ' + dom, audit: 'Crawl complete — Site Audit refreshed for ' + dom, positions: 'Positioning data refreshed for ' + dom, positions_new: 'New keywords measured for ' + dom, positioning_new: 'New keywords measured for ' + dom, positioning: 'Positioning data refreshed for ' + dom, keywords: 'Keywords data refreshed for ' + dom, backlinks: 'Backlinks data refreshed for ' + dom, ads: 'Ads data refreshed for ' + dom, ai: 'AI Optimization data refreshed for ' + dom, overview: 'Overview data refreshed for ' + dom, seo: 'SEO data refreshed for ' + dom };
           this.notify(scopeNotif[scope] || (scope === 'all' ? ('All modules refreshed for ' + dom) : (scope + ' refreshed for ' + dom)));
+          }
         } else {
           this.setState(s => ({ sync: Object.assign({}, s.sync, {
             active: true, scope, progress: st.progress, step: st.step, cost: estCost, projectId: pid,
@@ -2385,6 +2447,7 @@
       saveCreds: () => this.saveCreds(),
       testCreds: () => this.testConnections(),
       syncPanelToggle: () => this.setState({ syncPanelOpen: !s.syncPanelOpen }),
+      syncStop: () => this.cancelSync(),
       prefEmail: () => this.togglePref('email_alerts'),
       prefDigest: () => this.togglePref('weekly_digest'),
       syncAudit: () => this.startSync('audit'),
@@ -2610,6 +2673,7 @@
       syncElapsedText, syncSteps, syncStepsCount: syncSteps.length,
       syncPanelOpen: s.syncPanelOpen,
       syncPanelToggleLabel: s.syncPanelOpen ? 'Hide details ▲' : 'Show details ▼',
+      syncStopLabel: s.sync.stopping ? 'Stopping…' : 'Stop',
       /* True while Phase 1 is deployed: the sync now runs as its own OS process
          (manage.py run_sync), not a thread inside the web worker, so it survives navigating
          to another page, switching tabs, or even a normal page reload (resumeActiveSync in

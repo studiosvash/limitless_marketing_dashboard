@@ -79,7 +79,11 @@ class Command(BaseCommand):
         # RefreshRun row, the scope aliasing (positions -> positioning) and the worker thread.
         from apps.dashboard.services.sync_api_service import start_sync_run
 
-        info = start_sync_run(site_url, module)
+        # manual=False: the cadences this command enforces ARE the freshness logic for
+        # scheduled runs. Letting the manual "already fresh?" check apply here too would put
+        # two systems in charge of one decision -- a 24h window over a 12h cadence means that
+        # module silently never runs -- and the fresh response has no `task_id` to read below.
+        info = start_sync_run(site_url, module, manual=False)
         self.stdout.write(self.style.SUCCESS(
             f"  STARTED      {module:<10} — {reason} (task {info['task_id']}, "
             f"{len(info['steps'])} connector(s))"

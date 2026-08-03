@@ -30,20 +30,6 @@ class RefreshRunCancelFieldsTests(TestCase):
         self.assertEqual(run.status, "cancelled")
         self.assertNotEqual(run.status, RefreshStatus.ERROR)
 
-    def test_skipped_connectors_defaults_to_an_empty_list(self):
-        run = RefreshRun.objects.create(site_url=SITE_URL, scope="audit",
-                                        status=RefreshStatus.RUNNING)
-        run.refresh_from_db()
-        self.assertEqual(run.skipped_connectors, [])
-
-    def test_skipped_connectors_round_trips_a_list(self):
-        run = RefreshRun.objects.create(
-            site_url=SITE_URL, scope="positioning", status=RefreshStatus.RUNNING,
-            skipped_connectors=["gsc_keywords", "dataforseo_keywords"],
-        )
-        run.refresh_from_db()
-        self.assertEqual(run.skipped_connectors, ["gsc_keywords", "dataforseo_keywords"])
-
     def test_a_cancelled_run_does_not_anchor_a_cadence(self):
         """A run that was stopped refreshed nothing, so it must not push the next scheduled
         sync out. This holds today only because every `last_run_at` caller passes an explicit

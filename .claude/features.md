@@ -155,7 +155,16 @@ current user's initials, username and role, plus the change-password and logout 
   (Overview, Position Tracking, Off-site, and the four Ads pages).
 - **Page refresh button** (green, "Fetch …") — appears only on pages that map to a sync scope.
   Spins and disables while that scope is running.
-- **Refresh all button** (indigo) — runs all 14 connectors.
+- **Refresh all button** (indigo) — runs every connector in `ALL_CONNECTORS`.
+- **Stop** — the sync banner carries a Stop control while any refresh is running. It takes
+  effect within a couple of seconds, keeps everything already written, and skips every
+  connector that had not started; the one in flight may already be billed. No confirmation —
+  recovery is clicking Fetch again.
+- **Already fetched recently** — pressing a refresh button for a scope whose connectors all
+  synced successfully within the last 24 hours does not start a run. A prompt says when it was
+  last fetched and offers *Refetch anyway* or *Cancel*. A connector whose last run failed is
+  never treated as fresh, so a refresh right after fixing a credential always runs. Scheduled
+  syncs are unaffected — their cadences in Settings → Automation are their own freshness logic.
 
 ### Global overlays
 

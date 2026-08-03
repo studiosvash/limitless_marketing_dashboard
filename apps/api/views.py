@@ -1004,7 +1004,26 @@ class ProjectSyncView(APIView):
         # and why, the run proceeds with everything that CAN run, and each unusable connector
         # reports its own honest status in the step checklist. One missing credential should
         # cost you that credential's data, not the entire refresh.
-        return Response(start_sync_run(site_id, scope, user=request.user))
+        # Set only by the SPA's "Refetch anyway" answer to the already-fresh prompt.
+        force = bool(request.data.get("force", False))
+        return Response(start_sync_run(site_id, scope, user=request.user, force=force))
+
+
+@method_decorator(login_not_required, name="dispatch")
+class ProjectSyncCancelView(APIView):
+    """Stop the refresh in flight for this site. (POST /api/projects/<slug>/sync/cancel)
+
+    Always 200. "Nothing was running" is a race the user cannot avoid -- the run may have
+    finished while they were reaching for the button -- and a 4xx would make the SPA show a
+    failure toast for a non-failure.
+
+    No role gate: with 2-3 internal users, a run started by a colleague is far more likely to
+    be one you are waiting on than one you must not touch.
+    """
+    def post(self, request, slug):
+        from apps.dashboard.services.sync_api_service import cancel_sync_run
+        site_id = resolve_project_or_404(slug).site_url
+        return Response(cancel_sync_run(site_id, user=request.user))
 
 
 @method_decorator(login_not_required, name="dispatch")
