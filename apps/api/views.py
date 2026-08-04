@@ -173,6 +173,7 @@ class ProjectListCreateView(APIView):
                 gsc_property=data.get("gsc_property") or None,
                 ga4_property_id=data.get("ga4_property_id") or None,
                 dataforseo_target_domain=data.get("dataforseo_target_domain") or None,
+                allow_duplicate=data.get("allow_duplicate", False),
             )
         except ValueError as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
@@ -306,9 +307,7 @@ class ProjectOverviewView(APIView):
 @method_decorator(login_not_required, name="dispatch")
 class ProjectSEOView(APIView):
     def get(self, request, slug):
-        site_id = resolve_project_or_404(slug).site_url
-        anchor = latest_data_anchor(site_id)
-        curr_start, curr_end, _, _ = range_to_period_dates("28d", anchor)
+        site_id, curr_start, curr_end, _, _ = resolve_range_periods(request, slug)
 
         return Response(build_seo_response(site_id, curr_start, curr_end))
 
@@ -1435,6 +1434,52 @@ class AlertBatchAckView(APIView):
         acknowledged = [a for a in accepted if a not in failures]
         failed = list(failures.values())
         return Response({"ok": not failed, "acknowledged": acknowledged, "failed": failed})
+
+
+@method_decorator(login_not_required, name="dispatch")
+class NotificationsView(APIView):
+    """GET /api/notifications -> {items, unread} for the topbar bell — see
+    notifications_service.py. Account-wide, not project-scoped: connection failures, sync
+    results, budget/balance crossings and new-teammate pings all apply regardless of which
+    project happens to be selected."""
+
+    def get(self, request):
+        from apps.dashboard.services.notifications_service import build_notifications_response
+        return Response(build_notifications_response())
+
+
+@method_decorator(login_not_required, name="dispatch")
+class NotificationAckView(APIView):
+    """POST /api/notifications/<id>/ack -> {ok}."""
+
+    def post(self, request, notification_id):
+        from apps.dashboard.services.notifications_service import mark_read
+        mark_read(notification_id)
+        return Response({"ok": True})
+
+
+@method_decorator(login_not_required, name="dispatch")
+class NotificationBatchAckView(APIView):
+    """POST /api/notifications/ack-all -> {ok}. Mirrors AlertBatchAckView's one-request
+    'Acknowledge all' shape, simplified: notifications carry no per-project scope, so there
+    is nothing to resolve before marking every unread row read."""
+
+    def post(self, request):
+        from apps.dashboard.services.notifications_service import mark_all_read
+        mark_all_read()
+        return Response({"ok": True})
+
+
+@method_decorator(login_not_required, name="dispatch")
+class BudgetStatusView(APIView):
+    """GET /api/budget-status -> {cap, spent, remaining, pct, red, exceeded, balance,
+    balance_checked_at}. Backs the topbar's budget banner (see budget_service.py) — a
+    dedicated, unauthenticated-by-token, project-independent endpoint because the monthly
+    DataForSEO cap is one account-wide fact, not a per-project setting."""
+
+    def get(self, request):
+        from apps.dashboard.services.budget_service import budget_status
+        return Response(budget_status())
 
 
 @method_decorator(login_not_required, name="dispatch")

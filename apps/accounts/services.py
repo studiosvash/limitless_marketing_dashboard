@@ -86,4 +86,11 @@ def accept_invitation(token: str, password: str, username: str | None = None) ->
         invitation.is_accepted = True
         invitation.save(update_fields=["is_accepted"])
 
+    try:
+        from apps.dashboard.services.notifications_service import notify
+        notify("user_added", f"{invitation.email} joined as {invitation.role}",
+               severity="info")
+    except Exception:
+        pass  # a bell notification must never block account creation
+
     return user

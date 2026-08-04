@@ -87,3 +87,32 @@ def probe_credentials() -> tuple[bool, str]:
             "Every metered call will fail until the account is topped up."
         )
     return True, f"Credentials valid — balance ${balance:.2f}."
+
+
+def fetch_balance() -> float | None:
+    """Just the remaining USD balance, or None if it could not be read.
+
+    Same free `/appendix/user_data` call as `probe_credentials()`, kept as its own
+    function because the budget/notification path (budget_service.py) wants the raw
+    number, not a human sentence, and must never raise into a sync."""
+    login = os.getenv("DATAFORSEO_LOGIN")
+    password = os.getenv("DATAFORSEO_PASSWORD")
+    if not login or not password:
+        return None
+    try:
+        resp = requests.get(
+            f"{DATAFORSEO_BASE}/appendix/user_data",
+            auth=(login, password),
+            timeout=REQUEST_TIMEOUT,
+        )
+        if resp.status_code != 200:
+            return None
+        data = resp.json()
+        if data.get("status_code") != 20000:
+            return None
+        info = data["tasks"][0]["result"][0]
+        balance = (info.get("money") or {}).get("balance")
+        return float(balance) if balance is not None else None
+    except Exception as exc:
+        logger.warning(f"fetch_balance: could not read DataForSEO balance: {exc}")
+        return None

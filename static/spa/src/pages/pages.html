@@ -234,7 +234,7 @@
                           <tbody>
                             <sc-for list="{{ i.pages }}" as="pg" hint-placeholder-count="3">
                               <tr style="border-top: 1px solid #f1f5f9;">
-                                <td style="padding: 7px 0; font-family: monospace; font-size: 12px; color: #475569;">{{ pg.url }}</td>
+                                <td style="padding: 7px 0; font-family: monospace; font-size: 12px; color: #475569;">{{ pg.url }}<sc-if value="{{ pg.hasBadge }}" hint-placeholder-val="{{ false }}"><span style="{{ pg.badgeStyle }}">{{ pg.badgeLabel }}</span></sc-if></td>
                                 <td style="padding: 7px 12px; text-align: center;"><span style="{{ pg.scoreStyle }}">{{ pg.score }}</span></td>
                                 <td style="padding: 7px 0; text-align: right; color: #64748b; font-size: 12px;">{{ pg.status }}</td>
                               </tr>

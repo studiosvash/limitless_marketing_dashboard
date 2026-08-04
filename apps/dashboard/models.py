@@ -132,3 +132,53 @@ class ProjectSettings(models.Model):
 
     def __str__(self) -> str:
         return f"ProjectSettings({self.site_url})"
+
+
+class Notification(models.Model):
+    """The topbar bell's feed — system events, not analytics alerts.
+
+    Deliberately separate from Anomaly/TechnicalIssue (see alerts_service.py / the Alerts
+    page): those are per-project data-quality findings the user acts on from the Alerts
+    workspace. This table is short operational pings — connection failures, budget/balance
+    crossings, a refresh finishing, a teammate joining — that belong in the bell, not mixed
+    into the Alerts feed the sidebar badge counts. `site_url` is blank for account-wide
+    events (DataForSEO budget/balance are one shared account, not per-project)."""
+
+    KIND_CHOICES = [
+        ("connection_fail", "Connection failure"),
+        ("sync_success", "Sync succeeded"),
+        ("sync_error", "Sync failed"),
+        ("budget", "Budget"),
+        ("balance", "DataForSEO balance"),
+        ("user_added", "Team member added"),
+    ]
+    SEVERITY_CHOICES = [("info", "Info"), ("warning", "Warning"), ("critical", "Critical")]
+
+    site_url = models.CharField(max_length=255, blank=True, default="", db_index=True)
+    kind = models.CharField(max_length=20, choices=KIND_CHOICES)
+    severity = models.CharField(max_length=10, choices=SEVERITY_CHOICES, default="info")
+    title = models.CharField(max_length=255)
+    detail = models.TextField(blank=True, default="")
+    read = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self) -> str:
+        return f"Notification({self.kind}, {self.title[:40]!r})"
+
+
+class BudgetState(models.Model):
+    """Singleton row (pk=1) holding the DataForSEO account's last-known balance and the
+    monthly-budget notification state. Not per-project: DataForSEO bills one shared
+    account, so 'available balance' and the $/month cap are account-wide facts, and this
+    table exists only so a low-balance warning fires once instead of on every sync."""
+
+    dataforseo_balance = models.FloatField(null=True, blank=True)
+    balance_checked_at = models.DateTimeField(null=True, blank=True)
+    low_balance_notified = models.BooleanField(default=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self) -> str:
+        return f"BudgetState(balance={self.dataforseo_balance})"

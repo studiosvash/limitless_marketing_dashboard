@@ -106,6 +106,10 @@ class ProjectCreateSerializer(serializers.Serializer):
     gsc_property = serializers.CharField(max_length=255, required=False, allow_blank=True)
     ga4_property_id = serializers.CharField(max_length=100, required=False, allow_blank=True)
     dataforseo_target_domain = serializers.CharField(max_length=255, required=False, allow_blank=True)
+    # Set only by the Position Tracking wizard, to register the same domain as a second,
+    # independent tracking project. Every other creation path leaves this False, so add_site()
+    # keeps rejecting a plain re-add of an already-registered domain there.
+    allow_duplicate = serializers.BooleanField(required=False, default=False)
 
 
 class OverviewQuerySerializer(serializers.Serializer):

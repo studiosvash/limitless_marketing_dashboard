@@ -36,6 +36,17 @@
       const capNum = Number(s.budgetCap) || 0;
       const hasCap = capNum > 0;
       const overCap = hasCap && u.est_monthly > capNum;
+      /* Account-wide DataForSEO balance + hard $/month cap (see budget_service.py). Separate
+         from capNum/hasCap/overCap above, which are this PROJECT's soft cap over its own
+         spend -- `s.budget` is the whole account's shared cap, fetched once in boot() and
+         refreshed after every sync, same object the topbar banner reads. Null until that
+         first response lands. */
+      const dfs = s.budget;
+      const dfsCap = dfs ? dfs.cap : 100;
+      const dfsSpent = dfs ? dfs.spent : 0;
+      const dfsPct = dfs ? dfs.pct : 0;
+      const dfsExceeded = !!(dfs && dfs.exceeded);
+      const dfsRed = !!(dfs && dfs.red);
       const subDefs = [
         ['general', 'General', null],
         ['team', 'Team & Access', invitedCount ? String(team.length) : String(team.length)],
@@ -405,6 +416,21 @@
         jsToggle: toggle(!!crawlCfg.jsRendering),
         robotsToggle: toggle(!!crawlCfg.respectRobots),
         crawlSaveLabel: s.crawlSaved ? 'Saved \u2713' : 'Save crawl settings',
+
+        /* ---- DataForSEO account: shared balance + hard monthly cap ---- */
+        dfsBalance: (dfs && dfs.balance != null) ? this.money(dfs.balance) : 'Not checked yet',
+        dfsBalanceStyle: { fontSize: '24px', fontWeight: 600, marginTop: '3px', color: (dfs && dfs.balance != null) ? (dfs.balance <= 10 ? '#dc2626' : '#0f172a') : '#cbd5e1' },
+        dfsBalanceNote: (dfs && dfs.balance_checked_at)
+          ? ('Checked ' + this.relTime(dfs.balance_checked_at) + ' — re-checked after every sync.')
+          : 'Checked after each sync (free — does not spend credit); nothing has synced yet.',
+        dfsSpentText: usd(dfsSpent), dfsCapText: usd(dfsCap), dfsPctText: dfsPct.toFixed(0) + '%',
+        dfsCapBar: { height: '100%', borderRadius: '9999px', background: dfsExceeded ? '#dc2626' : (dfsRed ? '#f59e0b' : '#10b981'), width: Math.min(100, dfsPct) + '%' },
+        dfsExceeded: dfsExceeded,
+        // Answers "why did I get a $5 notification?" directly on the screen that shows the cap.
+        dfsThresholdNote: 'Every DataForSEO call updates this figure. You get a notification each '
+          + 'time total spend this month passes another $5, a specific one at $50, a red warning '
+          + 'at 90% of the cap (' + usd(dfsCap * 0.9) + '), and syncs that call DataForSEO pause '
+          + 'automatically once the ' + usd(dfsCap) + ' cap is reached.',
 
         /* ---- usage & budget ---- */
         // MEASURED. month_to_date is cost_since(1st of this month) -- billed rows only.

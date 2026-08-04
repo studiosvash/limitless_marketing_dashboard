@@ -118,4 +118,12 @@ def spa_index(request):
     # before app/api.js gets any chance to run (footgun #2).
     insert_at = html.index("<head>") + len("<head>")
     html = html[:insert_at] + bootstrap + html[insert_at:]
-    return HttpResponse(html, content_type="text/html; charset=utf-8")
+    response = HttpResponse(html, content_type="text/html; charset=utf-8")
+    # This shell embeds app.js/every page's JS inline, re-read from source and re-assembled on
+    # EVERY request (see resolve_includes above) -- there is no server-side cache to bust. But
+    # without an explicit header, a browser can still serve a cached copy of the *document itself*
+    # (back/forward cache, a plain refresh treated as a revalidation-free hit), so an edit here
+    # can look like it did nothing until the user does a hard reload. Explicit no-store removes
+    # that guesswork during active iteration.
+    response["Cache-Control"] = "no-store, no-cache, must-revalidate"
+    return response

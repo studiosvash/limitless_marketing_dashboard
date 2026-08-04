@@ -101,13 +101,23 @@ def keywords_needing_backfill(site_id: str) -> list[str]:
     competitor, which is slow and — because DataForSEO meters per query — expensive. This
     returns only the keywords with real work outstanding, so the caller can sync just those.
 
-    "Outstanding" means either of:
+    "Outstanding" means any of:
       * no `keyword_rankings` row at all for the keyword (never looked up), or
-      * a row exists but `search_volume` IS NULL (position captured, market data missing).
+      * every row has `search_volume` IS NULL (position may exist, market data missing), or
+      * every row has BOTH `position` IS NULL and `impressions` is 0/NULL (no evidence a rank
+        connector ever actually checked it — see below).
 
-    A keyword that has been measured and genuinely ranks nowhere is NOT returned: it has a row,
-    and re-querying it is exactly the waste this exists to avoid. Refreshing those is what the
-    scheduled full sync is for.
+    A keyword that has been measured and genuinely ranks nowhere is NOT returned: `dataforseo_serp`
+    writes an explicit `position: None` row when it checks a keyword and the domain isn't in the
+    top 30 (see `dataforseo_serp._normalize_task`), and `gsc_keywords` writes real impressions even
+    on a 0-click day. Either signal proves a rank connector actually ran, so re-querying that
+    keyword would be exactly the waste this exists to avoid — refreshing those is what the
+    scheduled full sync is for. The ambiguity this guards against: `dataforseo_keywords` (volume
+    only) can write a `position: None` row for a keyword that has NEVER been through a rank
+    connector at all, and that row is indistinguishable from a genuine "checked, not ranking" row
+    by `position` alone — a keyword tracked between two `positions` syncs landed exactly here,
+    with real volume but a rank check that never happened, and the volume-only check let it slip
+    through "Track These New Keywords" forever.
 
     Returns [] on any failure — the caller then falls back to a normal full sync rather than
     silently syncing nothing.
@@ -129,27 +139,36 @@ def keywords_needing_backfill(site_id: str) -> list[str]:
 
         with get_session() as session:
             rows = session.execute(
-                select(KeywordRanking.keyword, KeywordRanking.search_volume)
+                select(KeywordRanking.keyword, KeywordRanking.search_volume,
+                       KeywordRanking.position, KeywordRanking.impressions)
                 .where(KeywordRanking.site_id.in_(variants))
             ).all()
 
-        # A keyword counts as "measured" only if SOME row for it carries a volume. Matching is
-        # case-insensitive because GSC lower-cases queries while the Explorer preserves what the
-        # user typed, and the same keyword must not look unmeasured purely because of casing.
-        measured = set()
+        # Matching is case-insensitive because GSC lower-cases queries while the Explorer
+        # preserves what the user typed, and the same keyword must not look unmeasured purely
+        # because of casing.
+        has_volume = set()
+        rank_checked = set()
         seen = set()
-        for kw, vol in rows:
+        for kw, vol, pos, impressions in rows:
             key = (kw or "").strip().lower()
             if not key:
                 continue
             seen.add(key)
             if vol is not None:
-                measured.add(key)
+                has_volume.add(key)
+            if pos is not None or (impressions or 0) > 0:
+                rank_checked.add(key)
 
-        out = [k for k in tracked if (k or "").strip().lower() not in measured]
+        out = [
+            k for k in tracked
+            if (k or "").strip().lower() not in has_volume
+            or (k or "").strip().lower() not in rank_checked
+        ]
         logger.info(
             f"[keywords] {len(out)} of {len(tracked)} tracked keywords need backfill for "
-            f"{site_id!r} ({len(seen)} have a ranking row, {len(measured)} have volume)"
+            f"{site_id!r} ({len(seen)} have a ranking row, {len(has_volume)} have volume, "
+            f"{len(rank_checked)} have been rank-checked)"
         )
         return out
     except Exception as exc:

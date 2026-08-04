@@ -22,6 +22,11 @@
        previous site's freshness. See srcBadge(). */
     syncLog: null, syncLogFor: null,
     ncOpen: false,
+    /* Topbar bell + budget banner — account-wide (not per-project), so these are fetched once
+       in boot() and refreshed after every completed sync, not part of `cache`. See
+       notifications_service.py / budget_service.py. */
+    notifications: { items: [], unread: 0 },
+    budget: null,
     sync: { active: false, progress: 0, step: '', cost: 0, steps: [], warnings: [] },
     syncPanelOpen: false,
     freshness: 'Weekly · Mon',
@@ -266,12 +271,28 @@
        built-in country list for when `allUsCities` is absent. Nothing the user asked for has
        failed, and a toast about a city list on every page load would be pure noise. */
     fetch('/static/spa/us_cities.json').then(r => r.json()).then(locs => { this.setState({ allUsCities: locs }); }).catch(() => {});
+    this.refreshNotifications();
+  }
+
+  /* Topbar bell + budget banner. Account-wide, so unlike fetchTab() this is not keyed on
+     projectId — one fetch serves every project. Silent on failure: nobody pressed a button,
+     and a stale bell/banner is a much smaller problem than a toast on every boot. */
+  refreshNotifications() {
+    window.FuseAPI.get('/api/notifications').then(d => { if (this._alive) this.setState({ notifications: d }); }).catch(() => {});
+    window.FuseAPI.get('/api/budget-status').then(d => { if (this._alive) this.setState({ budget: d }); }).catch(() => {});
+  }
+
+  ackAllNotifications() {
+    if (!this.state.notifications.unread) return;
+    window.FuseAPI.post('/api/notifications/ack-all', {})
+      .then(() => { if (this._alive) this.refreshNotifications(); })
+      .catch(() => {});
   }
 
   /* ---------- data ---------- */
   key(tab, pid, range) {
     pid = pid || this.state.projectId; range = range || this.state.range;
-    return pid + ':' + tab + (tab === 'overview' || tab === 'offsite' || this.RES[tab] === 'ads' ? ':' + range : '');
+    return pid + ':' + tab + (tab === 'overview' || tab === 'offsite' || tab === 'seo' || this.RES[tab] === 'ads' ? ':' + range : '');
   }
 
   fetchTab(tab, pid, range, force) {
@@ -279,7 +300,7 @@
     const k = this.key(tab, pid, range);
     if (!force && this.state.cache[k]) { if (tab === this.state.tab) this.setState({ loading: false }); return; }
     if (tab === this.state.tab) this.setState({ loading: true, error: null });
-    const params = (tab === 'overview' || tab === 'positioning' || tab === 'offsite' || this.RES[tab] === 'ads') ? { range } : undefined;
+    const params = (tab === 'overview' || tab === 'positioning' || tab === 'offsite' || tab === 'seo' || this.RES[tab] === 'ads') ? { range } : undefined;
     window.FuseAPI.get('/api/projects/' + pid + '/' + this.RES[tab], params)
       .then(data => {
         if (!this._alive) return;
@@ -374,6 +395,62 @@
         if (!this._alive || this.state.ptSerpKw !== kw) return;
         this.setState({ ptSerpLoading: false, ptSerpError: e.message || 'Failed to fetch SERP' });
       });
+  }
+
+  /* Builds the ptSerpOpen/ptSerpCloseFn/ptSerp render-vals the shared SERP drawer partial
+     (components/serp_panel.html) reads. Position Tracking and Domain Overview both call
+     this from their own per-tab render-vals block -- one drawer, one implementation,
+     each page just supplies which domain counts as "you" and which location to show. */
+  serpDrawerVals(youDomain, location) {
+    const s = this.state;
+    const closeFn = () => this.setState({ ptSerpKw: null });
+    if (!s.ptSerpKw) {
+      return { open: false, closeFn, serp: { kw: '', location: '', href: '', rows: [], loading: false, error: null, showLoading: false, showError: false, showRows: false } };
+    }
+    const kw = s.ptSerpKw;
+    const serpRows = [];
+    if (s.ptSerpData) {
+      s.ptSerpData.forEach((item, i) => {
+        const dom = item.domain || '';
+        const isYou = dom.toLowerCase() === (youDomain || '').toLowerCase();
+        serpRows.push({
+          n: item.position || (i + 1),
+          domain: dom,
+          isYou,
+          url: item.url,
+          title: item.title,
+          rowStyle: { display: 'flex', gap: '12px', padding: '12px 0', borderBottom: '1px solid #f1f5f9', background: isYou ? '#fafaff' : 'transparent', alignItems: 'center' },
+          badgeStyle: { minWidth: '22px', fontSize: '13px', fontWeight: 700, color: isYou ? '#4f46e5' : '#94a3b8' },
+          onAnalyze: () => this.analyzeUrlInDomainOverview(item.url)
+        });
+      });
+    }
+    const locParam = this.googleSerpLocationParam(location);
+    return {
+      open: true,
+      closeFn,
+      serp: {
+        kw,
+        location: location || '',
+        href: 'https://www.google.com/search?q=' + encodeURIComponent(kw) + locParam,
+        rows: serpRows,
+        loading: !!s.ptSerpLoading,
+        error: s.ptSerpError || null,
+        /* Pre-computed, and it is NOT cosmetic. The template used to branch on
+           `{{ !ptSerp.loading && ptSerp.error }}`, but the dc-runtime's expression
+           resolver (support.js resolve()) understands parentheses, ===/!==/==/!=,
+           a leading `!`, true/false and property paths -- and NOTHING ELSE. It has no
+           `&&`. So it parsed that as `!resolve("ptSerp.loading && ptSerp.error")`, the
+           path did not exist, and `!undefined` is TRUE. Both the error branch and the
+           results branch therefore rendered on every open: the drawer showed
+           "Failed to load live SERP:" (with an empty message, because error was null)
+           directly above a perfectly good result list.
+           Never put `&&` or `||` in a template expression -- it fails silently as true. */
+        showLoading: !!s.ptSerpLoading,
+        showError: !s.ptSerpLoading && !!s.ptSerpError,
+        showRows: !s.ptSerpLoading && !s.ptSerpError
+      }
+    };
   }
 
   go(tab) {
@@ -610,7 +687,7 @@
 
   setRange(r) {
     this.setState({ range: r });
-    if (this.state.tab === 'overview' || this.state.tab === 'positioning' || this.state.tab === 'offsite' || this.ADSTABS.includes(this.state.tab)) {
+    if (this.state.tab === 'overview' || this.state.tab === 'positioning' || this.state.tab === 'offsite' || this.state.tab === 'seo' || this.ADSTABS.includes(this.state.tab)) {
       this.fetchTab(this.state.tab, this.state.projectId, r, false);
     }
   }
@@ -644,6 +721,13 @@
               + '\n\nRefetch anyway? It will call the APIs again and re-spend any credits they cost.')) {
             this.startSync(scope, null, true);
           }
+          return;
+        }
+        /* The DataForSEO paywall (see sync_api_service.start_sync_run). No task_id was
+           created — nothing to poll — so surface the reason and stop, same shape as `fresh`. */
+        if (t.budget_exceeded) {
+          this.notify(t.message || 'Monthly DataForSEO budget reached.');
+          this.refreshNotifications();
           return;
         }
         if (t.warnings && t.warnings.length) {
@@ -752,6 +836,10 @@
           });
           this.fetchTab(this.state.tab, pid, this.state.range, true);
           if (this.state.tab !== 'alerts') this.fetchTab('alerts', pid, this.state.range, false);
+          /* The sync just wrote a sync_success/sync_error bell notification and re-checked
+             the DataForSEO balance (see sync_engine._notify_sync_completion) — pick both up
+             now rather than waiting for the next boot. */
+          this.refreshNotifications();
           /* The whole point of a refresh is that the freshness changed — re-read the
              SyncLog rows so every Data source badge moves with the data it describes
              (including a connector whose run failed inside an otherwise "Done" sync). */
@@ -2587,10 +2675,12 @@
       copyKws: () => this.copySelectedKws(),
       copySummary: () => this.copySummary(),
       ackAll: () => this.ackAllAlerts(),
-      /* notification centre (topbar bell) — in-dashboard only, no Slack, no email */
-      ncToggle: () => this.setState(st => ({ ncOpen: !st.ncOpen, addSiteOpen: false })),
-      ncAckAll: () => this.ackAllAlerts(),
-      ncViewAll: () => { this.setState({ ncOpen: false }); this.go('alerts'); },
+      /* notification centre (topbar bell) — in-dashboard only, no Slack, no email. Reads
+         GET /api/notifications (connection failures, sync results, budget/balance,
+         new teammates), NOT the Alerts feed — see notifications_service.py. */
+      ncToggle: () => { const opening = !s.ncOpen; this.setState({ ncOpen: opening, addSiteOpen: false }); if (opening) this.refreshNotifications(); },
+      ncAckAll: () => this.ackAllNotifications(),
+      ncViewAll: () => this.setState({ ncOpen: false }),
       exportTopPages: () => { const d = s.cache[this.key('overview')]; if (d) this.downloadCsv(project.domain + '-top-pages.csv', [['page', 'url'], ['clicks', 'clicks'], ['impressions', 'impressions'], ['ctr', 'ctr']], d.topPages); },
       exportKeywords: () => { const d = s.cache[this.key('keywords')]; if (d) this.downloadCsv(project.domain + '-keywords.csv', [['keyword', 'kw'], ['intent', 'intent'], ['position', 'pos'], ['volume', 'volume'], ['kd', 'kd'], ['cpc', 'cpc'], ['clicks', 'clicks'], ['url', 'url']], d.keywords); },
       exportBacklinks: () => { const d = s.cache[this.key('backlinks')]; if (d) this.downloadCsv(project.domain + '-backlinks.csv', [['domain', 'domain'], ['url_from', 'url_from'], ['anchor', 'anchor'], ['status', 'status'], ['dofollow', 'dofollow'], ['domain_rank', 'rank'], ['page_rank', 'page_rank'], ['spam_score', 'spam_score'], ['first_seen', 'firstSeen'], ['target', 'target']], d.links); },
@@ -2854,39 +2944,31 @@
     }
 
     /* ---------- notification centre (topbar bell) ----------
-       In-dashboard only: no Slack, no email. Reads the alerts tab's already-prefetched
-       cache (boot() and every completed sync refresh it), so opening the bell never
-       touches the network — the database-first contract holds. Computed here, above the
-       `if (s.loading || s.error || !data) return vals` guard, because the topbar renders
-       on every screen including the loading and error states. */
+       In-dashboard only: no Slack, no email. Reads GET /api/notifications (fetched in
+       boot() and re-fetched after every completed sync / on open — see
+       refreshNotifications()), NOT the Alerts feed: this is deliberately a different,
+       leaner event set (connection failures, sync results, budget/balance crossings, new
+       teammates) — see notifications_service.py for why the two are kept apart. Computed
+       here, above the `if (s.loading || s.error || !data) return vals` guard, because the
+       topbar renders on every screen including the loading and error states. */
     {
       const NC_LIMIT = 8;
-      /* Mirrors overview_service._KIND_MODULE_MAP exactly (same six kinds, same
-         General/alerts fallback) so a row in the bell lands on the same screen as the
-         identical row in Overview's priority feed. Labels double as keys into the fixed
-         module colours in design.md §4 — do not re-word them. */
-      const ncKindModule = {
-        anomaly: { label: 'SEO', target: 'seo' },
-        ranking: { label: 'Positions', target: 'positioning' },
-        backlink: { label: 'Backlinks', target: 'backlinks' },
-        technical: { label: 'Site Audit', target: 'pages' },
-        ads: { label: 'Ads', target: 'ads' },
-        system: { label: 'System', target: 'alerts' }
+      const ncKindMeta = {
+        connection_fail: { label: 'Connection', color: '#dc2626' },
+        sync_error:      { label: 'Sync', color: '#dc2626' },
+        sync_success:    { label: 'Sync', color: '#059669' },
+        budget:          { label: 'Budget', color: '#d97706' },
+        balance:         { label: 'Balance', color: '#d97706' },
+        user_added:      { label: 'Team', color: '#4f46e5' },
       };
-      const ncModColor = { SEO: '#4f46e5', Positions: '#0891b2', Backlinks: '#7c3aed', 'Site Audit': '#dc2626', Ads: '#059669', System: '#64748b', General: '#64748b' };
-      const ncSevColor = { high: '#dc2626', medium: '#d97706', info: '#94a3b8' };
-      const ncSevRank = { high: 0, medium: 1, info: 2, low: 3 };
-      const ncRank = f => (ncSevRank[f.severity] == null ? 9 : ncSevRank[f.severity]);
-      /* Same order the server builds Overview's priority feed with (overview_service
-         .build_priority_feed): two stable passes — newest ts first, then highest
-         severity first — so the two lists never disagree about what matters most. */
-      const ncSorted = unackedFeed.slice()
-        .sort((a, b) => (a.ts < b.ts ? 1 : (a.ts > b.ts ? -1 : 0)))
-        .sort((a, b) => ncRank(a) - ncRank(b));
-      const ncShown = ncSorted.slice(0, NC_LIMIT);
+      const ncSevColor = { critical: '#dc2626', warning: '#d97706', info: '#94a3b8' };
+      const notifItems = (s.notifications && s.notifications.items) || [];
+      const notifUnread = (s.notifications && s.notifications.unread) || 0;
+      const ncShown = notifItems.slice(0, NC_LIMIT);
       const ncOn = s.ncOpen;
 
       vals.ncOpen = ncOn;
+      vals.ncHasUnread = notifUnread > 0;
       vals.ncTriggerStyle = {
         position: 'relative', display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
         width: '32px', height: '32px', borderRadius: '8px',
@@ -2896,29 +2978,51 @@
         cursor: 'pointer'
       };
       vals.ncBadgeStyle = { position: 'absolute', top: '-6px', right: '-6px', minWidth: '16px', height: '16px', padding: '0 4px', borderRadius: '9999px', background: '#dc2626', color: 'white', fontSize: '10px', fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', border: '2px solid white' };
-      vals.ncBadgeText = unacked > 99 ? '99+' : String(unacked);
+      vals.ncBadgeText = notifUnread > 99 ? '99+' : String(notifUnread);
       /* The badge digits are aria-hidden, so the count has to live in the label. */
-      vals.ncAria = unacked === 0
-        ? 'Notifications — no unread alerts'
-        : 'Notifications — ' + unacked + ' unread alert' + (unacked === 1 ? '' : 's');
-      vals.ncCountText = unacked === 0 ? 'Nothing unread' : unacked + ' unread';
+      vals.ncAria = notifUnread === 0
+        ? 'Notifications — nothing unread'
+        : 'Notifications — ' + notifUnread + ' unread notification' + (notifUnread === 1 ? '' : 's');
+      vals.ncCountText = notifUnread === 0 ? 'Nothing unread' : notifUnread + ' unread';
       vals.ncEmpty = ncShown.length === 0;
-      vals.ncCanAckAll = ncShown.length > 0;
-      vals.ncHasMore = ncSorted.length > ncShown.length;
-      vals.ncMoreText = 'Showing ' + ncShown.length + ' of ' + ncSorted.length;
-      vals.ncItems = ncShown.map((f, i) => {
-        const mod = ncKindModule[f.kind] || { label: 'General', target: 'alerts' };
-        const modC = ncModColor[mod.label] || '#64748b';
-        const rel = this.relTime(f.ts);
+      vals.ncCanAckAll = notifUnread > 0;
+      vals.ncHasMore = notifItems.length > ncShown.length;
+      vals.ncMoreText = 'Showing ' + ncShown.length + ' of ' + notifItems.length;
+      vals.ncItems = ncShown.map((n, i) => {
+        const meta = ncKindMeta[n.kind] || { label: 'System', color: '#64748b' };
+        const rel = this.relTime(n.ts);
         return {
-          title: f.title, timeFmt: rel, moduleLabel: mod.label,
-          aria: f.title + ' — ' + mod.label + ', ' + rel,
-          sevDotStyle: { width: '8px', height: '8px', borderRadius: '9999px', background: ncSevColor[f.severity] || '#94a3b8', marginTop: '5px', flexShrink: 0 },
-          moduleStyle: { fontSize: '10px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', color: modC, background: modC + '14', padding: '2px 7px', borderRadius: '4px' },
-          rowStyle: { display: 'flex', gap: '10px', alignItems: 'flex-start', padding: '11px 14px', cursor: 'pointer', borderTop: i === 0 ? 'none' : '1px solid #f1f5f9' },
-          onClick: () => { this.setState({ ncOpen: false }); this.go(mod.target); }
+          title: n.title, timeFmt: rel, moduleLabel: meta.label,
+          aria: n.title + ' — ' + meta.label + ', ' + rel,
+          sevDotStyle: { width: '8px', height: '8px', borderRadius: '9999px', background: ncSevColor[n.severity] || '#94a3b8', marginTop: '5px', flexShrink: 0, opacity: n.read ? 0.4 : 1 },
+          moduleStyle: { fontSize: '10px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', color: meta.color, background: meta.color + '14', padding: '2px 7px', borderRadius: '4px' },
+          rowStyle: { display: 'flex', gap: '10px', alignItems: 'flex-start', padding: '11px 14px', cursor: 'default', borderTop: i === 0 ? 'none' : '1px solid #f1f5f9', opacity: n.read ? 0.6 : 1 },
+          onClick: () => {}
         };
       });
+    }
+
+    /* ---------- budget banner (topbar) ----------
+       DataForSEO monthly cap — see budget_service.py. `budget` is fetched once in boot()
+       and refreshed alongside notifications, so this is a pure render of already-fetched
+       state, same as the bell above. Shown from 90% of the cap up (the "red" line the
+       budget was built around); the exceeded state additionally names the paywall. */
+    {
+      const b = s.budget;
+      vals.budgetBannerShow = !!(b && b.red);
+      if (vals.budgetBannerShow) {
+        vals.budgetBannerStyle = {
+          padding: '7px 24px', fontSize: '12.5px', fontWeight: 600,
+          background: b.exceeded ? '#fee2e2' : '#fff7ed',
+          color: b.exceeded ? '#991b1b' : '#9a3412',
+          borderBottom: '1px solid ' + (b.exceeded ? '#fecaca' : '#fed7aa'),
+        };
+        vals.budgetBannerText = b.exceeded
+          ? 'DataForSEO budget reached — $' + b.spent.toFixed(2) + ' of $' + b.cap.toFixed(2) + ' spent this month. Syncs that call DataForSEO are paused.'
+          : 'DataForSEO budget at ' + b.pct.toFixed(0) + '% — $' + b.spent.toFixed(2) + ' of $' + b.cap.toFixed(2) + ' spent this month.';
+      } else {
+        vals.budgetBannerStyle = {}; vals.budgetBannerText = '';
+      }
     }
 
     /* research results (visible on keywords tab regardless of loading) */

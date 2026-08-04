@@ -277,14 +277,14 @@
                   <h2 style="font-size: 15px; font-weight: 600; margin: 0; color: #0f172a;">All Tracked Keywords</h2><sc-if value="{{ pt.srcRankings.show }}" hint-placeholder-val="{{ true }}"><div style="margin-top: 6px;"><span style="{{ pt.srcRankings.style }}" title="{{ pt.srcRankings.title }}" aria-label="{{ pt.srcRankings.aria }}">{{ pt.srcRankings.text }}</span></div></sc-if>
                   <sc-if value="{{ pt.volCoverage.show }}" hint-placeholder-val="{{ false }}"><div style="margin-top: 6px;"><span title="{{ pt.volCoverage.title }}" style="font-size: 11px; font-weight: 500; color: #b45309; background: #fffbeb; border: 1px solid #fde68a; border-radius: 5px; padding: 2px 8px;">⚠ {{ pt.volCoverage.text }}</span></div></sc-if>
                   <div style="display: flex; gap: 6px;">
-                    <button onClick="{{ ptWs.onTabAll }}" style="padding: 5px 12px; font-size: 12px; font-weight: 600; border-radius: 6px; border: 1px solid {{ ptWs.rankingsTab === 'all' ? '#c7d2fe' : 'transparent' }}; background: {{ ptWs.rankingsTab === 'all' ? '#eef2ff' : 'transparent' }}; color: {{ ptWs.rankingsTab === 'all' ? '#4f46e5' : '#64748b' }}; cursor: pointer; font-family: inherit;">All ({{ pt.tracked }})</button>
+                    <button onClick="{{ ptWs.onTabAll }}" style="padding: 5px 12px; font-size: 12px; font-weight: 600; border-radius: 6px; border: 1px solid {{ ptWs.rankingsTab === 'all' ? '#c7d2fe' : 'transparent' }}; background: {{ ptWs.rankingsTab === 'all' ? '#eef2ff' : 'transparent' }}; color: {{ ptWs.rankingsTab === 'all' ? '#4f46e5' : '#64748b' }}; cursor: pointer; font-family: inherit;">All ({{ pt.trackedCount }})</button>
                     <button onClick="{{ ptWs.onTabTop10 }}" style="padding: 5px 12px; font-size: 12px; font-weight: 600; border-radius: 6px; border: 1px solid {{ ptWs.rankingsTab === 'top10' ? '#a7f3d0' : 'transparent' }}; background: {{ ptWs.rankingsTab === 'top10' ? '#ecfdf5' : 'transparent' }}; color: {{ ptWs.rankingsTab === 'top10' ? '#059669' : '#64748b' }}; cursor: pointer; font-family: inherit;">Top 10</button>
                     <button onClick="{{ ptWs.onTabImproved }}" style="padding: 5px 12px; font-size: 12px; font-weight: 600; border-radius: 6px; border: 1px solid {{ ptWs.rankingsTab === 'improved' ? '#a7f3d0' : 'transparent' }}; background: {{ ptWs.rankingsTab === 'improved' ? '#ecfdf5' : 'transparent' }}; color: {{ ptWs.rankingsTab === 'improved' ? '#059669' : '#64748b' }}; cursor: pointer; font-family: inherit;">Improved ({{ pt.improved }})</button>
                     <button onClick="{{ ptWs.onTabDeclined }}" style="padding: 5px 12px; font-size: 12px; font-weight: 600; border-radius: 6px; border: 1px solid {{ ptWs.rankingsTab === 'declined' ? '#fecaca' : 'transparent' }}; background: {{ ptWs.rankingsTab === 'declined' ? '#fef2f2' : 'transparent' }}; color: {{ ptWs.rankingsTab === 'declined' ? '#dc2626' : '#64748b' }}; cursor: pointer; font-family: inherit;">Declined ({{ pt.declined }})</button>
                   </div>
                 </div>
                 <div style="display: flex; align-items: center; gap: 8px;">
-                  <span onClick="{{ ptWs.onRefresh }}" style="display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; font-size: 12px; font-weight: 600; color: #475569; background: white; border: 1px solid #e2e8f0; border-radius: 6px; cursor: pointer;" style-hover="background:#f8fafc">⚡ Refresh Tracked Keywords</span>
+                  <span onClick="{{ ptWs.onRefresh }}" title="Re-measures every tracked keyword against every competitor. If you just added a few keywords, use Track These New Keywords above instead — it's faster and only touches the new ones." style="display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; font-size: 12px; font-weight: 600; color: #475569; background: white; border: 1px solid #e2e8f0; border-radius: 6px; cursor: pointer;" style-hover="background:#f8fafc">⚡ Refresh Tracked Keywords</span>
                 </div>
               </div>
               <div style="overflow-x: auto;">
@@ -332,6 +332,49 @@
                 </table>
               </div>
             </div>
+
+            <sc-if value="{{ pt.hasNewRows }}" hint-placeholder-val="{{ false }}">
+            <div style="border-radius: 12px; background: #eef2ff; border: 1px solid #c7d2fe; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
+              <div style="padding: 16px 20px; border-bottom: 1px solid #c7d2fe; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px;">
+                <div>
+                  <h2 style="font-size: 15px; font-weight: 600; margin: 0; color: #0f172a;">Newly Added Keywords — Not Tracked Yet ({{ pt.newRows.length }})</h2>
+                  <p style="font-size: 12px; color: #475569; margin: 4px 0 0;">Sent from the Keyword Explorer (or added another way) since the last Positioning refresh, so there's no measured rank yet. Track just these to measure position, volume and difficulty for them alone — it does not re-query the rest of your tracked list. Once measured, they move up into the table below and into Rankings Overview.</p>
+                </div>
+                <span onClick="{{ h.refreshNewKeywords }}" role="button" aria-label="Track these newly added keywords" style="display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; font-size: 12.5px; font-weight: 600; color: white; background: #4f46e5; border-radius: 8px; cursor: pointer; white-space: nowrap;" style-hover="background:#4338ca">⚡ Track These New Keywords</span>
+              </div>
+              <div style="overflow-x: auto; background: white;">
+                <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
+                  <thead>
+                    <tr style="text-align: left; background: #f8fafc; border-bottom: 1px solid #f1f5f9; color: #64748b; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;">
+                      <th style="font-weight: 600; padding: 12px 20px;">Keyword</th>
+                      <th style="font-weight: 600; padding: 12px; text-align: right;">Volume</th>
+                      <th style="font-weight: 600; padding: 12px; text-align: center;">KD%</th>
+                      <th style="font-weight: 600; padding: 12px; text-align: right;">CPC</th>
+                      <th style="font-weight: 600; padding: 12px;">Intent</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <sc-for list="{{ pt.newRows }}" as="r" hint-placeholder-count="3">
+                      <tr style="border-top: 1px solid #f1f5f9; transition: background 0.15s;" style-hover="background:#f8fafc">
+                        <td style="padding: 12px 20px; font-weight: 600; color: #334155;">{{ r.kw }}</td>
+                        <td style="padding: 12px; text-align: right; color: #64748b;">{{ r.volume }}</td>
+                        <td style="padding: 12px; text-align: center;">
+                          <div style="display: flex; align-items: center; justify-content: center; gap: 6px;">
+                            <div style="width: 28px; height: 6px; border-radius: 3px; background: #f1f5f9; overflow: hidden; display: inline-block;">
+                              <div style="height: 100%; width: {{ r.kdWidth }}; background: {{ r.kdColor }};"></div>
+                            </div>
+                            <span style="font-size: 12px; color: #64748b;">{{ r.kd }}</span>
+                          </div>
+                        </td>
+                        <td style="padding: 12px; text-align: right; color: #64748b;">{{ r.cpc }}</td>
+                        <td style="padding: 12px;"><span style="{{ r.intentStyle }}">{{ r.intent }}</span></td>
+                      </tr>
+                    </sc-for>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            </sc-if>
           </div>
           </sc-if>
 
@@ -387,8 +430,38 @@
                  `pt.srcComp` are still built server-side and still tested -- only this view is gone,
                  so bringing it back is a template change, not a rebuild. -->
 
+            <sc-if value="{{ ptOv.hasNewRows }}" hint-placeholder-val="{{ false }}">
+            <div style="border-radius: 12px; background: #eef2ff; border: 1px solid #c7d2fe; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
+              <div style="padding: 16px 20px; border-bottom: 1px solid #c7d2fe; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;">
+                <div>
+                  <h2 style="font-size: 15px; font-weight: 600; margin: 0; color: #0f172a;">Newly Added Keywords — Not Tracked Yet ({{ ptOv.newRows.length }})</h2>
+                  <p style="font-size: 12px; color: #475569; margin: 4px 0 0;">No captured position yet, so every cell below is empty. Track just these — it won't re-query the rest of your list — and they move down into Rankings Overview once measured.</p>
+                </div>
+                <span onClick="{{ h.refreshNewKeywords }}" role="button" aria-label="Track these newly added keywords" style="display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; font-size: 12.5px; font-weight: 600; color: white; background: #4f46e5; border-radius: 8px; cursor: pointer; white-space: nowrap;" style-hover="background:#4338ca">⚡ Track These New Keywords</span>
+              </div>
+              <div style="overflow-x: auto; background: white;">
+                <div style="min-width: 640px;">
+                  <div style="display: grid; grid-template-columns: {{ ptOv.gridCols }}; padding: 12px 20px; background: #f8fafc; border-bottom: 1px solid #f1f5f9; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8; font-weight: 600; align-items: center; gap: 8px;">
+                    <span>Keyword</span><span style="text-align:right;">Volume</span><span style="text-align:right;">KD %</span>
+                    <sc-for list="{{ ptOv.domains }}" as="d" hint-placeholder-count="4"><span style="{{ d.style }}">{{ d.name }}</span></sc-for>
+                  </div>
+                  <sc-for list="{{ ptOv.newRows }}" as="r" hint-placeholder-count="2">
+                    <div style="display: grid; grid-template-columns: {{ ptOv.gridCols }}; align-items: center; padding: 11px 20px; border-top: 1px solid #f1f5f9; gap: 8px;" style-hover="background:#f8fafc">
+                      <span style="font-size:13px;font-weight:500;color:#334155;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ r.kw }}</span>
+                      <span style="text-align:right;font-size:13px;color:#94a3b8;">{{ r.volFmt }}</span>
+                      <span style="{{ r.kdStyle }}"><sc-if value="{{ r.hasKd }}" hint-placeholder-val="{{ true }}"><span style="{{ r.kdDotStyle }}"></span></sc-if>{{ r.kd }}</span>
+                      <sc-for list="{{ r.cells }}" as="c" hint-placeholder-count="4">
+                        <span style="{{ c.cellStyle }}"><span style="{{ c.posStyle }}">{{ c.pos }}</span></span>
+                      </sc-for>
+                    </div>
+                  </sc-for>
+                </div>
+              </div>
+            </div>
+            </sc-if>
+
             <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
-              <div style="padding: 16px 20px; border-bottom: 1px solid #f1f5f9; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;"><div><h2 style="font-size: 15px; font-weight: 600; margin: 0;">Rankings Overview</h2><p style="font-size: 12px; color: #94a3b8; margin: 4px 0 0;">Your position vs each competitor per keyword — Δ compares the current SERP snapshot with the previous one</p><sc-if value="{{ pt.srcRankings.show }}" hint-placeholder-val="{{ true }}"><div style="margin-top: 6px;"><span style="{{ pt.srcRankings.style }}" title="{{ pt.srcRankings.title }}" aria-label="{{ pt.srcRankings.aria }}">{{ pt.srcRankings.text }}</span></div></sc-if></div><div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;"><span style="font-size: 11.5px; color: #94a3b8; max-width: 240px; line-height: 1.45;">{{ pt.newKwNote }}</span><span onClick="{{ h.refreshNewKeywords }}" role="button" aria-label="Measure only the newly tracked keywords" title="Fetches positions, search volume and difficulty for keywords that have never been measured. Leaves everything already measured alone, so it is far quicker and cheaper than a full refresh." style="{{ pt.newKwBtnStyle }}" style-hover="background:#4338ca">{{ pt.newKwBtnLabel }}</span></div></div>
+              <div style="padding: 16px 20px; border-bottom: 1px solid #f1f5f9; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;"><div><h2 style="font-size: 15px; font-weight: 600; margin: 0;">Rankings Overview</h2><p style="font-size: 12px; color: #94a3b8; margin: 4px 0 0;">Your position vs each competitor per keyword — Δ compares the current SERP snapshot with the previous one</p><sc-if value="{{ pt.srcRankings.show }}" hint-placeholder-val="{{ true }}"><div style="margin-top: 6px;"><span style="{{ pt.srcRankings.style }}" title="{{ pt.srcRankings.title }}" aria-label="{{ pt.srcRankings.aria }}">{{ pt.srcRankings.text }}</span></div></sc-if></div></div>
               <div style="overflow-x: auto;">
                 <div style="min-width: 640px;">
                   <div style="display: grid; grid-template-columns: {{ ptOv.gridCols }}; padding: 12px 20px; background: #f8fafc; border-bottom: 1px solid #f1f5f9; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8; font-weight: 600; align-items: center; gap: 8px;">
@@ -472,64 +545,7 @@
           </sc-if>
 
           <!-- SERP DRAWER -->
-          <sc-if value="{{ ptSerpOpen }}" hint-placeholder-val="{{ false }}">
-            <div style="position: fixed; inset: 0; z-index: 96; display: flex; justify-content: flex-end;">
-              <div onClick="{{ ptSerpCloseFn }}" style="position:absolute;inset:0;background:rgba(15,23,42,0.35);"></div>
-              <div style="position: relative; width: 460px; max-width: 92vw; height: 100vh; background: white; box-shadow: -16px 0 40px rgba(15,23,42,0.18); overflow-y: auto;">
-                <div style="padding: 20px 24px; border-bottom: 1px solid #e2e8f0; display: flex; align-items: flex-start; justify-content: space-between;">
-                  <div>
-                    <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: #94a3b8; font-weight: 600; margin-bottom: 5px;">Live SERP</div>
-                    <div style="font-size: 18px; font-weight: 700; color: #0f172a;">{{ ptSerp.kw }}</div>
-                    <div style="display: flex; gap: 12px; align-items: center; margin-top: 4px;">
-                      <sc-if value="{{ ptSerp.location }}" hint-placeholder-val="{{ true }}">
-                        <span style="font-size: 12px; color: #64748b; display: inline-flex; align-items: center; gap: 4px;"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>{{ ptSerp.location }}</span>
-                      </sc-if>
-                      <a href="{{ ptSerp.href }}" target="_blank" rel="noopener" style="font-size: 12px; color: #4f46e5; text-decoration: none; display: inline-flex; align-items: center;">Open in Google ↗</a>
-                    </div>
-                  </div>
-                  <span onClick="{{ ptSerpCloseFn }}" style="color:#94a3b8;cursor:pointer;display:inline-flex;" style-hover="color:#0f172a"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg></span>
-                </div>
-                <div style="padding: 12px 24px 24px;">
-                  <sc-if value="{{ ptSerp.showLoading }}">
-                    <div style="display: flex; flex-direction: column; gap: 12px;">
-                      <div style="display: flex; gap: 12px; align-items: center; padding: 12px 0; border-bottom: 1px solid #f1f5f9;">
-                        <div style="width: 22px; height: 18px; background: #e2e8f0; border-radius: 4px;"></div>
-                        <div style="flex: 1;">
-                          <div style="height: 14px; background: #e2e8f0; border-radius: 4px; margin-bottom: 6px; width: 80%;"></div>
-                          <div style="height: 12px; background: #f1f5f9; border-radius: 4px; width: 60%;"></div>
-                        </div>
-                      </div>
-                      <div style="display: flex; gap: 12px; align-items: center; padding: 12px 0; border-bottom: 1px solid #f1f5f9;">
-                        <div style="width: 22px; height: 18px; background: #e2e8f0; border-radius: 4px;"></div>
-                        <div style="flex: 1;">
-                          <div style="height: 14px; background: #e2e8f0; border-radius: 4px; margin-bottom: 6px; width: 70%;"></div>
-                          <div style="height: 12px; background: #f1f5f9; border-radius: 4px; width: 50%;"></div>
-                        </div>
-                      </div>
-                      <div style="display: flex; gap: 12px; align-items: center; padding: 12px 0; border-bottom: 1px solid #f1f5f9;">
-                        <div style="width: 22px; height: 18px; background: #e2e8f0; border-radius: 4px;"></div>
-                        <div style="flex: 1;">
-                          <div style="height: 14px; background: #e2e8f0; border-radius: 4px; margin-bottom: 6px; width: 90%;"></div>
-                          <div style="height: 12px; background: #f1f5f9; border-radius: 4px; width: 65%;"></div>
-                        </div>
-                      </div>
-                    </div>
-                  </sc-if>
-                  <sc-if value="{{ ptSerp.showError }}">
-                    <div style="padding: 16px; background: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; color: #b91c1c; font-size: 13px;">
-                      Failed to load live SERP: {{ ptSerp.error }}
-                    </div>
-                  </sc-if>
-                  <sc-if value="{{ ptSerp.showRows }}">
-                    <sc-for list="{{ ptSerp.rows }}" as="r" hint-placeholder-count="6">
-                      <div style="{{ r.rowStyle }}"><span style="{{ r.badgeStyle }}">{{ r.n }}</span><div style="min-width:0;"><div style="font-size:14px;color:#1a0dab;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ r.title }}</div><div style="font-size:12px;color:#0f766e;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ r.url }}</div></div><span onClick="{{ r.onAnalyze }}" style="margin-left:auto;font-size:11px;color:#4f46e5;background:#eef2ff;padding:4px 8px;border-radius:6px;cursor:pointer;flex-shrink:0;" style-hover="background:#e0e7ff" title="Analyze page in Domain Overview">Analyze</span></div>
-                    </sc-for>
-                    <p style="font-size: 11px; color: #94a3b8; margin: 14px 0 0; line-height: 1.5;">Live SERP is fetched on demand via DataForSEO SERP API (Google Organic, Advanced).</p>
-                  </sc-if>
-                </div>
-              </div>
-            </div>
-          </sc-if>
+          <!-- #include "components/serp_panel.html" -->
 
           </sc-if>
         </div>

@@ -1,0 +1,61 @@
+<!-- SERP DRAWER — shared by Position Tracking and Domain Overview. Both pages compute
+     the same ptSerpOpen/ptSerpCloseFn/ptSerp vals (via App#serpDrawerVals) and #include
+     this partial, so there is exactly one drawer implementation, not one per page. -->
+<sc-if value="{{ ptSerpOpen }}" hint-placeholder-val="{{ false }}">
+  <div style="position: fixed; inset: 0; z-index: 96; display: flex; justify-content: flex-end;">
+    <div onClick="{{ ptSerpCloseFn }}" style="position:absolute;inset:0;background:rgba(15,23,42,0.35);"></div>
+    <div style="position: relative; width: 460px; max-width: 92vw; height: 100vh; background: white; box-shadow: -16px 0 40px rgba(15,23,42,0.18); overflow-y: auto;">
+      <div style="padding: 20px 24px; border-bottom: 1px solid #e2e8f0; display: flex; align-items: flex-start; justify-content: space-between;">
+        <div>
+          <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: #94a3b8; font-weight: 600; margin-bottom: 5px;">Live SERP</div>
+          <div style="font-size: 18px; font-weight: 700; color: #0f172a;">{{ ptSerp.kw }}</div>
+          <div style="display: flex; gap: 12px; align-items: center; margin-top: 4px;">
+            <sc-if value="{{ ptSerp.location }}" hint-placeholder-val="{{ true }}">
+              <span style="font-size: 12px; color: #64748b; display: inline-flex; align-items: center; gap: 4px;"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>{{ ptSerp.location }}</span>
+            </sc-if>
+            <a href="{{ ptSerp.href }}" target="_blank" rel="noopener" style="font-size: 12px; color: #4f46e5; text-decoration: none; display: inline-flex; align-items: center;">Open in Google ↗</a>
+          </div>
+        </div>
+        <span onClick="{{ ptSerpCloseFn }}" style="color:#94a3b8;cursor:pointer;display:inline-flex;" style-hover="color:#0f172a"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg></span>
+      </div>
+      <div style="padding: 12px 24px 24px;">
+        <sc-if value="{{ ptSerp.showLoading }}">
+          <div style="display: flex; flex-direction: column; gap: 12px;">
+            <div style="display: flex; gap: 12px; align-items: center; padding: 12px 0; border-bottom: 1px solid #f1f5f9;">
+              <div style="width: 22px; height: 18px; background: #e2e8f0; border-radius: 4px;"></div>
+              <div style="flex: 1;">
+                <div style="height: 14px; background: #e2e8f0; border-radius: 4px; margin-bottom: 6px; width: 80%;"></div>
+                <div style="height: 12px; background: #f1f5f9; border-radius: 4px; width: 60%;"></div>
+              </div>
+            </div>
+            <div style="display: flex; gap: 12px; align-items: center; padding: 12px 0; border-bottom: 1px solid #f1f5f9;">
+              <div style="width: 22px; height: 18px; background: #e2e8f0; border-radius: 4px;"></div>
+              <div style="flex: 1;">
+                <div style="height: 14px; background: #e2e8f0; border-radius: 4px; margin-bottom: 6px; width: 70%;"></div>
+                <div style="height: 12px; background: #f1f5f9; border-radius: 4px; width: 50%;"></div>
+              </div>
+            </div>
+            <div style="display: flex; gap: 12px; align-items: center; padding: 12px 0; border-bottom: 1px solid #f1f5f9;">
+              <div style="width: 22px; height: 18px; background: #e2e8f0; border-radius: 4px;"></div>
+              <div style="flex: 1;">
+                <div style="height: 14px; background: #e2e8f0; border-radius: 4px; margin-bottom: 6px; width: 90%;"></div>
+                <div style="height: 12px; background: #f1f5f9; border-radius: 4px; width: 65%;"></div>
+              </div>
+            </div>
+          </div>
+        </sc-if>
+        <sc-if value="{{ ptSerp.showError }}">
+          <div style="padding: 16px; background: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; color: #b91c1c; font-size: 13px;">
+            Failed to load live SERP: {{ ptSerp.error }}
+          </div>
+        </sc-if>
+        <sc-if value="{{ ptSerp.showRows }}">
+          <sc-for list="{{ ptSerp.rows }}" as="r" hint-placeholder-count="6">
+            <div style="{{ r.rowStyle }}"><span style="{{ r.badgeStyle }}">{{ r.n }}</span><div style="min-width:0;"><div style="font-size:14px;color:#1a0dab;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ r.title }}</div><div style="font-size:12px;color:#0f766e;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ r.url }}</div></div><span onClick="{{ r.onAnalyze }}" style="margin-left:auto;font-size:11px;color:#4f46e5;background:#eef2ff;padding:4px 8px;border-radius:6px;cursor:pointer;flex-shrink:0;" style-hover="background:#e0e7ff" title="Analyze page in Domain Overview">Analyze</span></div>
+          </sc-for>
+          <p style="font-size: 11px; color: #94a3b8; margin: 14px 0 0; line-height: 1.5;">Live SERP is fetched on demand via DataForSEO SERP API (Google Organic, Advanced).</p>
+        </sc-if>
+      </div>
+    </div>
+  </div>
+</sc-if>

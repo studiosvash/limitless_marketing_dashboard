@@ -89,5 +89,16 @@ def record_cost(connector: str, site_id: Optional[str], cost: float,
             )
     except Exception as exc:  # pragma: no cover - defensive; must never fail a sync
         logger.warning(f"[{connector}] cost not recorded (${amount}): {exc}")
+        return amount
+
+    # Budget notifications — "after every hit". Every DataForSEO connector's spend already
+    # funnels through this one function, so this is the single choke point to watch the
+    # monthly cap cross a $5/$50/90%/100% line, without a separate polling process.
+    try:
+        from apps.dashboard.services.budget_service import check_and_notify_budget, month_to_date_spend
+        new_total = month_to_date_spend()
+        check_and_notify_budget(new_total - amount, new_total)
+    except Exception as exc:  # pragma: no cover - defensive; must never fail a sync
+        logger.warning(f"[{connector}] budget notification check failed: {exc}")
 
     return amount

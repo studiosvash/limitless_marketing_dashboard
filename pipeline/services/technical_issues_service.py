@@ -17,7 +17,7 @@ Every issue is backed by concrete, checkable metrics.
 
 import json
 import re
-from urllib.parse import urlparse
+from urllib.parse import urlparse, unquote
 from sqlalchemy import select, func, delete, or_
 
 from pipeline.db.schema import IndexingStatus, SEODaily, TechnicalIssue, PageSpeed, Page
@@ -28,6 +28,33 @@ from pipeline.utils.logger import get_logger
 logger = get_logger("technical_issues_service")
 
 URL_PATH_MAX = 70
+
+
+def _normalize_url_key(u: str) -> str:
+    """Collapse trailing-slash / capitalization / %-encoding variants of one URL to the
+    same key, so 'duplicate title' can tell "same page, different URL" apart from
+    genuinely different content that happens to share a title."""
+    try:
+        parsed = urlparse(u)
+    except ValueError:
+        return u.lower()
+    path = unquote(parsed.path or "/").lower()
+    if len(path) > 1 and path.endswith("/"):
+        path = path[:-1]
+    return f"{parsed.netloc.lower()}{path}"
+
+
+def _canonical_score(u: str) -> tuple:
+    """Lower is more "canonical": https, no trailing slash, not %-encoded, lowercase, shorter."""
+    parsed = urlparse(u)
+    return (
+        0 if parsed.scheme == "https" else 1,
+        0 if parsed.path in ("", "/") or not parsed.path.endswith("/") else 1,
+        0 if unquote(u) == u else 1,
+        0 if u == u.lower() else 1,
+        len(u),
+        u,
+    )
 
 # ---------------------------------------------------------------------------
 # What this service is allowed to delete.
@@ -284,6 +311,7 @@ def rebuild_technical_issues(site_id: str) -> int:
         ).scalars().all()
 
         title_counts: dict[str, list[str]] = {}
+        page_traffic: dict[str, int] = {}
         for p in page_rows:
             url = p.url
             if not url:
@@ -291,6 +319,7 @@ def rebuild_technical_issues(site_id: str) -> int:
             scanned_urls.add(url)
             title = (p.title or p.meta_title or "").strip()
             desc = (p.meta_description or "").strip()
+            page_traffic[url] = (p.clicks or 0) + (p.sessions or 0)
 
             if not title or len(title) < 3:
                 _add(url, "missing_title", "high",
@@ -310,12 +339,59 @@ def rebuild_technical_issues(site_id: str) -> int:
                 _add(url, "orphaned_pages", "low",
                      "Page receives no organic visits or internal link equity. Ensure it is linked from relevant category pages.")
 
-        # Flag duplicate titles across pages
+        # Flag duplicate titles across pages -- and say which one to act on, using two real
+        # signals rather than leaving every row identical:
+        #
+        # 1) Some "duplicates" are the SAME page reached through different URLs -- a trailing
+        #    slash, capitalization, or %-encoding (e.g. /pricing-san-diego vs
+        #    /pricing-san-diego/, or greeters-in-Las%20Vegas vs greeters-in-las-vegas). That's
+        #    a canonicalization problem, not a content problem: fixing it means a 301 redirect
+        #    to one clean URL, not writing a second title. Detected by normalizing each URL
+        #    (lowercase, decoded, no trailing slash) and grouping on that.
+        # 2) The rest are genuinely different pages that happen to share a title. When at
+        #    least one has real clicks/sessions, it's the page GSC/GA4 traffic is already
+        #    landing on with this title -- name it as the one to KEEP and rewrite the others.
+        #    With no traffic signal at all (fresh site, or a tie) there's nothing to base a
+        #    pick on, so the message stays generic rather than fabricating a recommendation.
         for t_lower, urls in title_counts.items():
-            if len(urls) > 1 and len(t_lower) > 3:
-                for u in urls[:10]:
+            if len(urls) <= 1 or len(t_lower) <= 3:
+                continue
+
+            variant_groups: dict[str, list[str]] = {}
+            for u in urls:
+                variant_groups.setdefault(_normalize_url_key(u), []).append(u)
+
+            ranked = sorted(urls, key=lambda u: page_traffic.get(u, 0), reverse=True)
+            best_url, best_traffic = ranked[0], page_traffic.get(ranked[0], 0)
+            has_signal = best_traffic > 0 and best_traffic > page_traffic.get(ranked[1], 0)
+
+            for u in urls[:10]:
+                same_page = variant_groups[_normalize_url_key(u)]
+                if len(same_page) > 1:
+                    canonical = min(same_page, key=_canonical_score)
+                    if u == canonical:
+                        _add(u, "duplicate_titles", "high",
+                             f"Title is identical across {len(urls)} URLs, but {len(same_page)} of them "
+                             f"are the SAME page reached through different URLs (trailing slash, "
+                             f"capitalization, or encoding). This is the clean form -- 301-redirect the "
+                             f"other{'s' if len(same_page) > 2 else ''} here instead of rewriting titles.")
+                    else:
+                        _add(u, "duplicate_titles", "high",
+                             f"This is the same page as {canonical}, just reached through a different URL "
+                             f"(trailing slash, capitalization, or encoding) -- not separate content. "
+                             f"301-redirect it to {canonical} rather than editing the title.")
+                elif not has_signal:
                     _add(u, "duplicate_titles", "high",
                          f"Title is identical across {len(urls)} URLs. Every page should have a distinct title tag.")
+                elif u == best_url:
+                    _add(u, "duplicate_titles", "high",
+                         f"Title is identical across {len(urls)} URLs. This page already has the most "
+                         f"traffic in the group ({best_traffic} clicks+sessions) -- keep the title here "
+                         f"and rewrite it on the other {len(urls) - 1}.")
+                else:
+                    _add(u, "duplicate_titles", "high",
+                         f"Title is identical across {len(urls)} URLs. Rewrite the title on this page -- "
+                         f"{best_url} already earns the traffic with it ({best_traffic} clicks+sessions).")
 
         # 4) Long URLs among pages that earn impressions or traffic.
         url_rows = session.execute(

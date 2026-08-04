@@ -7,7 +7,9 @@
          a connector of their own. Technical issues are a different lineage: DataForSEO OnPage
          plus rows technical_issues_service derives from GSC/Lighthouse data. */
       const GSC_SRC = ['gsc'];
+      const fmtD = z => new Date(z + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
       vals.seo = {
+        window: data.window && data.window.from ? (fmtD(data.window.from) + ' – ' + fmtD(data.window.to) + ' · ' + data.window.days + ' days') : '',
         srcLowCtr: this.srcBadge(GSC_SRC),
         srcCountries: this.srcBadge(GSC_SRC),
         srcDevices: this.srcBadge(GSC_SRC),

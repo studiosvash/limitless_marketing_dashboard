@@ -381,7 +381,14 @@ and last-updated. Clicking a row opens that project's workspace.
 
 **Finish** creates the project, saves the tracking-area choices and competitors, sends the
 keywords to tracking, and drops you into the new workspace. Adding a domain that already exists
-is caught with a toast instead of an error.
+in Position Tracking is **allowed** — it registers a second, independent project against the
+same domain (its own tracking-area settings, keyword list and competitors), sent to
+`POST /api/projects` with `allow_duplicate: true`. This is the one project-creation path that
+allows it: the topbar "+" add-site popover and Settings still reject a domain that is already
+registered (`add_site()` defaults `allow_duplicate` to `False` there). Because Position
+Tracking's own data (`saved_keywords`, `keyword_rankings`) is keyed by the raw domain string, not
+by project id, duplicate projects for the same domain share the same tracked-keyword pool and
+ranking history — they differ in name and tracking-area settings, not in underlying SEO data.
 
 Search engine, device and language are **stored on the `sites` row** (`search_engine`, `device`,
 `language`) and read back by the workspace header and the Edit modal. They used to be collected
@@ -417,7 +424,23 @@ Three workspace tabs:
   Keywords already in the top 3, and keywords with neither a position nor a volume, are not
   scored at all.
 - **All Tracked Keywords** — keyword, position badge, delta (`▲ +n`, `▼ −n`, `NEW`), volume,
-  clicks, KD bar, CPC, intent badge, ranking URL.
+  clicks, KD bar, CPC, intent badge, ranking URL. Only keywords with a measured position in the
+  current window (`pos != null`) appear here, so no row ever shows a blank Pos/Δ cell — this
+  catches both a brand-new tracked keyword and a keyword `dataforseo_keywords` has priced but no
+  rank connector has ever captured. The "All (N)" tab count reflects this table's own row count,
+  not the portfolio-wide `Tracked keywords` KPI above it.
+- **Newly Added Keywords — Not Tracked Yet** — a separate, tinted card shown only when non-empty,
+  for every tracked keyword with no measured position yet (`pos == null`): keyword, volume, KD,
+  CPC, intent — no Pos/Δ/clicks columns, since there is genuinely no measurement to show. This is
+  what a "Send keywords → Position Tracking" from the Keyword Explorer lands in first. Its own
+  "Track These New Keywords" button runs the `positions_new` sync scope (`h.refreshNewKeywords`,
+  §11/`app.js`), which `sync_engine.sync_page` narrows to exactly `keywords_needing_backfill`'s
+  list via `connector.only_keywords` — it does not re-query the rest of the tracked set. The
+  "All Tracked Keywords" card's own "Refresh Tracked Keywords" button is the full `positions`
+  scope (every tracked keyword against every competitor) and carries a tooltip pointing at the
+  narrower button, since it's the one that used to get clicked by mistake right after adding a
+  few keywords. Once a keyword is measured it drops out of this card and appears in the main
+  table and in Rankings Overview on its own — nothing else needs to move it.
 
 **Overview**
 - **Competitor Map** — the domain-level aggregate of the same captured SERP rows the grid

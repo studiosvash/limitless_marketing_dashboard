@@ -31,7 +31,13 @@ class Site(Base):
     __tablename__ = "sites"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    site_url = Column(String(255), nullable=False, unique=True, index=True)
+    # NOT unique: Position Tracking's wizard allows registering the same domain as a second,
+    # independent project (add_site(..., allow_duplicate=True)) so a team can run two tracking
+    # configurations against one site. Every other creation path (topbar "+", Settings) still
+    # blocks duplicates at the add_site() level -- this column-level constraint would block
+    # both, so the guard has to live in application code instead. See ensure_site_url_not_unique
+    # below for reconciling a database created before this change.
+    site_url = Column(String(255), nullable=False, index=True)
     site_name = Column(String(255), nullable=True)
     slug = Column(String(100), nullable=True, unique=True, index=True)
     vertical = Column(String(255), nullable=True)
@@ -1007,6 +1013,39 @@ def ensure_backlinks_columns(session_or_engine) -> list[str]:
     return _run_alter(session_or_engine, "backlinks", _BACKLINKS_ADDED_COLUMNS)
 
 
+def ensure_site_url_not_unique(session_or_engine) -> bool:
+    """Drop the UNIQUE index on `sites.site_url` if a pre-existing database still has one.
+
+    `Site.site_url` used to be declared `unique=True`; a database created before that was
+    removed still carries the resulting unique index (Column(unique=True, index=True) compiles
+    to one unique Index, not a separate UniqueConstraint -- confirmed via `PRAGMA index_list`
+    on SQLite), and `create_all()` never alters an existing table's constraints. This inspects
+    for that index on either backend and replaces it with a plain (non-unique) index of the same
+    name, so Position Tracking can register a duplicate domain (add_site(allow_duplicate=True))
+    without an IntegrityError. Idempotent: a database already reconciled has no unique index left
+    to find, so a repeat call issues nothing.
+
+    Returns True if a unique index was found and replaced.
+    """
+    def _do(conn) -> bool:
+        inspector = inspect(conn)
+        if not inspector.has_table("sites"):
+            return False
+        changed = False
+        for idx in inspector.get_indexes("sites"):
+            if idx.get("unique") and idx.get("column_names") == ["site_url"]:
+                name = idx["name"]
+                conn.execute(text(f'DROP INDEX "{name}"'))
+                conn.execute(text(f'CREATE INDEX "{name}" ON sites (site_url)'))
+                changed = True
+        return changed
+
+    if isinstance(session_or_engine, Session):
+        return _do(session_or_engine.connection())
+    with session_or_engine.begin() as conn:
+        return _do(conn)
+
+
 def init_db(engine: Engine) -> None:
     """Create all analytics tables if they don't exist, then reconcile columns added later.
 
@@ -1017,3 +1056,4 @@ def init_db(engine: Engine) -> None:
     ensure_site_columns(engine)
     ensure_page_speed_columns(engine)
     ensure_backlinks_columns(engine)
+    ensure_site_url_not_unique(engine)

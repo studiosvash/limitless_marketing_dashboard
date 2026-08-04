@@ -53,10 +53,12 @@ def _ensure_columns(session) -> None:
         return
     _COLUMNS_ENSURED.add(key)
     try:
-        from pipeline.db.schema import ensure_site_columns
+        from pipeline.db.schema import ensure_site_columns, ensure_site_url_not_unique
         added = ensure_site_columns(session)
         if added:
             logger.info(f"[site_service] Added missing sites column(s): {', '.join(added)}")
+        if ensure_site_url_not_unique(session):
+            logger.info("[site_service] Dropped legacy unique index on sites.site_url")
     except Exception as exc:  # noqa: BLE001
         logger.warning(f"[site_service] Could not reconcile sites columns: {exc}")
 
@@ -190,7 +192,8 @@ def sync_primary_site_from_env() -> None:
 
 def add_site(site_url, site_name=None, gsc_property=None, ga4_property_id=None,
              dataforseo_target_domain=None, vertical=None, location="United States",
-             search_engine="Google", device="Desktop", language="English") -> int:
+             search_engine="Google", device="Desktop", language="English",
+             allow_duplicate=False) -> int:
     """Register a new site. Returns the new row's integer primary key.
 
     `site_url` is accepted in any spelling and STORED NORMALISED — `https://www.x.com/`,
@@ -209,6 +212,12 @@ def add_site(site_url, site_name=None, gsc_property=None, ga4_property_id=None,
     Their defaults match the wizard's own pre-selected options, so a caller that does not pass
     them stores what the wizard would have shown rather than NULL. They are a recorded
     preference only — see the note on Site in pipeline/db/schema.py.
+
+    `allow_duplicate` skips the duplicate-domain check below. Only the Position Tracking
+    wizard passes this — it lets a team register the same domain twice to run two independent
+    tracking configurations (different keyword lists, tracking-area settings) against one site.
+    Every other creation path (topbar "+", Settings) leaves this False, so a plain re-add of an
+    already-registered domain is still rejected there.
     """
     raw_url = (site_url or "").strip()
     if not raw_url:
@@ -219,10 +228,11 @@ def add_site(site_url, site_name=None, gsc_property=None, ga4_property_id=None,
         raise ValueError(f"Could not read a domain from {raw_url!r}")
     with get_session() as session:
         _ensure_columns(session)
-        existing_sites = session.execute(select(Site)).scalars().all()
-        for s in existing_sites:
-            if _bare_domain(s.site_url) == domain:
-                raise ValueError(f"Site already exists: {s.site_url}")
+        if not allow_duplicate:
+            existing_sites = session.execute(select(Site)).scalars().all()
+            for s in existing_sites:
+                if _bare_domain(s.site_url) == domain:
+                    raise ValueError(f"Site already exists: {s.site_url}")
         name = site_name or domain
         site = Site(
             site_url=domain,

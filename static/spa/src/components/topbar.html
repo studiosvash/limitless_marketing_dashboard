@@ -23,7 +23,7 @@
         <div data-nc-root="" style="position: relative;">
           <div onClick="{{ h.ncToggle }}" role="button" aria-haspopup="true" aria-expanded="{{ ncOpen }}" aria-label="{{ ncAria }}" title="Notifications" style="{{ ncTriggerStyle }}" style-hover="border-color:#cbd5e1">
             <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15 17h5l-1.4-1.4a2 2 0 01-.6-1.4V11a6 6 0 10-12 0v3.2a2 2 0 01-.6 1.4L4 17h5m6 0H9m6 0v1a3 3 0 11-6 0v-1"></path></svg>
-            <sc-if value="{{ hasUnacked }}" hint-placeholder-val="{{ true }}">
+            <sc-if value="{{ ncHasUnread }}" hint-placeholder-val="{{ true }}">
               <span role="presentation" aria-hidden="true" style="{{ ncBadgeStyle }}">{{ ncBadgeText }}</span>
             </sc-if>
           </div>
@@ -86,6 +86,13 @@
         </div>
       </div>
     </header>
+
+    <!-- DataForSEO monthly budget banner — shown from 90% of the cap up (see
+         budget_service.py). Sits outside <header> at the same level as the add-site modal
+         so it spans the full width under the topbar rather than being squeezed into it. -->
+    <sc-if value="{{ budgetBannerShow }}" hint-placeholder-val="{{ false }}">
+      <div role="status" style="{{ budgetBannerStyle }}">{{ budgetBannerText }}</div>
+    </sc-if>
 
     <!-- Add-domain modal — deliberately OUTSIDE <header>. <header> has `backdrop-filter`,
          which (like `transform`/`filter`/`will-change`/`perspective`) creates a CSS containing

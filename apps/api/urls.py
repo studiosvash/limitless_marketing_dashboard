@@ -43,6 +43,12 @@ urlpatterns = [
     path("alerts/ack", views.AlertBatchAckView.as_view(), name="alert-ack-batch"),
     path("alerts/<str:alert_id>/ack", views.AlertAckView.as_view(), name="alert-ack"),
     path("alerts/<str:alert_id>/unack", views.AlertUnackView.as_view(), name="alert-unack"),
+    # Topbar bell — account-wide, not project-scoped (see notifications_service.py).
+    # Batch route first, matching the alerts/ack pair's specific-before-generic order.
+    path("notifications/ack-all", views.NotificationBatchAckView.as_view(), name="notification-ack-all"),
+    path("notifications/<int:notification_id>/ack", views.NotificationAckView.as_view(), name="notification-ack"),
+    path("notifications", views.NotificationsView.as_view(), name="notifications"),
+    path("budget-status", views.BudgetStatusView.as_view(), name="budget-status"),
     # Refresh / Sync
     # `sync/active` before `sync` is not strictly required (different segment counts), but it
     # documents the specific-before-generic intent, matching the alerts/ack pair above.

@@ -117,15 +117,14 @@
         const domainStr = (this.state.ptWizDomain || '').trim();
         const domain = domainStr.toLowerCase().replace(/^https?:\/\//, '').replace(/\/$/, '');
         if (!domain) { this.setState({ ptWizStep: 1 }); return; }
-        
-        if (this.state.projects.some(p => p.domain === domain)) {
-          this.setState({ ptWizBusy: false, ptWizOpen: false });
-          if (this.notify) this.notify('That site is already added to Position Tracking');
-          return;
-        }
 
+        // Position Tracking allows adding the same domain again as a second, independent
+        // project (its own tracking-area settings, keyword list and competitors) — the
+        // client-side block that used to sit here (and the backend's own duplicate-domain
+        // guard) are bypassed for this one path via allow_duplicate. Every other project
+        // creation path (topbar "+", Settings) still rejects a duplicate domain.
         this.setState({ ptWizBusy: true });
-        window.FuseAPI.post('/api/projects', { domain: domainStr, name: (this.state.ptWizName || '').trim() || undefined, location: this.state.ptWizLoc })
+        window.FuseAPI.post('/api/projects', { domain: domainStr, name: (this.state.ptWizName || '').trim() || undefined, location: this.state.ptWizLoc, allow_duplicate: true })
           .then(p => {
             if (!this._alive) return;
             this.setState({ ptWizBusy: false, ptWizOpen: false, ptView: 'workspace', ptTab: 'landscape', projectId: p.id });
@@ -482,11 +481,10 @@
       const ptSetup = !data || !data.kpis || data.kpis.state === 'setup' || (data.kpis.tracked === 0 && (!data.movers || !data.movers.length) && (!data.competitors || !data.competitors.rows || !data.competitors.rows.length) && (!data.rankings || !data.rankings.length));
       if (ptSetup) {
         /* Setup state: nothing measured on screen, so nothing to attribute. */
-        vals.pt = { setup: true, tracked: 0, avgPos: 0, traffic: 0, impressions: 0, distSegs: [], distLegend: [], improved: 0, declined: 0, added: 0, lost: 0, movers: [], compDomains: [], compGridCols: '', compRows: [], rankings: [], filteredRankings: [],
+        vals.pt = { setup: true, tracked: 0, avgPos: 0, traffic: 0, impressions: 0, distSegs: [], distLegend: [], improved: 0, declined: 0, added: 0, lost: 0, movers: [], compDomains: [], compGridCols: '', compRows: [], rankings: [], filteredRankings: [], trackedCount: 0, newRows: [], hasNewRows: false,
           srcKpis: this.srcBadge(null), srcDist: this.srcBadge(null), srcMovers: this.srcBadge(null),
           srcRankings: this.srcBadge(null), srcOpps: this.srcBadge(null), srcVisibility: this.srcBadge(null),
-          volCoverage: { show: false, text: '', title: '' },
-          newKwNote: '', newKwBtnLabel: 'Measure new keywords', newKwBtnStyle: {} };
+          volCoverage: { show: false, text: '', title: '' } };
         vals.ptOpp = { rows: [], isEmpty: true, gridCols: '' };
         vals.ptMap = buildMap(null);
         return vals;
@@ -525,11 +523,6 @@
           text: data.volume_coverage.with_volume + ' of ' + data.volume_coverage.tracked + ' keywords have search volume',
           title: data.volume_coverage.note || ''
         } : { show: false, text: '', title: '' },
-        /* Incremental refresh control. The page's own green Fetch button runs the FULL
-           positions scope; this one runs only the keywords that have never been measured. */
-        newKwNote: 'Just sent new keywords? Measure only those instead of re-querying the whole set.',
-        newKwBtnLabel: 'Measure new keywords',
-        newKwBtnStyle: { display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '8px 14px', borderRadius: '8px', fontSize: '12.5px', fontWeight: 600, color: 'white', background: '#4f46e5', cursor: 'pointer', whiteSpace: 'nowrap' },
         srcOpps: this.srcBadge(POS_SRC.concat(['dataforseo_keywords'])),
         srcVisibility: this.srcBadge(POS_SRC.concat(['dataforseo_keywords'])),
         /* The Competitor Map view was removed, but its source is still shown: the Rankings
@@ -561,7 +554,11 @@
         }),
         compDomains: data.competitors.domains,
         compGridCols: 'minmax(180px, 1.4fr) repeat(' + (1 + data.competitors.domains.length) + ', 1fr)',
-        compRows: data.competitors.rows.map(row => {
+        /* Same rule as the Landscape table: a keyword with no captured position for YOUR
+           domain (row.you.pos == null) is unmeasured, not "you rank nowhere" -- it belongs in
+           the "Newly Added Keywords" card above, not as an all-dash row here. It reappears in
+           this grid on its own once a sync captures a position, same as the main table. */
+        compRows: data.competitors.rows.filter(row => row.you && row.you.pos != null).map(row => {
           const mapCell = c => {
             if (c == null || c.pos == null) return { text: '—', style: { color: '#cbd5e1' }, diff: '', diffStyle: {}, url: '', domain: (c && c.domain) || '' };
             const pos = Math.round(c.pos);
@@ -611,7 +608,33 @@
             url: k.url || ''
           };
         }),
+        /* Split on whether a position was actually captured this window, not on `source`
+           alone: a keyword can carry source:'sync' (a keyword_rankings row exists) yet still
+           have pos:null -- e.g. dataforseo_keywords wrote volume/KD/CPC but no rank connector
+           has ever found it ranking. Either way there is no Pos/Δ to show, so `pos == null` is
+           the one check that guarantees the main table never renders a blank Pos/Δ cell; the
+           unmeasured keywords get their own section instead (pt.newRows below). */
+        trackedCount: (data.rankings || data.keywords || []).filter(k => k.pos != null).length,
+        // Precomputed, not `pt.newRows.length > 0` in the template: this DSL's {{ }} resolver
+        // (support.js resolve()) only handles ==/===/!=/!== and dot-paths, no `>`/`<` at all --
+        // an unsupported operator falls through to resolvePath(), hits the space before `>`,
+        // and returns undefined (falsy) silently. The sc-if rendered null every time, no error.
+        hasNewRows: (data.rankings || data.keywords || []).some(k => k.pos == null),
+        newRows: (data.rankings || data.keywords || []).filter(k => k.pos == null).map(k => {
+          const iLower = (k.intent || '').toLowerCase();
+          return {
+            kw: k.kw,
+            volume: this.fmt(k.volume),
+            kd: k.kd != null ? Math.round(k.kd) : '—',
+            kdWidth: k.kd != null ? Math.min(100, Math.max(5, Math.round(k.kd))) + '%' : '0%',
+            kdColor: k.kd != null ? (k.kd < 30 ? '#10b981' : (k.kd < 60 ? '#f59e0b' : '#ef4444')) : '#e2e8f0',
+            cpc: k.cpc != null ? '$' + Number(k.cpc).toFixed(2) : '—',
+            intent: k.intent || '—',
+            intentStyle: { padding: '2px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', background: iLower.includes('comm') ? '#d1fae5' : (iLower.includes('info') ? '#dbeafe' : (iLower.includes('trans') ? '#ffedd5' : '#f1f5f9')), color: iLower.includes('comm') ? '#047857' : (iLower.includes('info') ? '#1d4ed8' : (iLower.includes('trans') ? '#c2410c' : '#475569')) }
+          };
+        }),
         filteredRankings: (data.rankings || data.keywords || []).filter(k => {
+          if (k.pos == null) return false;
           const st = s.ptRankingsSubTab || 'all';
           if (st === 'top10') return k.pos != null && k.pos <= 10;
           if (st === 'improved') return k.prevPos != null && k.pos != null && (k.prevPos - k.pos) >= 2;
@@ -764,6 +787,28 @@
           },
           domains: allDomains.filter(d => !hiddenOv.includes(d)).map(d => ({ name: d, style: { textAlign: 'center', color: d === vals.ptWs.domain ? '#4338ca' : '#64748b', fontSize: '9.5px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } })),
           gridCols: 'minmax(180px, 1.4fr) 90px 88px repeat(' + allDomains.filter(d => !hiddenOv.includes(d)).length + ', 1fr)',
+          /* Same grid shape as `rows` below (Keyword/Volume/KD%/one column per domain), for
+             keywords with no captured position anywhere yet -- source: none of them have a
+             `you` cell, since `pt.compRows` already excludes exactly these. Rendered as its
+             own card directly above Rankings Overview so a keyword just sent from the Keyword
+             Explorer visibly moves DOWN into the real grid once "Track New Keywords" measures
+             it, instead of appearing as an all-dash row mixed into the real data. */
+          // Precomputed for the same reason as pt.hasNewRows above: this DSL's {{ }} resolver
+          // has no `>`/`<` operator support, so `ptOv.newRows.length > 0` silently resolved to
+          // undefined (falsy) and the card never rendered, with no console error either.
+          hasNewRows: (data.rankings || data.keywords || []).some(k => k.pos == null),
+          newRows: (data.rankings || data.keywords || []).filter(k => k.pos == null).map(k => ({
+            kw: k.kw,
+            volFmt: (k.volume === 0 || k.volume) ? this.fmt(k.volume) : '—',
+            kd: k.kd != null ? Math.round(k.kd) : '—',
+            kdStyle: { display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '5px', paddingLeft: '10px', fontSize: '13px', color: k.kd != null ? '#475569' : '#94a3b8' },
+            hasKd: k.kd != null,
+            kdDotStyle: { width: '8px', height: '8px', borderRadius: '50%', flexShrink: 0, background: k.kd != null ? (k.kd < 30 ? '#10b981' : (k.kd < 60 ? '#f59e0b' : '#ef4444')) : '#cbd5e1' },
+            cells: allDomains.filter(d => !hiddenOv.includes(d)).map(() => ({
+              pos: '—', diff: '', cellStyle: { textAlign: 'center', padding: '6px', borderRadius: '6px' },
+              posStyle: { color: '#cbd5e1' }, diffStyle: {}
+            }))
+          })),
           rows: vals.pt.compRows.map(row => {
             const rInfo = (vals.pt.rankings || []).find(r => (r.kw || '').toLowerCase() === (row.kw || '').toLowerCase()) || {};
             return {
@@ -918,56 +963,10 @@
           })
         };
 
-        vals.ptSerpOpen = !!s.ptSerpKw;
-        vals.ptSerpCloseFn = () => this.setState({ ptSerpKw: null });
-        if (s.ptSerpKw) {
-          const kw = s.ptSerpKw;
-          const serpRows = [];
-          
-          if (s.ptSerpData) {
-            s.ptSerpData.forEach((item, i) => {
-              const dom = item.domain || '';
-              const isYou = dom.toLowerCase() === vals.ptWs.domain.toLowerCase();
-              serpRows.push({
-                n: item.position || (i + 1),
-                domain: dom,
-                isYou,
-                url: item.url,
-                title: item.title,
-                rowStyle: { display: 'flex', gap: '12px', padding: '12px 0', borderBottom: '1px solid #f1f5f9', background: isYou ? '#fafaff' : 'transparent', alignItems: 'center' },
-                badgeStyle: { minWidth: '22px', fontSize: '13px', fontWeight: 700, color: isYou ? '#4f46e5' : '#94a3b8' },
-                onAnalyze: () => vals.h.analyzeUrlInDomainOverview(item.url)
-              });
-            });
-          }
-          
-          const locParam = this.googleSerpLocationParam(vals.ptWs.location);
-
-          vals.ptSerp = {
-            kw, 
-            location: vals.ptWs.location, 
-            href: 'https://www.google.com/search?q=' + encodeURIComponent(kw) + locParam, 
-            rows: serpRows,
-            loading: !!s.ptSerpLoading,
-            error: s.ptSerpError || null,
-            /* Pre-computed, and it is NOT cosmetic. The template used to branch on
-               `{{ !ptSerp.loading && ptSerp.error }}`, but the dc-runtime's expression
-               resolver (support.js resolve()) understands parentheses, ===/!==/==/!=,
-               a leading `!`, true/false and property paths -- and NOTHING ELSE. It has no
-               `&&`. So it parsed that as `!resolve("ptSerp.loading && ptSerp.error")`, the
-               path did not exist, and `!undefined` is TRUE. Both the error branch and the
-               results branch therefore rendered on every open: the drawer showed
-               "Failed to load live SERP:" (with an empty message, because error was null)
-               directly above a perfectly good result list.
-               Never put `&&` or `||` in a template expression -- it fails silently as true. */
-            showLoading: !!s.ptSerpLoading,
-            showError: !s.ptSerpLoading && !!s.ptSerpError,
-            showRows: !s.ptSerpLoading && !s.ptSerpError
-          };
-        } else {
-          vals.ptSerp = { kw: '', location: '', href: '', rows: [], loading: false, error: null,
-            showLoading: false, showError: false, showRows: false };
-        }
+        const ptSerpVals = this.serpDrawerVals(vals.ptWs.domain, vals.ptWs.location);
+        vals.ptSerpOpen = ptSerpVals.open;
+        vals.ptSerpCloseFn = ptSerpVals.closeFn;
+        vals.ptSerp = ptSerpVals.serp;
       }
 
     }

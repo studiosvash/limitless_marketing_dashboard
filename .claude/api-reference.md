@@ -337,9 +337,10 @@ whatever renders the row; do not reintroduce it in the query.
 
 **Related frontend:** Overview page.
 
-### `GET /api/projects/<slug>/seo`
+### `GET /api/projects/<slug>/seo` — *range-aware*
 
-Not range-aware — always uses a `30d` window anchored to the latest data.
+`?range=7d|28d|90d`, default `28d`, via the same `resolve_range_periods` helper as Overview
+(anchored to the latest data date, not `today()`).
 
 ```json
 {
@@ -347,14 +348,19 @@ Not range-aware — always uses a `30d` window anchored to the latest data.
   "lowCtrPages": [{"url", "impressions", "clicks", "ctr", "avg_pos"}],
   "countries":   [{"country", "clicks", "impressions", "ctr", "avg_position"}],
   "anomalies":   [{"id", "metric", "severity", "deviation", "date", "detail"}],
+  "issues":      [{"issue_type", "severity", "pages", "example_url", "description"}],
+  "window":      {"from": "2026-07-05", "to": "2026-08-01", "days": 28},
   "quickWinKws": 7
 }
 ```
 
-`low_ctr` = pages with ≥100 impressions and ≤2 % CTR (max 15 returned). `critical` counts
-`TechnicalIssue` rows of type `not_found_404`. `total_issues` = all technical issues +
-anomalies + low-CTR pages. `quickWinKws` counts keywords ranking 4–10 with real clicks.
-`countries` is capped at the top 5 by clicks.
+`low_ctr` = pages with ≥100 impressions and ≤2 % CTR (max 15 returned) **within the requested
+window**, not a fixed 30 days. `critical` counts `TechnicalIssue` rows of type `not_found_404`
+(these are not window-scoped — technical issues have no date dimension). `total_issues` = all
+technical issues + anomalies + low-CTR pages. `quickWinKws` counts keywords ranking 4–10 with
+real clicks in the window. `countries` is capped at the top 5 by clicks. `window` is the same
+`{from, to, days}` shape as the Ads endpoint's `window` — the SPA's SEO page renders it next to
+"Pages seen but not clicked" so the table's date range is never ambiguous.
 
 ### `GET /api/projects/<slug>/keywords`
 
@@ -403,6 +409,17 @@ yet); `source` is always `"sync"` here.
 
 A *cell* is `{pos, prev, diff, direction}` with `direction ∈ up|down|flat`.
 `rankings` and `keywords` are the same array (the template reads both names).
+
+Each keyword's `source` is `"new"` when it was tracked since the last positioning sync and has no
+`keyword_rankings` row in the current window at all — `"sync"` otherwise. `source` alone is NOT
+enough to know whether `pos` is populated: a `dataforseo_keywords`-only row is `"sync"` (a row
+exists) but still carries `pos: null` if no rank connector has ever captured that keyword. The
+Landscape tab's frontend splits on `pos == null` instead — the one check that actually predicts
+an unrenderable Pos/Δ cell: `pt.trackedCount` counts only rows with a real `pos` (the "All (N)"
+tab label and every sub-tab filter), and `pos == null` rows are rendered in their own "Recently
+Added — Awaiting First Sync" table instead of appearing as blank cells in the main grid. Don't
+reintroduce a merged table — a row a user can't read anything from is worse than a separate,
+honestly-labelled section.
 
 A *mapdomain* is `{domain, is_you, keywords_ranked, coverage_pct, avg_position, best_position,
 top3, top10, head_to_head, beats_you, you_beat, visibility}` — the domain-level aggregate of
@@ -1254,7 +1271,7 @@ From `pipeline/services/sync_engine.PAGE_CONNECTORS`:
 | `pages` | `gsc_pages`, `url_inspection`, `pagespeed` |
 | `backlinks` | `dataforseo_backlinks` |
 | `positioning` (alias `positions`) | `gsc_keywords`, `dataforseo_serp`, `dataforseo_keywords`, `dataforseo_labs_competitors`, `dataforseo_serp_competitors` |
-| `positioning_new` (alias `positions_new`) | `dataforseo_serp`, `dataforseo_keywords`, `dataforseo_serp_competitors` — narrowed to keywords never measured |
+| `positioning_new` (alias `positions_new`) | `dataforseo_serp`, `dataforseo_keywords`, `dataforseo_serp_competitors` — narrowed by `keywords_needing_backfill()` to keywords missing volume OR never rank-checked (no `position` and no `impressions` on any row — volume alone isn't enough, since `dataforseo_keywords` can price a keyword `dataforseo_serp` has never touched) |
 | `ai` | `dataforseo_ai_keywords`, `dataforseo_llm_mentions` |
 | `audit` | `domain_checks`, `gsc_pages`, `url_inspection`, `pagespeed`, `dataforseo_onpage` |
 | `domain_checks` | `domain_checks` |

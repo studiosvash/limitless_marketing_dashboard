@@ -71,10 +71,10 @@ class Command(BaseCommand):
             raise CommandError(f"{only!r} is not an active site. Active: {', '.join(active) or '(none)'}")
         return [only]
 
-    def _start(self, site_url: str, module: str, reason: str, dry_run: bool) -> None:
+    def _start(self, site_url: str, module: str, reason: str, dry_run: bool) -> bool:
         if dry_run:
             self.stdout.write(f"  WOULD START  {module:<10} — {reason}")
-            return
+            return True
         # The one sanctioned way to run a sync. Not reimplemented here: start_sync_run owns the
         # RefreshRun row, the scope aliasing (positions -> positioning) and the worker thread.
         from apps.dashboard.services.sync_api_service import start_sync_run
@@ -84,10 +84,17 @@ class Command(BaseCommand):
         # two systems in charge of one decision -- a 24h window over a 12h cadence means that
         # module silently never runs -- and the fresh response has no `task_id` to read below.
         info = start_sync_run(site_url, module, manual=False)
+        if info.get("budget_exceeded"):
+            self.stdout.write(self.style.WARNING(
+                f"  SKIPPED      {module:<10} — {reason} — DataForSEO budget exceeded "
+                f"(${info['spent']:.2f} of ${info['cap']:.2f})"
+            ))
+            return False
         self.stdout.write(self.style.SUCCESS(
             f"  STARTED      {module:<10} — {reason} (task {info['task_id']}, "
             f"{len(info['steps'])} connector(s))"
         ))
+        return True
 
     # -- main ---------------------------------------------------------------
 
@@ -134,8 +141,8 @@ class Command(BaseCommand):
 
             if forced is not None:
                 cadence = scheduling.get_sync_config(site_url).get(forced, "manual")
-                self._start(site_url, forced, f"forced via --scope (cadence: {cadence})", dry_run)
-                started += 1
+                if self._start(site_url, forced, f"forced via --scope (cadence: {cadence})", dry_run):
+                    started += 1
                 continue
 
             rows = scheduling.due_modules(site_url, now=now)
@@ -147,8 +154,8 @@ class Command(BaseCommand):
 
             # Most overdue first (due_modules already sorted); the rest wait for the next tick.
             winner, deferred = due[0], due[1:]
-            self._start(site_url, winner["module"], winner["reason"], dry_run)
-            started += 1
+            if self._start(site_url, winner["module"], winner["reason"], dry_run):
+                started += 1
             for r in deferred:
                 self.stdout.write(
                     f"  DEFERRED     {r['module']:<10} — due ({r['reason']}) but one sync per "

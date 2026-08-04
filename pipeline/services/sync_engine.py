@@ -202,6 +202,35 @@ _TECHNICAL_ISSUE_INPUTS = ("gsc", "ga4", "gsc_pages", "url_inspection", "pagespe
 _AUDIT_SNAPSHOT_INPUTS = ("url_inspection", "pagespeed", "dataforseo_onpage")
 
 
+def _notify_sync_completion(site_url: str, label: str, errors: list[str]) -> None:
+    """One topbar-bell Notification per finished run (sync_all or sync_page) — "any new page
+    fetched successful or failed" from the notifications spec, plus the DataForSEO balance
+    re-check that stands in for "continuously" watching it (see budget_service's docstring:
+    there is no daemon in this codebase, so every completed sync — manual or the hourly
+    scheduled tick — is the closest thing to continuous this architecture has).
+
+    Never raises: called after RefreshRun is already marked done, so a notification failure
+    here must not be mistaken for the sync itself failing.
+    """
+    try:
+        from apps.dashboard.services.notifications_service import notify
+        if errors:
+            notify(
+                "sync_error", f"{label} refresh finished with {len(errors)} error(s)",
+                "; ".join(errors)[:500], severity="warning", site_url=site_url,
+            )
+        else:
+            notify("sync_success", f"{label} refresh completed", severity="info", site_url=site_url)
+    except Exception as exc:
+        logger.warning(f"[sync_engine] sync-result notification failed: {exc}")
+
+    try:
+        from apps.dashboard.services.budget_service import refresh_balance_and_notify
+        refresh_balance_and_notify()
+    except Exception as exc:
+        logger.warning(f"[sync_engine] balance re-check failed: {exc}")
+
+
 def _run_cancelled(run_id: int) -> bool:
     """Has this run been stopped from the UI since the last connector finished?
 
@@ -400,6 +429,7 @@ def sync_all(site_url: str, run_id: int) -> dict:
         f"[sync_engine] sync_all finished — site={site_url!r} run_id={run_id} "
         f"status={final_status} records_written={total_records} errors={len(errors)}"
     )
+    _notify_sync_completion(site_url, "Refresh all", errors)
 
     # Post-sync processing (aggregate rebuild etc.).
     _run_post_sync(site_url, connectors)
@@ -546,6 +576,7 @@ def sync_page(page: str, site_url: str, run_id: int) -> dict:
         f"run_id={run_id} status={final_status} records_written={total_records} "
         f"errors={len(errors)}"
     )
+    _notify_sync_completion(site_url, page.replace("_", " ").title(), errors)
 
     # Post-sync processing (aggregate rebuild etc.).
     _run_post_sync(site_url, connector_names)

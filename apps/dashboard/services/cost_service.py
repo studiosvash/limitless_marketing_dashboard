@@ -204,6 +204,33 @@ def cost_by_month(site_id: str, months: int = 3) -> list[dict]:
     return out
 
 
+def cost_since_all_sites(start_date) -> float:
+    """Total USD spent by every site combined, at/after `start_date`.
+
+    The global twin of `cost_since()` — DataForSEO bills one shared account, so the $/month
+    budget cap (budget_service.py) is enforced against spend across every project, not one
+    site's slice of it. Same honesty rule: 0.0 on no rows or a query failure, never None.
+    """
+    try:
+        start = _as_datetime(start_date)
+    except TypeError as exc:
+        logger.error(f"cost_since_all_sites: {exc}")
+        return 0.0
+
+    try:
+        with get_session() as session:
+            ensure_tables(session, ConnectorCost)
+            total = session.execute(
+                select(func.sum(ConnectorCost.cost))
+                .where(ConnectorCost.run_at >= start)
+            ).scalar()
+    except Exception as exc:
+        logger.error(f"cost_since_all_sites: could not read connector_costs: {exc}", exc_info=True)
+        return 0.0
+
+    return round(float(total or 0.0), 4)
+
+
 def cost_since(site_id: str, start_date) -> float:
     """Total USD spent by this site at/after `start_date`. Accepts a date or datetime.
 

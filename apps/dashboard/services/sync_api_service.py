@@ -185,6 +185,28 @@ def start_sync_run(site_url: str, scope: str, user=None, force: bool = False,
             ],
         }
 
+    # The DataForSEO paywall. Checked AFTER the one-run-per-site guard (attaching to a run
+    # already in flight is always fine — its spend already happened) and BEFORE the
+    # freshness check (going over budget must block a refetch even of "fresh" data, since
+    # 'force' would otherwise still spend past the cap). Only scopes that actually call
+    # DataForSEO are refused — a pure GSC/GA4 refresh costs nothing and stays available.
+    from apps.dashboard.services.budget_service import budget_status, is_billable_connectors
+    if is_billable_connectors(connectors):
+        status = budget_status()
+        if status["exceeded"]:
+            logger.info("[sync] refused %r for %r — DataForSEO budget exceeded ($%.2f of $%.2f)",
+                        scope, site_url, status["spent"], status["cap"])
+            return {
+                "budget_exceeded": True,
+                "spent": status["spent"],
+                "cap": status["cap"],
+                "message": (
+                    f"Monthly DataForSEO budget of ${status['cap']:.2f} reached "
+                    f"(${status['spent']:.2f} spent). Syncs that call DataForSEO are paused "
+                    "until next month, or until the budget is raised."
+                ),
+            }
+
     # Checked AFTER the one-run-per-site guard: if a run is already in flight, attaching to it
     # is what the user wanted, and answering "already up to date" would hide it.
     if manual and not force:

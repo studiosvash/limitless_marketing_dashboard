@@ -77,6 +77,14 @@
         trackSelLabel: 'Track selected'
       };
 
+      /* Same shared drawer Position Tracking uses (see App#serpDrawerVals) -- "you" here
+         is the domain currently being looked up, since that's usually what a Domain
+         Overview visitor wants highlighted in the live SERP, not the active project. */
+      const doSerpVals = this.serpDrawerVals(this._normalizeDomain(s.doQuery), vals.do.location);
+      vals.ptSerpOpen = doSerpVals.open;
+      vals.ptSerpCloseFn = doSerpVals.closeFn;
+      vals.ptSerp = doSerpVals.serp;
+
       if (s.doData && s.doData.status === 'ok') {
         const metrics = s.doData.metrics || {};
         vals.do.metrics = {
@@ -129,7 +137,8 @@
             elsewhereLabel: elsewhereProj ? ('Tracked in ' + (elsewhereProj.name || elsewhereProj.domain)) : '',
             elsewhereStyle: { fontSize: '10.5px', fontWeight: 600, color: '#0369a1', background: '#e0f2fe', padding: '3px 8px', borderRadius: '9999px', whiteSpace: 'nowrap' },
             notTracked: !tracked && !elsewhereProj,
-            onTrack: () => this.trackDomainOverviewKws([trackRow])
+            onTrack: () => this.trackDomainOverviewKws([trackRow]),
+            onSerp: () => vals.h.fetchLiveSerp(k.keyword, vals.do.location)
           };
         });
 

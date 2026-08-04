@@ -51,7 +51,11 @@ def to_api_keyword(row: dict, extras: dict | None = None) -> dict:
         # Row's own trend when the window caught it, else the window-independent one from
         # extras — see query_saved_keyword_extras for why both paths exist.
         "monthly": _parse_trend(row.get("trend") or extra.get("trend")),
-        "source": "sync",    # every currently-tracked keyword comes from the sync pipeline
+        # "new" only for positioning_service's merged rows tagged action="new" — a saved
+        # keyword with no keyword_rankings row in the current window, i.e. never measured
+        # yet. keywords_service's own rows never carry "action", so this stays "sync" for
+        # every caller except positioning_service.
+        "source": "new" if row.get("action") == "new" else "sync",
         "serpFeatures": extra.get("serp_features") or [],
         "competition": extra.get("competition"),
     }

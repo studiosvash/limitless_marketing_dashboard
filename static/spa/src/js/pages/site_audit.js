@@ -46,6 +46,26 @@
       const scoreChip = v => v == null ? chipNA : Object.assign({}, chipBase, { background: v >= 80 ? '#dcfce7' : v >= 60 ? '#fef3c7' : '#fee2e2', color: v >= 80 ? '#15803d' : v >= 60 ? '#b45309' : '#b91c1c' });
       const scoreText = v => v == null ? NA : v;
       const secsText = ms => ms == null ? NA : (ms / 1000).toFixed(1) + ' s';
+      /* Duplicate-title rows carry a recommendation inside their description text (see
+         technical_issues_service.py's duplicate_titles block) -- which of several pages
+         sharing a title to keep and which to fix, based on real traffic or URL
+         canonicalization, never a guess dressed up as one. This turns that sentence into a
+         small pill so it reads at a glance instead of requiring the full sentence. Matched by
+         phrase because the description IS the source of truth; a check id would drift from it. */
+      const badgeBase = { display: 'inline-flex', padding: '1px 7px', borderRadius: '999px', fontSize: '10.5px', fontWeight: 700, letterSpacing: '0.02em', marginLeft: '8px', verticalAlign: 'middle' };
+      const dupTitleBadge = desc => {
+        if (!desc) return null;
+        if (desc.indexOf('clean form') >= 0 || desc.indexOf('already has the most traffic') >= 0) {
+          return { label: 'KEEP', style: Object.assign({}, badgeBase, { background: '#dcfce7', color: '#15803d' }) };
+        }
+        if (desc.indexOf('This is the same page as') >= 0) {
+          return { label: 'REDIRECT', style: Object.assign({}, badgeBase, { background: '#fef3c7', color: '#b45309' }) };
+        }
+        if (desc.indexOf('Rewrite the title on this page') >= 0) {
+          return { label: 'REWRITE', style: Object.assign({}, badgeBase, { background: '#fee2e2', color: '#b91c1c' }) };
+        }
+        return null;
+      };
       const numText = v => v == null ? NA : this.fmt(v);
       /* Mean over the values that exist. Returns null — not 0 — for an empty set, so a KPI
          with nothing measured behind it disappears instead of printing a confident zero. */
@@ -270,11 +290,18 @@
               /* Both sources carry the same measured-or-null score by contract, so an
                  unscored page shows the neutral dash chip here too rather than a red 0. */
               const sc3 = pg2 ? pg2.score : (u && u.score !== undefined ? u.score : null);
+              /* The recommendation badge is derived from the description regardless of what
+                 the status column displays -- a page can have a real 200 status AND a
+                 keep/redirect/rewrite recommendation at the same time. */
+              const badge = dupTitleBadge(u && u.status);
               return {
                 url: urlStr,
                 score: scoreText(sc3),
                 scoreStyle: scoreChip(sc3),
-                status: (pg2 && pg2.statusCode) ? statusOf(pg2) : (u.status || '200')
+                status: (pg2 && pg2.statusCode) ? statusOf(pg2) : (u.status || '200'),
+                hasBadge: !!badge,
+                badgeLabel: badge ? badge.label : '',
+                badgeStyle: badge ? badge.style : {}
               };
             }),
             more: total > PAGE_PREVIEW,

@@ -297,6 +297,7 @@ def build_seo_response(site_id: str, curr_start: date, curr_end: date) -> dict:
         # by_dim already computed this; it used to be dropped on the floor.
         "devices": by_dim["by_device"],
         "issues": issues_raw,
+        "window": {"from": curr_start.isoformat(), "to": curr_end.isoformat(), "days": (curr_end - curr_start).days + 1},
         "anomalies": [
             {
                 "id": str(a["id"]),
