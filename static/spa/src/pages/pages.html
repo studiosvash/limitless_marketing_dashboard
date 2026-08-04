@@ -230,13 +230,14 @@
                     <sc-if value="{{ i.hasPages }}" hint-placeholder-val="{{ true }}">
                       <div style="{{ i.pagesWrap }}">
                         <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
-                          <thead><tr style="text-align: left; color: #94a3b8; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;"><th style="font-weight: 500; padding: 6px 0;">Affected page</th><th style="font-weight: 500; padding: 6px 12px; text-align: center;">Page score</th><th style="font-weight: 500; padding: 6px 0; text-align: right;">Status</th></tr></thead>
+                          <thead><tr style="text-align: left; color: #94a3b8; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;"><th style="font-weight: 500; padding: 6px 0;">Affected page</th><th style="font-weight: 500; padding: 6px 12px; text-align: center;">Page score</th><th style="font-weight: 500; padding: 6px 0; text-align: right;">Status</th><th style="font-weight: 500; padding: 6px 0 6px 12px; text-align: right;">Action</th></tr></thead>
                           <tbody>
                             <sc-for list="{{ i.pages }}" as="pg" hint-placeholder-count="3">
                               <tr style="border-top: 1px solid #f1f5f9;">
                                 <td style="padding: 7px 0; font-family: monospace; font-size: 12px; color: #475569;">{{ pg.url }}<sc-if value="{{ pg.hasBadge }}" hint-placeholder-val="{{ false }}"><span style="{{ pg.badgeStyle }}">{{ pg.badgeLabel }}</span></sc-if></td>
                                 <td style="padding: 7px 12px; text-align: center;"><span style="{{ pg.scoreStyle }}">{{ pg.score }}</span></td>
                                 <td style="padding: 7px 0; text-align: right; color: #64748b; font-size: 12px;">{{ pg.status }}</td>
+                                <td style="padding: 7px 0 7px 12px; text-align: right; white-space: nowrap;"><sc-if value="{{ pg.resolved }}" hint-placeholder-val="{{ false }}"><span style="{{ pg.resolvedTagStyle }}">Resolved</span></sc-if><span onClick="{{ pg.resolveToggle }}" style="{{ pg.resolveStyle }}" style-hover="opacity:0.7">{{ pg.resolveLabel }}</span></td>
                               </tr>
                             </sc-for>
                           </tbody>

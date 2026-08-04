@@ -66,6 +66,12 @@
         }
         return null;
       };
+      /* Per-page resolve/undo (right end of each affected-page row, every check). Reads
+         straight off `pg.resolved` from the payload each fetch -- no client-side tracking
+         of which rows are acknowledged, matching how the whole-check resolve already works. */
+      const resolvedTagStyle = { display: 'inline-flex', padding: '2px 8px', borderRadius: '999px', fontSize: '10.5px', fontWeight: 700, background: '#dcfce7', color: '#15803d', marginRight: '8px' };
+      const resolveLinkStyle = { fontSize: '11.5px', fontWeight: 600, color: '#4f46e5', cursor: 'pointer' };
+      const undoLinkStyle = { fontSize: '11.5px', fontWeight: 600, color: '#94a3b8', cursor: 'pointer' };
       const numText = v => v == null ? NA : this.fmt(v);
       /* Mean over the values that exist. Returns null — not 0 — for an empty set, so a KPI
          with nothing measured behind it disappears instead of printing a confident zero. */
@@ -294,6 +300,7 @@
                  the status column displays -- a page can have a real 200 status AND a
                  keep/redirect/rewrite recommendation at the same time. */
               const badge = dupTitleBadge(u && u.status);
+              const pageResolved = !!(u && u.resolved);
               return {
                 url: urlStr,
                 score: scoreText(sc3),
@@ -301,7 +308,12 @@
                 status: (pg2 && pg2.statusCode) ? statusOf(pg2) : (u.status || '200'),
                 hasBadge: !!badge,
                 badgeLabel: badge ? badge.label : '',
-                badgeStyle: badge ? badge.style : {}
+                badgeStyle: badge ? badge.style : {},
+                resolved: pageResolved,
+                resolvedTagStyle,
+                resolveLabel: pageResolved ? 'Undo' : 'Resolve',
+                resolveStyle: pageResolved ? undoLinkStyle : resolveLinkStyle,
+                resolveToggle: (e) => { if (e && e.stopPropagation) e.stopPropagation(); this.togglePageResolved(c.id, urlStr); }
               };
             }),
             more: total > PAGE_PREVIEW,

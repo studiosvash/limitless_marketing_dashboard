@@ -2119,6 +2119,20 @@
       this.notify(this.errText(err, 'Could not update that check'));
     });
   }
+  togglePageResolved(checkId, url) {
+    const pid = this.state.projectId;
+    window.FuseAPI.post('/api/projects/' + pid + '/audit/toggle-page-resolved', { checkId, url }).then(() => {
+      if (!this._alive) return;
+      /* Unlike toggleAuditCheck/toggleResolvedCheck, this does NOT reset auOpen/auAllPages --
+         resolving one row is meant to happen one at a time inside an already-expanded check,
+         and collapsing the panel after every click would make working through a long list
+         of affected pages painful. */
+      this.fetchTab('pages', pid, this.state.range, true);
+    }).catch(err => {
+      if (!this._alive) return;
+      this.notify(this.errText(err, 'Could not update that page'));
+    });
+  }
 
   /* The one comparator behind every sortable table here (Crawled Pages, Keywords, Campaigns,
      Search Terms, Referring domains). Tested in static/spa/tests/sort_rows.test.js.
