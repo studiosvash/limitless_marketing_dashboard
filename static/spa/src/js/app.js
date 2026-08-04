@@ -228,7 +228,11 @@
        in the initial state, so the wait shows the skeleton rather than an empty screen. */
     let pid = null;
     try { pid = localStorage.getItem('fh_selected_project') || null; } catch (e) {}
-    this.setState({ tab, range, kwLists, projectId: pid, seoOpen: this.state.seoOpen || this.SEOTABS.includes(tab), adsOpen: this.state.adsOpen || this.ADSTABS.includes(tab) });
+    // Keyword Explorer results are saved to localStorage (client-only, no DB) so a reload
+    // doesn't wipe them -- see kwHist* helpers above runResearch().
+    const bootHist = this.kwHistLoad(pid);
+    const bootResearch = bootHist[0] ? bootHist[0].research : null;
+    this.setState({ tab, range, kwLists, projectId: pid, research: bootResearch, seoOpen: this.state.seoOpen || this.SEOTABS.includes(tab), adsOpen: this.state.adsOpen || this.ADSTABS.includes(tab) });
     this._hist = [Object.assign(this.navSnapshot(), { tab, projectId: pid })];
     this._histIdx = 0;
 
@@ -455,7 +459,15 @@
 
   go(tab) {
     this.pushNav({ tab });
-    this.setState({ tab, seoOpen: this.state.seoOpen || this.SEOTABS.includes(tab), adsOpen: this.state.adsOpen || this.ADSTABS.includes(tab), error: null });
+    // Defensive restore: if the in-memory Explorer state was ever lost across a tab switch,
+    // fall back to the last saved localStorage search for this project rather than showing
+    // an empty Explorer the user has to re-run.
+    const extra = {};
+    if (tab === 'keywords' && !this.state.research) {
+      const hist = this.kwHistLoad(this.state.projectId);
+      if (hist[0]) extra.research = hist[0].research;
+    }
+    this.setState(Object.assign({ tab, seoOpen: this.state.seoOpen || this.SEOTABS.includes(tab), adsOpen: this.state.adsOpen || this.ADSTABS.includes(tab), error: null }, extra));
     try { if (('#' + tab) !== location.hash) history.replaceState(null, '', '#' + tab); } catch (e) {}
     this.fetchTab(tab, this.state.projectId, this.state.range, false);
   }
@@ -672,8 +684,12 @@
   }
   setProject(pid) {
     try { localStorage.setItem('fh_selected_project', pid); } catch (e) {}
-    this.pushNav({ projectId: pid, research: null, kwSeg: null, blFilter: 'all', alFilter: 'all' });
-    this.setState({ projectId: pid, research: null, kwSeg: null, blFilter: 'all', alFilter: 'all', crawlCfg: null, crawlSaved: false, auPage: null, rules: null, termCampaign: null, cmpSearch: '', cmpOpenId: null, editBudgetId: null });
+    // Each project has its own localStorage Explorer history, so switching sites restores
+    // THAT site's last search rather than always clearing to empty.
+    const hist = this.kwHistLoad(pid);
+    const research = hist[0] ? hist[0].research : null;
+    this.pushNav({ projectId: pid, research, kwSeg: null, blFilter: 'all', alFilter: 'all' });
+    this.setState({ projectId: pid, research, kwSeg: null, blFilter: 'all', alFilter: 'all', crawlCfg: null, crawlSaved: false, auPage: null, rules: null, termCampaign: null, cmpSearch: '', cmpOpenId: null, editBudgetId: null });
     this.fetchTab(this.state.tab, pid, this.state.range, false);
     if (this.state.tab !== 'alerts') this.fetchTab('alerts', pid, this.state.range, false);
     /* Freshness is per-project, so it has to be re-read here — otherwise every Data source
@@ -890,12 +906,54 @@
   }
 
   /* ---------- keyword explorer ---------- */
+  /* Client-side only (localStorage, per browser -- explicitly requested as the quick,
+     no-DB-migration version, not shared across the team). One list per project, newest
+     first, capped at 20 entries. Serves three purposes: a "Recent" chip row to revisit a
+     past search without retyping, a same-seeds-within-24h cache so re-searching doesn't
+     re-bill DataForSEO, and restoring the last search on boot/tab-switch/project-switch so
+     results don't appear to vanish. */
+  kwHistKey(pid) { return 'fh_kw_hist_' + (pid || ''); }
+  kwHistLoad(pid) {
+    // render() calls this on every state change (e.g. each keystroke in the Explorer input),
+    // so an in-memory cache avoids re-parsing potentially-large JSON on every keystroke.
+    const k = this.kwHistKey(pid);
+    if (this._kwHistCache && this._kwHistCache.key === k) return this._kwHistCache.data;
+    let data = [];
+    try { data = JSON.parse(localStorage.getItem(k) || '[]'); } catch (e) { data = []; }
+    this._kwHistCache = { key: k, data };
+    return data;
+  }
+  kwHistSave(pid, hist) {
+    const capped = hist.slice(0, 20);
+    const k = this.kwHistKey(pid);
+    try { localStorage.setItem(k, JSON.stringify(capped)); } catch (e) {}
+    this._kwHistCache = { key: k, data: capped };
+  }
+  kwHistCacheKey(q, loc) {
+    return q.split(',').map(x => x.trim().toLowerCase()).filter(Boolean).sort().join(',') + '|' + loc;
+  }
   runResearch() {
     const q = this.state.explorerQ.trim();
     if (!q || this.state.researching) return;
+    const pid = this.state.projectId, loc = this.state.explorerLoc;
+    const cacheKey = this.kwHistCacheKey(q, loc);
+    const hist = this.kwHistLoad(pid);
+    const hit = hist.find(h => h.key === cacheKey && (Date.now() - h.ts) < 24 * 60 * 60 * 1000);
+    if (hit) {
+      this.setState({ research: hit.research, matchType: 'broad', resGroup: null, resDrawer: null, resVolMin: 0, resKdMin: 0, resKdMax: 100, resIntents: [], resIncl: '', resExcl: '', resOpenFilter: null, selectedKws: [], sendOpen: false, exportOpen: false, sendSub: null });
+      this.pushNav({ research: hit.research });
+      return;
+    }
     this.setState({ researching: true, selectedKws: [], sendOpen: false, exportOpen: false, sendSub: null });
-    window.FuseAPI.post('/api/research', { project: this.state.projectId, keywords: q.split(','), location: this.state.explorerLoc })
-      .then(r => { if (this._alive) { r.seeds = q.toLowerCase(); this.setState({ researching: false, research: r, matchType: 'broad', resGroup: null, resDrawer: null, resVolMin: 0, resKdMin: 0, resKdMax: 100, resIntents: [], resIncl: '', resExcl: '', resOpenFilter: null }); this.pushNav({ research: r }); } })
+    window.FuseAPI.post('/api/research', { project: pid, keywords: q.split(','), location: loc })
+      .then(r => {
+        if (!this._alive) return;
+        r.seeds = q.toLowerCase();
+        this.setState({ researching: false, research: r, matchType: 'broad', resGroup: null, resDrawer: null, resVolMin: 0, resKdMin: 0, resKdMax: 100, resIntents: [], resIncl: '', resExcl: '', resOpenFilter: null });
+        this.pushNav({ research: r });
+        const nextHist = [{ key: cacheKey, query: q, location: loc, research: r, ts: Date.now() }].concat(hist.filter(h => h.key !== cacheKey));
+        this.kwHistSave(pid, nextHist);
+      })
       .catch(err => { if (this._alive) this.setState({ researching: false, error: this.errText(err, 'Keyword research request failed') }); });
   }
 
@@ -2620,6 +2678,11 @@
       explorerLocSet: e => this.setState({ explorerLoc: e.target.value }),
       runResearch: () => this.runResearch(),
       clearResearch: () => { this.pushNav({ research: null }); this.setState({ research: null, selectedKws: [], sendOpen: false, exportOpen: false, sendSub: null, resGroup: null, resDrawer: null, resOpenFilter: null }); },
+      clearKwHistory: () => {
+        this.kwHistSave(s.projectId, []);
+        this.pushNav({ research: null });
+        this.setState({ research: null, selectedKws: [], sendOpen: false, exportOpen: false, sendSub: null, resGroup: null, resDrawer: null, resOpenFilter: null });
+      },
       histBack: () => this.histBack(),
       histFwd: () => this.histFwd(),
       toggleLists: () => this.setState(st => ({ showLists: !st.showLists })),
@@ -3024,6 +3087,20 @@
         vals.budgetBannerStyle = {}; vals.budgetBannerText = '';
       }
     }
+
+    /* Recent Explorer searches (localStorage, per project) -- shown regardless of whether
+       results are currently on screen, so a past search is one click away even after
+       Clear results. */
+    const kwHist = this.kwHistLoad(s.projectId);
+    vals.kwHistHasItems = kwHist.length > 0;
+    vals.kwHistItems = kwHist.slice(0, 8).map(hEntry => ({
+      label: hEntry.query.length > 28 ? hEntry.query.slice(0, 26) + '…' : hEntry.query,
+      title: hEntry.query + ' · ' + hEntry.location,
+      onClick: () => {
+        this.setState({ explorerQ: hEntry.query, explorerLoc: hEntry.location, research: hEntry.research, matchType: 'broad', resGroup: null, resDrawer: null, resVolMin: 0, resKdMin: 0, resKdMax: 100, resIntents: [], resIncl: '', resExcl: '', resOpenFilter: null, selectedKws: [], sendOpen: false, exportOpen: false, sendSub: null });
+        this.pushNav({ research: hEntry.research });
+      }
+    }));
 
     /* research results (visible on keywords tab regardless of loading) */
     if (s.research && s.research.rows) {
