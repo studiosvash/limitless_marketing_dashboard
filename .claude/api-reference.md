@@ -965,17 +965,29 @@ Hidden checks are excluded from `/audit`'s `totals` and from the Overview error 
 
 ### `POST /api/projects/<slug>/audit/toggle-resolved`
 
-Body `{"checkId": "not_found_404"}` (missing → **400**). Marks/unmarks a check resolved.
-Returns `{"resolved": ["..."]}` — the full list of currently-resolved check ids.
+Body `{"checkId": "not_found_404"}` (missing → **400**). Acknowledges every page currently
+affected by this check at once — a shortcut over `toggle-page-resolved` below. Unresolving
+clears every acknowledgment for the check. Returns `{"resolved": ["..."]}` — the full list of
+currently-resolved check ids.
 
-Persisted in `ProjectSettings.data["auditResolved"]` as `{check_id: [affected urls at the
-moment it was resolved]}`, not a plain id list — the URL snapshot is what lets
-`build_site_audit_response` distinguish "still genuinely fixed" from "recurred" on the next
-crawl **without a background job**: on every `/audit` read, a resolved check's current
-affected-page URLs are diffed against the stored snapshot. Same set → stays resolved. Any
-change (pages fixed, new pages tripping the same check) → renders active again this request
-("auto-unresolve"); the stale snapshot is left in place rather than written back from the GET,
-keeping `/audit` a pure read.
+### `POST /api/projects/<slug>/audit/toggle-page-resolved`
+
+Body `{"checkId": "not_found_404", "url": "https://..."}` (either missing → **400**).
+Acknowledges/unacknowledges a single page within a check. Returns `{"resolved": ["..."]}` — the
+full list of currently-acknowledged URLs for that check (URLs, not check ids — don't confuse
+this with the list shape the endpoint above returns).
+
+Both endpoints write to the same store: `ProjectSettings.data["auditResolved"]` as
+`{check_id: [acknowledged urls]}`. A check is `checks[].resolved: true` once every URL it
+currently reports is in that list — a **subset** check, computed fresh on every `/audit` read,
+never written back from a GET. This is what lets the two controls compose: acknowledging a
+check's pages one at a time via `toggle-page-resolved` has the exact same end effect as clicking
+the whole-check button once every page is covered, and the check drops back to active the moment
+an unacknowledged page shows up under it — one tripping the check for the first time, or one a
+later crawl's affected set isn't covered by an older acknowledgment.
+
+Each entry in `checks[].pages[]` also carries its own `"resolved": bool`, independent of whether
+the check as a whole is resolved yet.
 
 Resolved checks get `checks[].resolved: true` and are excluded from `/audit`'s `totals` and the
 Overview error count — same treatment as hidden checks. The Issues tab's severity filter gets a
@@ -1514,7 +1526,7 @@ entirely Django's.
 | `/positions` | Position Tracking |
 | `/alerts` | Alerts + the sidebar unacknowledged badge (prefetched on every project change) |
 | `/backlinks` | Backlinks |
-| `/audit` + `/audit/toggle-check` + `/audit/toggle-resolved` | Site Audit |
+| `/audit` + `/audit/toggle-check` + `/audit/toggle-resolved` + `/audit/toggle-page-resolved` | Site Audit |
 | `/offsite` | Off-site SEO |
 | `/ads` + `/ads/{status,budget,negatives,promote}` | Paid Overview, Campaigns, Search Terms, Attribution |
 | `/ai` + `/ai/<action>` | AI Optimization |

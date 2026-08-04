@@ -222,6 +222,162 @@ class AuditToggleResolvedTests(MutationTestBase):
         self.assertEqual(after["totals"]["errors"], 2)  # both pages counted again
 
 
+class AuditTogglePageResolvedTests(MutationTestBase):
+    def test_toggle_resolves_single_page(self):
+        resp = self.client_auth.post("/api/projects/fusehealth/audit/toggle-page-resolved",
+                                     {"checkId": "not_found_404", "url": "https://fusehealth.com/a"},
+                                     format="json")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json(), {"resolved": ["https://fusehealth.com/a"]})
+
+        after = self.client_auth.get("/api/projects/fusehealth/audit").json()
+        check = next(c for c in after["checks"] if c["id"] == "not_found_404")
+        page = next(p for p in check["pages"] if p["url"] == "https://fusehealth.com/a")
+        self.assertTrue(page["resolved"])
+
+    def test_second_toggle_unresolves_the_page(self):
+        self.client_auth.post("/api/projects/fusehealth/audit/toggle-page-resolved",
+                              {"checkId": "not_found_404", "url": "https://fusehealth.com/a"},
+                              format="json")
+        resp = self.client_auth.post("/api/projects/fusehealth/audit/toggle-page-resolved",
+                                     {"checkId": "not_found_404", "url": "https://fusehealth.com/a"},
+                                     format="json")
+        self.assertEqual(resp.json(), {"resolved": []})
+
+    def test_missing_url_is_400(self):
+        resp = self.client_auth.post("/api/projects/fusehealth/audit/toggle-page-resolved",
+                                     {"checkId": "not_found_404"}, format="json")
+        self.assertEqual(resp.status_code, 400)
+
+    def test_missing_checkid_is_400(self):
+        resp = self.client_auth.post("/api/projects/fusehealth/audit/toggle-page-resolved",
+                                     {"url": "https://fusehealth.com/a"}, format="json")
+        self.assertEqual(resp.status_code, 400)
+
+    def test_check_resolves_once_every_current_page_is_acknowledged(self):
+        """Fixture seeds ONE not_found_404 page (see MutationTestBase.setUp). Add a second
+        so the check has two current pages, then confirm it only flips to resolved once
+        BOTH are acknowledged -- not on the first one."""
+        with get_session() as session:
+            session.add(TechnicalIssue(site_id=SITE, url="https://fusehealth.com/b",
+                                       issue_type="not_found_404", severity="high",
+                                       description="404 page", detected_at=datetime(2026, 7, 3, 9)))
+
+        self.client_auth.post("/api/projects/fusehealth/audit/toggle-page-resolved",
+                              {"checkId": "not_found_404", "url": "https://fusehealth.com/a"},
+                              format="json")
+        mid = self.client_auth.get("/api/projects/fusehealth/audit").json()
+        check_mid = next(c for c in mid["checks"] if c["id"] == "not_found_404")
+        self.assertFalse(check_mid["resolved"])  # /b still unacknowledged
+        page_a = next(p for p in check_mid["pages"] if p["url"] == "https://fusehealth.com/a")
+        self.assertTrue(page_a["resolved"])
+
+        self.client_auth.post("/api/projects/fusehealth/audit/toggle-page-resolved",
+                              {"checkId": "not_found_404", "url": "https://fusehealth.com/b"},
+                              format="json")
+        after = self.client_auth.get("/api/projects/fusehealth/audit").json()
+        check_after = next(c for c in after["checks"] if c["id"] == "not_found_404")
+        self.assertTrue(check_after["resolved"])
+        self.assertEqual(after["totals"]["errors"], 0)
+
+    def test_whole_check_resolve_still_works(self):
+        """Regression: the existing bulk 'Mark as resolved' button must still resolve a
+        check in one call after is_resolved switches from equality to a subset check."""
+        resp = self.client_auth.post("/api/projects/fusehealth/audit/toggle-resolved",
+                                     {"checkId": "not_found_404"}, format="json")
+        self.assertEqual(resp.status_code, 200)
+        after = self.client_auth.get("/api/projects/fusehealth/audit").json()
+        check = next(c for c in after["checks"] if c["id"] == "not_found_404")
+        self.assertTrue(check["resolved"])
+
+    def test_resolved_check_reverts_when_a_new_unacknowledged_page_appears(self):
+        """A check fully resolved page-by-page must drop back to active the moment a later
+        crawl adds a page under it that was never acknowledged -- while the page that WAS
+        acknowledged keeps its own resolved:true. Mirrors AuditToggleResolvedTests'
+        test_recurrence_auto_unresolves, but for the per-page path."""
+        self.client_auth.post("/api/projects/fusehealth/audit/toggle-page-resolved",
+                              {"checkId": "not_found_404", "url": "https://fusehealth.com/a"},
+                              format="json")
+        resolved = self.client_auth.get("/api/projects/fusehealth/audit").json()
+        check = next(c for c in resolved["checks"] if c["id"] == "not_found_404")
+        self.assertTrue(check["resolved"])
+
+        with get_session() as session:
+            session.add(TechnicalIssue(site_id=SITE, url="https://fusehealth.com/c",
+                                       issue_type="not_found_404", severity="high",
+                                       description="404 page", detected_at=datetime(2026, 7, 4, 9)))
+
+        after = self.client_auth.get("/api/projects/fusehealth/audit").json()
+        check_after = next(c for c in after["checks"] if c["id"] == "not_found_404")
+        self.assertFalse(check_after["resolved"])
+        page_a = next(p for p in check_after["pages"] if p["url"] == "https://fusehealth.com/a")
+        page_c = next(p for p in check_after["pages"] if p["url"] == "https://fusehealth.com/c")
+        self.assertTrue(page_a["resolved"])
+        self.assertFalse(page_c["resolved"])
+
+    def test_whole_check_resolve_composes_with_a_prior_partial_page_ack(self):
+        """Regression for the whole-branch review's Critical finding: toggle_resolved_check
+        used to toggle by key PRESENCE in the auditResolved dict. Once a page was acked via
+        toggle-page-resolved the check's key already existed (holding a partial url list), so
+        a single click of the whole-check 'Mark as resolved' button hit the `del` branch and
+        WIPED that page's acknowledgment instead of bulk-resolving the check -- a second click
+        was needed to actually resolve it. Ack ONE of two current pages, then a SINGLE
+        toggle-resolved call must resolve the check outright."""
+        with get_session() as session:
+            session.add(TechnicalIssue(site_id=SITE, url="https://fusehealth.com/b",
+                                       issue_type="not_found_404", severity="high",
+                                       description="404 page", detected_at=datetime(2026, 7, 3, 9)))
+
+        self.client_auth.post("/api/projects/fusehealth/audit/toggle-page-resolved",
+                              {"checkId": "not_found_404", "url": "https://fusehealth.com/a"},
+                              format="json")
+
+        resp = self.client_auth.post("/api/projects/fusehealth/audit/toggle-resolved",
+                                     {"checkId": "not_found_404"}, format="json")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json(), {"resolved": ["not_found_404"]})
+
+        after = self.client_auth.get("/api/projects/fusehealth/audit").json()
+        check_after = next(c for c in after["checks"] if c["id"] == "not_found_404")
+        self.assertTrue(check_after["resolved"])  # must be resolved after ONE toggle-resolved call
+        page_a = next(p for p in check_after["pages"] if p["url"] == "https://fusehealth.com/a")
+        page_b = next(p for p in check_after["pages"] if p["url"] == "https://fusehealth.com/b")
+        self.assertTrue(page_a["resolved"])
+        self.assertTrue(page_b["resolved"])
+
+    def test_toggle_page_resolved_does_not_affect_a_sibling_check(self):
+        """Both controls share one `{check_id: [urls]}` store -- acking a page under one
+        check_id must never leak into another check_id's acknowledged list."""
+        with get_session() as session:
+            session.add(TechnicalIssue(site_id=SITE, url="https://fusehealth.com/x",
+                                       issue_type="missing_meta_description", severity="medium",
+                                       description="Missing meta description",
+                                       detected_at=datetime(2026, 7, 3, 9)))
+
+        self.client_auth.post("/api/projects/fusehealth/audit/toggle-page-resolved",
+                              {"checkId": "not_found_404", "url": "https://fusehealth.com/a"},
+                              format="json")
+        resp = self.client_auth.post("/api/projects/fusehealth/audit/toggle-page-resolved",
+                                     {"checkId": "missing_meta_description",
+                                      "url": "https://fusehealth.com/x"},
+                                     format="json")
+        self.assertEqual(resp.json(), {"resolved": ["https://fusehealth.com/x"]})
+
+        after = self.client_auth.get("/api/projects/fusehealth/audit").json()
+        not_found = next(c for c in after["checks"] if c["id"] == "not_found_404")
+        meta_desc = next(c for c in after["checks"] if c["id"] == "missing_meta_description")
+        page_a = next(p for p in not_found["pages"] if p["url"] == "https://fusehealth.com/a")
+        page_x = next(p for p in meta_desc["pages"] if p["url"] == "https://fusehealth.com/x")
+        self.assertTrue(page_a["resolved"])  # untouched by the second check's toggle
+        self.assertTrue(page_x["resolved"])
+
+    def test_unknown_slug_is_404(self):
+        resp = self.client_auth.post("/api/projects/does-not-exist/audit/toggle-page-resolved",
+                                     {"checkId": "not_found_404", "url": "https://fusehealth.com/a"},
+                                     format="json")
+        self.assertEqual(resp.status_code, 404)
+
+
 class AdsMutationTests(MutationTestBase):
     def test_budget_rounds_to_int_min_1(self):
         resp = self.client_auth.post("/api/projects/fusehealth/ads/budget",

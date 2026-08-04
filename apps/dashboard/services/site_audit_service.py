@@ -612,9 +612,9 @@ def toggle_audit_check(site_id: str, check_id: str) -> list[str]:
 
 
 def _current_check_urls(site_id: str, check_id: str) -> list[str]:
-    """Every URL `TechnicalIssue` currently reports for this check, sorted. This is the
-    snapshot `toggle_resolved_check` stores, and what `build_site_audit_response` diffs
-    future crawls against to decide whether a resolved check has recurred."""
+    """Every URL `TechnicalIssue` currently reports for this check, sorted. `toggle_resolved_check`
+    acknowledges this whole set in one shot, and `build_site_audit_response` compares it against
+    the acknowledged-urls list (subset check, not equality) to decide whether a check is resolved."""
     try:
         with get_session() as session:
             rows = session.execute(
@@ -630,20 +630,49 @@ def _current_check_urls(site_id: str, check_id: str) -> list[str]:
 
 
 def toggle_resolved_check(site_id: str, check_id: str) -> list[str]:
-    """Mark/unmark a check as resolved (HANDOFF_SPEC POST audit/toggle-resolved). Persisted
-    per project as `{check_id: [affected urls at the moment it was resolved]}` rather than a
-    plain id list -- the URL snapshot is what lets `build_site_audit_response` tell "still
-    genuinely fixed" apart from "recurred, same or different pages" on the next crawl without
-    a background job. Returns the sorted list of currently-resolved check ids, matching
-    `toggle_audit_check`'s response shape."""
+    """Mark/unmark a check as resolved (HANDOFF_SPEC POST audit/toggle-resolved). Shares the
+    `{check_id: [acknowledged urls]}` store with `toggle_resolved_page` -- a check counts as
+    resolved once every one of its CURRENT pages is in that list (a subset check, computed in
+    `build_site_audit_response`), so this toggle has to reason the same way: if the check is
+    already fully covered, clear every acknowledgment for it (unresolve); otherwise, acknowledge
+    every currently-affected page in one shot (bulk-resolve), on top of whatever per-page
+    acknowledgments already exist rather than overwriting them. Returns the sorted list of
+    every check id with at least one acknowledged url, matching `toggle_audit_check`'s response
+    shape and this endpoint's documented `{"resolved": [...]}` body."""
     resolved = get_state(site_id, "auditResolved", {})
     resolved = dict(resolved)
-    if check_id in resolved:
+    current = _current_check_urls(site_id, check_id)
+    acked = set(resolved.get(check_id, []))
+    union = acked | set(current)
+    if current and set(current) <= acked:
+        union = set()  # fully covered -- unresolve by clearing every acknowledgment
+    if union:
+        resolved[check_id] = sorted(union)
+    elif check_id in resolved:
         del resolved[check_id]
-    else:
-        resolved[check_id] = _current_check_urls(site_id, check_id)
     set_state(site_id, "auditResolved", resolved)
     return sorted(resolved.keys())
+
+
+def toggle_resolved_page(site_id: str, check_id: str, url: str) -> list[str]:
+    """Mark/unmark a single page as resolved within a check (HANDOFF_SPEC POST
+    audit/toggle-page-resolved). Adds or removes `url` from the same `{check_id: [urls]}`
+    store `toggle_resolved_check` writes -- the whole-check button and the per-page
+    buttons share one list, so either one always sees what the other did. Returns the
+    check's current acknowledged list, sorted."""
+    resolved = get_state(site_id, "auditResolved", {})
+    resolved = dict(resolved)
+    urls = list(resolved.get(check_id, []))
+    if url in urls:
+        urls.remove(url)
+    else:
+        urls.append(url)
+    if urls:
+        resolved[check_id] = sorted(urls)
+    elif check_id in resolved:
+        del resolved[check_id]
+    set_state(site_id, "auditResolved", resolved)
+    return resolved.get(check_id, [])
 
 
 def query_audit_snapshots(site_id: str, limit: int = 30) -> list[dict]:
@@ -826,10 +855,11 @@ def build_site_audit_response(site_id: str) -> dict:
     checks = []
     totals = {"errors": 0, "warnings": 0, "notices": 0}
     hidden_ids = set(get_state(site_id, "auditHidden", []))
-    # {check_id: [urls at the moment it was resolved]}. A resolved check stays resolved only
-    # while its current affected-page set matches the snapshot exactly; any change (pages
-    # fixed, new pages added) means the check recurred and it renders as active again --
-    # auto-unresolve, computed fresh on every read rather than written back from a GET.
+    # {check_id: [urls acknowledged so far]}. A resolved check stays resolved as long as every
+    # one of its CURRENT pages is in that list (a subset check, not equality) -- fixed pages
+    # dropping out of the current set don't matter, but a new/unacknowledged page appearing
+    # under the check flips it back to active. Computed fresh on every read, never written
+    # back from a GET.
     resolved_snapshots = get_state(site_id, "auditResolved", {})
     for issue_type, items in sorted(by_type.items(), key=lambda kv: -len(kv[1])):
         title, category, how_to_fix = _humanize(issue_type)
@@ -839,10 +869,15 @@ def build_site_audit_response(site_id: str) -> dict:
         severity = _SEVERITY_MAP.get((items[0].severity or "").lower(), "notice")
         is_hidden = issue_type in hidden_ids
         current_urls = sorted({i.url for i in items})
-        is_resolved = (
-            issue_type in resolved_snapshots
-            and resolved_snapshots[issue_type] == current_urls
-        )
+        # A check counts as resolved once every one of its CURRENT pages has been
+        # individually acknowledged -- a subset check, not equality. This is what lets
+        # the existing whole-check button (writes every current URL at once) and the
+        # per-page button (writes one URL at a time) share one rule: the check clears
+        # the moment its last unacknowledged page is acked, and drops back to active the
+        # moment an unacknowledged page shows up under it (a new page tripping the same
+        # check, or a later crawl whose affected set the old acknowledgment doesn't cover).
+        acked_urls = set(resolved_snapshots.get(issue_type, []))
+        is_resolved = bool(current_urls) and set(current_urls) <= acked_urls
         if not is_hidden and not is_resolved:  # HANDOFF_SPEC 2.4: totals over active checks only
             totals[_TOTALS_KEY[severity]] += len(items)
         checks.append({
@@ -860,6 +895,7 @@ def build_site_audit_response(site_id: str) -> dict:
                 # crawledPages[].score, so the two views of a page cannot disagree.
                 "score": _page_score(i.url),
                 "status": i.description or title,
+                "resolved": i.url in acked_urls,
             } for i in items],
         })
 

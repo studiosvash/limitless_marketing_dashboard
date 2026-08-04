@@ -604,17 +604,25 @@ assignable work list with fix instructions.
 Severity filter (All / Errors / Warnings / Notices / Hidden / Resolved), a category chip row,
 and a search box. A checkbox at the left of each issue row marks/unmarks that check
 **resolved** (`POST audit/toggle-resolved`) without expanding the row. Each row also expands to
-show a preview of 8 affected pages (URL, page score chip, status) with a **Show all N affected
-pages** toggle that reveals the rest in a scrollable box (capped at 500 rendered rows, with an
-"export for the full list" note beyond that), a **How to fix** paragraph written for that issue
-type, an **Export** action for the full page list, a **Mark as resolved / Unresolve** text
-action mirroring the checkbox, and a **Hide this check / Restore check** toggle.
+show a preview of 8 affected pages (URL, page score chip, status, and a per-row **Resolve /
+Undo** action at the right end that acknowledges just that one page via `POST
+audit/toggle-page-resolved`) with a **Show all N affected pages** toggle that reveals the rest
+in a scrollable box (capped at 500 rendered rows, with an "export for the full list" note beyond
+that), a **How to fix** paragraph written for that issue type, an **Export** action for the full
+page list, a **Mark as resolved / Unresolve** text action mirroring the checkbox, and a **Hide
+this check / Restore check** toggle.
 
 Hidden and resolved checks are both excluded from the totals and from Overview's error count,
 and both persist per project. They differ in intent: hiding is "ignore this, don't count it,"
-while resolving is "this is fixed" — and a resolved check **auto-unresolves** the next time its
-affected-page set changes (a crawl finds the issue recurred, on the same or different pages),
-so a real regression cannot stay silently buried in the Resolved tab.
+while resolving is "this is fixed." A check counts as resolved once every one of its CURRENT
+affected pages has been individually acknowledged — a **subset** rule, not equality — so
+clicking the whole-check control acknowledges every current page in one shot, and the per-row
+Resolve action does the same one page at a time; either path can complete the other. A resolved
+check **auto-unresolves**, not when its affected-page set changes at all, but specifically the
+moment an unacknowledged page shows up under it (a crawl finds a genuinely new/unacked page,
+same check) — a page that was fixed and drops out of the current set does not by itself flip the
+check back to active. This keeps a real regression from staying silently buried in the Resolved
+tab while not punishing partial progress.
 
 ### Crawled Pages
 Two views. **Table**: URL, score chip, HTTP status chip, an `nE · nW · nN` issue summary, crawl

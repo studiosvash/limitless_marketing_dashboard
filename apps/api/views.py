@@ -1511,6 +1511,27 @@ class AuditToggleResolvedView(APIView):
 
 
 @method_decorator(login_not_required, name="dispatch")
+class AuditTogglePageResolvedView(APIView):
+    """POST /api/projects/<slug>/audit/toggle-page-resolved {checkId, url} -> {resolved: [...]}.
+
+    Writes to the same store as AuditToggleResolvedView -- toggles one URL in or out of
+    that check's acknowledged list instead of writing the whole current set at once.
+    """
+
+    def post(self, request, slug):
+        from apps.dashboard.services.site_audit_service import toggle_resolved_page
+
+        site_id = resolve_project_or_404(slug).site_url
+        check_id = (request.data.get("checkId") or "").strip()
+        url = (request.data.get("url") or "").strip()
+        if not check_id:
+            return Response({"detail": "checkId is required"}, status=400)
+        if not url:
+            return Response({"detail": "url is required"}, status=400)
+        return Response({"resolved": toggle_resolved_page(site_id, check_id, url)})
+
+
+@method_decorator(login_not_required, name="dispatch")
 class AdsStatusView(APIView):
     """POST .../ads/status {campaignId, status} -> {ok, status}. Records intent; the real
     CampaignService.mutate happens on the next 12h sync (spec 8: 'written back on next sync')."""
