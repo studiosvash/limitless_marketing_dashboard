@@ -646,6 +646,27 @@ def toggle_resolved_check(site_id: str, check_id: str) -> list[str]:
     return sorted(resolved.keys())
 
 
+def toggle_resolved_page(site_id: str, check_id: str, url: str) -> list[str]:
+    """Mark/unmark a single page as resolved within a check (HANDOFF_SPEC POST
+    audit/toggle-page-resolved). Adds or removes `url` from the same `{check_id: [urls]}`
+    store `toggle_resolved_check` writes -- the whole-check button and the per-page
+    buttons share one list, so either one always sees what the other did. Returns the
+    check's current acknowledged list, sorted."""
+    resolved = get_state(site_id, "auditResolved", {})
+    resolved = dict(resolved)
+    urls = list(resolved.get(check_id, []))
+    if url in urls:
+        urls.remove(url)
+    else:
+        urls.append(url)
+    if urls:
+        resolved[check_id] = sorted(urls)
+    elif check_id in resolved:
+        del resolved[check_id]
+    set_state(site_id, "auditResolved", resolved)
+    return resolved.get(check_id, [])
+
+
 def query_audit_snapshots(site_id: str, limit: int = 30) -> list[dict]:
     """Real audit history, OLDEST FIRST — the exact shape `site_audit.js` reads.
 
@@ -839,10 +860,15 @@ def build_site_audit_response(site_id: str) -> dict:
         severity = _SEVERITY_MAP.get((items[0].severity or "").lower(), "notice")
         is_hidden = issue_type in hidden_ids
         current_urls = sorted({i.url for i in items})
-        is_resolved = (
-            issue_type in resolved_snapshots
-            and resolved_snapshots[issue_type] == current_urls
-        )
+        # A check counts as resolved once every one of its CURRENT pages has been
+        # individually acknowledged -- a subset check, not equality. This is what lets
+        # the existing whole-check button (writes every current URL at once) and the
+        # per-page button (writes one URL at a time) share one rule: the check clears
+        # the moment its last unacknowledged page is acked, and drops back to active the
+        # moment an unacknowledged page shows up under it (a new page tripping the same
+        # check, or a later crawl whose affected set the old acknowledgment doesn't cover).
+        acked_urls = set(resolved_snapshots.get(issue_type, []))
+        is_resolved = bool(current_urls) and set(current_urls) <= acked_urls
         if not is_hidden and not is_resolved:  # HANDOFF_SPEC 2.4: totals over active checks only
             totals[_TOTALS_KEY[severity]] += len(items)
         checks.append({
@@ -860,6 +886,7 @@ def build_site_audit_response(site_id: str) -> dict:
                 # crawledPages[].score, so the two views of a page cannot disagree.
                 "score": _page_score(i.url),
                 "status": i.description or title,
+                "resolved": i.url in acked_urls,
             } for i in items],
         })
 
