@@ -23,7 +23,7 @@
       vals.ptEditDeviceFn = e => this.setState({ ptEditDevice: e.target.value });
       vals.ptEditLang = s.ptEditLang || 'English';
       vals.ptEditLangFn = e => this.setState({ ptEditLang: e.target.value });
-      vals.ptEditLoc = s.ptEditLoc || 'United States';
+      vals.ptEditLoc = s.ptEditLoc || '';
       vals.ptEditLocFn = e => this.setState({ ptEditLoc: e.target.value });
       vals.ptEditClose = () => this.setState({ ptEditOpen: false, ptEditBusy: false });
       vals.ptEditSave = () => {
@@ -318,7 +318,7 @@
               ptEditEngine: wsEngine,
               ptEditDevice: wsDevice,
               ptEditLang: wsLang,
-              ptEditLoc: wsLoc
+              ptEditLoc: ptPrefs.location || proj.location || ''
             });
             window.FuseAPI.get('/api/projects/' + proj.id + '/settings').then(res => {
               if (this.state.ptEditOpen && res && res.project) {
@@ -331,7 +331,7 @@
                   ptEditEngine: res.project.search_engine || wsEngine,
                   ptEditDevice: res.project.device || wsDevice,
                   ptEditLang: res.project.language || wsLang,
-                  ptEditLoc: res.project.location || wsLoc
+                  ptEditLoc: res.project.location || ''
                 });
               }
             }).catch(err => {
