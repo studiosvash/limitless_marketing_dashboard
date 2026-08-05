@@ -668,18 +668,24 @@
         const allDomains = [vals.ptWs.domain].concat((data.competitors && data.competitors.domains) || []);
         const colors = ['#4f46e5', '#a855f7', '#f59e0b', '#ef4444', '#10b981', '#06b6d4'];
         
-        /* VISIBILITY INDEX — one 0-100 score per domain, answering the question the page
-           exists for: which competitor is ranking best across the tracked keywords.
-           Every input is real (the domain's actual SERP position on each keyword);
-           nothing is estimated, and a domain with no measurable keyword shows "—".
+        /* VISIBILITY — two readings per domain, from ONE set of real inputs (the
+           domain's actual SERP position on each tracked keyword; nothing estimated,
+           a domain with no measurable keyword shows "—").
 
-           Scale: 100 = #1 on EVERY tracked keyword. That is the ceiling, so every card
-           always sits inside 0-100 and any two domains compare directly.
+           1. SHARE OF VOICE (the big number, primary since 2026-08-05 at the product
+              lead's direction): the domain's CTR-curve points as a % of all points
+              earned by the domains shown, so the cards total 100% and read like the
+              market-share panels users know from Semrush. An absolute index alone
+              ("100 = #1 on everything") does not read as market share.
+           2. VISIBILITY INDEX (the sub-line): the same points against a perfect board
+              (#1 on every keyword = 100). Kept because a share hides absolute
+              strength — a field of weak boards still splits 100% between them — and
+              because a share necessarily moves when a competitor is added or removed,
+              which the index does not.
 
            Position -> credit follows an organic click-through curve, so a position is
            worth what it is actually worth: #1 = 31.7 points, #2 = 24.7, #5 = 9.5,
-           #10 = 1.8, past #20 almost nothing. Dividing the earned points by 31.7 (a
-           perfect #1) turns them into the index.
+           #10 = 1.8, past #20 almost nothing.
 
            Two earlier formulas were wrong here, both worth not repeating:
              1. `(100 - pos)/100` per domain — paid 55% credit for sitting at #45, so
@@ -692,54 +698,72 @@
                 volume happened to sit.
 
            Hence EQUAL weight per keyword. Every tracked keyword is one the user chose to
-           track, so each counts once and the index measures ranking strength rather than
-           traffic potential. A keyword a domain does not rank on scores 0 but still
-           counts in the denominator — that is what makes coverage matter, and it keeps
-           the denominator identical for every domain, which is what makes the cards
-           comparable at all. */
-        const CTR_CURVE = [31.7, 24.7, 18.7, 13.3, 9.5, 6.8, 4.9, 3.5, 2.5, 1.8,
-                           1.4, 1.2, 1.0, 0.9, 0.8, 0.7, 0.6, 0.5, 0.45, 0.4];
-        const PERFECT = CTR_CURVE[0];
-        const posCredit = pos => {
-          if (pos == null || pos < 1 || pos > 100) return 0;
-          return pos <= 20 ? CTR_CURVE[pos - 1] : (pos <= 50 ? 0.05 : 0.02);
+           track, so each counts once and both readings measure ranking strength rather
+           than traffic potential. A keyword a domain does not rank on scores 0 but still
+           counts in the index denominator — that is what makes coverage matter, and it
+           keeps the denominator identical for every domain, which is what makes the
+           cards comparable at all.
+
+           Self-contained (curve and credit live inside) so tests/visibility_scores.test.js
+           can extract and run the real function by brace-matching, same as sortRows.
+           `domains[0]` is "you" (read from r.you), the rest match inside r.comps. */
+        const buildVisibilityScores = (domains, rows) => {
+          const CTR_CURVE = [31.7, 24.7, 18.7, 13.3, 9.5, 6.8, 4.9, 3.5, 2.5, 1.8,
+                             1.4, 1.2, 1.0, 0.9, 0.8, 0.7, 0.6, 0.5, 0.45, 0.4];
+          const PERFECT = CTR_CURVE[0];
+          const posCredit = pos => {
+            if (pos == null || pos < 1 || pos > 100) return 0;
+            return pos <= 20 ? CTR_CURVE[pos - 1] : (pos <= 50 ? 0.05 : 0.02);
+          };
+          const perDomain = domains.map((dom, idx) => {
+            let earned = 0;
+            let posSum = 0;
+            const ranked = [];
+            rows.forEach(r => {
+              let pos = null;
+              if (idx === 0) {
+                pos = r.you ? r.you.pos : null;
+              } else {
+                const compCell = (r.comps || []).find(c => c && c.domain === dom);
+                pos = compCell ? compCell.pos : null;
+              }
+              if (pos != null) { ranked.push(pos); posSum += pos; }
+              earned += posCredit(pos);
+            });
+            /* Having no captured rows at all is the only null. A domain that IS
+               measured but ranks nowhere scores a real 0 — that is information, not a
+               missing value. */
+            const visScore = rows.length ? (earned / (rows.length * PERFECT)) * 100 : null;
+            const avgPos = ranked.length ? Math.round(posSum / ranked.length) : null;
+            return { dom: dom, earned: earned, visScore: visScore, avgPos: avgPos,
+                     rankedCount: ranked.length, sov: null };
+          });
+          /* Share denominator = points earned by the domains SHOWN, so the set totals
+             exactly 100. When nobody ranks anywhere there is no field to split — the
+             share stays null while the index reports its honest 0. */
+          const totalEarned = perDomain.reduce((t, d) => t + d.earned, 0);
+          perDomain.forEach(d => {
+            d.sov = (d.visScore != null && totalEarned > 0)
+              ? (d.earned / totalEarned) * 100 : null;
+          });
+          return perDomain;
         };
 
         const compRows = (data.competitors && data.competitors.rows) || [];
-        const scMap = allDomains.map((dom, idx) => {
-          let earned = 0;
-          let posSum = 0;
-          const ranked = [];
-          compRows.forEach(r => {
-            let pos = null;
-            if (idx === 0) {
-              pos = r.you ? r.you.pos : null;
-            } else {
-              const compCell = (r.comps || []).find(c => c && c.domain === dom);
-              pos = compCell ? compCell.pos : null;
-            }
-            if (pos != null) { ranked.push(pos); posSum += pos; }
-            earned += posCredit(pos);
-          });
-          /* Having no keywords at all is the only "—". A domain that IS measured but
-             ranks nowhere scores a real 0 — that is information, not a missing value. */
-          const visScore = compRows.length ? (earned / (compRows.length * PERFECT)) * 100 : null;
-          /* Coverage and average position printed under the score. The index folds both
-             together, so on its own it cannot distinguish "ranks everywhere, mid-table"
-             from "ranks on three keywords, all at #1" — two very different boards that
-             can land on the same number. The sub-line is what makes the score auditable
-             instead of something the user has to trust. */
-          const avgPos = ranked.length ? Math.round(posSum / ranked.length) : null;
-          return {
-            k: dom, name: dom, color: colors[idx % colors.length],
-            val: visScore != null ? visScore.toFixed(1) : '—',
-            sub: visScore == null ? ''
-                 : (ranked.length
-                    ? ranked.length + '/' + compRows.length + ' keywords · avg #' + avgPos
-                    : 'no positions on ' + compRows.length + ' keywords'),
-            rawVal: visScore
-          };
-        });
+        const scMap = buildVisibilityScores(allDomains, compRows).map((d, idx) => ({
+          k: d.dom, name: d.dom, color: colors[idx % colors.length],
+          val: d.sov != null ? d.sov.toFixed(1) + '%' : '—',
+          /* Coverage, average position AND the absolute index printed under the share.
+             The share alone cannot distinguish "ranks everywhere, mid-table" from
+             "ranks on three keywords, all at #1", nor a strong field from a weak one —
+             the sub-line is what makes the big number auditable instead of something
+             the user has to trust. */
+          sub: d.visScore == null ? ''
+               : (d.rankedCount
+                  ? 'index ' + d.visScore.toFixed(1) + ' · ' + d.rankedCount + '/' + compRows.length + ' keywords · avg #' + d.avgPos
+                  : 'no positions on ' + compRows.length + ' keywords'),
+          rawVal: d.sov != null ? d.sov : (d.visScore != null ? 0 : null)
+        }));
         const hiddenOv = s.ptOvHidden || [];
         vals.ptOv = {
           /* /api/positions returns no snapshot dates, so the Δ caption names the

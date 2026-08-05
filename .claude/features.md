@@ -449,27 +449,37 @@ Three workspace tabs:
   table of keywords / coverage / avg position / top 10 / ahead-of-you / visibility. Head-to-head
   is counted only where both domains have a real captured position. With no captured rows it
   renders an empty state with a capture button — **nothing is estimated to fill it**.
-- Per-domain **visibility index cards** (you + each competitor), sorted **strongest first** — the
+- Per-domain **visibility cards** (you + each competitor), sorted **strongest first** — the
   question the tab answers is which competitor is ranking best, so that must be the reading order,
   and your own domain is deliberately *not* pinned to the front because its rank among the rivals
-  is the answer. Each card carries a colour swatch, the index, a sub-line (`n/N keywords · avg
-  #p`), and a legend checkbox.
-  **The index is 0–100 where 100 = #1 on every tracked keyword.** Position → credit follows an
-  organic CTR curve (#1 = 31.7, #2 = 24.7, #5 = 9.5, #10 = 1.8, ~0 past #20); the earned points
-  are divided by a perfect board (`keywords × 31.7`). A keyword the domain does not rank on scores
-  0 but stays in the denominator, so coverage counts alongside position and the denominator is
-  identical for every domain — which is the only reason the cards are comparable.
+  is the answer. Each card carries a colour swatch, **two readings from one set of real inputs**,
+  and a legend checkbox. Computed by `buildVisibilityScores` in `positioning.js`, covered by
+  `static/spa/tests/visibility_scores.test.js` (extraction test, same pattern as `sortRows`).
+  **1. Share of voice — the big number** (primary since 2026-08-05 at the product lead's
+  direction): the domain's CTR-curve points as a % of all points earned by the domains shown, so
+  the cards **total exactly 100%** and read like the market-share panels in Semrush. An absolute
+  index alone does not read as market share, which is what the user asks of this card row.
+  **2. Visibility index — the sub-line** (`index i · n/N keywords · avg #p`): the same points
+  against a perfect board, 0–100 where 100 = #1 on every tracked keyword. Kept alongside the
+  share because a share hides absolute strength (a field of weak boards still splits 100%
+  between them) and a share necessarily moves when a competitor is added or removed, which the
+  index does not — each covers the other's blind spot.
+  Position → credit follows an organic CTR curve (#1 = 31.7, #2 = 24.7, #5 = 9.5, #10 = 1.8,
+  ~0 past #20). A keyword the domain does not rank on scores 0 but stays in the index
+  denominator, so coverage counts alongside position and the denominator is identical for every
+  domain — which is the only reason the cards are comparable.
   **Every keyword is weighted equally, and that is deliberate.** Two earlier formulas were wrong
   and must not come back: (1) `(100 − pos)/100` per domain paid 55% credit for sitting at #45, so
   five domains totalled 264% under a caption reading "share"; (2) the CTR curve **weighted by
   search volume** inverted the ranking outright on real data — four keywords carry 81% of the
   Premier Staff project's volume, which scored atneventstaffing.com (avg position 7.7, the
   strongest board) at 2.21 while eventstaff.com (avg 18.7) scored 12.09. Every tracked keyword is
-  one the user chose to track, so the index measures **ranking strength, not traffic potential**.
-  The sub-line exists because the index alone cannot separate "ranks everywhere, mid-table" from
-  "ranks on three keywords, all #1" — both can land on the same number.
+  one the user chose to track, so both readings measure **ranking strength, not traffic
+  potential**. The sub-line exists because the share alone cannot separate "ranks everywhere,
+  mid-table" from "ranks on three keywords, all #1" — both can land on the same number.
   Unticking a legend entry only greys its card and hides its (future) chart series; it never
-  changes anyone's number.
+  changes anyone's number — including the share, whose denominator is the full card set, not the
+  ticked subset.
 - A multi-series visibility line chart — **dormant**: `/api/positions` returns no per-date series,
   so `hasHistory` is hard-`false` and an empty state renders instead. The SVG is kept as the target
   shape; populate it only from real positions, never a generator.
@@ -499,15 +509,19 @@ Three workspace tabs:
   state rather than a picture. Do not reintroduce it in any form.
 - The Overview tab's visibility trend, deltas and the Pages tab's traffic/change figures are
   **derived approximations**, not stored history.
-- The Overview visibility cards are **per-domain indices, not a share**. Each is independently
-  0–100 against the same perfect board, so they do not sum to 100 and are not meant to. Do not
-  "fix" that by normalising the set to total 100%: it was tried, and it makes a domain's number
-  move whenever an unrelated competitor is added or removed, which is worse than the gap.
-  Verified against the real Premier Staff payload: #1 on every keyword = exactly 100.0, ranking
-  nowhere = exactly 0.0, and the highest live card is 9.4.
+- The Overview visibility cards show **a share AND an index — never a share alone** (2026-08-05,
+  product lead's direction). The share's known cost is that a domain's % moves whenever an
+  unrelated competitor is added or removed — that is inherent to any market-share reading and is
+  exactly why the absolute index stays printed on the sub-line (it moves only when rankings
+  move). An earlier attempt that normalised the set to 100% *without* keeping the index was
+  rejected for this reason; do not remove the index and recreate it.
+- When **nobody ranks anywhere**, the share is `null` ("—") because there is no field to split,
+  while the index reports its honest 0. With no captured rows at all, both are `null`.
 - **Low index values are usually true, not a scaling bug.** On the Premier Staff project the best
-  domain scores 9.4 because it ranks on 7 of 24 keywords at an average of #8. The pre-2026-08
-  formula printed 80.41% for an average position of *38* — that number was the bug, not this one.
+  domain scores index 9.4 because it ranks on 7 of 24 keywords at an average of #8. The
+  pre-2026-08 formula printed 80.41% for an average position of *38* — that number was the bug,
+  not this one. The share can read high (e.g. 40%) while the index reads 9 — that means "biggest
+  fish in a weak field", and showing both is the point.
 - This page performs a **live DataForSEO lookup** to backfill missing volume/KD, so it can be
   slower than other pages on first load after adding keywords.
 - **Delete project** works (fixed 2026-07 — it previously called `FuseAPI.delete`, which does not
