@@ -117,15 +117,24 @@ def latest_ranking_anchor(site_id: str, location: str | None = None) -> date_cls
     `location` scopes it to this project's market, so a sibling project's newer sync cannot
     drag this project's window past its own last measurement.
     """
-    with get_session() as session:
-        ensure_tables(session, KeywordRanking)
-        query = select(func.max(KeywordRanking.date)).where(
-            KeywordRanking.site_id.in_(resolve_site_ids(site_id))
-        )
-        if location:
-            query = query.where(KeywordRanking.location == location)
-        newest = session.execute(query).scalar()
-    return (newest + timedelta(days=1)) if newest is not None else None
+    try:
+        from pipeline.db.schema import ensure_ranking_location_columns, ensure_ranking_location_keys
+        with get_session() as session:
+            ensure_tables(session, KeywordRanking)
+            # Reconcile columns/keys for legacy databases before querying them
+            ensure_ranking_location_columns(session)
+            ensure_ranking_location_keys(session)
+            
+            query = select(func.max(KeywordRanking.date)).where(
+                KeywordRanking.site_id.in_(resolve_site_ids(site_id))
+            )
+            if location:
+                query = query.where(KeywordRanking.location == location)
+            newest = session.execute(query).scalar()
+        return (newest + timedelta(days=1)) if newest is not None else None
+    except Exception as e:
+        logger.error(f"latest_ranking_anchor error: {e}", exc_info=True)
+        return None
 
 
 _LOCAL_HOSTS = ("localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]")
