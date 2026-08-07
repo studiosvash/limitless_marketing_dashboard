@@ -176,7 +176,7 @@
           const m = v[2], vd = vitalVerdict(m);
           const b = m.buckets, tot = Math.max(1, b.good + b.mid + b.poor);
           return {
-            name: v[0], desc: v[1], p75: m.p75 !== null ? m.p75 : '—', unit: m.p75 !== null ? m.unit : '',
+            name: v[0], desc: v[1], p75: m.p75 !== null ? (v[0] === 'LCP' ? Number(m.p75).toFixed(1) : m.p75) : '—', unit: m.p75 !== null ? m.unit : '',
             verdict: vd[0], badge: { fontSize: '11px', fontWeight: 700, padding: '2px 9px', borderRadius: '999px', background: vd[1], color: vd[2] },
             numStyle: { fontSize: '30px', fontWeight: 800, marginTop: '10px', color: vd[2] },
             segs: [
