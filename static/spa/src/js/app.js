@@ -3100,6 +3100,18 @@
       seoOpen: s.seoOpen, adsOpen: s.adsOpen,
       title: titles[tab][0], subtitle: titles[tab][1] + ' · ' + project.domain,
       projects: s.projects.length ? s.projects : [{ id: s.projectId, domain: project.domain }],
+      topbarProjects: (() => {
+        const unique = new Map();
+        const arr = s.projects.length ? s.projects : [{ id: s.projectId, domain: project.domain }];
+        arr.forEach(p => {
+          if (!unique.has(p.domain)) {
+            unique.set(p.domain, p);
+          } else if (p.id === s.projectId) {
+            unique.set(p.domain, p);
+          }
+        });
+        return Array.from(unique.values());
+      })(),
       projectId: s.projectId, projectDomain: project.domain,
       addSiteOpen: s.addSiteOpen, addSiteDomain: s.addSiteDomain, addSiteName: s.addSiteName, addSiteError: s.addSiteError,
       addSite: this.addSiteVals(s),
