@@ -44,22 +44,48 @@ def _load_from_file(path: str) -> list[str]:
     return keywords
 
 
-def _load_from_db(site_id: str) -> list[str]:
-    """Keywords the admin explicitly tracks for this site (saved_keywords table), plus any
-    keywords currently in keyword_rankings (from GSC queries or past syncs)."""
+def _load_from_db(site_id: str, location: Optional[str] = None,
+                  site_pk: Optional[int] = None) -> list[str]:
+    """Keywords the admin explicitly tracks for THIS PROJECT (saved_keywords table).
+
+    `site_pk` is the project's `sites.id`, and it is what makes the list per-project rather than
+    per-domain. Position Tracking registers one domain as several projects
+    (`add_site(allow_duplicate=True)`), and they all share `site_id` — so filtering on `site_id`
+    alone hands a brand-new project every keyword its siblings already track. That is what made
+    a freshly created project open with another project's keywords in its grid, in its Rankings
+    Overview, and in Positioning's "Newly Added Keywords" card.
+
+    `location` was the first discriminator tried (2026-08-06) and is kept ONLY as a fallback for
+    a caller that has a project's location but not its id. It does not actually identify a
+    project: two projects on one domain may track the same market, and the wizard defaults every
+    project to "United States", so in the common case it separates nothing. Pass `site_pk`.
+
+    Both `None` means domain-wide, which is still correct for a caller with genuinely no project
+    in hand.
+    """
     # Imported lazily: connectors import this module, and pulling in the DB layer at module
     # import time would risk a circular import.
     try:
         from sqlalchemy import select
 
-        from pipeline.db.schema import SavedKeyword, KeywordRanking
+        from pipeline.db.schema import SavedKeyword, ensure_saved_keyword_project
         from pipeline.utils.db_connection import get_session
+        from pipeline.utils.site_ids import resolve_site_ids
 
         with get_session() as session:
-            saved_rows = session.execute(
-                select(SavedKeyword.keyword).where(SavedKeyword.site_id == site_id)
-            ).scalars().all()
-            rows = list(saved_rows)
+            ensure_saved_keyword_project(session)   # site_pk may not exist yet on this database
+            query = select(SavedKeyword.keyword)
+            if site_pk:
+                # `site_pk` alone: the project id already implies the domain, while the reverse
+                # is not true — one site can be stored under several site_id spellings, and
+                # ANDing them hides the rows filed under the ones this project's site_url does
+                # not match. See saved_keyword_service._scope.
+                query = query.where(SavedKeyword.site_pk == site_pk)
+            else:
+                query = query.where(SavedKeyword.site_id.in_(resolve_site_ids(site_id)))
+                if location:
+                    query = query.where(SavedKeyword.location == location)
+            rows = list(session.execute(query).scalars().all())
     except Exception as e:
         logger.error(f"[keywords] DB lookup failed for {site_id!r}: {e}", exc_info=True)
         return []
@@ -78,13 +104,31 @@ def _load_from_db(site_id: str) -> list[str]:
     return keywords
 
 
-def load_tracked_keywords(site_id: Optional[str] = None, path: str = KEYWORDS_FILE) -> list[str]:
-    """Tracked keywords for a site: the DB list the admin manages from the dashboard, falling
-    back to the legacy keywords.txt file when the DB has none (or no site was given)."""
+def load_tracked_keywords(site_id: Optional[str] = None, path: str = KEYWORDS_FILE,
+                          location: Optional[str] = None,
+                          site_pk: Optional[int] = None) -> list[str]:
+    """Tracked keywords for ONE PROJECT: the DB list the admin manages from the dashboard.
+
+    `site_pk` scopes the list to a single project when several share a domain — see
+    `_load_from_db`. Pass it from anything that has a project in hand; `location` is the weaker
+    fallback for callers that only have that.
+
+    THE FILE FALLBACK IS SKIPPED FOR A PROJECT-SCOPED CALL. `keywords.txt` is a legacy,
+    domain-agnostic list; handing it to a brand-new project that has genuinely tracked nothing
+    yet would refill the empty state this scoping exists to produce. An empty list is the
+    honest answer there, and the UI already has a "no keywords tracked yet" state for it.
+    """
     if site_id:
-        db_keywords = _load_from_db(site_id)
+        db_keywords = _load_from_db(site_id, location, site_pk)
         if db_keywords:
             return db_keywords
+        if site_pk or location:
+            scope = f"project #{site_pk}" if site_pk else f"@ {location!r}"
+            logger.info(
+                f"[keywords] No tracked keywords for {site_id!r} {scope} — this project tracks "
+                f"nothing yet. Add some from the Keyword Explorer."
+            )
+            return []
         logger.info(
             f"[keywords] No tracked keywords in DB for {site_id!r} — falling back to {path}. "
             f"Track keywords from the Keyword Explorer to manage this list from the dashboard."
@@ -92,8 +136,15 @@ def load_tracked_keywords(site_id: Optional[str] = None, path: str = KEYWORDS_FI
     return _load_from_file(path)
 
 
-def keywords_needing_backfill(site_id: str) -> list[str]:
+def keywords_needing_backfill(site_id: str, site_pk: Optional[int] = None,
+                              location: Optional[str] = None) -> list[str]:
     """Tracked keywords that have never been measured — the subset an incremental sync needs.
+
+    Scoped to ONE PROJECT by `site_pk`, and its measurements to that project's `location`. Both
+    halves matter and for the same money: this is what "Track These New Keywords" narrows its
+    sync to, so an unscoped call would spend DataForSEO credits re-measuring a sibling project's
+    keywords, and a location-blind measurement check would skip a keyword this project has never
+    had measured in ITS market because a sibling had it measured in another one.
 
     A keyword sent from the Keyword Explorer lands in `saved_keywords` immediately, but it has
     no SERP position, no search volume and no difficulty until a sync fetches them. Re-running
@@ -103,21 +154,19 @@ def keywords_needing_backfill(site_id: str) -> list[str]:
 
     "Outstanding" means any of:
       * no `keyword_rankings` row at all for the keyword (never looked up), or
-      * every row has `search_volume` IS NULL (position may exist, market data missing), or
-      * every row has BOTH `position` IS NULL and `impressions` is 0/NULL (no evidence a rank
-        connector ever actually checked it — see below).
+      * every row has `search_volume` IS NULL (market data missing), or
+      * every row has `rank_checked_at` IS NULL (no rank connector has ever looked).
 
-    A keyword that has been measured and genuinely ranks nowhere is NOT returned: `dataforseo_serp`
-    writes an explicit `position: None` row when it checks a keyword and the domain isn't in the
-    top 30 (see `dataforseo_serp._normalize_task`), and `gsc_keywords` writes real impressions even
-    on a 0-click day. Either signal proves a rank connector actually ran, so re-querying that
-    keyword would be exactly the waste this exists to avoid — refreshing those is what the
-    scheduled full sync is for. The ambiguity this guards against: `dataforseo_keywords` (volume
-    only) can write a `position: None` row for a keyword that has NEVER been through a rank
-    connector at all, and that row is indistinguishable from a genuine "checked, not ranking" row
-    by `position` alone — a keyword tracked between two `positions` syncs landed exactly here,
-    with real volume but a rank check that never happened, and the volume-only check let it slip
-    through "Track These New Keywords" forever.
+    A keyword that has been measured and genuinely ranks nowhere is NOT returned. `rank_checked_at`
+    is the whole reason that distinction is now possible: `dataforseo_serp` stamps it even when it
+    writes `position: None` for a domain outside the top 30, and `gsc_keywords` stamps it because
+    Search Console only returns a query row for a page it actually served. Both are real
+    measurements, and re-buying them is exactly the waste this function exists to prevent.
+
+    This used to infer the same thing from `position IS NOT NULL OR impressions > 0`, which could
+    not tell a measured "not in the top 30" from a row `dataforseo_keywords` had merely priced —
+    both are `position: NULL, impressions: 0`. So every genuinely-unranked keyword was re-queried
+    on every incremental sync, forever, and paid for again each time.
 
     Returns [] on any failure — the caller then falls back to a normal full sync rather than
     silently syncing nothing.
@@ -126,23 +175,21 @@ def keywords_needing_backfill(site_id: str) -> list[str]:
         from sqlalchemy import select
         from pipeline.db.schema import KeywordRanking
         from pipeline.utils.db_connection import get_session
+        from pipeline.utils.site_ids import resolve_site_ids
 
-        tracked = load_tracked_keywords(site_id)
+        tracked = load_tracked_keywords(site_id, location=location, site_pk=site_pk)
         if not tracked:
             return []
 
-        variants = [site_id]
-        if site_id.startswith("sc-domain:"):
-            variants.append(site_id.replace("sc-domain:", "", 1))
-        else:
-            variants.append(f"sc-domain:{site_id}")
-
         with get_session() as session:
-            rows = session.execute(
+            query = (
                 select(KeywordRanking.keyword, KeywordRanking.search_volume,
-                       KeywordRanking.position, KeywordRanking.impressions)
-                .where(KeywordRanking.site_id.in_(variants))
-            ).all()
+                       KeywordRanking.rank_checked_at)
+                .where(KeywordRanking.site_id.in_(resolve_site_ids(site_id)))
+            )
+            if location:
+                query = query.where(KeywordRanking.location == location)
+            rows = session.execute(query).all()
 
         # Matching is case-insensitive because GSC lower-cases queries while the Explorer
         # preserves what the user typed, and the same keyword must not look unmeasured purely
@@ -150,14 +197,14 @@ def keywords_needing_backfill(site_id: str) -> list[str]:
         has_volume = set()
         rank_checked = set()
         seen = set()
-        for kw, vol, pos, impressions in rows:
+        for kw, vol, checked_at in rows:
             key = (kw or "").strip().lower()
             if not key:
                 continue
             seen.add(key)
             if vol is not None:
                 has_volume.add(key)
-            if pos is not None or (impressions or 0) > 0:
+            if checked_at is not None:
                 rank_checked.add(key)
 
         out = [

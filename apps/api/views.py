@@ -1,5 +1,6 @@
 import logging
-from datetime import date as date_cls
+from datetime import date as date_cls, timedelta
+from pipeline.utils.site_ids import resolve_site_ids
 
 from django.contrib.auth.decorators import login_not_required
 from django.http import Http404
@@ -86,6 +87,45 @@ def latest_data_anchor(site_id: str) -> date_cls:
         ).scalar()
         candidates = [d for d in (breakdown, totals) if d is not None]
         return max(candidates) if candidates else date_cls.today()
+
+
+def latest_ranking_anchor(site_id: str, location: str | None = None) -> date_cls | None:
+    """An anchor that includes the newest `keyword_rankings` row, or None if there are none.
+
+    WHY THE SEO ANCHOR IS WRONG FOR THE KEYWORD PAGES. `latest_data_anchor` reads the two GSC
+    TRAFFIC tables, and `range_to_period_dates` ends the window at `anchor - 1 day` because
+    Search Console's last day is partial. Search Console also lags about three days
+    (`gsc_safe_range` ends at today-3), so that window ends around today-4.
+
+    `dataforseo_serp` stamps every row it writes with `yesterday()` — today-1. A freshly
+    measured SERP position is therefore about three days NEWER than the end of the window that
+    is supposed to display it, on every single run. The consequence was absolute rather than
+    occasional: **a rank measurement could never appear on the Positioning page**, however well
+    the sync worked. A user who pressed Refresh, watched it succeed, and saw an unchanged empty
+    page was looking at a date-window bug, not at missing data.
+
+    (It went unnoticed because the rows that DID show came from `gsc_keywords`, which writes a
+    row per day across the whole window. Only the DataForSEO connector writes a single
+    same-day snapshot — and that connector had never run: see the connector-map typo in
+    `sync_engine._get_connector`.)
+
+    Returns `max(date) + 1 day` so the existing `anchor - 1` arithmetic lands the window END
+    exactly on the measurement, rather than a day before it. A rank snapshot is a complete
+    reading for its day — the partial-last-day reasoning that justifies the offset for GSC
+    traffic does not apply to it.
+
+    `location` scopes it to this project's market, so a sibling project's newer sync cannot
+    drag this project's window past its own last measurement.
+    """
+    with get_session() as session:
+        ensure_tables(session, KeywordRanking)
+        query = select(func.max(KeywordRanking.date)).where(
+            KeywordRanking.site_id.in_(resolve_site_ids(site_id))
+        )
+        if location:
+            query = query.where(KeywordRanking.location == location)
+        newest = session.execute(query).scalar()
+    return (newest + timedelta(days=1)) if newest is not None else None
 
 
 _LOCAL_HOSTS = ("localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]")
@@ -210,7 +250,7 @@ class ProjectListCreateView(APIView):
         # a manual Refresh click. Returns task_id so the SPA can start polling the
         # progress bar immediately (GET /api/tasks/<task_id>).
         try:
-            sync_info = start_sync_run(site_url, "all", user=request.user)
+            sync_info = start_sync_run(site_url, "all", user=request.user, site_pk=new_id)
             body["sync_task_id"] = sync_info["task_id"]
         except Exception:
             # Non-fatal: sync failure should never block site creation.
@@ -231,18 +271,25 @@ class ProjectDetailView(APIView):
 @method_decorator(login_not_required, name="dispatch")
 class ProjectDataCleanView(APIView):
     def delete(self, request, slug):
-        site_id = resolve_project_or_404(slug).site_url
+        site = resolve_project_or_404(slug)
+        site_id = site.site_url
         tables_to_clean = [
             SEODaily, KeywordRanking, Page, AdMetricDaily, Backlink,
             TechnicalIssue, PageSpeed, IndexingStatus, SEOAggregate, AISummary,
             Anomaly, ComparativeMetrics, CompetitorKeywordRanking, TrackedCompetitor,
-            AIKeywordData, SavedKeyword, KeywordOpportunity
+            AIKeywordData, KeywordOpportunity
         ]
-        
+
         try:
             with get_session() as session:
                 for table in tables_to_clean:
                     session.execute(delete(table).where(table.site_id == site_id))
+                # `saved_keywords` is handled separately because it is the one table here that
+                # is per-PROJECT rather than per-domain: several projects share this `site_id`,
+                # so clearing one project's data by site_id alone also destroyed every sibling
+                # project's tracked keyword list.
+                session.execute(delete(SavedKeyword).where(
+                    SavedKeyword.site_id == site_id, SavedKeyword.site_pk == site.id))
                 session.commit()
             return Response(status=status.HTTP_204_NO_CONTENT)
         except Exception as e:
@@ -315,11 +362,22 @@ class ProjectSEOView(APIView):
 @method_decorator(login_not_required, name="dispatch")
 class ProjectKeywordsView(APIView):
     def get(self, request, slug):
-        site_id = resolve_project_or_404(slug).site_url
+        # Same two-axis scoping as ProjectPositionsView: `site_pk` picks this project's tracked
+        # list out of the domain's, `location` picks its market's measurements.
+        site = resolve_project_or_404(slug)
+        site_id = site.site_url
+        location = (site.location or "").strip() or None
+        # Later of the GSC traffic anchor and this project's newest rank measurement — the
+        # Keywords page reads `keyword_rankings` too, so it has the same blind spot the
+        # Positioning page had. See `latest_ranking_anchor`.
         anchor = latest_data_anchor(site_id)
+        rank_anchor = latest_ranking_anchor(site_id, location)
+        if rank_anchor and rank_anchor > anchor:
+            anchor = rank_anchor
         curr_start, curr_end, prev_start, prev_end = range_to_period_dates("28d", anchor)
 
-        return Response(build_keywords_response(site_id, curr_start, curr_end, prev_start, prev_end))
+        return Response(build_keywords_response(site_id, curr_start, curr_end, prev_start,
+                                                prev_end, location=location, site_pk=site.id))
 
     def post(self, request, slug):
         """Track a keyword (or batch of keywords) found in the Keyword Explorer -- persists to the site's saved
@@ -358,7 +416,7 @@ class ProjectKeywordsView(APIView):
                 })
             if not rows:
                 return Response({"detail": "keywords list is empty or invalid"}, status=400)
-            saved = save_keywords(site_id, rows, location=location)
+            saved = save_keywords(site_id, rows, location=location, site_pk=site.id)
             return Response({"ok": True, "saved": saved, "keyword": _tracked_keyword_body(first_kw, batch[0], "manual")})
 
         # Single keyword payload
@@ -376,17 +434,20 @@ class ProjectKeywordsView(APIView):
             "serp_features": ",".join(serp) if isinstance(serp, list) else serp,
             "competition": request.data.get("competition"),
         }
-        saved = save_keywords(site_id, [row], location=location)
+        saved = save_keywords(site_id, [row], location=location, site_pk=site.id)
         # HANDOFF_SPEC 1: track-keyword returns {ok, keyword} (keyword echoed in spec shape).
         return Response({"ok": True, "saved": saved, "keyword": _tracked_keyword_body(kw, request.data, "manual")})
 
     def put(self, request, slug):
-        """Bulk replace all tracked keywords for the project."""
-        from pipeline.services.saved_keyword_service import save_keywords
-        from pipeline.utils.db_connection import get_session
-        from pipeline.db.schema import SavedKeyword
-        from sqlalchemy import delete
-        
+        """Bulk replace all tracked keywords for THIS project.
+
+        The clear step goes through `clear_saved_keywords`, which is scoped to `site_pk`. This
+        used to issue its own `delete(SavedKeyword).where(site_id == ...)`, which wiped every
+        SIBLING project's tracked list on the same domain as a side effect of one project saving
+        its own — invisibly, because the response only reported the rows it then wrote back.
+        """
+        from pipeline.services.saved_keyword_service import clear_saved_keywords, save_keywords
+
         site = resolve_project_or_404(slug)
         site_id = site.site_url
         location = request.data.get("location") or site.location or "United States"
@@ -399,11 +460,9 @@ class ProjectKeywordsView(APIView):
 
         if not isinstance(batch, list):
             return Response({"detail": "keywords list required"}, status=400)
-            
-        with get_session() as session:
-            session.execute(delete(SavedKeyword).where(SavedKeyword.site_id == site_id))
-            session.commit()
-            
+
+        clear_saved_keywords(site_id, site_pk=site.id)
+
         if batch:
             rows = []
             for item in batch:
@@ -424,8 +483,8 @@ class ProjectKeywordsView(APIView):
                     "serp_features": ",".join(serp) if isinstance(serp, list) else serp,
                     "competition": item.get("competition"),
                 })
-            save_keywords(site_id, rows, location)
-            
+            save_keywords(site_id, rows, location, site_pk=site.id)
+
         return Response({"ok": True, "count": len(batch)})
 
 
@@ -467,8 +526,28 @@ class ProjectKeywordListsView(APIView):
 class ProjectPositionsView(APIView):
     def get(self, request, slug):
         site_id, curr_start, curr_end, prev_start, prev_end = resolve_range_periods(request, slug)
+        # Scope this page to THIS project, on both axes. Several projects can share one domain
+        # (add_site(allow_duplicate=True)) and they all carry the same `site_id`:
+        #   * `site_pk` scopes the tracked KEYWORD LIST — without it a brand-new project's
+        #     "Newly Added Keywords" card fills with its siblings' keywords;
+        #   * `location` scopes the RANKING reads — without it each project renders the union
+        #     of all their rankings, identical numbers under different city names.
+        site = resolve_project_or_404(slug)
+        location = (site.location or "").strip() or None
 
-        return Response(build_positions_response(site_id, curr_start, curr_end, prev_start, prev_end))
+        # Re-anchor on the newest RANK measurement when it is newer than the GSC traffic
+        # anchor `resolve_range_periods` used. Without this a position measured today is
+        # roughly three days past the end of the window meant to show it, so a successful
+        # refresh changes nothing on screen — see `latest_ranking_anchor`.
+        rank_anchor = latest_ranking_anchor(site_id, location)
+        if rank_anchor and rank_anchor > curr_end + timedelta(days=1):
+            range_key = (request.query_params.get("range") or "28d").strip() or "28d"
+            curr_start, curr_end, prev_start, prev_end = range_to_period_dates(
+                range_key, rank_anchor)
+
+        return Response(build_positions_response(site_id, curr_start, curr_end,
+                                                 prev_start, prev_end, location=location,
+                                                 site_pk=site.id))
 
 
 @method_decorator(login_not_required, name="dispatch")
@@ -721,17 +800,17 @@ class ProjectSettingsView(APIView):
     persist (see .claude/api-reference.md)."""
 
     def get(self, request, slug):
-        site_id = resolve_project_or_404(slug).site_url
-        return Response(build_settings_response(site_id))
+        site = resolve_project_or_404(slug)
+        return Response(build_settings_response(site.site_url, site_pk=site.id))
 
     def put(self, request, slug):
         if not check_owner_admin(request.user):
             return Response({"detail": "Settings modifications require Owner or Admin access."}, status=403)
-        site_id = resolve_project_or_404(slug).site_url
-        result = apply_settings_update(site_id, request.data)
+        site = resolve_project_or_404(slug)
+        result = apply_settings_update(site.site_url, request.data)
         if "error" in result:
             return Response({"detail": result["error"]}, status=400)
-        return Response(build_settings_response(site_id))
+        return Response(build_settings_response(site.site_url, site_pk=site.id))
 
 
 @method_decorator(login_not_required, name="dispatch")
@@ -1075,8 +1154,15 @@ class AuthInviteAcceptView(APIView):
 # writes the DB, and the page then reads the fresh DB. (Engine already exists:
 # pipeline.services.sync_engine + apps.sync.models.RefreshRun.)
 # ---------------------------------------------------------------------------
+@method_decorator(login_not_required, name="dispatch")
 class ChangePasswordView(APIView):
-    """POST /api/auth/password to change the logged-in user's password."""
+    """POST /api/auth/password to change the logged-in user's password.
+
+    login_not_required opts out of LoginRequiredMiddleware so DRF's own
+    TokenAuthentication/IsAuthenticated run instead — without it, a token-authenticated
+    request is 302'd to the login page before DRF ever sees it (same rule as every other
+    view in this file). The is_authenticated check below still gates anonymous callers.
+    """
     def post(self, request):
         user = request.user
         if not user or not user.is_authenticated:
@@ -1097,7 +1183,10 @@ class ChangePasswordView(APIView):
 @method_decorator(login_not_required, name="dispatch")
 class ProjectSyncView(APIView):
     def post(self, request, slug):
-        site_id = resolve_project_or_404(slug).site_url
+        # Keep the whole row: `site_url` is the analytics key, but `id` is the only thing that
+        # identifies WHICH project asked when several track the same domain in different cities.
+        project = resolve_project_or_404(slug)
+        site_id = project.site_url
         scope = request.data.get("scope", "all")
 
         # No credential gate here, on purpose. This used to refuse the WHOLE run with a 400
@@ -1118,7 +1207,8 @@ class ProjectSyncView(APIView):
         # cost you that credential's data, not the entire refresh.
         # Set only by the SPA's "Refetch anyway" answer to the already-fresh prompt.
         force = bool(request.data.get("force", False))
-        return Response(start_sync_run(site_id, scope, user=request.user, force=force))
+        return Response(start_sync_run(site_id, scope, user=request.user, force=force,
+                                       site_pk=project.id))
 
 
 @method_decorator(login_not_required, name="dispatch")
@@ -1258,9 +1348,9 @@ class DomainOverviewView(APIView):
         if slug and result.get("status") == "ok" and result.get("keywords"):
             try:
                 from pipeline.services.saved_keyword_service import list_saved_keywords
-                site_id = resolve_project_or_404(slug).site_url
+                project = resolve_project_or_404(slug)
                 tracked = {(k.get("keyword") or "").strip().lower()
-                           for k in list_saved_keywords(site_id)}
+                           for k in list_saved_keywords(project.site_url, site_pk=project.id)}
                 result = {**result, "keywords": [
                     {**row, "tracked": (row.get("keyword") or "").strip().lower() in tracked}
                     for row in result["keywords"]
@@ -1593,10 +1683,16 @@ class AdsPromoteView(APIView):
         from apps.dashboard.services.ads_service import mark_promoted
         from pipeline.services.saved_keyword_service import save_keywords
 
-        site_id = resolve_project_or_404(slug).site_url
+        site = resolve_project_or_404(slug)
+        site_id = site.site_url
         term = (request.data.get("term") or "").strip()
         if not term:
             return Response({"detail": "term is required"}, status=400)
-        save_keywords(site_id, [{"keyword": term}], location="United States")
+        # Tracked for THIS project, in ITS market — a promoted ads term used to land under a
+        # hardcoded "United States" and no project id, so it joined the domain-wide pool every
+        # sibling project then rendered.
+        save_keywords(site_id, [{"keyword": term}],
+                      location=(site.location or "").strip() or "United States",
+                      site_pk=site.id)
         mark_promoted(site_id, term)
         return Response({"ok": True, "keyword": _tracked_keyword_body(term, {}, "ads_term")})

@@ -60,12 +60,23 @@ class GSCKeywordsConnector(BaseConnector):
         return self._default_site_url or ""
 
     def _get_last_synced_date(self, site_url: str):
-        """Check the DB for the most recent date in keyword_rankings for this site."""
+        """Most recent date **this connector** has written keyword data for, or None.
+
+        `impressions > 0` is load-bearing, for the same reason as gsc._get_last_synced_date:
+        `keyword_rankings` is a shared table where the DataForSEO connectors write position
+        rows stamped `date = yesterday()` with clicks/impressions at 0. A bare `max(date)`
+        therefore reads the DataForSEO cursor, and because gsc_safe_range ends *today − 3*,
+        fetch() computes `new_start > new_end` and returns [] on every run once any DataForSEO
+        keyword sync has happened — GSC clicks/impressions/CTR enrichment silently never
+        refreshes again. A GSC Search Analytics row always has impressions >= 1, so the
+        predicate selects exactly this connector's own rows.
+        """
         with get_session() as session:
             try:
                 result = session.execute(
                     select(func.max(KeywordRanking.date)).where(
                         KeywordRanking.site_id == site_url,
+                        KeywordRanking.impressions > 0,
                     )
                 ).scalar()
             except Exception:
@@ -189,22 +200,48 @@ class GSCKeywordsConnector(BaseConnector):
         self.logger.info(f"[gsc_keywords] {len(records)} keyword-date records for {site_url} (from {len(raw_rows)} raw rows)")
         return records
 
+    def _resolve_location(self, site_id: str) -> str:
+        """This PROJECT's tracking location — the same value the SERP connectors stamp.
+
+        Search Console data is not market-specific (it is whatever the property recorded), but
+        it shares `keyword_rankings` with the per-market SERP capture, and that table is keyed
+        by location. Writing GSC rows under a different location than the project's own would
+        put its clicks and impressions in rows the project never reads — the columns would
+        simply stay empty. Stamping the project's location merges them into the same rows the
+        SERP capture writes, which is what the Position Tracking grid expects.
+        """
+        from pipeline.services.site_service import resolve_tracking_location
+        return resolve_tracking_location(getattr(self, "site_pk", None), site_id)
+
     def _write_records(self, session, records: list[dict], site_id: Optional[str] = None) -> int:
-        """Upsert keyword records in batches to avoid SQLite parameter limits.
-        SQLite max ~999 vars; each record has ~10 cols → batch size 80.
+        """Upsert via the shared writer — see `pipeline/db/writer.upsert_keyword_rankings`.
+
+        This used to build its own `insert(...).on_conflict_do_update(...)` with
+        `index_elements=["date", "site_id", "keyword"]`. That duplicated the writer (against
+        the project's "analytics writes go through a writer upsert" rule) and it broke outright
+        the moment `location` joined the unique key on 2026-08-06: Postgres answered
+        `InvalidColumnReference: there is no unique or exclusion constraint matching the ON
+        CONFLICT specification`, so every Position Tracking refresh reported "GSC queries
+        refresh failed" after writing ~2200 rows.
+
+        The shared writer also updates with `coalesce(excluded, existing)`, so a NULL coming
+        from GSC (search_volume, keyword_difficulty, cpc — GSC has none of them) leaves
+        DataForSEO's stored values alone rather than blanking them. That is what the old
+        hand-written `set_` was trying to achieve by listing columns explicitly.
         """
         if not records:
             return 0
 
-        from pipeline.db.dialect import max_batch_size, upsert_insert
+        from pipeline.db.writer import upsert_keyword_rankings
 
-        # Clean records: keep all schema fields including GSC engagement metrics
+        location = self._resolve_location(site_id or "")
         clean_records = []
         for r in records:
             clean_records.append({
                 "date": r["date"],
                 "site_id": r.get("site_id") or site_id or "",
                 "keyword": r["keyword"],
+                "location": location,
                 "position": r["position"],
                 "url": r["url"],
                 # GSC real engagement — these tell us which keywords actually drive traffic
@@ -217,29 +254,14 @@ class GSCKeywordsConnector(BaseConnector):
                 "cpc": r.get("cpc"),
                 "intent": r.get("intent"),
                 "trend": r.get("trend"),
+                # Search Console only returns a query row because the page was actually served
+                # for it, so this IS a rank observation — see KeywordRanking.rank_checked_at.
+                # Stamped with the row's own date, not today's: it records when the position
+                # was true, which is what the reader of the column needs.
+                "rank_checked_at": r["date"],
             })
 
-        # Batch insert to avoid SQLite "too many SQL variables" error
-        insert = upsert_insert(session)
-        BATCH_SIZE = max_batch_size(session, 80)
-        total_written = 0
-        for i in range(0, len(clean_records), BATCH_SIZE):
-            batch = clean_records[i:i + BATCH_SIZE]
-            stmt = insert(KeywordRanking).values(batch)
-            stmt = stmt.on_conflict_do_update(
-                index_elements=["date", "site_id", "keyword"],
-                set_={
-                    "position": stmt.excluded.position,
-                    "url": stmt.excluded.url,
-                    "clicks": stmt.excluded.clicks,
-                    "impressions": stmt.excluded.impressions,
-                    "ctr": stmt.excluded.ctr,
-                },
-            )
-            session.execute(stmt)
-            total_written += len(batch)
-
-        return total_written
+        return upsert_keyword_rankings(session, clean_records, site_id=site_id)
 
 
 if __name__ == "__main__":

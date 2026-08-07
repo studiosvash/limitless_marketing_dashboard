@@ -25,7 +25,12 @@ class ProjectSerializer(serializers.Serializer):
             return site._pos_summary_cache
         try:
             from pipeline.utils.keywords import load_tracked_keywords
-            tracked_kws = load_tracked_keywords(site.site_url)
+            # Scoped to THIS project by its primary key — several projects can share one
+            # site_url, and an unscoped list gives a new project its siblings' keywords, so its
+            # card in the project switcher advertises a tracked count it does not have.
+            project_location = (getattr(site, "location", "") or "").strip() or None
+            tracked_kws = load_tracked_keywords(site.site_url, location=project_location,
+                                                site_pk=getattr(site, "id", None))
             if not tracked_kws:
                 summary = {"tracked": 0, "avg_pos": 0.0, "improved": 0, "declined": 0, "last_updated": "No sync yet"}
                 site._pos_summary_cache = summary
@@ -42,12 +47,24 @@ class ProjectSerializer(serializers.Serializer):
             prev_end = curr_start - timedelta(days=1)
             prev_start = prev_end - timedelta(days=30)
 
-            dist = _get_ranking_distribution(site.site_url, curr_start, curr_end)
-            changes = _get_position_changes(site.site_url, curr_start, curr_end, prev_start, prev_end)
+            # Scope to THIS project's tracking location. These three numbers are the project
+            # list's "keywords / up / down" columns, and several projects can share one
+            # site_url (one per city) -- unscoped, every city row rendered the union of all of
+            # them, which is why six Premierstaff projects showed an identical 22 / 6 / 7.
+            location = (getattr(site, "location", "") or "").strip() or None
+            project_pk = getattr(site, "id", None)
+
+            dist = _get_ranking_distribution(site.site_url, curr_start, curr_end,
+                                             location=location, site_pk=project_pk)
+            changes = _get_position_changes(site.site_url, curr_start, curr_end,
+                                            prev_start, prev_end, location=location,
+                                            site_pk=project_pk)
 
             with get_session() as session:
                 latest = session.execute(
-                    select(func.max(KeywordRanking.date)).where(KeywordRanking.site_id == site.site_url)
+                    select(func.max(KeywordRanking.date))
+                    .where(KeywordRanking.site_id == site.site_url,
+                           *([KeywordRanking.location == location] if location else []))
                 ).scalar()
 
             if latest:

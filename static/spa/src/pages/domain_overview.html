@@ -7,7 +7,17 @@
         <div>
           <h2 style="font-size: 15px; font-weight: 600; margin: 0; display: flex; align-items: center; gap: 8px;">Domain Overview</h2><sc-if value="{{ do.src.show }}" hint-placeholder-val="{{ true }}"><div style="margin-top: 6px;"><span style="{{ do.src.style }}" title="{{ do.src.title }}" aria-label="{{ do.src.aria }}">{{ do.src.text }}</span></div></sc-if>
           <p style="font-size: 12px; color: #94a3b8; margin: 4px 0 0;">Analyze the overall performance and top keywords of any domain, subdomain, or exact URL.</p>
-          <p style="font-size: 12px; color: #64748b; margin: 6px 0 0; display: flex; align-items: center; gap: 6px;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="2"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0z"/><circle cx="12" cy="10" r="3"/></svg>Market: <strong style="font-weight: 600; color: #334155;">{{ do.location }}</strong> — the project's location, same as Position Tracking</p>
+          <div style="font-size: 12px; color: #64748b; margin: 8px 0 0; display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="2"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0z"/><circle cx="12" cy="10" r="3"/></svg>
+            <label for="do-market" style="color: #64748b;">Market:</label>
+            <select id="do-market" value="{{ do.locValue }}" onChange="{{ do.locChange }}" aria-label="Country to analyse this URL in" style="font-family: inherit; font-size: 12px; font-weight: 600; color: #334155; padding: 4px 8px; border: 1px solid #e2e8f0; border-radius: 6px; background: white; cursor: pointer;">
+              <sc-for list="{{ do.locOptions }}" as="o" hint-placeholder-count="2"><option value="{{ o.value }}">{{ o.label }}</option></sc-for>
+            </select>
+            <span style="color: #94a3b8;">— country-level; Position Tracking measures the exact city</span>
+          </div>
+          <sc-if value="{{ do.locDowngraded }}" hint-placeholder-val="{{ false }}">
+            <p style="font-size: 11.5px; color: #92400e; background: #fffbeb; border: 1px solid #fde68a; border-radius: 6px; padding: 7px 10px; margin: 8px 0 0;">{{ do.locDowngradeNote }}</p>
+          </sc-if>
         </div>
       </div>
       <div style="padding: 20px; display: flex; gap: 12px;">

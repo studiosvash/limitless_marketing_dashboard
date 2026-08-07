@@ -311,22 +311,42 @@ def _volume_coverage(rows: list[dict], sample_limit: int = 25) -> dict:
 
 
 def build_positions_response(site_id: str, curr_start: date, curr_end: date,
-                              prev_start: date, prev_end: date) -> dict:
+                              prev_start: date, prev_end: date,
+                              location: str | None = None,
+                              site_pk: int | None = None) -> dict:
     """HANDOFF_SPEC.md `positions` view shape — verified against the real fixture's
-    positionsView() in Limitless marketing dashboard2/app/api.js."""
+    positionsView() in Limitless marketing dashboard2/app/api.js.
+
+    Two scoping arguments, answering two different questions — pass both:
+
+    `site_pk` is THIS PROJECT's `sites.id`. It scopes the TRACKED KEYWORD LIST: which keywords
+    this project's user sent from the Keyword Explorer. Several projects share one `site_id`,
+    so without it the "Newly Added Keywords — Not Tracked Yet" card fills with every sibling
+    project's untracked keywords — a brand-new project opened showing 28 keywords nobody had
+    added to it.
+
+    `location` is THIS project's tracking location. It scopes the MEASUREMENTS to the SERP this
+    project actually tracks; without it several projects on one domain merge into one set of
+    numbers (see `shared_queries._location_clause`).
+
+    Both None means domain-wide — correct only for a caller that has no specific project.
+    """
     from apps.dashboard.services.shared_queries import (
         _get_ranking_distribution, _get_position_changes, _get_competitor_grid,
         _get_competitor_map,
     )
     from pipeline.services.saved_keyword_service import list_saved_keywords
 
-    dist = _get_ranking_distribution(site_id, curr_start, curr_end)
-    changes = _get_position_changes(site_id, curr_start, curr_end, prev_start, prev_end)
-    grid = _get_competitor_grid(site_id)
-    comp_map = _get_competitor_map(site_id)
-    saved_kws = list_saved_keywords(site_id)
+    dist = _get_ranking_distribution(site_id, curr_start, curr_end, location=location,
+                                     site_pk=site_pk)
+    changes = _get_position_changes(site_id, curr_start, curr_end, prev_start, prev_end,
+                                    location=location, site_pk=site_pk)
+    grid = _get_competitor_grid(site_id, location=location, site_pk=site_pk)
+    comp_map = _get_competitor_map(site_id, location=location, site_pk=site_pk)
+    saved_kws = list_saved_keywords(site_id, site_pk=site_pk)
 
-    intel = get_keyword_intelligence_raw(site_id, curr_start, curr_end, prev_start, prev_end, tracked_only=True)
+    intel = get_keyword_intelligence_raw(site_id, curr_start, curr_end, prev_start, prev_end,
+                                         tracked_only=True, location=location, site_pk=site_pk)
     intel_kws = intel.get("full_keywords", [])
     ranked_map = {r["keyword"].lower(): r for r in intel_kws if r.get("keyword")}
 
@@ -386,6 +406,11 @@ def build_positions_response(site_id: str, curr_start: date, curr_end: date,
             "intent": sk.get("intent") or "informational",
             "url": "",
             "action": "new",
+            # No keyword_rankings row exists for this keyword at all, so nothing has ever
+            # rank-checked it. Stated explicitly rather than left absent: `to_api_keyword`
+            # reads it to set `measured`, and an absent key would read the same as a NULL
+            # from a row that HAD been checked.
+            "rank_checked_at": None,
         })
 
     # ─────────────────────────────────────────────────────────────────────────────
@@ -439,6 +464,15 @@ def build_positions_response(site_id: str, curr_start: date, curr_end: date,
             comp_rows.append({"kw": kw, "you": row["you"], "comps": comps})
         else:
             comp_rows.append({"kw": kw, "you": {"pos": r.get("position"), "prev": r.get("prev_position"), "diff": r.get("pos_change"), "direction": "up" if r.get("pos_change") and r.get("pos_change") > 0 else ("down" if r.get("pos_change") and r.get("pos_change") < 0 else "flat")}, "comps": [None] * len(domains)})
+
+    # Whether a rank connector has looked at each keyword, so the grid can hide only the
+    # genuinely unmeasured ones. It used to hide every row whose own position was null, which
+    # silently dropped every keyword that HAD been measured and simply does not rank — the
+    # rows a user most wants to see, since they are the gaps.
+    measured_by_kw = {(r.get("keyword") or "").lower(): r.get("rank_checked_at") is not None
+                      for r in merged_kws_raw}
+    for row in comp_rows:
+        row["you"]["measured"] = measured_by_kw.get((row.get("kw") or "").lower(), False)
     competitors = {"domains": domains, "rows": comp_rows}
 
     total_tracked = max(dist["total"], len(merged_kws_raw))
@@ -470,7 +504,7 @@ def build_positions_response(site_id: str, curr_start: date, curr_end: date,
 
     # The project's own tracking preferences, so the workspace header can print what the user
     # actually chose in the wizard instead of a hardcoded "Desktop".
-    project = _project_tracking_prefs(site_id)
+    project = _project_tracking_prefs(site_id, site_pk)
 
     return {
         "kpis": kpis,
@@ -489,20 +523,25 @@ def build_positions_response(site_id: str, curr_start: date, curr_end: date,
     }
 
 
-def _project_tracking_prefs(site_id: str) -> dict:
+def _project_tracking_prefs(site_id: str, site_pk: int | None = None) -> dict:
     """The stored search engine / device / language / location for this project.
 
+    BY PRIMARY KEY when the caller knows which project it is. `get_site(site_id)` looks up by
+    `site_url` and returns the FIRST match, which cannot identify one of several projects on a
+    domain — the "staff dc" workspace header printed "United States - New York" (the oldest
+    sibling's market) under its own name while the sync it triggered was correctly querying
+    Washington, DC. `get_site` stays as the fallback for a caller with no project in hand.
+
     Falls back to the wizard's own default options only when no Site row resolves or the
-    column is NULL — never invents a different value. These are a recorded preference: no
-    connector reads them yet (see the note on Site in pipeline/db/schema.py).
+    column is NULL — never invents a different value.
     """
     defaults = {"search_engine": "Google", "device": "Desktop", "language": "English",
                 "location": "United States"}
     try:
-        from pipeline.services.site_service import get_site
+        from pipeline.services.site_service import get_site, get_site_by_pk
         from pipeline.utils.db_connection import get_session
         with get_session() as session:
-            site = get_site(session, site_id)
+            site = get_site_by_pk(session, site_pk) or get_site(session, site_id)
             if site is None or site.site_url != site_id:
                 return defaults
             return {

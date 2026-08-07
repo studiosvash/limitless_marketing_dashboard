@@ -321,3 +321,45 @@ class GetConnectorCredentialWiringTests(TestCase):
         # (every other existing caller) still works unchanged.
         conn = sync_engine._get_connector("domain_checks")
         self.assertIsNotNone(conn)
+
+
+class ConnectorMapResolvesTests(TestCase):
+    """Every (module, class) pair in `_get_connector`'s map must actually exist.
+
+    `dataforseo_serp` was mapped to `DataForSEOSerpConnector`; the real class is
+    `DataForSEOSERPConnector`. `getattr(module, class_name)` raised AttributeError, the
+    factory's blanket `except ... Exception` swallowed it and returned None, and sync_engine
+    skipped the connector on every run — so **position tracking never ran at all**, on any
+    project, while the UI reported "Skipped — credentials not configured" and the failure read
+    as a billing problem. keyword_rankings filled with volume and difficulty from the other
+    connectors and never a single measured position.
+
+    A name resolved by string lookup cannot fail at import time, so nothing but this test
+    catches it. Asserting on the map rather than on one connector means a future rename of any
+    of the 23 entries fails here instead of silently disabling that data source in production.
+    """
+
+    def test_every_mapped_connector_class_exists(self):
+        import importlib
+        import inspect
+        import re
+
+        source = inspect.getsource(sync_engine._get_connector)
+        pairs = re.findall(r'\("(pipeline\.connectors\.[a-z_0-9]+)",\s*"([A-Za-z0-9_]+)"\)', source)
+        self.assertGreater(len(pairs), 15, "connector map not parsed — did its literal shape change?")
+
+        missing = []
+        for module_path, class_name in pairs:
+            module = importlib.import_module(module_path)
+            if not hasattr(module, class_name):
+                available = [n for n in dir(module) if n.endswith("Connector")]
+                missing.append(f"{module_path}.{class_name} (module has: {available})")
+        self.assertEqual(missing, [], "connector_map names that resolve to nothing")
+
+    def test_the_serp_connector_specifically_loads(self):
+        """The one that was broken. It needs only DataForSEO credentials, which the test env
+        supplies via .env — if they are absent the factory returns None for a legitimate
+        reason, so assert on the class name rather than on non-None."""
+        conn = sync_engine._get_connector("dataforseo_serp")
+        if conn is not None:
+            self.assertEqual(type(conn).__name__, "DataForSEOSERPConnector")

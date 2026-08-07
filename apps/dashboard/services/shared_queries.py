@@ -148,11 +148,40 @@ def _get_keywords_overview(site_id: str, limit: int = 5) -> list[dict]:
         import logging; logging.getLogger(__name__).error(f"Error: {e}", exc_info=True)
         return []
 
-def _get_ranking_distribution(site_id: str, curr_start: date, curr_end: date) -> dict:
-    """Compute keyword counts per SERP position bucket — SEMrush Landscape style."""
+def _location_clause(model, location: str | None) -> list:
+    """WHERE terms restricting a ranking query to one project's tracking location.
+
+    `location` is the SPA display form stored on `sites.location` and on every ranking row
+    (see `KeywordRanking.location`). Passing None returns no terms — every row for the domain,
+    which is what a domain-level caller (the Overview page) genuinely wants.
+
+    Why a per-project filter is required and not cosmetic: several projects can track one
+    domain in different cities, and they all share `site_id`. Filtering on `site_id` alone
+    merges every city's rankings into one set, which is why six Premierstaff projects reported
+    the same visibility %, the same keyword count and the same up/down counts. This clause is
+    the read-side half of that fix; the write-side half is `location` joining the unique key.
+
+    A project whose city has not been synced yet correctly matches NOTHING. That is the honest
+    outcome — it has no measurements in that city — and the page shows its normal empty state.
+    Falling back to the domain's other rows would put another city's numbers under this
+    project's name, which is the exact bug being removed.
+    """
+    return [model.location == location] if location else []
+
+
+def _get_ranking_distribution(site_id: str, curr_start: date, curr_end: date,
+                              location: str | None = None,
+                              site_pk: int | None = None) -> dict:
+    """Compute keyword counts per SERP position bucket — SEMrush Landscape style.
+
+    `location` scopes the MEASUREMENTS to one project's tracking location (see
+    `_location_clause`); `site_pk` scopes the TRACKED KEYWORD LIST the measurements are counted
+    over to that same project (see the site_pk comment on SavedKeyword). Both are needed: a
+    location with no project id still counts a sibling's keywords as this project's.
+    """
     try:
         from pipeline.utils.keywords import load_tracked_keywords
-        tracked_kws = load_tracked_keywords(site_id)
+        tracked_kws = load_tracked_keywords(site_id, location=location, site_pk=site_pk)
         if not tracked_kws:
             return {"total": 0, "top3": 0, "top10": 0, "top20": 0, "top50": 0, "top100": 0,
                     "avg_position": 0, "total_clicks": 0, "total_impressions": 0,
@@ -171,7 +200,8 @@ def _get_ranking_distribution(site_id: str, curr_start: date, curr_end: date) ->
                     KeywordRanking.site_id == site_id,
                     KeywordRanking.date >= curr_start,
                     KeywordRanking.date <= curr_end,
-                    func.lower(KeywordRanking.keyword).in_(tracked_lower)
+                    func.lower(KeywordRanking.keyword).in_(tracked_lower),
+                    *_location_clause(KeywordRanking, location),
                 )
                 .group_by(KeywordRanking.keyword)
             ).all()
@@ -216,10 +246,14 @@ def _get_ranking_distribution(site_id: str, curr_start: date, curr_end: date) ->
                 "avg_position": 0, "total_clicks": 0, "total_impressions": 0,
                 "top3_pct": 0, "top4_10_pct": 0, "top11_20_pct": 0, "rest_pct": 0}
 
-def _get_position_changes(site_id: str, curr_start: date, curr_end: date, prev_start: date, prev_end: date) -> dict:
+def _get_position_changes(site_id: str, curr_start: date, curr_end: date, prev_start: date,
+                          prev_end: date, location: str | None = None,
+                          site_pk: int | None = None) -> dict:
+    """`location` scopes the measurements to one project's tracking location (see
+    `_location_clause`); `site_pk` scopes the tracked keyword list to that project."""
     try:
         from pipeline.utils.keywords import load_tracked_keywords
-        tracked_kws = load_tracked_keywords(site_id)
+        tracked_kws = load_tracked_keywords(site_id, location=location, site_pk=site_pk)
         if not tracked_kws:
             return {k: [] if "count" not in k else 0 for k in ["improved", "improved_count", "declined", "declined_count", "new", "new_count", "lost", "lost_count"]}
 
@@ -239,7 +273,8 @@ def _get_position_changes(site_id: str, curr_start: date, curr_end: date, prev_s
                     KeywordRanking.site_id == site_id,
                     KeywordRanking.date >= curr_start,
                     KeywordRanking.date <= curr_end,
-                    func.lower(KeywordRanking.keyword).in_(tracked_lower)
+                    func.lower(KeywordRanking.keyword).in_(tracked_lower),
+                    *_location_clause(KeywordRanking, location),
                 )
                 .group_by(KeywordRanking.keyword)
             ).all()
@@ -251,7 +286,8 @@ def _get_position_changes(site_id: str, curr_start: date, curr_end: date, prev_s
                     KeywordRanking.site_id == site_id,
                     KeywordRanking.date >= prev_start,
                     KeywordRanking.date <= prev_end,
-                    func.lower(KeywordRanking.keyword).in_(tracked_lower)
+                    func.lower(KeywordRanking.keyword).in_(tracked_lower),
+                    *_location_clause(KeywordRanking, location),
                 )
                 .group_by(KeywordRanking.keyword)
             ).all()
@@ -319,8 +355,14 @@ def _get_position_changes(site_id: str, curr_start: date, curr_end: date, prev_s
         import logging; logging.getLogger(__name__).error(f"_get_position_changes error: {e}", exc_info=True)
         return {k: [] if "count" not in k else 0 for k in ["improved", "improved_count", "declined", "declined_count", "new", "new_count", "lost", "lost_count"]}
 
-def _get_competitor_map(site_id: str, limit: int = 12) -> dict:
+def _get_competitor_map(site_id: str, limit: int = 12, location: str | None = None,
+                        site_pk: int | None = None) -> dict:
     """Domain-level aggregate of the per-keyword competitor capture — the "map".
+
+    `location` scopes every read to one project's tracking location (see `_location_clause`);
+    `site_pk` scopes the tracked keyword list the map is built over to that same project.
+    This function computes the `visibility` percentage the project list shows, so leaving it
+    unscoped is exactly what made six Premierstaff city projects all report 65%.
 
     Where _get_competitor_grid answers "who ranks where for this one keyword", this answers
     "how does each competitor sit relative to us overall": how many of our tracked keywords
@@ -349,7 +391,7 @@ def _get_competitor_map(site_id: str, limit: int = 12) -> dict:
              "domains": []}
     try:
         from pipeline.utils.keywords import load_tracked_keywords
-        tracked_kws = load_tracked_keywords(site_id)
+        tracked_kws = load_tracked_keywords(site_id, location=location, site_pk=site_pk)
         if not tracked_kws:
             return empty
         tracked_lower = [k.lower() for k in tracked_kws]
@@ -365,7 +407,8 @@ def _get_competitor_map(site_id: str, limit: int = 12) -> dict:
 
             captured_date = session.execute(
                 select(func.max(CompetitorKeywordRanking.date))
-                .where(CompetitorKeywordRanking.site_id == site_id)
+                .where(CompetitorKeywordRanking.site_id == site_id,
+                       *_location_clause(CompetitorKeywordRanking, location))
             ).scalar()
             if captured_date is None:
                 return {**empty, "tracked_total": len(tracked_kws)}
@@ -376,14 +419,16 @@ def _get_competitor_map(site_id: str, limit: int = 12) -> dict:
                        CompetitorKeywordRanking.position)
                 .where(CompetitorKeywordRanking.site_id == site_id,
                        CompetitorKeywordRanking.date == captured_date,
-                       func.lower(CompetitorKeywordRanking.keyword).in_(tracked_lower))
+                       func.lower(CompetitorKeywordRanking.keyword).in_(tracked_lower),
+                       *_location_clause(CompetitorKeywordRanking, location))
             ).all()
 
             # Your own ranks: the latest keyword_rankings date at or before the capture date,
             # so the comparison never reads your future position against their past one.
             your_date = session.execute(
                 select(func.max(KeywordRanking.date))
-                .where(KeywordRanking.site_id == site_id, KeywordRanking.date <= captured_date)
+                .where(KeywordRanking.site_id == site_id, KeywordRanking.date <= captured_date,
+                       *_location_clause(KeywordRanking, location))
             ).scalar()
             your_rows = []
             if your_date is not None:
@@ -392,7 +437,8 @@ def _get_competitor_map(site_id: str, limit: int = 12) -> dict:
                            func.avg(KeywordRanking.position).label("pos"))
                     .where(KeywordRanking.site_id == site_id,
                            KeywordRanking.date == your_date,
-                           func.lower(KeywordRanking.keyword).in_(tracked_lower))
+                           func.lower(KeywordRanking.keyword).in_(tracked_lower),
+                           *_location_clause(KeywordRanking, location))
                     .group_by(KeywordRanking.keyword)
                 ).all()
 
@@ -403,7 +449,8 @@ def _get_competitor_map(site_id: str, limit: int = 12) -> dict:
                 select(KeywordRanking.keyword,
                        func.max(KeywordRanking.search_volume).label("vol"))
                 .where(KeywordRanking.site_id == site_id,
-                       func.lower(KeywordRanking.keyword).in_(tracked_lower))
+                       func.lower(KeywordRanking.keyword).in_(tracked_lower),
+                       *_location_clause(KeywordRanking, location))
                 .group_by(KeywordRanking.keyword)
             ).all()
 
@@ -498,16 +545,23 @@ def _get_competitor_map(site_id: str, limit: int = 12) -> dict:
         return empty
 
 
-def _get_competitor_grid(site_id: str, limit: int = 100) -> dict:
+def _get_competitor_grid(site_id: str, limit: int = 100, location: str | None = None,
+                         site_pk: int | None = None) -> dict:
     """
     SEMrush-style per-keyword competitor grid: for each tracked keyword, your rank
     plus each tracked competitor's rank on the two most recent capture dates, with
     the date-over-date diff. Reads only from the DB (competitor_keyword_rankings +
     keyword_rankings) — never calls an API. Returns a status the template branches on.
+
+    `location` scopes every read below to one project's tracking location; see
+    `_location_clause`. It is applied to the DATE queries as well as the row queries — picking
+    "the two most recent capture dates" across all of a domain's cities would anchor this
+    project's grid to a date another city was synced on and then find no rows for it.
+    `site_pk` scopes the tracked keyword list the grid's rows are built from to that project.
     """
     try:
         from pipeline.utils.keywords import load_tracked_keywords
-        tracked_kws = load_tracked_keywords(site_id)
+        tracked_kws = load_tracked_keywords(site_id, location=location, site_pk=site_pk)
         if not tracked_kws:
             return {"status": "no_data", "competitors": [], "rows": [], "dates": [], "overridden": False}
 
@@ -526,7 +580,8 @@ def _get_competitor_grid(site_id: str, limit: int = 100) -> dict:
             ensure_tables(session, CompetitorKeywordRanking)  # idempotent; clean empty state pre-first-refresh
             dates = session.execute(
                 select(CompetitorKeywordRanking.date)
-                .where(CompetitorKeywordRanking.site_id == site_id)
+                .where(CompetitorKeywordRanking.site_id == site_id,
+                       *_location_clause(CompetitorKeywordRanking, location))
                 .group_by(CompetitorKeywordRanking.date)
                 .order_by(CompetitorKeywordRanking.date.desc())
                 .limit(2)
@@ -534,7 +589,8 @@ def _get_competitor_grid(site_id: str, limit: int = 100) -> dict:
             if not dates:
                 dates = session.execute(
                     select(KeywordRanking.date)
-                    .where(KeywordRanking.site_id == site_id)
+                    .where(KeywordRanking.site_id == site_id,
+                           *_location_clause(KeywordRanking, location))
                     .group_by(KeywordRanking.date)
                     .order_by(KeywordRanking.date.desc())
                     .limit(2)
@@ -559,7 +615,8 @@ def _get_competitor_grid(site_id: str, limit: int = 100) -> dict:
                 )
                 .where(CompetitorKeywordRanking.site_id == site_id,
                        CompetitorKeywordRanking.date.in_(both),
-                       func.lower(CompetitorKeywordRanking.keyword).in_(tracked_lower))
+                       func.lower(CompetitorKeywordRanking.keyword).in_(tracked_lower),
+                       *_location_clause(CompetitorKeywordRanking, location))
             ).all()
 
             # Your own two latest dates are picked independently of `both` (the competitor
@@ -574,7 +631,8 @@ def _get_competitor_grid(site_id: str, limit: int = 100) -> dict:
                 select(KeywordRanking.date)
                 .where(KeywordRanking.site_id == site_id,
                        KeywordRanking.position.isnot(None),
-                       func.lower(KeywordRanking.keyword).in_(tracked_lower))
+                       func.lower(KeywordRanking.keyword).in_(tracked_lower),
+                       *_location_clause(KeywordRanking, location))
                 .group_by(KeywordRanking.date)
                 .order_by(KeywordRanking.date.desc())
                 .limit(2)
@@ -589,7 +647,8 @@ def _get_competitor_grid(site_id: str, limit: int = 100) -> dict:
                        # max() only to satisfy the GROUP BY; one keyword/date has one URL.
                        func.max(KeywordRanking.url).label("url"))
                 .where(KeywordRanking.site_id == site_id, KeywordRanking.date.in_(your_both),
-                       func.lower(KeywordRanking.keyword).in_(tracked_lower))
+                       func.lower(KeywordRanking.keyword).in_(tracked_lower),
+                       *_location_clause(KeywordRanking, location))
                 .group_by(KeywordRanking.keyword, KeywordRanking.date)
             ).all()
 

@@ -39,6 +39,17 @@
         };
       });
 
+      /* ---- market picker --------------------------------------------------------------
+         Countries only — DataForSEO Labs cannot answer at any finer scope (see
+         App#doCountryOptions). The current value is guaranteed to appear in the list even if
+         it is a country the built-in set does not name, so the select can never render blank
+         on a project configured for, say, Poland. */
+      const doCurrentCountry = this.doLocation();
+      const doCountries = this.doCountryOptions();
+      const doLocOptions = (doCountries.indexOf(doCurrentCountry) === -1
+        ? [doCurrentCountry].concat(doCountries)
+        : doCountries).map(c => ({ value: c, label: c }));
+
       vals.do = {
         /* One of the three sanctioned live lookups: it calls DataForSEO because the user
            pressed a button, so there is no SyncLog row and no staleness to report. */
@@ -61,9 +72,28 @@
         data: s.doData || null,
         loading: s.doLoading || false,
         error: s.doError || null,
-        /* the market this analysis is read in — the project's own location, i.e. the
-           same value the Position Tracking live-SERP drawer uses (see doLocation()) */
+        /* The market this analysis is read in. Editable: it defaults to the project's own
+           location but the user can inspect any URL in another market without leaving the
+           page (see App#doLocation). */
         location: this.doLocation(),
+        /* A real country, never a "same as project" placeholder — it starts on the active
+           project's country and the user can switch it to any other. */
+        locValue: doCurrentCountry,
+        locOptions: doLocOptions,
+        locChange: e => this.setState({ doLoc: e.target.value }, () => {
+          /* Re-run only when a result is already on screen — changing the market on an empty
+             page should not spend a DataForSEO call the user never asked for. */
+          if (this.state.doData || this.state.doError) this.runDomainOverview();
+        }),
+        /* True when the project tracks a city but this page had to query its country,
+           because DataForSEO Labs supports country locations only. Surfaced rather than
+           hidden: these are national figures and the header must not imply otherwise. */
+        locDowngraded: !!(s.doData && s.doData.location_downgraded),
+        locDowngradeNote: (s.doData && s.doData.location_downgraded)
+          ? 'Showing ' + s.doData.location + ' — DataForSEO’s domain database is country-level, '
+            + 'so ' + s.doData.requested_location + ' was read at country scope. '
+            + 'Position Tracking still measures the exact city.'
+          : '',
         rows: [],
         hasRows: false,
         noRows: false,

@@ -1,9 +1,18 @@
 """
-pipeline/services/saved_keyword_service.py — the Keyword Explorer's saved research list.
+pipeline/services/saved_keyword_service.py — the Keyword Explorer's tracked keyword list.
 
-A thin read/write layer over the `saved_keywords` table. This list is a research bookmark
-store, completely separate from the keyword-tracking pipeline (keyword_rankings) — saved
-keywords are never synced or position-tracked. Site-scoped, shared across the team.
+A thin read/write layer over the `saved_keywords` table: the keywords an admin explicitly sent
+from the Keyword Explorer to a project. PROJECT-scoped, shared across the team.
+
+EVERY FUNCTION HERE TAKES `site_pk`, AND EVERY CALLER THAT HAS A PROJECT MUST PASS IT. `site_id`
+is the domain, and one domain can be registered as several independent projects
+(`add_site(allow_duplicate=True)`), so a call scoped by `site_id` alone returns the union of
+every sibling project's list — which is how a brand-new project came to open with 28 keywords
+its user had never chosen. See the `site_pk` comment on the SavedKeyword model.
+
+`site_pk=None` means domain-wide and is still correct for a caller with genuinely no project in
+hand (a maintenance command, a cross-project audit). It is not a shortcut for "I didn't have it
+handy".
 """
 from typing import Optional
 
@@ -11,7 +20,7 @@ from sqlalchemy import select, delete
 
 from pipeline.utils.db_connection import get_session
 from pipeline.utils.logger import get_logger
-from pipeline.db.schema import SavedKeyword
+from pipeline.db.schema import SavedKeyword, UNOWNED_SITE_PK, ensure_saved_keyword_project
 from pipeline.db.writer import ensure_tables, upsert_saved_keywords
 
 logger = get_logger("saved_keyword_service")
@@ -21,18 +30,54 @@ _FIELDS = ("keyword", "location", "search_volume", "keyword_difficulty",
            "cpc", "competition", "intent", "serp_features")
 
 
-def list_saved_keywords(site_id: str) -> list[dict]:
-    """Return the site's saved research keywords, newest first."""
+def _prepare(session) -> None:
+    """Table exists and carries `site_pk`. Idempotent; issues nothing once reconciled."""
+    ensure_tables(session, SavedKeyword)      # clean empty state pre-first-save
+    ensure_saved_keyword_project(session)     # self-provisions site_pk on an existing database
+
+
+def project_scope(site_id: str, site_pk: Optional[int]) -> list:
+    """WHERE clauses selecting one project's rows, or the whole domain when site_pk is None.
+
+    `site_pk` alone when it is given, and deliberately NOT `site_pk AND site_id`. The project id
+    already implies the domain — but the reverse is not true, because one site can be stored
+    under several `site_id` spellings (`premierstaff.com`, `https://premierstaff.com/`, … —
+    skills.md §3). ANDing them drops the rows filed under a spelling the project's own
+    `site_url` doesn't happen to match: 16 of one live project's 44 tracked keywords were
+    invisible to it that way, having been written before the domain was normalised.
+
+    Without a project id, fall back to matching every spelling of the domain rather than the one
+    exact string — same reason.
+    """
+    if site_pk:
+        return [SavedKeyword.site_pk == site_pk]
+    from pipeline.utils.site_ids import resolve_site_ids
+    return [SavedKeyword.site_id.in_(resolve_site_ids(site_id))]
+
+
+def list_saved_keywords(site_id: str, site_pk: Optional[int] = None) -> list[dict]:
+    """Return THIS PROJECT's tracked keywords, newest first.
+
+    Deduplicated on the keyword, case-insensitively, newest row winning. A project that had its
+    tracking location edited can hold the same keyword under both the old and the new location
+    (`location` is still part of the unique key) — that is one keyword the user tracked once,
+    and showing it twice would be a rendering artefact of a schema detail.
+    """
     try:
         with get_session() as session:
-            ensure_tables(session, SavedKeyword)  # idempotent; clean empty state pre-first-save
+            _prepare(session)
             rows = session.execute(
                 select(SavedKeyword)
-                .where(SavedKeyword.site_id == site_id)
+                .where(*project_scope(site_id, site_pk))
                 .order_by(SavedKeyword.saved_at.desc(), SavedKeyword.id.desc())
             ).scalars().all()
-            return [
-                {
+            out, seen = [], set()
+            for r in rows:
+                key = (r.keyword or "").strip().lower()
+                if not key or key in seen:
+                    continue
+                seen.add(key)
+                out.append({
                     "keyword": r.keyword,
                     "location": r.location,
                     "search_volume": r.search_volume,
@@ -41,9 +86,8 @@ def list_saved_keywords(site_id: str) -> list[dict]:
                     "competition": r.competition,
                     "intent": r.intent,
                     "serp_features": r.serp_features,
-                }
-                for r in rows
-            ]
+                })
+            return out
     except Exception as exc:
         logger.error(f"[saved_keyword_service] list failed: {exc}", exc_info=True)
         return []
@@ -82,13 +126,15 @@ def _clean_row(row: dict, location: Optional[str]) -> Optional[dict]:
     return rec
 
 
-def save_keywords(site_id: str, rows: list[dict], location: Optional[str] = None) -> int:
-    """Upsert the given Explorer rows into the saved list. Returns count saved."""
+def save_keywords(site_id: str, rows: list[dict], location: Optional[str] = None,
+                  site_pk: Optional[int] = None) -> int:
+    """Upsert the given Explorer rows into THIS PROJECT's tracked list. Returns count saved."""
     records = []
     for row in rows or []:
         rec = _clean_row(row, location)
         if rec:
             rec["site_id"] = site_id
+            rec["site_pk"] = site_pk or UNOWNED_SITE_PK
             records.append(rec)
     if not records:
         return 0
@@ -102,20 +148,54 @@ def save_keywords(site_id: str, rows: list[dict], location: Optional[str] = None
         return 0
 
 
-def delete_saved_keyword(site_id: str, keyword: str, location: str) -> bool:
-    """Remove one saved keyword (by keyword + location). Returns True if a row was deleted."""
+def delete_saved_keyword(site_id: str, keyword: str, location: str,
+                         site_pk: Optional[int] = None) -> bool:
+    """Untrack one keyword for one project. Returns True if a row was deleted.
+
+    `location` is IGNORED when `site_pk` is given: it identifies nothing (see the model comment)
+    and a project whose tracking location was edited still holds rows under the old one, so
+    matching on it made those keywords undeletable from the UI. With a project in hand the
+    keyword name is the whole identity, and every row of it for that project goes.
+    """
     try:
         with get_session() as session:
-            ensure_tables(session, SavedKeyword)
-            result = session.execute(
-                delete(SavedKeyword).where(
-                    SavedKeyword.site_id == site_id,
-                    SavedKeyword.keyword == keyword,
-                    SavedKeyword.location == location,
-                )
+            _prepare(session)
+            stmt = delete(SavedKeyword).where(
+                *project_scope(site_id, site_pk),
+                SavedKeyword.keyword == keyword,
             )
+            if not site_pk:
+                stmt = stmt.where(SavedKeyword.location == location)
+            result = session.execute(stmt)
             session.commit()
             return (result.rowcount or 0) > 0
     except Exception as exc:
         logger.error(f"[saved_keyword_service] delete failed: {exc}", exc_info=True)
         return False
+
+
+def clear_saved_keywords(site_id: str, site_pk: Optional[int] = None) -> int:
+    """Untrack everything for ONE PROJECT. Returns the number of rows removed.
+
+    Exists because the bulk-replace endpoint used to issue its own
+    `delete(SavedKeyword).where(site_id == ...)`, which wiped every sibling project's list on
+    the domain as a side effect of one project saving its own — silently, since the response
+    only reported the rows it then wrote back.
+
+    Refuses to run without a `site_pk`: a domain-wide wipe is never what a caller with a project
+    in hand means, and there is no UI that wants one.
+    """
+    if not site_pk:
+        logger.error("[saved_keyword_service] clear refused: no site_pk given for %r", site_id)
+        return 0
+    try:
+        with get_session() as session:
+            _prepare(session)
+            result = session.execute(
+                delete(SavedKeyword).where(*project_scope(site_id, site_pk))
+            )
+            session.commit()
+            return result.rowcount or 0
+    except Exception as exc:
+        logger.error(f"[saved_keyword_service] clear failed: {exc}", exc_info=True)
+        return 0

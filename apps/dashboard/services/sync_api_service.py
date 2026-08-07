@@ -24,6 +24,7 @@ from datetime import timedelta
 from pathlib import Path
 
 from django.conf import settings
+from django.db import IntegrityError
 from django.utils import timezone
 
 from apps.sync.models import RefreshRun, RefreshStatus, SyncLog, SyncStatus
@@ -128,10 +129,15 @@ def _spawn_sync_process(run_id: int) -> int | None:
 
 
 def start_sync_run(site_url: str, scope: str, user=None, force: bool = False,
-                   manual: bool = True) -> dict:
+                   manual: bool = True, site_pk: int | None = None) -> dict:
     """Create a RefreshRun and execute it in a SEPARATE PROCESS.
 
     Returns the JSON the SPA's startSync expects: {task_id, steps, est_cost, warnings}.
+
+    `site_pk` names the PROJECT that triggered this run (`sites.id`). Pass it whenever a
+    specific project is in hand — every per-project API view has one — so location-aware
+    connectors query that project's own city instead of a sibling's. Omitting it is correct
+    only for a per-domain run (the scheduler), where it falls back to a by-URL lookup.
 
     Three behaviours worth knowing about:
 
@@ -227,13 +233,39 @@ def start_sync_run(site_url: str, scope: str, user=None, force: bool = False,
         logger.error("[sync] pre-flight credential check failed", exc_info=True)
         warnings = []
 
-    run = RefreshRun.objects.create(
-        site_url=site_url,
-        scope=scope,
-        triggered_by=user if (user is not None and user.is_authenticated) else None,
-        status=RefreshStatus.RUNNING,
-        total_count=len(connectors),
-    )
+    try:
+        run = RefreshRun.objects.create(
+            site_url=site_url,
+            # Which project asked. Carried on the row rather than passed as an argument because the
+            # sync executes in a SEPARATE PROCESS (`manage.py run_sync --run-id`), so the row is the
+            # only channel between the request and the connectors. See RefreshRun.site_pk.
+            site_pk=site_pk,
+            scope=scope,
+            triggered_by=user if (user is not None and user.is_authenticated) else None,
+            status=RefreshStatus.RUNNING,
+            total_count=len(connectors),
+        )
+    except IntegrityError:
+        # Lost the race with a simultaneous start: the `one_running_refresh_per_site`
+        # constraint rejected a second RUNNING row for this site. Attach to the winner
+        # instead of spawning a second metered sync — same response shape as the
+        # "already in flight" check above.
+        existing = (RefreshRun.objects
+                    .filter(site_url=site_url, status=RefreshStatus.RUNNING)
+                    .order_by("-started_at").first())
+        if existing is None:
+            raise
+        logger.info("[sync] lost start race for %r — attaching to run #%s", site_url, existing.pk)
+        return {
+            "task_id": existing.pk,
+            "steps": _connectors_for_scope(existing.scope) or ["No connectors for this scope"],
+            "est_cost": 0,
+            "already_running": True,
+            "warnings": [
+                f"A {existing.scope!r} refresh is already running for this site — showing its "
+                f"progress instead of starting another."
+            ],
+        }
 
     try:
         pid = _spawn_sync_process(run.pk)
@@ -375,7 +407,16 @@ def _step_details(run: RefreshRun, connectors: list[str]) -> list[dict]:
 
         if i < finished:
             if not ran_this_time:
-                state, detail = "skipped", "Skipped — credentials not configured"
+                # "Skipped" is all we know: sync_engine could not construct the connector, and
+                # it does not record why. DO NOT NAME A CAUSE HERE. This line used to read
+                # "Skipped — credentials not configured", which was a guess presented as a
+                # diagnosis — and it was wrong for the most important connector in the
+                # product: `dataforseo_serp` was unconstructable because its entry in
+                # `connector_map` named a class that does not exist, so position tracking
+                # never ran while the UI blamed billing. Weeks of "our DataForSEO plan must be
+                # limited" came from this one string. An honest "check the log" sends the
+                # reader to the AttributeError; a confident wrong answer sends them nowhere.
+                state, detail = "skipped", "Skipped — could not start (see sync log)"
             elif log.status == "error":
                 state, detail = "error", (log.error_message or "Failed")
             else:
@@ -395,12 +436,59 @@ def _step_details(run: RefreshRun, connectors: list[str]) -> list[dict]:
     return steps
 
 
+def _reap_if_dead(run: RefreshRun) -> RefreshRun:
+    """Resolve THIS run if its OS process is gone. Returns the row, refreshed if it changed.
+
+    `GET /api/tasks/<id>` is the only thing the SPA polls during a sync, and it used to trust
+    `status` verbatim — so when the sync process died (a crash, a deploy, a `runserver` reload,
+    a killed terminal) the row sat at `running` and the progress bar spun on a ghost for up to
+    RUN_TIMEOUT (2 hours). Observed exactly that: a 3-keyword `positions_new` run whose pid had
+    been gone for six minutes while the UI reported "Syncing… 33% · Est. 10m remaining" and the
+    user waited for API calls that nobody was making.
+
+    Deliberately a single-row pid check rather than `reap_orphaned_runs()`, which sweeps every
+    running row and reconciles the SyncLog table. This runs on every poll — twice a second at
+    the start of a sync — and must stay cheap. The full sweep still runs where it belongs: at
+    `start_sync_run`, at `active_run`, on app start and on every scheduler tick.
+
+    PID_GRACE is honoured for the same reason the sweep honours it: a row is written before
+    `Popen` returns, so a just-started run legitimately has no live pid yet.
+    """
+    from apps.sync.scheduling import DEAD_PROCESS_MESSAGE, PID_GRACE, _process_alive
+
+    if run.status != RefreshStatus.RUNNING or not run.pid or not run.started_at:
+        return run
+    if timezone.now() - run.started_at < PID_GRACE:
+        return run
+    try:
+        if _process_alive(run.pid):
+            return run
+    except Exception:
+        logger.warning("[sync] liveness check failed for run #%s", run.pk, exc_info=True)
+        return run
+
+    # Filtered on status='running', so a run that finished between the read and here is left
+    # alone — the same concurrency rule reap_orphaned_runs() follows.
+    updated = RefreshRun.objects.filter(pk=run.pk, status=RefreshStatus.RUNNING).update(
+        status=RefreshStatus.ERROR,
+        current_connector=None,
+        finished_at=timezone.now(),
+        error_message=DEAD_PROCESS_MESSAGE.format(pid=run.pid),
+    )
+    if not updated:
+        return run
+    logger.warning("[sync] run #%s reaped while polling — pid %s is gone", run.pk, run.pid)
+    return RefreshRun.objects.get(pk=run.pk)
+
+
 def task_status(task_id: int) -> dict | None:
     """Progress for the SPA's polling loop. None if the run id is unknown (view -> 404)."""
     try:
         run = RefreshRun.objects.get(pk=task_id)
     except RefreshRun.DoesNotExist:
         return None
+
+    run = _reap_if_dead(run)
 
     done = run.status != RefreshStatus.RUNNING
     error = None

@@ -55,6 +55,19 @@ class RefreshRun(models.Model):
     """One user-triggered refresh run. The HTMX progress bar polls this row."""
 
     site_url = models.CharField(max_length=255, db_index=True)
+    # WHICH PROJECT asked for this run — `sites.id` in the analytics DB.
+    #
+    # `site_url` alone cannot answer that. Position Tracking's wizard registers the same domain
+    # as several independent projects (`add_site(allow_duplicate=True)`), so "Premierstaff NY"
+    # and "Premierstaff Las Vegas" are distinct `sites` rows that share one `site_url` — and
+    # `site_service.get_site(site_url)` returns whichever one it finds FIRST. A connector
+    # resolving its tracking location that way read an arbitrary sibling's city, which is part
+    # of why every city project produced identical numbers.
+    #
+    # Nullable, and every consumer falls back to the by-URL lookup: rows created before this
+    # field existed have no pk, and the scheduled sync legitimately runs per domain rather than
+    # per project. NULL means "no specific project", never "project 0".
+    site_pk = models.IntegerField(null=True, blank=True, db_index=True)
     scope = models.CharField(max_length=50, default="all")  # 'all' or a page key (e.g. 'seo', 'keywords') from the page registry
     triggered_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL
@@ -83,6 +96,19 @@ class RefreshRun(models.Model):
 
     class Meta:
         ordering = ["-started_at"]
+        constraints = [
+            # start_sync_run's "already running" SELECT is check-then-create with several
+            # queries (reap, budget, freshness) between the check and the INSERT, so two
+            # simultaneous POSTs could both pass it and each spawn a full metered sync.
+            # This partial unique index is the authoritative guard: the second INSERT
+            # raises IntegrityError, which start_sync_run catches and turns into an
+            # attach-to-existing response. Works on both SQLite and Postgres.
+            models.UniqueConstraint(
+                fields=["site_url"],
+                condition=models.Q(status="running"),
+                name="one_running_refresh_per_site",
+            ),
+        ]
 
     def __str__(self) -> str:
         return f"RefreshRun#{self.pk} {self.scope}@{self.site_url}: {self.status}"

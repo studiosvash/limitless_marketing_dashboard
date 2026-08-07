@@ -448,9 +448,43 @@ volume of `0` is a known value (DataForSEO does report 0 for some keywords) and 
 names the fix (run a Positioning refresh).
 
 `project` carries the Position Tracking wizard's stored "Tracking area" choices so the workspace
-header can show them. **They are a recorded preference only**: `dataforseo_serp` and
-`dataforseo_serp_competitors` still post `location_name="United States"`,
-`language_name="English"`, `device="desktop"` as literals and read none of these fields.
+header can show them. `search_engine` / `language` / `device` remain **a recorded preference
+only**: both SERP connectors still post `language_name="English"` and `device="desktop"` as
+literals and read neither field.
+
+`location` is different as of **2026-08-06** — it is now a real sync parameter *and* a data key:
+
+- `dataforseo_serp` / `dataforseo_serp_competitors` resolve it per project through
+  `site_service.resolve_tracking_location(site_pk, site_id)` and send it as `location_name`
+  (converted to DataForSEO's wire form by `normalize_location_name`). They used to post a
+  literal `"United States"`, so a project configured for a city was measured against the
+  national SERP.
+- `keyword_rankings.location` / `competitor_keyword_rankings.location` store it and are part of
+  those tables' unique keys. Position Tracking registers one domain as several projects (one
+  per city, `add_site(allow_duplicate=True)`) and they all share `site_url` — without location
+  in the key they overwrote each other's rows, and every city project rendered the union of all
+  of them (identical visibility %, keyword count and up/down counts across six projects).
+- Every position read is scoped by it (`shared_queries._location_clause`). A project whose city
+  has not been synced yet reads **empty**, deliberately: showing another city's numbers under
+  this project's name is the bug being removed.
+- Which project triggered a run travels on `RefreshRun.site_pk` → `sync_all`/`sync_page` →
+  `connector.site_pk`, because `site_url` alone cannot identify one of several projects sharing
+  a domain and `get_site()` returns an arbitrary sibling.
+
+**`location` scopes the measurements; `site_pk` scopes the keyword list** — two axes, both
+needed, added **2026-08-06**. The view passes `resolve_project_or_404(slug).id` as `site_pk` and
+`build_positions_response` threads it into every `saved_keywords` read
+(`saved_keywords.site_pk` is the owning `sites.id` — see skills.md §4). Without it the
+`source: "new"` rows — the SPA's **"Newly Added Keywords — Not Tracked Yet"** card — were every
+sibling project's untracked keywords, so a project created minutes earlier listed 28 keywords
+nobody had sent it, above a button offering to buy DataForSEO lookups for all of them.
+`location` cannot substitute: two projects on a domain may track the same market, and the wizard
+defaults every project to "United States".
+
+`POST`/`PUT /api/projects/<slug>/keywords` are scoped the same way. The `PUT` (bulk replace) now
+clears through `saved_keyword_service.clear_saved_keywords(site_id, site_pk)`; its own
+`delete(SavedKeyword).where(site_id == …)` used to destroy every sibling project's tracked list
+and report only the rows it wrote back.
 
 Two behaviours worth knowing:
 
@@ -755,9 +789,9 @@ conflate them:**
 | | `mentionPlatforms` | `llmPlatforms` |
 |---|---|---|
 | Entries | 2: `google` ("AI Overviews"), `chat_gpt` ("ChatGPT") | 4: `chatgpt`, `claude`, `gemini`, `perplexity` |
-| Source | `llm_mentions_service.MENTION_PLATFORMS` — the only two platforms DataForSEO's LLM Mentions API covers | `ai_service.MENTION_PLATFORMS` — the four answer engines the Prompts tab checks with this deployment's own LLM API keys |
+| Source | `llm_mentions_service.MENTION_PLATFORMS` — the only two platforms DataForSEO's LLM Mentions API covers | `ai_service.MENTION_PLATFORMS` — the four answer engines the Prompts tab checks, all four reachable through DataForSEO's separate LLM Responses API (`ai_visibility_service.PLATFORMS`) |
 | Drives | The AI Visibility tab's platform-toggle chips and (once wired) the trend chart's series | The Prompts tab's per-model columns in the Tracked Prompts grid |
-| Why they must stay separate | Claude, Gemini and Perplexity are **not available from DataForSEO's LLM Mentions API at any price** — they were briefly the same constant, which is why the visibility toggles used to offer platforms that could never have data. `ai_optimization.js`'s `aiPlat` toggle state is keyed on `mentionPlatforms`' ids (`google`/`chat_gpt`); a default written against `llmPlatforms`' ids (as happened once — see `SKILLS.md` §9) silently renders both toggles "off" |
+| Why they must stay separate | These are two distinct DataForSEO products with different platform coverage. **LLM Mentions** (share-of-voice / who's cited) covers only Google AI Overviews and ChatGPT, and requires its own $100/mo subscription commitment — not wired in this deployment. **LLM Responses** (ask-and-observe-the-answer, what `run`/`inspect` call) is pay-as-you-go and covers all four engines. `ai_optimization.js`'s `aiPlat` toggle state is keyed on `mentionPlatforms`' ids (`google`/`chat_gpt`); a default written against `llmPlatforms`' ids (as happened once — see `SKILLS.md` §9) silently renders both toggles "off" |
 
 Both objects share the same `{id, name, color}` shape — the SPA reads `.name` (not `.label`) off
 either one.
@@ -1042,6 +1076,17 @@ billed answer-engine checks through `pipeline/services/ai_visibility_service`; t
 config fields persist through `ai_service.PROMPT_CFG_KEY`. Neither statement matched the code
 this session found — updated rather than left stale.)*
 
+*(Corrected 2026-08-06: `run`/`inspect` previously called OpenAI's chat-completions API
+directly (`OPENAI_API_KEY`), so only `chatgpt` was ever connectable — Claude/Gemini/Perplexity
+were permanently `not_connected`. All four now go through DataForSEO's AI Optimization LLM
+Responses API (`POST /v3/ai_optimization/<llm_type>/llm_responses/live`) on the standard
+`DATAFORSEO_LOGIN`/`DATAFORSEO_PASSWORD` pair — no separate key per provider, and `cost` is the
+USD DataForSEO's own response envelope reports, not a local price table. `webSearch` (from
+`PROMPT_CFG_KEY`) now actually reaches the request and, when on, `citations` on the result/history
+entry are the real provider-verified `{title, url}` source annotations DataForSEO returns —
+previously always `[]`. `not_connected` now means "DataForSEO credentials are unset", not
+"this provider has no connector".)*
+
 ---
 
 ## 6. Team, invitations & account
@@ -1282,7 +1327,7 @@ From `pipeline/services/sync_engine.PAGE_CONNECTORS`:
 | `keywords` | `gsc_keywords`, `dataforseo_ai_keywords` |
 | `pages` | `gsc_pages`, `url_inspection`, `pagespeed` |
 | `backlinks` | `dataforseo_backlinks` |
-| `positioning` (alias `positions`) | `gsc_keywords`, `dataforseo_serp`, `dataforseo_keywords`, `dataforseo_labs_competitors`, `dataforseo_serp_competitors` |
+| `positioning` (alias `positions`) | `dataforseo_serp`, `dataforseo_keywords`, `dataforseo_labs_competitors`, `dataforseo_serp_competitors` — **DataForSEO only, deliberately** (2026-08-06): `gsc_keywords` was removed because it is a whole-account Search Console report, not a per-project fetch; the grid's clicks/impressions/CTR still refresh via the `keywords` scope and "Refresh all" |
 | `positioning_new` (alias `positions_new`) | `dataforseo_serp`, `dataforseo_keywords`, `dataforseo_serp_competitors` — narrowed by `keywords_needing_backfill()` to keywords missing volume OR never rank-checked (no `position` and no `impressions` on any row — volume alone isn't enough, since `dataforseo_keywords` can price a keyword `dataforseo_serp` has never touched) |
 | `ai` | `dataforseo_ai_keywords`, `dataforseo_llm_mentions` |
 | `audit` | `domain_checks`, `gsc_pages`, `url_inspection`, `pagespeed`, `dataforseo_onpage` |
@@ -1384,12 +1429,22 @@ Calls DataForSEO Labs `ranked_keywords/live`. When a path is supplied it is appl
 `ranked_serp_element.serp_item.relative_url` filter. Results are cached in Django's cache under
 `domain_overview_<target>_<location>` for **24 hours** (only on `status == "ok"`).
 
+**Location is COUNTRY-LEVEL here, unlike Position Tracking.** DataForSEO Labs documents
+`"location_type": "Country"` as *the only supported location_type*, so a city value returns
+`Invalid Field: 'location_name'` and the whole lookup fails — which is what every
+city-configured project used to get: an error banner and empty KPIs. The connector now degrades
+any finer location to its country via `dataforseo_live_serp.country_of` and reports that it did.
+The SPA's market dropdown therefore offers countries plus a "Same as project" default, and shows
+a note whenever a downgrade happened. This is an upstream API limit, not something to work
+around; per-city measurement lives in Position Tracking, which uses the SERP API.
+
 **Response**
 
 ```json
 {"status":"ok","metrics":{"organic_traffic","traffic_value","ranked_keywords"},
  "keywords":[{"keyword","intent","position","volume","cpc","traffic","url"}],
- "target","domain","path","cost"}
+ "target","domain","path","cost",
+ "location","requested_location","location_downgraded"}
 ```
 
 or `{"status": "error", "error": "..."}` — note this is a **200 with an error body**, not a 4xx.
@@ -1478,9 +1533,12 @@ Every DataForSEO response wraps results as `tasks[0].result[0]`; a `task.status_
 is treated as an error. Costs are read from `task.cost` where the caller surfaces them.
 
 **Which keywords cost money:** the paid per-keyword connectors read
-`pipeline/utils/keywords.load_tracked_keywords(site_id)`, which returns the site's
-`SavedKeyword` rows (falling back to a legacy `keywords.txt` only when the DB has none). This is
-why "Track" in the Keyword Explorer is the control that governs API spend.
+`pipeline/utils/keywords.load_tracked_keywords(site_id, location=…, site_pk=…)`, which returns
+**that project's** `SavedKeyword` rows (falling back to a legacy `keywords.txt` only when the DB
+has none and the call is unscoped). This is why "Track" in the Keyword Explorer is the control
+that governs API spend — and why `site_pk` is not optional in practice: several projects share
+one `site_url`, so an unscoped call bills one project for every sibling's keywords. Connectors
+read it off `self.site_pk`, which `sync_engine` stamps before each run.
 
 ### OpenAI
 

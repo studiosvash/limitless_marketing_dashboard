@@ -114,6 +114,33 @@ def normalize_location_name(location_name: str) -> str:
     return ",".join(parts)
 
 
+def country_of(location_name: str) -> str:
+    """The COUNTRY component of any location, in DataForSEO's `location_name` form.
+
+        ""                              -> "United States"
+        "United States"                 -> "United States"
+        "United States - Austin, TX"    -> "United States"
+        "Austin,Texas,United States"    -> "United States"
+
+    Needed because the two DataForSEO products this app calls do NOT support the same location
+    granularity, and the difference is not a detail:
+
+      * The **SERP API** (Position Tracking) accepts city and region locations — that is what
+        makes per-city rank tracking possible at all.
+      * The **DataForSEO Labs API** (Domain Overview's ranked_keywords) documents
+        `"location_type": "Country"` as *the only supported location_type*. Sending it a city
+        returns `Invalid Field: 'location_name'` and the whole lookup fails — which is exactly
+        what a project configured for "United States - New York, NY" saw: an error banner and
+        empty KPIs on every URL it inspected.
+
+    So a Labs caller degrades to the country here rather than failing, and tells the user that
+    is what happened. Downgrading silently would be worse than the error it replaces.
+    """
+    normalized = normalize_location_name(location_name)
+    # normalize_location_name emits most-specific-first, so the country is always last.
+    return normalized.split(",")[-1].strip() or DEFAULT_LOCATION_NAME
+
+
 class DataForSEOLiveSERPConnector(BaseConnector):
     name = "dataforseo_live_serp"
 

@@ -502,13 +502,18 @@
         ['Top 3', dist.top3, '#10b981'], ['4–10', dist.p4_10, '#3b82f6'],
         ['11–20', dist.p11_20, '#f59e0b'], ['21–100', dist.p21_100, '#cbd5e1']
       ];
-      /* Provenance. Positions in `keyword_rankings` are written by EITHER gsc_keywords OR
-         dataforseo_serp with nothing recording which, so both are named everywhere a position
-         is shown. Competitor surfaces are a different lineage entirely -- competitor_keyword_
-         rankings comes from dataforseo_serp_competitors and the discovered domain list from
-         dataforseo_labs_competitors -- so they carry their own badge rather than inheriting
-         the page's. Opportunities are scored from the merged rows, so they name every input. */
-      const POS_SRC = ['gsc_keywords', 'dataforseo_serp'];
+      /* Provenance. This page's positions come from dataforseo_serp — the connector its own
+         Refresh button actually runs. gsc_keywords used to be named here too (it also writes
+         into keyword_rankings), but it left the positioning scope on 2026-08-06: naming a
+         connector this page's refresh can no longer run meant a stale gsc_keywords error kept
+         the badge red forever, telling the user to fix something this page cannot fix. Its
+         clicks/impressions enrichment is still credited where it is shown (the Keywords page,
+         whose scope runs it). Competitor surfaces are a different lineage entirely --
+         competitor_keyword_rankings comes from dataforseo_serp_competitors and the discovered
+         domain list from dataforseo_labs_competitors -- so they carry their own badge rather
+         than inheriting the page's. Opportunities are scored from the merged rows, so they
+         name every input. */
+      const POS_SRC = ['dataforseo_serp'];
       const COMP_SRC = ['dataforseo_serp_competitors', 'dataforseo_labs_competitors'];
       vals.pt = {
         srcKpis: this.srcBadge(POS_SRC),
@@ -554,11 +559,11 @@
         }),
         compDomains: data.competitors.domains,
         compGridCols: 'minmax(180px, 1.4fr) repeat(' + (1 + data.competitors.domains.length) + ', 1fr)',
-        /* Same rule as the Landscape table: a keyword with no captured position for YOUR
-           domain (row.you.pos == null) is unmeasured, not "you rank nowhere" -- it belongs in
-           the "Newly Added Keywords" card above, not as an all-dash row here. It reappears in
-           this grid on its own once a sync captures a position, same as the main table. */
-        compRows: data.competitors.rows.filter(row => row.you && row.you.pos != null).map(row => {
+        /* Same rule as the main table: hide only the keywords NOBODY HAS MEASURED YET, not
+           the ones measured and found outside the top 30. Filtering on `row.you.pos != null`
+           dropped exactly the rows a user most wants here — a keyword where a competitor
+           ranks and you do not is the gap this grid exists to show, and it was invisible. */
+        compRows: data.competitors.rows.filter(row => row.you && row.you.measured).map(row => {
           const mapCell = c => {
             if (c == null || c.pos == null) return { text: '—', style: { color: '#cbd5e1' }, diff: '', diffStyle: {}, url: '', domain: (c && c.domain) || '' };
             const pos = Math.round(c.pos);
@@ -608,19 +613,25 @@
             url: k.url || ''
           };
         }),
-        /* Split on whether a position was actually captured this window, not on `source`
-           alone: a keyword can carry source:'sync' (a keyword_rankings row exists) yet still
-           have pos:null -- e.g. dataforseo_keywords wrote volume/KD/CPC but no rank connector
-           has ever found it ranking. Either way there is no Pos/Δ to show, so `pos == null` is
-           the one check that guarantees the main table never renders a blank Pos/Δ cell; the
-           unmeasured keywords get their own section instead (pt.newRows below). */
-        trackedCount: (data.rankings || data.keywords || []).filter(k => k.pos != null).length,
+        /* SPLIT ON `measured`, NOT ON `pos`.
+           `pos == null` conflates two different facts and this table used to split on it:
+             measured:true,  pos:null  -> checked today, the domain is not in the top 30.
+                                          A REAL RESULT. Belongs in Rankings Overview with an
+                                          em dash in the Pos column.
+             measured:false, pos:null  -> no rank connector has ever looked. Belongs in
+                                          "Newly Added Keywords — Not Tracked Yet".
+           Splitting on `pos` sent every just-measured non-ranking keyword straight back into
+           the "Not Tracked Yet" card, under copy reading "no captured position yet" — so a
+           user who ran Fetch Positions, watched it succeed and paid for it was told it had
+           not happened, and offered a button to buy it again. `measured` comes from
+           keyword_rankings.rank_checked_at; see the column comment in pipeline/db/schema.py. */
+        trackedCount: (data.rankings || data.keywords || []).filter(k => k.measured).length,
         // Precomputed, not `pt.newRows.length > 0` in the template: this DSL's {{ }} resolver
         // (support.js resolve()) only handles ==/===/!=/!== and dot-paths, no `>`/`<` at all --
         // an unsupported operator falls through to resolvePath(), hits the space before `>`,
         // and returns undefined (falsy) silently. The sc-if rendered null every time, no error.
-        hasNewRows: (data.rankings || data.keywords || []).some(k => k.pos == null),
-        newRows: (data.rankings || data.keywords || []).filter(k => k.pos == null).map(k => {
+        hasNewRows: (data.rankings || data.keywords || []).some(k => !k.measured),
+        newRows: (data.rankings || data.keywords || []).filter(k => !k.measured).map(k => {
           const iLower = (k.intent || '').toLowerCase();
           return {
             kw: k.kw,
@@ -634,7 +645,9 @@
           };
         }),
         filteredRankings: (data.rankings || data.keywords || []).filter(k => {
-          if (k.pos == null) return false;
+          /* Measured, not ranked, is a row — with an em dash in Pos. Only the never-checked
+             keywords are held back for the "Not Tracked Yet" card above. */
+          if (!k.measured) return false;
           const st = s.ptRankingsSubTab || 'all';
           if (st === 'top10') return k.pos != null && k.pos <= 10;
           if (st === 'improved') return k.prevPos != null && k.pos != null && (k.prevPos - k.pos) >= 2;
@@ -712,8 +725,15 @@
                              1.4, 1.2, 1.0, 0.9, 0.8, 0.7, 0.6, 0.5, 0.45, 0.4];
           const PERFECT = CTR_CURVE[0];
           const posCredit = pos => {
-            if (pos == null || pos < 1 || pos > 100) return 0;
-            return pos <= 20 ? CTR_CURVE[pos - 1] : (pos <= 50 ? 0.05 : 0.02);
+            const p = Number(pos);
+            if (!isFinite(p) || p < 1 || p > 100) return 0;
+            /* Positions arrive as 1-dp averages (8.4, 24.5 — every service rounds to 1 dp),
+               and an array will not interpolate: CTR_CURVE[8.4 - 1] is CTR_CURVE[7.4] =
+               undefined, one undefined poisons the whole earned-points sum, and the card
+               printed "index NaN". Round to the nearest whole position for the curve
+               lookup — the curve is only defined at whole positions anyway. */
+            const r = Math.round(p);
+            return r <= 20 ? CTR_CURVE[r - 1] : (r <= 50 ? 0.05 : 0.02);
           };
           const perDomain = domains.map((dom, idx) => {
             let earned = 0;
@@ -820,8 +840,8 @@
           // Precomputed for the same reason as pt.hasNewRows above: this DSL's {{ }} resolver
           // has no `>`/`<` operator support, so `ptOv.newRows.length > 0` silently resolved to
           // undefined (falsy) and the card never rendered, with no console error either.
-          hasNewRows: (data.rankings || data.keywords || []).some(k => k.pos == null),
-          newRows: (data.rankings || data.keywords || []).filter(k => k.pos == null).map(k => ({
+          hasNewRows: (data.rankings || data.keywords || []).some(k => !k.measured),
+          newRows: (data.rankings || data.keywords || []).filter(k => !k.measured).map(k => ({
             kw: k.kw,
             volFmt: (k.volume === 0 || k.volume) ? this.fmt(k.volume) : '—',
             kd: k.kd != null ? Math.round(k.kd) : '—',

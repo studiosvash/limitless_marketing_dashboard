@@ -106,9 +106,13 @@ class SyncEndpointTests(APITestCase):
             "/api/projects/fusehealth/sync", {"scope": "positions"}, format="json"
         )
         self.assertEqual(resp.status_code, 200)
+        # DataForSEO connectors ONLY — a Position Tracking refresh must not pull the
+        # whole-account Search Console query report along with it (2026-08-06; see the
+        # comment on PAGE_CONNECTORS["positioning"]).
         self.assertEqual(
-            resp.json()["steps"], ["gsc_keywords", "dataforseo_serp", "dataforseo_keywords", "dataforseo_labs_competitors", "dataforseo_serp_competitors"]
+            resp.json()["steps"], ["dataforseo_serp", "dataforseo_keywords", "dataforseo_labs_competitors", "dataforseo_serp_competitors"]
         )
+        self.assertNotIn("gsc_keywords", resp.json()["steps"])
 
     @patch("apps.dashboard.services.sync_api_service._spawn_sync_process", return_value=1)
     def test_backlinks_scope_is_no_longer_a_silent_noop(self, _mock_spawn):

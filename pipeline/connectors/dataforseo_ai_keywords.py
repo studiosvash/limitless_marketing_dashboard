@@ -64,8 +64,14 @@ class DataForSEOAIKeywordsConnector(BaseConnector):
         return site_id or ""
 
     def _load_keywords(self, site_id: str = "") -> list[str]:
+        """This PROJECT's tracked keywords — scoped by `site_pk`, which sync_engine stamps on
+        every connector before the run. This is a metered per-keyword endpoint, so an unscoped
+        list bills this project for every sibling project's keywords as well."""
+        from pipeline.services.site_service import resolve_tracking_location
         from pipeline.utils.keywords import load_tracked_keywords
-        keywords = load_tracked_keywords(site_id)
+        site_pk = getattr(self, "site_pk", None)
+        keywords = load_tracked_keywords(
+            site_id, location=resolve_tracking_location(site_pk, site_id), site_pk=site_pk)
         if not keywords:
             self.logger.warning(
                 "[dataforseo_ai_keywords] No keywords in keywords.txt — nothing to fetch."

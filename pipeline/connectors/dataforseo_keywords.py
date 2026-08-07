@@ -22,7 +22,8 @@ from pipeline.connectors.base import BaseConnector
 from pipeline.connectors.dataforseo_cost import extract_cost, record_cost
 # Single home for the location-string fix — see dataforseo_live_serp for the documented
 # DataForSEO `location_name` format and why the SPA's picker value has to be converted.
-from pipeline.connectors.dataforseo_live_serp import normalize_location_name
+from pipeline.connectors.dataforseo_live_serp import country_of, normalize_location_name
+from pipeline.db.schema import DEFAULT_LOCATION
 from pipeline.utils.retry import with_retry
 from pipeline.utils.date_helpers import yesterday
 from pipeline.utils.db_connection import get_session
@@ -48,17 +49,21 @@ class DataForSEOKeywordsConnector(BaseConnector):
 
     def _resolve_site_id(self, site_id: Optional[str]) -> str:
         """Pick the right site_id to tag records with."""
-        from pipeline.services.site_service import get_site
+        from pipeline.services.site_service import get_site, get_site_by_pk
         with get_session() as session:
-            site = get_site(session, site_id)
+            # Prefer the exact project when the run named one — several projects can share a
+            # site_url and get_site() would return an arbitrary sibling.
+            site = get_site_by_pk(session, getattr(self, "site_pk", None)) \
+                or get_site(session, site_id)
             if site:
                 return site.site_url
         return site_id or os.getenv("GSC_SITE_URL", "")
 
-    def _load_keywords(self, site_id: str = "") -> list[str]:
-        """Tracked keywords for this site, optionally narrowed to an incremental subset."""
+    def _load_keywords(self, site_id: str = "", location: str = "") -> list[str]:
+        """This PROJECT's tracked keywords, optionally narrowed to an incremental subset."""
         from pipeline.utils.keywords import load_tracked_keywords
-        keywords = load_tracked_keywords(site_id)
+        keywords = load_tracked_keywords(site_id, location=location or None,
+                                         site_pk=getattr(self, "site_pk", None))
         # Incremental sync: sync_engine may set `only_keywords` to restrict this run to the
         # keywords that actually need work (pipeline/utils/keywords.keywords_needing_backfill).
         # DataForSEO meters per query, so re-querying every tracked keyword to pick up five new
@@ -75,14 +80,20 @@ class DataForSEOKeywordsConnector(BaseConnector):
         return keywords
 
     @with_retry(max_retries=3, base_delay=5.0)
-    def _fetch_search_volume(self, keywords: list[str]) -> list[dict]:
+    def _fetch_search_volume(self, keywords: list[str],
+                             location: str = DEFAULT_LOCATION) -> list[dict]:
         """
-        Fetch search volume + CPC for a batch of keywords.
+        Fetch search volume + CPC for a batch of keywords, IN THIS PROJECT'S MARKET.
         Max 1,000 keywords per request. Rate limit: 12 req/min.
+
+        Google Ads reports volume per location, and the difference is the whole point of a
+        city project: "event staffing" is not searched the same number of times in New York as
+        it is nationally. This used to post a literal `location_name="United States"`, so every
+        project — whatever market it was configured for — showed national volume.
         """
         payload = [{
             "keywords": keywords[:1000],
-            "location_name": "United States",
+            "location_name": normalize_location_name(location),
             "language_name": "English",
         }]
 
@@ -98,15 +109,22 @@ class DataForSEOKeywordsConnector(BaseConnector):
         return data.get("tasks", [{}])[0].get("result", [])
 
     @with_retry(max_retries=3, base_delay=5.0)
-    def _fetch_keyword_difficulty(self, keywords: list[str]) -> dict[str, float]:
+    def _fetch_keyword_difficulty(self, keywords: list[str],
+                                  location: str = DEFAULT_LOCATION) -> dict[str, float]:
         """
         Fetch keyword difficulty (0-100) for a batch via the DataForSEO Labs
         bulk_keyword_difficulty endpoint. Returns {keyword_lower: difficulty}.
         Failures degrade gracefully to an empty map (KD stays None).
+
+        COUNTRY-LEVEL, unavoidably: this is a DataForSEO Labs endpoint, and Labs documents
+        `location_type: Country` as the only one it supports — a city value is rejected
+        outright. `country_of` degrades the project's market rather than sending a city and
+        losing the whole KD column to an `Invalid Field` error. Search volume above has no
+        such limit and IS fetched at the project's exact market.
         """
         payload = [{
             "keywords": [k.lower() for k in keywords[:1000]],
-            "location_name": "United States",
+            "location_name": country_of(location),
             "language_name": "English",
         }]
         try:
@@ -553,13 +571,17 @@ class DataForSEOKeywordsConnector(BaseConnector):
         if not self.login or not self.password:
             raise ValueError("[dataforseo_keywords] Missing DATAFORSEO_LOGIN or DATAFORSEO_PASSWORD in .env.")
         resolved_site_id = self._resolve_site_id(site_id)
+        location = self._resolve_location(resolved_site_id)
 
-        keywords = self._load_keywords(resolved_site_id)
+        keywords = self._load_keywords(resolved_site_id, location)
         if not keywords:
             self.logger.warning("[dataforseo_keywords] No keywords found.")
             return []
 
-        self.logger.info(f"[dataforseo_keywords] Fetching metadata for {len(keywords)} keywords (site: {resolved_site_id})")
+        self.logger.info(
+            f"[dataforseo_keywords] Fetching metadata for {len(keywords)} keywords "
+            f"(site: {resolved_site_id} @ {location!r})"
+        )
         tracking_date = yesterday()
         records = []
         self._run_cost = 0.0
@@ -569,9 +591,9 @@ class DataForSEOKeywordsConnector(BaseConnector):
         for i in range(0, len(keywords), batch_size):
             batch = keywords[i:i + batch_size]
             try:
-                results = self._fetch_search_volume(batch)
+                results = self._fetch_search_volume(batch, location)
                 # Keyword difficulty comes from a separate Labs endpoint; merge by keyword.
-                kd_map = self._fetch_keyword_difficulty(batch)
+                kd_map = self._fetch_keyword_difficulty(batch, location)
                 for item in results:
                     kw = item.get("keyword", "")
                     # monthly_searches rides along free on every search_volume response —
@@ -610,29 +632,39 @@ class DataForSEOKeywordsConnector(BaseConnector):
         self.logger.info(f"[dataforseo_keywords] Fetched metadata for {len(records)} keywords")
         return records
 
-    def _write_records(self, session, records: list[dict], site_id: Optional[str] = None) -> int:
+    def _resolve_location(self, site_id: str) -> str:
+        """This PROJECT's tracking location — see the identical method on gsc_keywords.
+
+        Search volume and difficulty are market-level facts from DataForSEO, but they land in
+        `keyword_rankings` alongside the per-market SERP capture, and that table is keyed by
+        location. Stamping the project's own location puts them in the rows that project
+        actually reads.
         """
-        Upsert keyword metadata. Only updates search_volume and cpc
-        so we don't overwrite positions set by the SERP connector.
+        from pipeline.services.site_service import resolve_tracking_location
+        return resolve_tracking_location(getattr(self, "site_pk", None), site_id)
+
+    def _write_records(self, session, records: list[dict], site_id: Optional[str] = None) -> int:
+        """Upsert keyword metadata through the shared writer.
+
+        This used to hand-build `on_conflict_do_update(index_elements=["date", "site_id",
+        "keyword"])`. That key stopped existing when `location` joined it on 2026-08-06, and
+        Postgres refused the statement outright (`InvalidColumnReference`) — the same break
+        `gsc_keywords` hit. `pipeline/db/writer.upsert_keyword_rankings` owns the conflict
+        target now, so there is one definition of it instead of three.
+
+        The old `set_` listed only search_volume/cpc/keyword_difficulty to avoid clobbering
+        the SERP connector's positions. The shared writer's `coalesce(excluded, existing)`
+        gives the same protection for free: this connector's records carry no `position` or
+        `url` key at all, so those columns are not in the update set to begin with.
         """
         if not records:
             return 0
 
+        from pipeline.db.writer import upsert_keyword_rankings
+
+        location = self._resolve_location(site_id or "")
         for r in records:
             r.setdefault("site_id", site_id or "")
+            r.setdefault("location", location)
 
-        from pipeline.db.dialect import upsert_insert
-        from pipeline.db.schema import KeywordRanking
-
-        insert = upsert_insert(session)
-        stmt = insert(KeywordRanking).values(records)
-        stmt = stmt.on_conflict_do_update(
-            index_elements=["date", "site_id", "keyword"],
-            set_={
-                "search_volume": stmt.excluded.search_volume,
-                "cpc": stmt.excluded.cpc,
-                "keyword_difficulty": stmt.excluded.keyword_difficulty,
-            },
-        )
-        session.execute(stmt)
-        return len(records)
+        return upsert_keyword_rankings(session, records, site_id=site_id)

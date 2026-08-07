@@ -15,6 +15,8 @@ Refinements vs. the Streamlit MVP schema:
   * site_id columns hold the site's URL string (= Site.site_url), intentionally NOT an
     integer FK to sites.id. It is the cross-DB join key shared with Django models.
 """
+import logging
+
 from sqlalchemy import (
     Column, String, Float, Integer, Date, DateTime, Text,
     UniqueConstraint, Index, inspect, text,
@@ -23,7 +25,22 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, declarative_base
 from sqlalchemy.sql import func
 
+logger = logging.getLogger(__name__)
+
 Base = declarative_base()
+
+# The location a row belongs to when nothing more specific is known. Matches `Site.location`'s
+# and `SavedKeyword.location`'s existing default, and it is the honest backfill value for rows
+# captured before location became part of their identity: every one of those was fetched with a
+# hardcoded `location_name="United States"`, so labelling them "United States" records what
+# actually happened rather than guessing.
+DEFAULT_LOCATION = "United States"
+
+# `saved_keywords.site_pk` for a row whose `site_id` matches no `sites` row at all — an old
+# site_url spelling (see pipeline/utils/site_ids). 0, not NULL: the column is part of a unique
+# key and Postgres does not treat NULL = NULL as a conflict, so a nullable key column would
+# bypass ON CONFLICT and duplicate the row on every save (skills.md §9).
+UNOWNED_SITE_PK = 0
 
 
 class Site(Base):
@@ -55,12 +72,17 @@ class Site(Base):
     # hardcoded "Desktop" no matter what the user picked. They are stored here so the header
     # can report the user's actual choice.
     #
-    # THEY ARE A STORED PREFERENCE, NOT YET A SYNC PARAMETER. Both SERP connectors
-    # (dataforseo_serp.py and dataforseo_serp_competitors.py) still post
-    # location_name="United States", language_name="English", device="desktop" as literals,
-    # and neither reads this row. Recording what the user chose is honest; claiming it
-    # changes what gets fetched would not be. See ensure_site_columns() below for how an
-    # existing database acquires these columns.
+    # STILL A STORED PREFERENCE, NOT A SYNC PARAMETER — for these three. Both SERP connectors
+    # post language_name="English" and device="desktop" as literals and read neither column.
+    # Recording what the user chose is honest; claiming it changes what gets fetched would not
+    # be. See ensure_site_columns() below for how an existing database acquires them.
+    #
+    # `location` (declared above) IS a sync parameter as of 2026-08-06 and is no longer
+    # covered by the paragraph above: both SERP connectors resolve it per project via
+    # `site_service.resolve_tracking_location` and send it as `location_name`, and every row
+    # they write is stamped with it. Until then they posted a literal "United States", so a
+    # project configured for Las Vegas was measured against the national SERP — see
+    # KeywordRanking.location for the full account of what that broke.
     search_engine = Column(String(50), nullable=True, default="Google")
     device = Column(String(50), nullable=True, default="Desktop")
     language = Column(String(100), nullable=True, default="English")
@@ -211,6 +233,27 @@ class KeywordRanking(Base):
     # same crash waiting for its turn. Truncating to fit would have silently corrupted real
     # queries, which this codebase does not do.
     keyword = Column(Text, nullable=False, index=True)
+    # The tracking location this rank was MEASURED IN — part of the identity of the row, not a
+    # label on it. A position is meaningless without it: "event staffing" sits at #25 nationally
+    # and somewhere else entirely in a Las Vegas SERP.
+    #
+    # This column is also what separates two PROJECTS that track the same domain. Position
+    # Tracking's wizard registers the same domain repeatedly (add_site(allow_duplicate=True)),
+    # so "Premierstaff NY" and "Premierstaff Las Vegas" are distinct `sites` rows with distinct
+    # slugs but the SAME site_url — and site_url is the analytics join key. Before this column
+    # existed the unique key was (date, site_id, keyword), so every city project wrote to and
+    # read from ONE set of rows: six projects showed one identical dataset (same visibility %,
+    # same keyword count, same up/down counts), which is exactly the bug this fixes.
+    #
+    # Two projects on the same domain AND the same location still share rows, deliberately —
+    # they are tracking the identical thing, so one fetch serving both is correct, not a
+    # collision.
+    #
+    # Stored in the SPA's display form ("United States - Las Vegas, NV"), the same form
+    # `sites.location` holds; the DataForSEO wire form is produced at the connector edge by
+    # `normalize_location_name`. Keeping one form in the database means a read filter can
+    # compare against `sites.location` directly.
+    location = Column(String(255), nullable=False, index=True, default=DEFAULT_LOCATION)
     position = Column(Integer, nullable=True)
     url = Column(Text, nullable=True)
     clicks = Column(Integer, nullable=True, default=0)
@@ -222,9 +265,36 @@ class KeywordRanking(Base):
     intent = Column(String(100), nullable=True, index=True)
     trend = Column(Text, nullable=True)
 
+    # THE DATE A RANK CONNECTOR ACTUALLY LOOKED. Written only by connectors that inspect a
+    # SERP — `dataforseo_serp` and `gsc_keywords` — and never by `dataforseo_keywords`, which
+    # only prices a keyword.
+    #
+    # It exists because `position IS NULL` means two completely different things and this table
+    # could not tell them apart:
+    #
+    #   "nobody has ever checked this keyword"        -> genuinely unmeasured
+    #   "checked, and the domain is not in the top 30" -> a real, measured result
+    #
+    # Both wrote `position: NULL`, so the Positioning page filed a keyword the user had just
+    # paid to measure back into "Newly Added Keywords — Not Tracked Yet", under copy reading
+    # "no captured position yet" — telling them the refresh they had watched succeed had not
+    # happened. `keywords_needing_backfill` had the same problem and had to guess from
+    # `position IS NOT NULL OR impressions > 0`, which re-bought every genuinely-unranked
+    # keyword on every incremental sync.
+    #
+    # NULL therefore means "never rank-checked", and that is now a fact rather than an
+    # inference. Rows written before this column existed are NULL — honest, since nothing
+    # recorded whether they were checked; the next sync stamps them.
+    rank_checked_at = Column(Date, nullable=True)
+
     __table_args__ = (
-        UniqueConstraint("date", "site_id", "keyword", name="uq_keyword_date_site"),
+        # `location` joined this key on 2026-08-06 — see the column comment. The constraint was
+        # RENAMED at the same time on purpose: the name is how `ensure_ranking_location_keys()`
+        # tells a reconciled database from one still carrying the 3-column key.
+        UniqueConstraint("date", "site_id", "keyword", "location",
+                         name="uq_keyword_date_site_loc"),
         Index("ix_keyword_site_date", "site_id", "date"),
+        Index("ix_keyword_site_loc_date", "site_id", "location", "date"),
     )
 
 
@@ -539,14 +609,18 @@ class CompetitorKeywordRanking(Base):
     site_id = Column(String(255), nullable=False, index=True, default="")
     keyword = Column(Text, nullable=False, index=True)
     competitor_domain = Column(String(255), nullable=False, index=True)
+    # Same role as KeywordRanking.location — the SERP this position was read from. Without it
+    # the NY project's competitor grid and the Las Vegas project's would overwrite each other.
+    location = Column(String(255), nullable=False, index=True, default=DEFAULT_LOCATION)
     position = Column(Integer, nullable=True)        # rank_absolute; NULL = not in captured depth
     url = Column(Text, nullable=True)                # the competitor's ranking URL
     last_fetched = Column(DateTime, server_default=func.now())
 
     __table_args__ = (
-        UniqueConstraint("date", "site_id", "keyword", "competitor_domain",
-                         name="uq_comp_kw_rank"),
+        UniqueConstraint("date", "site_id", "keyword", "competitor_domain", "location",
+                         name="uq_comp_kw_rank_loc"),
         Index("ix_comp_kw_rank_site_date", "site_id", "date"),
+        Index("ix_comp_kw_rank_site_loc_date", "site_id", "location", "date"),
     )
 
 
@@ -660,12 +734,33 @@ class SavedKeyword(Base):
     and therefore the API spend — entirely from the UI, with no file to edit.
 
     Distinct from keyword_rankings, which is the *synced result* data (what the site actually
-    ranks for, discovered from GSC). Site-scoped, shared by the team.
+    ranks for, discovered from GSC). PROJECT-scoped (see `site_pk`), shared by the team.
     """
     __tablename__ = "saved_keywords"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     site_id = Column(String(255), nullable=False, index=True, default="")
+
+    # THE OWNING PROJECT — `sites.id`, and the only column that identifies one.
+    #
+    # `site_id` cannot: Position Tracking registers one domain as several projects
+    # (`add_site(allow_duplicate=True)`), and every one of them carries the same `site_url`. A
+    # read keyed on `site_id` alone therefore hands a brand-new project every keyword its
+    # siblings already track — which is exactly what put 28 keywords the user had never chosen
+    # into a freshly created project's "Newly Added Keywords" card on the Positioning page.
+    #
+    # `location` was the first attempt at a discriminator (2026-08-06) and is NOT one. It is a
+    # tracking preference, not an identity: nothing stops two projects on a domain from tracking
+    # the same market, and the wizard defaults every project to "United States", so the common
+    # case is siblings that share it. It stays as the market a keyword's metrics were researched
+    # in — see `location` below — and is no longer asked to say who owns the row.
+    #
+    # `UNOWNED_SITE_PK` (0) means no project could be resolved for the row's `site_id`. Those
+    # rows are deliberately invisible to every project and are reported by
+    # `manage.py adopt_orphan_saved_keywords`.
+    site_pk = Column(Integer, nullable=False, index=True, default=UNOWNED_SITE_PK,
+                     server_default=str(UNOWNED_SITE_PK))
+
     keyword = Column(Text, nullable=False, index=True)
     location = Column(String(255), nullable=False, default="United States")
     search_volume = Column(Integer, nullable=True)
@@ -676,8 +771,14 @@ class SavedKeyword(Base):
     serp_features = Column(Text, nullable=True)            # comma-joined serp_item_types
     saved_at = Column(DateTime, server_default=func.now())
 
+    # `site_pk` is PREPENDED to the old (site_id, keyword, location) key rather than replacing
+    # part of it. That is deliberate and the reason the migration is safe: adding a column to a
+    # unique key can only SPLIT existing groups, never merge two rows onto one key, so no
+    # existing row can collide when the constraint is swapped. Dropping `location` from the key
+    # could have, and a rebuild that raises IntegrityError halfway is not a migration.
     __table_args__ = (
-        UniqueConstraint("site_id", "keyword", "location", name="uq_saved_keyword_site_kw_loc"),
+        UniqueConstraint("site_pk", "site_id", "keyword", "location",
+                         name="uq_saved_keyword_project_kw_loc"),
         Index("ix_saved_keyword_site", "site_id"),
     )
 
@@ -942,6 +1043,46 @@ _BACKLINKS_ADDED_COLUMNS = (
     ("spam_score", "INTEGER", None),
 )
 
+# `keyword_rankings.location` / `competitor_keyword_rankings.location` — see the column comments
+# on KeywordRanking. A DEFAULT is given (unlike the nullable measurements above) because these
+# columns are NOT NULL and part of a unique key: an existing row must land on a real value in the
+# same ALTER, and "United States" is what those rows were genuinely fetched with.
+_KEYWORD_RANKINGS_ADDED_COLUMNS = (
+    ("location", "VARCHAR(255)", DEFAULT_LOCATION),
+    # No DEFAULT: a row written before this column existed has a genuinely unknown check
+    # history, and backfilling a date would assert a measurement that may never have happened.
+    # See the column comment on KeywordRanking.rank_checked_at.
+    ("rank_checked_at", "DATE", None),
+)
+_COMPETITOR_KEYWORD_RANKINGS_ADDED_COLUMNS = (
+    ("location", "VARCHAR(255)", DEFAULT_LOCATION),
+)
+
+# (table, old constraint name, new constraint name, new column tuple) for the 2026-08-06
+# location key change. `ensure_ranking_location_keys` uses the NAME to decide whether a database
+# has been reconciled, which is why the new constraints were given new names rather than
+# redefining the old ones in place.
+_RANKING_LOCATION_KEYS = (
+    ("keyword_rankings", "uq_keyword_date_site", "uq_keyword_date_site_loc",
+     ("date", "site_id", "keyword", "location")),
+    ("competitor_keyword_rankings", "uq_comp_kw_rank", "uq_comp_kw_rank_loc",
+     ("date", "site_id", "keyword", "competitor_domain", "location")),
+)
+
+# `saved_keywords.site_pk` — the owning project. See the column comment on SavedKeyword for why
+# neither `site_id` nor `location` can identify one. A DEFAULT is given (unlike the nullable
+# measurements above) because the column is part of a unique key: an existing row has to land on
+# a real value in the same ALTER, and `UNOWNED_SITE_PK` is the honest "not resolved yet" value
+# that `_backfill_saved_keyword_projects` then replaces with a real project id.
+_SAVED_KEYWORDS_ADDED_COLUMNS = (
+    ("site_pk", "INTEGER", UNOWNED_SITE_PK),
+)
+
+_SAVED_KEYWORD_PROJECT_KEY = (
+    "saved_keywords", "uq_saved_keyword_site_kw_loc", "uq_saved_keyword_project_kw_loc",
+    ("site_pk", "site_id", "keyword", "location"),
+)
+
 
 def _alter_missing_columns(conn, table: str, specs) -> list[str]:
     """Add each missing column of `table` on the given Connection. Returns the names added.
@@ -1013,6 +1154,209 @@ def ensure_backlinks_columns(session_or_engine) -> list[str]:
     return _run_alter(session_or_engine, "backlinks", _BACKLINKS_ADDED_COLUMNS)
 
 
+def ensure_ranking_location_columns(session_or_engine) -> list[str]:
+    """Add `location` to the two ranking tables on an existing database. Idempotent.
+
+    Must run BEFORE `ensure_ranking_location_keys`, which builds a unique constraint over that
+    column. `init_db` orders them correctly.
+    """
+    added = _run_alter(session_or_engine, "keyword_rankings",
+                       _KEYWORD_RANKINGS_ADDED_COLUMNS)
+    added += _run_alter(session_or_engine, "competitor_keyword_rankings",
+                        _COMPETITOR_KEYWORD_RANKINGS_ADDED_COLUMNS)
+    return added
+
+
+def _swap_unique_constraint(conn, table: str, old_name: str, new_name: str,
+                            new_columns: tuple) -> bool:
+    """Replace `table`'s old unique constraint with one that also covers `location`.
+
+    Returns True if a swap actually happened.
+
+    Why this cannot be left to `create_all`: it only ever creates MISSING TABLES and never
+    alters an existing table's constraints. And the swap is not cosmetic — while the old
+    3-column key is still in force, two projects tracking the same domain in different cities
+    collide on (date, site_id, keyword) and the second one's upsert OVERWRITES the first's
+    row instead of adding its own. The location column alone fixes nothing without this.
+
+    The two backends need different SQL, for a real reason rather than a stylistic one:
+
+      * PostgreSQL (what production runs) supports `DROP CONSTRAINT` / `ADD CONSTRAINT`
+        directly, so the swap is two statements against the live table and the 215k existing
+        rows are never copied.
+      * SQLite compiles a table-level UNIQUE into an internal `sqlite_autoindex_*` that
+        `DROP INDEX` refuses to touch, so the only way to change it is the documented
+        rebuild: create the new table, copy the rows, swap the names. Acceptable here because
+        every SQLite database in this project is a dev or test one — production is Postgres.
+    """
+    inspector = inspect(conn)
+    if not inspector.has_table(table):
+        return False  # brand-new database: create_all() already built the current definition
+
+    names = {c.get("name") for c in inspector.get_unique_constraints(table)}
+    names |= {i.get("name") for i in inspector.get_indexes(table) if i.get("unique")}
+    if new_name in names:
+        return False                      # already reconciled
+    if old_name not in names:
+        # Neither name present. Do not invent a constraint on a table whose shape this function
+        # does not recognise — say so and leave it alone.
+        logger.warning(
+            "[schema] %s carries neither %r nor %r; leaving its unique key untouched.",
+            table, old_name, new_name,
+        )
+        return False
+
+    cols = ", ".join(f'"{c}"' for c in new_columns)
+    if conn.dialect.name == "sqlite":
+        _rebuild_sqlite_table(conn, table)
+    else:
+        conn.execute(text(f'ALTER TABLE {table} DROP CONSTRAINT "{old_name}"'))
+        conn.execute(text(
+            f'ALTER TABLE {table} ADD CONSTRAINT "{new_name}" UNIQUE ({cols})'
+        ))
+    return True
+
+
+def _rebuild_sqlite_table(conn, table: str) -> None:
+    """Rebuild one SQLite table from its current model definition, preserving its rows.
+
+    SQLite cannot alter a table-level UNIQUE in place (see `_swap_unique_constraint`). Only the
+    columns present in BOTH the old table and the model are copied, named explicitly — a
+    bare `INSERT INTO ... SELECT *` would depend on column ORDER matching, which is exactly the
+    assumption that turns a schema migration into silently transposed data.
+    """
+    model_table = Base.metadata.tables[table]
+    old_cols = {c["name"] for c in inspect(conn).get_columns(table)}
+    shared = [c.name for c in model_table.columns if c.name in old_cols]
+    cols = ", ".join(f'"{c}"' for c in shared)
+    tmp = f"{table}__pre_key_swap"
+
+    conn.execute(text(f"ALTER TABLE {table} RENAME TO {tmp}"))
+    model_table.create(bind=conn)
+    conn.execute(text(f"INSERT INTO {table} ({cols}) SELECT {cols} FROM {tmp}"))
+    conn.execute(text(f"DROP TABLE {tmp}"))
+
+
+def ensure_ranking_location_keys(session_or_engine) -> list[str]:
+    """Move both ranking tables onto their location-aware unique keys. Idempotent.
+
+    Returns the tables actually reconciled, so a caller can log a real event.
+    """
+    def _do(conn) -> list[str]:
+        changed = []
+        for table, old_name, new_name, cols in _RANKING_LOCATION_KEYS:
+            try:
+                if _swap_unique_constraint(conn, table, old_name, new_name, cols):
+                    changed.append(table)
+            except Exception:
+                # Never take a sync or a page load down over this. A database left on the old
+                # key still reads and writes; it just cannot separate two city projects, which
+                # is the pre-existing behaviour rather than a new failure.
+                logger.error("[schema] could not swap the unique key on %s", table,
+                             exc_info=True)
+        return changed
+
+    if isinstance(session_or_engine, Session):
+        return _do(session_or_engine.connection())
+    with session_or_engine.begin() as conn:
+        return _do(conn)
+
+
+def _backfill_saved_keyword_projects(conn) -> int:
+    """Give every unowned `saved_keywords` row the project id it belongs to. Returns the count.
+
+    Runs once per database, between the ALTER that adds `site_pk` and the constraint swap that
+    puts it in the unique key. Every row written before the column existed defaulted to
+    `UNOWNED_SITE_PK`, and a row nobody owns is invisible to every project — so leaving them
+    unresolved would blank out keyword lists that users really did choose and that the rank
+    connectors are really being billed for.
+
+    THE OWNERSHIP RULE, and why it is the only defensible one:
+
+      * candidates are the projects whose domain matches the row's `site_id`, expanded through
+        `resolve_site_ids` so a row filed under `https://x.com/` still reaches the project
+        registered as `x.com` (skills.md §3);
+      * among them, a project whose `location` equals the row's wins — that pairing is what the
+        previous scoping scheme wrote, so honouring it preserves whatever separation the
+        location-based read had actually achieved;
+      * otherwise the OLDEST project on the domain takes it. That is the project that existed
+        when the row was written, which is the same rule `adopt_orphan_saved_keywords` already
+        applies, and guessing at a newer sibling would hand one team's keywords to another.
+
+    A row whose `site_id` matches no project at all keeps `UNOWNED_SITE_PK`. Re-keying
+    measurement history is `normalize_site_urls`' job; inventing an owner here could file one
+    site's keywords under a different site.
+    """
+    from collections import defaultdict
+
+    from pipeline.utils.site_ids import resolve_site_ids
+
+    inspector = inspect(conn)
+    if not inspector.has_table("saved_keywords") or not inspector.has_table("sites"):
+        return 0
+
+    sites = conn.execute(text("SELECT id, site_url, location FROM sites ORDER BY id")).fetchall()
+    if not sites:
+        return 0
+
+    owners: dict[str, list] = defaultdict(list)   # spelling -> [(id, location)], oldest first
+    for site_pk, site_url, location in sites:
+        for spelling in resolve_site_ids(site_url or ""):
+            owners[spelling].append((site_pk, (location or "").strip()))
+
+    rows = conn.execute(text(
+        "SELECT id, site_id, location FROM saved_keywords "
+        "WHERE site_pk IS NULL OR site_pk = :unowned"
+    ), {"unowned": UNOWNED_SITE_PK}).fetchall()
+
+    updated = 0
+    for row_id, site_id, location in rows:
+        candidates = owners.get(site_id or "")
+        if not candidates:
+            continue                              # orphaned spelling — left for normalize_site_urls
+        wanted = (location or "").strip()
+        target = next((pk for pk, loc in candidates if loc == wanted), candidates[0][0])
+        conn.execute(text("UPDATE saved_keywords SET site_pk = :pk WHERE id = :id"),
+                     {"pk": target, "id": row_id})
+        updated += 1
+    return updated
+
+
+def ensure_saved_keyword_project(session_or_engine) -> bool:
+    """Move `saved_keywords` onto its per-PROJECT key: add `site_pk`, fill it, key on it.
+
+    Idempotent, and safe to call on every read path — it inspects first and issues nothing once
+    the database is reconciled. That matters because `init_db()` is a management-command entry
+    point, not something the web process runs at boot: without a lazy caller, a deployed
+    database would never acquire the column and every `select(SavedKeyword)` would fail with
+    "no such column" (the same window `ensure_page_speed_columns` documents).
+
+    Returns True if this call changed anything.
+
+    Never raises. A database left on the old key still reads and writes; it just cannot separate
+    two projects on one domain, which is the pre-existing behaviour rather than a new failure.
+    """
+    def _do(conn) -> bool:
+        changed = False
+        try:
+            changed = bool(_alter_missing_columns(conn, "saved_keywords",
+                                                  _SAVED_KEYWORDS_ADDED_COLUMNS))
+            if _backfill_saved_keyword_projects(conn):
+                changed = True
+            table, old_name, new_name, cols = _SAVED_KEYWORD_PROJECT_KEY
+            if _swap_unique_constraint(conn, table, old_name, new_name, cols):
+                changed = True
+        except Exception:
+            logger.error("[schema] could not move saved_keywords onto its per-project key",
+                         exc_info=True)
+        return changed
+
+    if isinstance(session_or_engine, Session):
+        return _do(session_or_engine.connection())
+    with session_or_engine.begin() as conn:
+        return _do(conn)
+
+
 def ensure_site_url_not_unique(session_or_engine) -> bool:
     """Drop the UNIQUE index on `sites.site_url` if a pre-existing database still has one.
 
@@ -1057,3 +1401,8 @@ def init_db(engine: Engine) -> None:
     ensure_page_speed_columns(engine)
     ensure_backlinks_columns(engine)
     ensure_site_url_not_unique(engine)
+    # Order matters: the column has to exist before a unique key can be built over it.
+    ensure_ranking_location_columns(engine)
+    ensure_ranking_location_keys(engine)
+    # Same shape, one step: add site_pk, backfill it, then key on it.
+    ensure_saved_keyword_project(engine)

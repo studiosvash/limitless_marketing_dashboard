@@ -581,7 +581,7 @@ def _usage_raw(site_id: str, sync_config: dict, budget_cap) -> dict:
     }
 
 
-def build_settings_response(site_id: str) -> dict:
+def build_settings_response(site_id: str, site_pk: int | None = None) -> dict:
     """API-shaped Settings response. Real: project/credentials/connectors/team/sync.*
     (next_run/day now come from the real scheduler's own cadence logic, see _sync_summary_raw)
     and usage.* (measured `connector_costs` rows, read via cost_service -- see _usage_raw for
@@ -591,7 +591,13 @@ def build_settings_response(site_id: str) -> dict:
     backing infrastructure exists yet): budget.quotas -- nothing counts GA4/Ads/GSC free-tier
     API calls, so those three bars stay at their configured limits with 0 used."""
     with get_session() as session:
-        site = session.execute(select(Site).where(Site.site_url == site_id)).scalars().first()
+        # By primary key when the caller knows which project it is. `site_url` alone cannot say:
+        # several projects can share one domain (add_site(allow_duplicate=True)) and this
+        # returned whichever was created first, so a sibling project's Settings panel showed the
+        # first project's name, vertical, location and tracking preferences.
+        query = select(Site).where(Site.id == site_pk) if site_pk \
+            else select(Site).where(Site.site_url == site_id)
+        site = session.execute(query).scalars().first()
 
     from pipeline.services.saved_keyword_service import list_saved_keywords
     project = {
@@ -610,7 +616,13 @@ def build_settings_response(site_id: str) -> dict:
         "device": (site.device or "Desktop") if site else "Desktop",
         "language": (site.language or "English") if site else "English",
         "competitors": get_tracked_competitors(site_id),
-        "tracked_keywords": [k["keyword"] for k in list_saved_keywords(site_id)],
+        # This project's tracked list, not the domain's — see the site_pk comment on
+        # SavedKeyword. Falls back to the resolved row's own id so a caller that passed only a
+        # site_id still gets one project's list rather than every sibling's merged together.
+        "tracked_keywords": [
+            k["keyword"] for k in list_saved_keywords(
+                site_id, site_pk=site_pk or (site.id if site else None))
+        ],
     }
     credentials = {
         "gsc_property": (site.gsc_property or "") if site else "",

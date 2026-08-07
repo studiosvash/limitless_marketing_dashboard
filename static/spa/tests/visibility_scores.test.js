@@ -120,3 +120,26 @@ test('avg position and coverage are reported per domain', () => {
   assert.strictEqual(out[1].rankedCount, 1);
   assert.strictEqual(out[1].avgPos, 4);
 });
+
+test('fractional average positions score real numbers, never NaN', () => {
+  /* Regression: /api/positions reports 1-dp average positions (8.4, 24.5 — every service
+     rounds to 1 dp), and the credit lookup indexed the CTR curve with them raw:
+     CTR_CURVE[8.4 - 1] is undefined, one undefined poisoned the whole earned sum, and the
+     Overview card printed "index NaN · 20/28 keywords · avg #25" on real projects. The
+     curve is defined at whole positions, so a fractional position rounds to the nearest. */
+  const rows = [
+    row(8.4, { 'b.com': 3.6 }),
+    row(24.5, { 'b.com': null }),
+    row(1.2, { 'b.com': 19.5 })
+  ];
+  const out = build(['a.com', 'b.com'], rows);
+  for (const d of out) {
+    assert.ok(Number.isFinite(d.visScore), d.dom + ' visScore must be finite, got ' + d.visScore);
+    assert.ok(Number.isFinite(d.sov), d.dom + ' sov must be finite, got ' + d.sov);
+  }
+  /* 8.4 rounds to #8 (credit 3.5), not down to #8.4-floor-by-accident: check the exact
+     earned points so the rounding rule itself is pinned. 8.4→#8=3.5, 24.5→#25(wait, rounds
+     to 24 or 25? Math.round(24.5)=25)=0.05, 1.2→#1=31.7. */
+  assert.ok(Math.abs(out[0].earned - (3.5 + 0.05 + 31.7)) < 1e-9,
+            'expected exact rounded-curve credit, got ' + out[0].earned);
+});

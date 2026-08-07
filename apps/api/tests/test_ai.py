@@ -401,7 +401,8 @@ class AIRunInspectValidationTests(APITestCase):
     "unimplemented -> 400" expectation for `run` no longer describes the contract: the SPA's
     "Run all now" button really does post an empty body, and the honest answer to "run all"
     with nothing to run is a 200 saying zero prompts ran -- not a 400. Nothing here may reach
-    the network: no OPENAI_API_KEY is set under test, so every platform is not_connected."""
+    the network: no DataForSEO credentials are set under test, so every platform is
+    not_connected."""
 
     def setUp(self):
         self.client_auth = _bootstrap_ai_test_env(self)
@@ -445,26 +446,41 @@ All are licensed."""
 ANSWER_ABSENT = "Check your state's licensing directory for accredited providers."
 
 
-def _openai_response(text, prompt_tokens=120, completion_tokens=80):
-    """A stubbed OpenAI chat-completions response. The real API is NEVER called from a test:
-    a check is a real charge."""
+# Prompt checks ride DataForSEO's LLM Responses API on the standard credential pair.
+DFS_ENV = {"DATAFORSEO_LOGIN": "login", "DATAFORSEO_PASSWORD": "secret"}
+NO_DFS_ENV = {"DATAFORSEO_LOGIN": "", "DATAFORSEO_PASSWORD": ""}
+
+# The charge the stubbed DataForSEO envelope reports for one check — read off the response,
+# not computed from a price table.
+EXPECTED_COST = 0.0055
+
+
+def _dfs_response(text, input_tokens=120, output_tokens=80, cost=EXPECTED_COST):
+    """A stubbed DataForSEO llm_responses/live envelope. The real API is NEVER called from a
+    test: a check is a real charge."""
     resp = mock.Mock()
     resp.raise_for_status.return_value = None
     resp.json.return_value = {
-        "choices": [{"message": {"content": text}}],
-        "usage": {"prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens,
-                  "total_tokens": prompt_tokens + completion_tokens},
+        "cost": cost,
+        "tasks": [{
+            "status_code": 20000,
+            "status_message": "Ok.",
+            "cost": cost,
+            "result": [{
+                "model_name": "gpt-4o-mini",
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "items": [{"type": "message", "sections": [{"type": "text", "text": text}]}],
+            }],
+        }],
     }
     return resp
 
 
-EXPECTED_COST = round(120 / 1_000_000 * 0.15 + 80 / 1_000_000 * 0.60, 6)
-
-
-@mock.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=False)
+@mock.patch.dict(os.environ, DFS_ENV, clear=False)
 class AIRunPersistenceTests(APITestCase):
     """"Run now" must persist a real observed result and it must come back on the next GET --
-    the whole point of the button. OpenAI is stubbed; nothing here reaches the network."""
+    the whole point of the button. DataForSEO is stubbed; nothing here reaches the network."""
 
     def setUp(self):
         self.client_auth = _bootstrap_ai_test_env(self)
@@ -476,7 +492,7 @@ class AIRunPersistenceTests(APITestCase):
 
     @mock.patch("pipeline.services.ai_visibility_service.requests.post")
     def test_run_persists_a_real_result_visible_on_the_next_get(self, post):
-        post.return_value = _openai_response(ANSWER_CITED)
+        post.return_value = _dfs_response(ANSWER_CITED)
 
         resp = self.client_auth.post(
             "/api/projects/fusehealth/ai/run", {"promptId": self.prompt.id}, format="json"
@@ -517,7 +533,7 @@ class AIRunPersistenceTests(APITestCase):
 
     @mock.patch("pipeline.services.ai_visibility_service.requests.post")
     def test_absent_answer_is_recorded_as_absent_not_dropped(self, post):
-        post.return_value = _openai_response(ANSWER_ABSENT)
+        post.return_value = _dfs_response(ANSWER_ABSENT)
         self.client_auth.post("/api/projects/fusehealth/ai/run",
                               {"promptId": self.prompt.id}, format="json")
         body = self.client_auth.get("/api/projects/fusehealth/ai").json()
@@ -531,20 +547,40 @@ class AIRunPersistenceTests(APITestCase):
         self.assertEqual(body["kpis"]["prompt_coverage"], {"cited": 0, "total": 1})
 
     @mock.patch("pipeline.services.ai_visibility_service.requests.post")
-    def test_unconnected_engine_is_recorded_as_not_connected_never_simulated(self, post):
-        post.return_value = _openai_response(ANSWER_CITED)
+    def test_tracking_several_engines_calls_each_one_through_dataforseo(self, post):
+        # All four engines ride the same DataForSEO credential pair now, so tracking several on
+        # one prompt really calls each of them -- there is no longer a "some engines have no
+        # credential path" case to hit while DataForSEO itself is connected.
+        post.return_value = _dfs_response(ANSWER_CITED)
         self.prompt.tracked_models = ["chatgpt", "claude", "perplexity"]
         self.prompt.save()
 
         resp = self.client_auth.post("/api/projects/fusehealth/ai/run",
                                      {"promptId": self.prompt.id}, format="json")
-        # Only the one connected engine was actually called.
-        self.assertEqual(post.call_count, 1)
-        self.assertEqual(resp.json()["checked"], 1)
-        self.assertEqual(resp.json()["notConnected"], ["claude", "perplexity"])
+        self.assertEqual(post.call_count, 3)
+        self.assertEqual(resp.json()["checked"], 3)
+        self.assertEqual(resp.json()["notConnected"], [])
 
         results = self.client_auth.get("/api/projects/fusehealth/ai").json()["prompts"][0]["results"]
-        for pid in ("claude", "perplexity"):
+        for pid in ("chatgpt", "claude", "perplexity"):
+            self.assertEqual(results[pid]["state"], "checked")
+            self.assertEqual(results[pid]["verdict"], "cited")
+
+    @mock.patch.dict(os.environ, NO_DFS_ENV, clear=False)
+    @mock.patch("pipeline.services.ai_visibility_service.requests.post")
+    def test_without_dataforseo_credentials_every_tracked_engine_is_not_connected(self, post):
+        self.prompt.tracked_models = ["chatgpt", "claude", "perplexity"]
+        self.prompt.save()
+
+        resp = self.client_auth.post("/api/projects/fusehealth/ai/run",
+                                     {"promptId": self.prompt.id}, format="json")
+        post.assert_not_called()
+        self.assertEqual(resp.json()["checked"], 0)
+        self.assertEqual(sorted(resp.json()["notConnected"]),
+                         ["chatgpt", "claude", "perplexity"])
+
+        results = self.client_auth.get("/api/projects/fusehealth/ai").json()["prompts"][0]["results"]
+        for pid in ("chatgpt", "claude", "perplexity"):
             self.assertEqual(results[pid]["state"], "not_connected")
             self.assertIsNone(results[pid]["verdict"])
             self.assertFalse(results[pid]["mentioned"])
@@ -562,7 +598,7 @@ class AIRunPersistenceTests(APITestCase):
 
     @mock.patch("pipeline.services.ai_visibility_service.requests.post")
     def test_run_all_covers_every_prompt_in_the_project_only(self, post):
-        post.return_value = _openai_response(ANSWER_CITED)
+        post.return_value = _dfs_response(ANSWER_CITED)
         AIPrompt.objects.create(site_url=SITE_URL, text="second prompt",
                                 tracked_models=["chatgpt"])
         AIPrompt.objects.create(site_url="https://other-project.com", text="not ours",
@@ -574,7 +610,7 @@ class AIRunPersistenceTests(APITestCase):
 
     @mock.patch("pipeline.services.ai_visibility_service.requests.post")
     def test_run_by_list_scopes_to_that_list(self, post):
-        post.return_value = _openai_response(ANSWER_CITED)
+        post.return_value = _dfs_response(ANSWER_CITED)
         plist = AIPromptList.objects.create(site_url=SITE_URL, name="Branded")
         AIPrompt.objects.create(site_url=SITE_URL, list=plist, text="in the list",
                                 tracked_models=["chatgpt"])
@@ -586,8 +622,8 @@ class AIRunPersistenceTests(APITestCase):
 
 
 class AIRunWithoutApiKeyTests(APITestCase):
-    """Without OPENAI_API_KEY the whole feature degrades honestly -- exactly as
-    ai_summary_service skips -- rather than simulating an answer."""
+    """Without DataForSEO credentials the whole feature degrades honestly -- rather than
+    simulating an answer."""
 
     def setUp(self):
         self.client_auth = _bootstrap_ai_test_env(self)
@@ -595,7 +631,7 @@ class AIRunWithoutApiKeyTests(APITestCase):
         self.prompt = AIPrompt.objects.create(site_url=SITE_URL, text="best iv therapy",
                                               tracked_models=["chatgpt"])
 
-    @mock.patch.dict(os.environ, {"OPENAI_API_KEY": ""}, clear=False)
+    @mock.patch.dict(os.environ, NO_DFS_ENV, clear=False)
     @mock.patch("pipeline.services.ai_visibility_service.requests.post")
     def test_run_makes_no_call_and_reports_why(self, post):
         resp = self.client_auth.post("/api/projects/fusehealth/ai/run",
@@ -604,7 +640,7 @@ class AIRunWithoutApiKeyTests(APITestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.json()["checked"], 0)
         self.assertEqual(resp.json()["cost"], 0.0)
-        self.assertIn("OPENAI_API_KEY", resp.json()["detail"])
+        self.assertIn("DATAFORSEO", resp.json()["detail"])
 
         body = self.client_auth.get("/api/projects/fusehealth/ai").json()
         self.assertEqual(body["history"], [])
@@ -613,17 +649,17 @@ class AIRunWithoutApiKeyTests(APITestCase):
         self.assertEqual(body["prompts"][0]["results"]["chatgpt"]["state"], "not_connected")
         self.assertIsNone(body["prompts"][0]["lastRun"])
 
-    @mock.patch.dict(os.environ, {"OPENAI_API_KEY": ""}, clear=False)
+    @mock.patch.dict(os.environ, NO_DFS_ENV, clear=False)
     @mock.patch("pipeline.services.ai_visibility_service.requests.post")
     def test_inspect_is_503_not_a_fabricated_answer(self, post):
         resp = self.client_auth.post("/api/projects/fusehealth/ai/inspect",
                                      {"question": "best iv therapy"}, format="json")
         post.assert_not_called()
         self.assertEqual(resp.status_code, 503)
-        self.assertIn("OPENAI_API_KEY", resp.json()["detail"])
+        self.assertIn("DATAFORSEO", resp.json()["detail"])
 
 
-@mock.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=False)
+@mock.patch.dict(os.environ, DFS_ENV, clear=False)
 class AIInspectPersistenceTests(APITestCase):
     def setUp(self):
         self.client_auth = _bootstrap_ai_test_env(self)
@@ -632,7 +668,7 @@ class AIInspectPersistenceTests(APITestCase):
 
     @mock.patch("pipeline.services.ai_visibility_service.requests.post")
     def test_inspect_returns_the_entry_and_stores_it_in_history(self, post):
-        post.return_value = _openai_response(ANSWER_CITED)
+        post.return_value = _dfs_response(ANSWER_CITED)
         resp = self.client_auth.post(
             "/api/projects/fusehealth/ai/inspect",
             {"question": "best iv therapy in austin", "promptId": None}, format="json",
@@ -652,7 +688,7 @@ class AIInspectPersistenceTests(APITestCase):
 
     @mock.patch("pipeline.services.ai_visibility_service.requests.post")
     def test_inspecting_a_tracked_prompt_also_updates_its_row(self, post):
-        post.return_value = _openai_response(ANSWER_CITED)
+        post.return_value = _dfs_response(ANSWER_CITED)
         prompt = AIPrompt.objects.create(site_url=SITE_URL, text="best iv therapy in austin",
                                          tracked_models=["chatgpt"])
         self.client_auth.post(

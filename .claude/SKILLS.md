@@ -189,16 +189,25 @@ Every table has a `site_id VARCHAR(255)` column. Uniqueness is enforced by expli
 | `ai_keyword_data` | `AIKeywordData` | date, site_id, keyword | `dataforseo_ai_keywords` |
 | `llm_mention_metrics` | `LLMMentionMetric` | site_id, week_start, subject_domain, platform | `dataforseo_llm_mentions` |
 | `llm_cited_pages` | `LLMCitedPage` | site_id, week_start, url | `dataforseo_llm_mentions` |
-| `saved_keywords` | `SavedKeyword` | site_id, keyword, location | `saved_keyword_service` — **the tracked-keyword list** |
+| `saved_keywords` | `SavedKeyword` | **site_pk**, site_id, keyword, location | `saved_keyword_service` — **the tracked-keyword list** |
 | `anomalies` | `Anomaly` | date, site_id, metric_type | `anomaly_service` |
 | `comparative_metrics` | `ComparativeMetrics` | site_id, metric_type, week_start | *(unwritten)* |
 | `metric_forecasts` | `MetricForecast` | site_id, metric_type, period_type, target_date, model_name | *(unwritten — designed, never built)* |
 | `keyword_opportunities` | `KeywordOpportunity` | site_id, keyword | *(unwritten)* |
 | `risk_signals` | `RiskSignal` | — | *(unwritten)* |
 
-**`SavedKeyword` is the money table.** `pipeline/utils/keywords.load_tracked_keywords(site_id)`
-reads it, and the paid per-keyword DataForSEO connectors read that. Adding rows here increases
-API spend; that is why the UI gates it behind an explicit "Track" action.
+**`SavedKeyword` is the money table.** `pipeline/utils/keywords.load_tracked_keywords()` reads
+it, and the paid per-keyword DataForSEO connectors read that. Adding rows here increases API
+spend; that is why the UI gates it behind an explicit "Track" action.
+
+**It is the one analytics table keyed by PROJECT, not by domain.** `saved_keywords.site_pk` is
+the owning `sites.id`. Every read and write of it takes a `site_pk` and every caller that has a
+project must pass one — `list_saved_keywords`, `save_keywords`, `clear_saved_keywords`,
+`delete_saved_keyword`, `load_tracked_keywords`, `keywords_needing_backfill`. Use
+`saved_keyword_service.project_scope(site_id, site_pk)` to build the WHERE clause rather than
+writing your own: with a `site_pk` it scopes on that **alone** (the project id already implies
+the domain, and ANDing `site_id` hides rows filed under another spelling of it — §3), and
+without one it falls back to `resolve_site_ids`. See the §9 trap for what an unscoped read did.
 
 **`llm_mention_metrics` counts are not comparable across different competitor sets.** A live
 cross-aggregation call for the same domain returned 20 mentions when the project tracked 1
@@ -509,6 +518,7 @@ Each of these is a real bug that was found and fixed. Do not re-introduce them.
 | Two state keys that must track each other but live in different files | `app.js`'s `aiPlat` default was `{chatgpt, perplexity}` while `llm_mentions_service.MENTION_PLATFORMS`' ids became `google`/`chat_gpt`, so both platform toggle chips silently defaulted to "off" — nothing raised, the Share-of-Voice trend just rendered as if every platform were deselected. `mentionPlatforms` (2 entries, DataForSEO-backed) and `llmPlatforms` (4 entries, the Prompts tab's own LLM keys) are deliberately different lists; a frontend default keyed on one must be written against *that* list's ids, not copied from the other |
 | Naming a REST endpoint after its MCP tool identifier | The connector shipped calling `llm_mentions/aggregation_metrics` and `llm_mentions/cross_aggregation_metrics`, carried over from the MCP tool names `ai_opt_llm_ment_agg_metrics` / `ai_opt_llm_ment_cross_agg_metrics`. Both return a plain HTTP 404 — the real REST paths are `llm_mentions/aggregated_metrics/live` and `llm_mentions/cross_aggregated_metrics/live` (**`aggregated`, not `aggregation`**, and every DataForSEO Live endpoint needs the `/live` suffix, exactly like the working `ai_keyword_data/keywords_search_volume/live`). Every test passed the whole time this was wrong, because a fixture never touches a URL — only a real call against the real host exercises the path string. `EndpointUrlTests` in `pipeline/connectors/tests/test_llm_mentions_parsing.py` now pins the verified paths so this can't regress silently |
 | A domain-equality check that strips the scheme but not `www.` | `sites.site_url` is the cross-database join key, and `add_site`'s duplicate guard compared a `_bare_domain()` that stripped `https://`, `http://`, `sc-domain:` and a trailing slash — **not a leading `www.`**. So `premierstaff.com` and `www.premierstaff.com` were both accepted as new sites: two projects, two slugs, two sync budgets, two halves of one site's history, and a project switcher that offered the user a choice between them with no way to tell which was real. The SPA's client-side pre-check (`_addSiteDomain`) had the identical gap, so nothing caught it on either side. Use `pipeline/utils/site_ids.normalize_domain()` — §3 — at every point that asks "is this the same site?" Note the two follow-on traps this created: `canonical_domain("https://")` used to fall back to the raw string and yield `"https"`, a domain-shaped non-domain that would have been stored as a `site_url`; and `POST /api/projects` passed the **raw typed string** to `start_sync_run()`, which would have filed a brand-new site's entire first sync under a key no page reads |
+| Scoping a per-project table by `site_id`, or by `location` as a stand-in for project identity | `saved_keywords` is per-PROJECT, and one domain is registered as several projects (`add_site(allow_duplicate=True)`) that all carry the same `site_url`. Reading it by `site_id` gave a **brand-new project 28 keywords its user had never added**, sitting in Positioning's "Newly Added Keywords — Not Tracked Yet" card with a button offering to buy DataForSEO lookups for all of them. The first fix used `location` as the discriminator, and that is not an identity: two projects on a domain may track the same market, and the wizard defaults every project to "United States", so the sibling case in front of us separated nothing. The write side was worse than the read — the unique key `(site_id, keyword, location)` meant a second project tracking a keyword its sibling already tracked silently **UPDATED the sibling's row**, and the bulk-replace endpoint's own `delete(SavedKeyword).where(site_id == ...)` wiped every sibling's entire list while reporting only the rows it wrote back. The owner is now `saved_keywords.site_pk` (`sites.id`), leading the unique key. Ask "could two projects legitimately have the same value here?" before treating any column as an identity |
 | A fixture built from a tool's rendering of a response, not the response itself | The real envelope is `tasks[0].result[0] == {"total": {...}, "items": [...]}`. DataForSEO's MCP tool happens to present that `result` array under a field it labels `items` in its own output, which got misread as an *extra* nesting level inside the real envelope — so all three parsers read `result[0]["items"][0]` as the block. `.get("total")` on that was always `None`, so every parser returned `[]`: both live syncs reported **success with 0 records written** while all 37 tests stayed green, because the hand-written fixtures matched the wrong shape the code expected. Fixtures in `test_llm_mentions_parsing.py` are now trimmed from real captured responses (`.superpowers/sdd/2026-07-31-llm-mentions-ai-visibility/real-*.json`). Build a fixture from a captured response, never from documentation or a tool's rendering of one |
 
 ---

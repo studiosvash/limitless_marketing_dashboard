@@ -4,10 +4,17 @@ pipeline/connectors/dataforseo_llm_mentions.py — AI answer-engine visibility.
 Calls DataForSEO's AI Optimization **LLM Mentions** API to answer one question per project:
 when people ask AI instead of Google, do we get mentioned — and who gets mentioned instead?
 
-Endpoints (Live, instant — no task_post/task_get polling):
-  POST /v3/ai_optimization/llm_mentions/cross_aggregation_metrics
-  POST /v3/ai_optimization/llm_mentions/top_pages
-  POST /v3/ai_optimization/llm_mentions/aggregation_metrics
+Endpoints (Live, instant — no task_post/task_get polling). Note the `aggregated` spellings
+and the `/live` suffix — see the warning above the constants below; the `aggregation_*`
+spellings DataForSEO's own MCP tool names use return a plain 404:
+  POST /v3/ai_optimization/llm_mentions/cross_aggregated_metrics/live
+  POST /v3/ai_optimization/llm_mentions/top_pages/live
+  POST /v3/ai_optimization/llm_mentions/aggregated_metrics/live
+
+No activation or subscription is needed: DataForSEO removed the $100/month minimum
+commitment for the LLM Mentions endpoints on 2026-07-01, and it now bills pay-as-you-go
+against the same account balance as every other connector here (confirmed by DataForSEO
+support 2026-08-06: "activated for all DataForSEO users by default").
 
 Writes to: llm_mention_metrics, llm_cited_pages (one weekly snapshot per project).
 

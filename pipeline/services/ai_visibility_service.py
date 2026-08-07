@@ -4,29 +4,27 @@ appears in it.
 
 Design notes, so nothing here is mistaken for a simulation:
 
-* **Only OpenAI is connected.** `PLATFORMS` lists the four answer engines the UI shows, but
-  only `chatgpt` has a credential path (`OPENAI_API_KEY`). The other three return an explicit
-  `state="not_connected"` result and are never called, never estimated, never simulated. Wiring
-  one up means adding its env var + a `_call_*` branch here — nothing else in the app changes.
+* **All four engines go through DataForSEO's AI Optimization LLM Responses API**
+  (`POST /v3/ai_optimization/<llm_type>/llm_responses/live`), authenticated with the same
+  `DATAFORSEO_LOGIN`/`DATAFORSEO_PASSWORD` pair every other DataForSEO connector uses. One
+  credential pair makes ChatGPT, Claude, Gemini AND Perplexity real — previously only
+  `chatgpt` was wired (direct to OpenAI with `OPENAI_API_KEY`) and the other three returned
+  a permanent `state="not_connected"`. Nothing is ever estimated or simulated: if the
+  DataForSEO credentials are absent, every engine degrades to an explicit `not_connected`.
 
-* **The calling pattern deliberately mirrors `pipeline/services/ai_summary_service.py`**: raw
-  `requests` against the chat-completions endpoint, `gpt-4o-mini`, an explicit timeout, and an
-  honest skip when the key is absent. (The `openai` package is in requirements but is not
-  imported anywhere in this codebase; adding a second, divergent calling style for the same
-  provider would be the worse choice.)
+* **`cost` is the USD charge DataForSEO reports in its own response envelope** (read via
+  `pipeline/connectors/dataforseo_cost.extract_cost`, the same reader every other DataForSEO
+  connector uses). It already includes the underlying model spend — no price table to keep
+  current. An envelope with no charge reads as `None` (unknown), never a guess.
 
-* **`cost` is arithmetic on the real token counts the API returns**, using the published
-  per-million list price in `MODEL_PRICING_USD_PER_1M`. If the response carries no `usage`
-  block the cost is `None` (unknown) — never a guessed number. Update the price table when
-  OpenAI changes list pricing; it is the one figure here not read off the wire.
-
-* **What "cited" means.** The chat-completions API without a web-search tool returns prose, not
-  sources — so "cited" cannot mean "your URL was used as a source" (that needs a web-search-
-  enabled provider, which is not connected). Here `cited` means the strictly weaker, fully
-  determinable thing: *the brand appears as an item of an enumerated/bulleted recommendation
-  list in the answer*, and `position` is that item's real ordinal. `mentioned` means it appears
-  in the answer prose but not as a ranked item. `absent` means it does not appear at all.
-  `citations` is therefore always empty — see `analyze_answer`.
+* **What "cited" means.** Without web search the model returns prose, not sources — so
+  "cited" means the strictly weaker, fully determinable thing: *the brand appears as an item
+  of an enumerated/bulleted recommendation list in the answer*, and `position` is that item's
+  real ordinal. `mentioned` means it appears in the answer prose but not as a ranked item.
+  `absent` means it does not appear at all. `analyze_answer` itself is pure text analysis and
+  always returns `citations: []`; `check_prompt` then overwrites that with the *real* source
+  annotations DataForSEO returns when the prompt's `webSearch` option is on — verified
+  `{title, url}` pairs from the provider, never URLs scraped out of the prose.
 """
 from __future__ import annotations
 
@@ -37,30 +35,49 @@ from datetime import datetime, timezone
 
 import requests
 
+from pipeline.connectors.dataforseo_cost import extract_cost
+
 logger = logging.getLogger(__name__)
 
-OPENAI_CHAT_URL = "https://api.openai.com/v1/chat/completions"
-DEFAULT_MODEL = "gpt-4o-mini"
-REQUEST_TIMEOUT = 30
+DATAFORSEO_BASE = "https://api.dataforseo.com/v3"
+# DataForSEO executes the provider call server-side with its own ceiling of 120s; a shorter
+# client timeout would abort (and still pay for) slow-but-successful checks.
+REQUEST_TIMEOUT = 120
 MAX_ANSWER_TOKENS = 600
+# Hard DataForSEO limit on user_prompt; longer prompts are rejected, so truncate honestly.
+PROMPT_MAX_CHARS = 500
 # Deterministic: the same prompt should give a comparable answer week over week, otherwise the
 # trend measures sampling noise rather than a change in the model's view of the brand.
 TEMPERATURE = 0.0
 
-# Published OpenAI list price, USD per 1M tokens. The only hardcoded money figure in this
-# module — everything else is computed from the token counts the API actually returns.
-MODEL_PRICING_USD_PER_1M = {
-    "gpt-4o-mini": {"input": 0.15, "output": 0.60},
+# The four answer engines the AI Optimization UI has columns for. `llm_type` is the DataForSEO
+# path segment; `model` is the PREFERRED model_name — each provider's cheapest current tier,
+# because a visibility check needs a representative answer, not a frontier one.
+#
+# `model` is a preference, NOT a guarantee: it is validated against the provider's live model
+# list before use (see `resolve_model`). Hardcoding a name outright is what broke this feature
+# — `claude-3-5-haiku-latest` was taken from DataForSEO's published docs, had since been
+# retired, and every Claude check returned `40501 Invalid Field: 'model_name'` while the run
+# reported success. Providers rotate these names continuously; the code must not assume a
+# literal it read once is still valid.
+PLATFORMS = {
+    "chatgpt": {"name": "ChatGPT", "llm_type": "chat_gpt", "model": "gpt-4o-mini"},
+    "claude": {"name": "Claude", "llm_type": "claude", "model": "claude-haiku-4-5"},
+    "gemini": {"name": "Gemini", "llm_type": "gemini", "model": "gemini-2.5-flash-lite"},
+    "perplexity": {"name": "Perplexity", "llm_type": "perplexity", "model": "sonar"},
 }
 
-# The four answer engines the AI Optimization UI has columns for. `env` is the credential that
-# makes one real; `None` means this deployment has no way to reach it at all.
-PLATFORMS = {
-    "chatgpt": {"name": "ChatGPT", "provider": "openai", "env": "OPENAI_API_KEY"},
-    "claude": {"name": "Claude", "provider": "anthropic", "env": None},
-    "gemini": {"name": "Gemini", "provider": "google", "env": None},
-    "perplexity": {"name": "Perplexity", "provider": "perplexity", "env": None},
-}
+# Substrings marking a cheap tier, best first. Used only to pick a replacement when the
+# preferred model is gone — a visibility check wants the provider's ordinary answer, and the
+# frontier tiers cost several times more for no better signal about who gets mentioned.
+_CHEAP_TIER_HINTS = ("haiku", "flash-lite", "nano", "mini", "flash", "sonar")
+
+# llm_type -> the provider's live model names, fetched once per process. The models endpoint
+# is free ("your account will not be charged"), so this costs nothing but one request.
+_MODEL_CACHE: dict[str, list[str]] = {}
+
+# Every engine above rides the same DataForSEO credential pair.
+DATAFORSEO_ENV_VARS = ("DATAFORSEO_LOGIN", "DATAFORSEO_PASSWORD")
 
 SNIPPET_MAX = 300
 
@@ -86,34 +103,33 @@ def platform_name(platform_id: str) -> str:
 
 
 def is_platform_connected(platform_id: str) -> bool:
-    """True only when this deployment can actually reach that answer engine right now."""
-    meta = PLATFORMS.get(platform_id)
-    if not meta or not meta["env"]:
+    """True only when this deployment can actually reach that answer engine right now.
+    All four ride DataForSEO, so connectivity is one question: are both credentials set?"""
+    if platform_id not in PLATFORMS:
         return False
-    return bool(os.environ.get(meta["env"]))
+    return all(os.environ.get(var) for var in DATAFORSEO_ENV_VARS)
 
 
 def connected_platforms() -> list[str]:
     """Every platform a real check can be run against *right now*. Empty list == the feature is
-    unavailable and must say so, exactly as ai_summary_service skips when OPENAI_API_KEY is
-    absent."""
+    unavailable and must say so — no credentials, no call, no simulated answer."""
     return [pid for pid in PLATFORMS if is_platform_connected(pid)]
 
 
 def connectable_platforms() -> list[str]:
-    """Every platform this build has a connector for at all, whether or not its key is set
-    today. Used to seed a new prompt's tracked models: that choice must not silently change
-    depending on whether an env var happened to be present the moment setup ran."""
-    return [pid for pid, meta in PLATFORMS.items() if meta["env"]]
+    """Every platform this build has a connector for at all, whether or not its credentials are
+    set today. Used to seed a new prompt's tracked models: that choice must not silently change
+    depending on whether an env var happened to be present the moment setup ran. All four
+    engines are reachable through DataForSEO's LLM Responses API, so all four qualify."""
+    return list(PLATFORMS)
 
 
 def not_connected_reason(platform_id: str) -> str:
-    meta = PLATFORMS.get(platform_id)
-    if not meta:
+    if platform_id not in PLATFORMS:
         return f"Unknown answer engine: {platform_id}"
-    if not meta["env"]:
-        return f"Not connected — this deployment has no {meta['name']} credentials or connector."
-    return f"Not connected — {meta['env']} is not set."
+    missing = [var for var in DATAFORSEO_ENV_VARS if not os.environ.get(var)]
+    return ("Not connected — " + " and ".join(missing or DATAFORSEO_ENV_VARS)
+            + " must be set (answer-engine checks run through DataForSEO).")
 
 
 def not_connected_result(platform_id: str) -> dict:
@@ -303,33 +319,119 @@ def analyze_answer(answer: str, brand: str, aliases=(), competitors=()) -> dict:
         "snippet": hit["snippet"],
         "competitors": competitor_hits,
         "paragraphs": _paragraphs(answer, needles),
-        # Always empty, deliberately. The model emits prose, not verified sources; any URL it
-        # happens to write is unverified and frequently hallucinated, so surfacing one as a
-        # "source this answer cited" would be exactly the kind of invented signal this page is
-        # being cleaned of. Real citations need a web-search-enabled provider — not connected.
+        # Empty here, deliberately: this function is pure text analysis, and any URL the model
+        # happens to write in prose is unverified and frequently hallucinated. Real citations
+        # exist only as the source annotations DataForSEO returns on a web-search-enabled
+        # check — `check_prompt` fills them in from there, never from the answer text.
         "citations": [],
     }
 
 
 # ─────────────────────────────────────────────
-# Cost
+# Model resolution
 # ─────────────────────────────────────────────
 
-def _cost_usd(model: str, usage: dict | None) -> float | None:
-    """Real USD cost of one call, from the token counts the API returned. `None` when the
-    response carried no usage block — unknown, not zero, and not a guess."""
-    price = MODEL_PRICING_USD_PER_1M.get(model)
-    if not price or not usage:
-        return None
-    prompt_tokens = usage.get("prompt_tokens")
-    completion_tokens = usage.get("completion_tokens")
-    if prompt_tokens is None or completion_tokens is None:
-        return None
-    return round(
-        (prompt_tokens / 1_000_000) * price["input"]
-        + (completion_tokens / 1_000_000) * price["output"],
-        6,
+def available_models(llm_type: str, timeout: int = 20) -> list[str]:
+    """Every model name this provider currently accepts, newest-listed first.
+
+    Free endpoint, cached per process. Returns [] when it cannot be read — callers then keep
+    their configured preference rather than refusing to run.
+    """
+    if llm_type in _MODEL_CACHE:
+        return _MODEL_CACHE[llm_type]
+    names: list[str] = []
+    try:
+        response = requests.get(
+            f"{DATAFORSEO_BASE}/ai_optimization/{llm_type}/llm_responses/models",
+            auth=(os.environ["DATAFORSEO_LOGIN"], os.environ["DATAFORSEO_PASSWORD"]),
+            timeout=timeout,
+        )
+        response.raise_for_status()
+        results = ((response.json().get("tasks") or [{}])[0].get("result")) or []
+        # The payload nests one level deeper on some providers: result[0].items[].
+        if results and isinstance(results[0], dict) and results[0].get("items"):
+            results = results[0]["items"]
+        for item in results:
+            if isinstance(item, dict):
+                name = item.get("model_name") or item.get("name")
+                if name:
+                    names.append(name)
+    except Exception as exc:
+        # Cache the failure too. A batch run asks this for every prompt x engine, so an
+        # unreachable endpoint would otherwise add one failed request per check — 80 of them
+        # on a 20-prompt run — each waiting out its own timeout before the paid call it is
+        # only meant to sanity-check.
+        logger.warning(f"[ai_visibility] could not read {llm_type} model list: {exc}")
+        _MODEL_CACHE[llm_type] = []
+        return []
+    _MODEL_CACHE[llm_type] = names
+    return names
+
+
+def resolve_model(platform_id: str, preferred: str | None = None) -> str | None:
+    """A model name this provider will actually accept, for `platform_id`.
+
+    `preferred` (or the platform's configured default) wins whenever the provider still lists
+    it. When it does not — a retired name — the cheapest currently-listed tier is used instead
+    and the substitution is logged, because silently answering from a frontier model would
+    change what the check costs without saying so.
+
+    Falls back to the preference unchanged if the model list cannot be read at all: a
+    temporary outage of a free metadata endpoint must not stop a paid check the user asked for.
+    """
+    meta = PLATFORMS.get(platform_id)
+    if meta is None:
+        return preferred
+    wanted = preferred or meta["model"]
+
+    names = available_models(meta["llm_type"])
+    if not names or wanted in names:
+        return wanted
+
+    for hint in _CHEAP_TIER_HINTS:
+        for name in names:
+            if hint in name.lower():
+                logger.warning(
+                    f"[ai_visibility] {platform_id}: model {wanted!r} is no longer offered — "
+                    f"using {name!r}. Update PLATFORMS[{platform_id!r}]['model']."
+                )
+                return name
+    logger.warning(
+        f"[ai_visibility] {platform_id}: model {wanted!r} is no longer offered — falling back "
+        f"to {names[0]!r}. Update PLATFORMS[{platform_id!r}]['model']."
     )
+    return names[0]
+
+
+# ─────────────────────────────────────────────
+# Response parsing
+# ─────────────────────────────────────────────
+
+def _extract_answer(result: dict) -> tuple[str, list[dict]]:
+    """(answer text, citations) out of one DataForSEO llm_responses result object.
+
+    `items[].sections[].text` carries the answer; items of type "reasoning" are the model's
+    thinking summary, not the answer a user sees, so they are skipped. `annotations` on a
+    section are the provider-verified web sources of a web-search-enabled answer — the only
+    thing this module will ever surface as a citation."""
+    texts: list[str] = []
+    citations: list[dict] = []
+    seen_urls: set[str] = set()
+    for item in result.get("items") or []:
+        if item.get("type") == "reasoning":
+            continue
+        for section in item.get("sections") or []:
+            if not isinstance(section, dict):
+                continue
+            text = section.get("text")
+            if text:
+                texts.append(text)
+            for ann in section.get("annotations") or []:
+                url = (ann or {}).get("url")
+                if url and url not in seen_urls:
+                    seen_urls.add(url)
+                    citations.append({"title": ann.get("title") or "", "url": url})
+    return "\n\n".join(texts), citations
 
 
 # ─────────────────────────────────────────────
@@ -359,16 +461,47 @@ def _error_result(platform_id: str, model: str, message: str) -> dict:
     }
 
 
+def _country_iso(country: str | None) -> str | None:
+    """The ISO-3166-1 alpha-2 code DataForSEO's `web_search_country_iso_code` wants.
+
+    The prompt-settings modal collects Country as free text, so both "US" and "United States"
+    arrive here. A two-letter value is passed through; a recognised name is mapped; anything
+    else returns None and is simply not sent — an unrecognised country is better dropped than
+    guessed, since a wrong code silently changes which country's web results the answer is
+    grounded in.
+    """
+    value = (country or "").strip()
+    if not value:
+        return None
+    if len(value) == 2 and value.isalpha():
+        return value.upper()
+    return {
+        "united states": "US", "usa": "US", "united states of america": "US",
+        "united kingdom": "GB", "uk": "GB", "great britain": "GB", "england": "GB",
+        "canada": "CA", "australia": "AU", "india": "IN", "germany": "DE",
+        "france": "FR", "spain": "ES", "italy": "IT", "netherlands": "NL",
+        "brazil": "BR", "mexico": "MX", "japan": "JP", "singapore": "SG",
+        "united arab emirates": "AE", "uae": "AE", "new zealand": "NZ",
+        "ireland": "IE", "south africa": "ZA",
+    }.get(value.lower())
+
+
 def check_prompt(question: str, brand: str, aliases=(), competitors=(),
-                 platform: str = "chatgpt", model: str = DEFAULT_MODEL,
-                 timeout: int = REQUEST_TIMEOUT) -> dict:
-    """Ask one answer engine one tracked prompt and report what really came back.
+                 platform: str = "chatgpt", model: str | None = None,
+                 timeout: int = REQUEST_TIMEOUT, web_search: bool = False,
+                 country: str | None = None) -> dict:
+    """Ask one answer engine one tracked prompt (via DataForSEO's LLM Responses API) and
+    report what really came back.
 
     Costs money — call it only from an explicit user action, never while rendering a page.
     Never raises: a provider failure comes back as `state="error"`, so one bad prompt cannot
     abort a batch run or lose the results already paid for.
     """
     question = (question or "").strip()
+    meta = PLATFORMS.get(platform)
+    # Validated against the provider's live list, so a retired default cannot turn every
+    # check into `40501 Invalid Field: 'model_name'` — see `resolve_model`.
+    model = resolve_model(platform, model) if meta else model
     if not question:
         return _error_result(platform, model, "Empty prompt.")
     if not target_needles(brand, aliases):
@@ -376,34 +509,56 @@ def check_prompt(question: str, brand: str, aliases=(), competitors=(),
         # scored "absent", which would be an invented verdict paid for in real money.
         return _error_result(platform, model, "No brand or alias configured to look for.")
 
-    meta = PLATFORMS.get(platform)
     if meta is None:
         return _error_result(platform, model, f"Unknown answer engine: {platform}")
-    if not is_platform_connected(platform) or meta["provider"] != "openai":
+    if not is_platform_connected(platform):
         return not_connected_result(platform)
 
-    api_key = os.environ.get(meta["env"])
+    task = {
+        # The prompt is sent verbatim, with no system message: the point is to observe what
+        # an ordinary user asking this question actually gets back.
+        "user_prompt": question[:PROMPT_MAX_CHARS],
+        "model_name": model,
+        "max_output_tokens": MAX_ANSWER_TOKENS,
+        "temperature": TEMPERATURE,
+    }
+    if web_search:
+        task["web_search"] = True
+        # Only meaningful alongside web search — it geo-scopes the web results the model is
+        # grounded in. There is no city-level equivalent on this endpoint: `web_search_country_
+        # iso_code` is the finest geography DataForSEO's LLM Responses API accepts, which is
+        # why the modal's City field cannot be honoured (see the note beside it).
+        iso = _country_iso(country)
+        if iso:
+            task["web_search_country_iso_code"] = iso
+
     try:
         response = requests.post(
-            OPENAI_CHAT_URL,
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            json={
-                "model": model,
-                # The prompt is sent verbatim, with no system message: the point is to observe
-                # what an ordinary user asking this question actually gets back.
-                "messages": [{"role": "user", "content": question}],
-                "temperature": TEMPERATURE,
-                "max_tokens": MAX_ANSWER_TOKENS,
-            },
+            f"{DATAFORSEO_BASE}/ai_optimization/{meta['llm_type']}/llm_responses/live",
+            auth=(os.environ["DATAFORSEO_LOGIN"], os.environ["DATAFORSEO_PASSWORD"]),
+            json=[task],
             timeout=timeout,
         )
         response.raise_for_status()
         data = response.json()
-        choices = data.get("choices") or []
-        if not choices:
-            raise ValueError("provider returned no choices")
-        answer = (choices[0].get("message") or {}).get("content") or ""
-        usage = data.get("usage") or {}
+        # What DataForSEO says it charged for this call (model spend included). 0 from a live
+        # endpoint means the charge wasn't reported — unknown, not free.
+        cost = extract_cost(data) or None
+        tasks = data.get("tasks") or []
+        task_out = tasks[0] if tasks else {}
+        if task_out.get("status_code") != 20000:
+            raise ValueError(
+                f"DataForSEO task failed: {task_out.get('status_code')} "
+                f"{task_out.get('status_message')}"
+            )
+        results = task_out.get("result") or []
+        if not results:
+            raise ValueError("DataForSEO returned no result for the task")
+        result = results[0] or {}
+        answer, citations = _extract_answer(result)
+        input_tokens = result.get("input_tokens")
+        output_tokens = result.get("output_tokens")
+        model_used = result.get("model_name") or model
     except Exception as exc:
         logger.error(f"[ai_visibility] {platform} check failed: {exc}")
         return _error_result(platform, model, str(exc))
@@ -411,23 +566,25 @@ def check_prompt(question: str, brand: str, aliases=(), competitors=(),
     if not answer.strip():
         # A 200 with an empty body is a provider failure, not an "absent" verdict — reporting
         # "your brand is absent" from an answer that does not exist would be a fabricated result.
-        return _error_result(platform, model, "Provider returned an empty answer.")
+        return _error_result(platform, model_used, "Provider returned an empty answer.")
 
     analysis = analyze_answer(answer, brand, aliases, competitors)
-    cost = _cost_usd(model, usage)
+    # Real provider-verified sources (web-search checks only) — see _extract_answer.
+    analysis["citations"] = citations
     return {
         "ok": True,
         "state": "checked",
         "platform": platform,
         "platformName": platform_name(platform),
-        "model": model,
+        "model": model_used,
         "error": None,
         "answer": answer,
         "cost": cost,
         "tokens": {
-            "input": usage.get("prompt_tokens"),
-            "output": usage.get("completion_tokens"),
-            "total": usage.get("total_tokens"),
+            "input": input_tokens,
+            "output": output_tokens,
+            "total": (input_tokens + output_tokens)
+                     if input_tokens is not None and output_tokens is not None else None,
         },
         "checkedAt": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         **analysis,

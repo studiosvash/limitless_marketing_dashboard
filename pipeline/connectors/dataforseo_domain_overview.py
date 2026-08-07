@@ -15,8 +15,9 @@ from pipeline.utils.retry import with_retry
 # Single shared implementation of the DataForSEO `location_name` normaliser. It is
 # defined in the live-SERP connector (where the SERP API docs specify the format) and
 # imported here so the two connectors cannot drift apart. The DataForSEO Labs endpoint
-# used below takes the same `location_name` field with the same convention.
-from pipeline.connectors.dataforseo_live_serp import normalize_location_name
+# used below takes the same `location_name` field — but NOT the same granularity, which is
+# what `country_of` exists to handle; see its docstring and the call site below.
+from pipeline.connectors.dataforseo_live_serp import country_of, normalize_location_name
 
 load_dotenv()
 
@@ -51,7 +52,14 @@ class DataForSEODomainOverviewConnector(BaseConnector):
             return {"status": "error", "error": "Target URL cannot be empty."}
 
         # The UI sends "United States - Texas"; DataForSEO wants "Texas,United States".
-        location_name = normalize_location_name(location_name)
+        requested_location = normalize_location_name(location_name)
+        # ...but DataForSEO Labs only supports COUNTRY locations ("the only supported
+        # location_type"), so anything finer is degraded to its country. Without this, every
+        # city-configured project got `Invalid Field: 'location_name'` and an empty page
+        # instead of data. `location_downgraded` is returned so the UI can say so out loud
+        # rather than passing off national figures as local ones.
+        location_name = country_of(requested_location)
+        location_downgraded = location_name != requested_location
 
         # Ensure scheme for urlparse. Only the scheme/host get lowercased here (domain names
         # are case-insensitive) -- the path is left exactly as given. URL paths ARE
@@ -181,5 +189,11 @@ class DataForSEODomainOverviewConnector(BaseConnector):
             "target": target_url,
             "domain": domain,
             "path": path,
+            # What was actually queried, plus whether that differs from what was asked for.
+            # The UI prints these; a country figure shown under a city heading would be a
+            # quiet lie about the data's scope.
+            "location": location_name,
+            "requested_location": requested_location,
+            "location_downgraded": location_downgraded,
             "cost": task.get("cost", 0)
         }

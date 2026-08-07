@@ -72,10 +72,14 @@ class Command(BaseCommand):
         self.stdout.write(f"Running scope={scope!r} for {run.site_url!r} (run #{run_id})…")
 
         try:
+            # `run.site_pk` names the project that triggered this run; the connectors need it to
+            # resolve THEIR OWN tracking location rather than a sibling project's. It rides on
+            # the row because this command is a separate process — see RefreshRun.site_pk.
             if scope == "all":
-                summary = sync_all(run.site_url, run.pk)
+                summary = sync_all(run.site_url, run.pk, site_pk=run.site_pk)
             else:
-                summary = sync_page(SCOPE_ALIASES.get(scope, scope), run.site_url, run.pk)
+                summary = sync_page(SCOPE_ALIASES.get(scope, scope), run.site_url, run.pk,
+                                    site_pk=run.site_pk)
         except Exception:
             # sync_all/sync_page mark the row themselves on the paths they control, but a crash
             # OUTSIDE their per-connector try/except (an import error, a DB outage, or a bug

@@ -91,9 +91,23 @@
         aiv.budgetStyle = { fontSize: '12px', fontWeight: 600, padding: '4px 10px', borderRadius: '6px', background: overCap >= 0.8 ? '#fee2e2' : '#f1f5f9', color: overCap >= 0.8 ? '#b91c1c' : '#475569' };
         aiv.nextRunLabel = d.next_run ? ('Runs weekly · next ' + d.next_run) : 'Runs weekly · not yet scheduled';
         const allCost = prompts.reduce((a2, pr) => a2 + runCostOf(pr), 0);
-        aiv.runAllLabel = 'Run all now · ' + money3(allCost);
-        aiv.runAllStyle = redBtn;
-        aiv.runAll = () => { if (prompts.length) this.aiRun({}); };
+        /* While a run is in flight every Run control says so and does nothing — a run is a
+           long synchronous paid request, and the page used to give no sign it had started
+           (see App#aiRun). The banner below carries the same state for the whole tab, so the
+           user is not left reading a still screen wondering whether the click registered. */
+        const running = !!s.aiRunning;
+        aiv.running = running;
+        const engines = prompts.reduce((n, pr) => n + ((pr.cfg && pr.cfg.models) || []).length, 0);
+        aiv.runBanner = running
+          ? 'Asking ' + engines + ' answer engine' + (engines === 1 ? '' : 's')
+            + ' across ' + prompts.length + ' prompt' + (prompts.length === 1 ? '' : 's')
+            + ' — this takes a few minutes and keeps going if you switch tabs.'
+          : '';
+        aiv.runAllLabel = running ? 'Running…' : 'Run all now · ' + money3(allCost);
+        aiv.runAllStyle = running
+          ? Object.assign({}, redBtn, { background: '#fca5a5', cursor: 'default' })
+          : redBtn;
+        aiv.runAll = () => { if (prompts.length && !running) this.aiRun({}); };
         aiv.hasPrompts = prompts.length > 0;
 
         const sub2 = s.aiSub;
@@ -343,9 +357,9 @@
                    model is tracked, and "not run yet" is the actual state, not missing data. */
                 snippet: (res(pl2) || {}).snippet || 'Not run yet — press “Run now” to check this model.'
               })),
-              runLabel: 'Run now · ' + money3(runCostOf(pr)),
-              runStyle: redBtn,
-              run: () => this.aiRun({ promptId: pr.id }),
+              runLabel: running ? 'Running…' : 'Run now · ' + money3(runCostOf(pr)),
+              runStyle: running ? Object.assign({}, redBtn, { background: '#fca5a5', cursor: 'default' }) : redBtn,
+              run: () => { if (!running) this.aiRun({ promptId: pr.id }); },
               inspect: () => this.aiInspect(pr.text, pr.id),
               cfgOpen: () => this.setState({ aiCfgOpen: pr.id, aiCfgDraft: Object.assign({}, pr.cfg, { models: pr.cfg.models.slice(), listId: pr.listId, text: pr.text }) }),
               remove: () => this.aiRemovePrompts([pr.id])
@@ -355,9 +369,9 @@
           if (flt) {
             const listCost = visPrompts.reduce((a2, pr) => a2 + runCostOf(pr), 0);
             aiv.runListShown = visPrompts.length > 0;
-            aiv.runListLabel = 'Run "' + flt.name + '" now · ' + money3(listCost);
-            aiv.runListStyle = redBtn;
-            aiv.runList = () => this.aiRun({ listId: flt.id });
+            aiv.runListLabel = running ? 'Running…' : 'Run "' + flt.name + '" now · ' + money3(listCost);
+            aiv.runListStyle = running ? Object.assign({}, redBtn, { background: '#fca5a5', cursor: 'default' }) : redBtn;
+            aiv.runList = () => { if (!running) this.aiRun({ listId: flt.id }); };
           } else { aiv.runListShown = false; }
 
           /* --- config modal --- */

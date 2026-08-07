@@ -49,8 +49,17 @@ PAGE_CONNECTORS: dict[str, list[str]] = {
     "insights":    [],                    # no connectors — data entered by user
     "alerts":      ["gsc", "ga4"],        # anomaly detection runs on fresh data
     "settings":    [],                    # no data to sync
-    # Positioning per-page refresh captures domain SERP positions, keyword metrics, and competitor ranks.
-    "positioning": ["gsc_keywords", "dataforseo_serp", "dataforseo_keywords", "dataforseo_labs_competitors", "dataforseo_serp_competitors"],
+    # Positioning per-page refresh: DataForSEO ONLY, deliberately — positions, keyword
+    # metrics (volume/KD), competitor domain discovery, competitor ranks. Everything here is
+    # scoped to the ONE project that pressed Refresh (its tracked keywords, its market).
+    #
+    # `gsc_keywords` was removed from this scope on 2026-08-06 at the user's direction. It is
+    # a whole-ACCOUNT Search Console query report (90 days, every query the property ranks
+    # for), not a per-project fetch — on a Position Tracking project it re-pulled thousands of
+    # rows to refresh three enrichment columns (clicks/impressions/CTR) that Search Console
+    # cannot even break down by the project's market. Those columns still populate from the
+    # "keywords" scope and the full "Refresh all", where account-level work belongs.
+    "positioning": ["dataforseo_serp", "dataforseo_keywords", "dataforseo_labs_competitors", "dataforseo_serp_competitors"],
     # Incremental variant of "positioning". Same per-keyword connectors, but restricted at run
     # time to the keywords that have never been measured (see _INCREMENTAL_SCOPES below).
     # Deliberately EXCLUDES gsc_keywords (a whole-account report, not per-keyword, so filtering
@@ -140,7 +149,16 @@ def _get_connector(name: str, site_id: str | None = None):
         # DataForSEO — included in map so they can be enabled later; not in
         # PAGE_CONNECTORS or ALL_CONNECTORS until balance is positive.
         "dataforseo_keywords":         ("pipeline.connectors.dataforseo_keywords",         "DataForSEOKeywordsConnector"),
-        "dataforseo_serp":             ("pipeline.connectors.dataforseo_serp",             "DataForSEOSerpConnector"),
+        # `DataForSEOSERPConnector` — capital SERP. This entry said `DataForSEOSerpConnector`,
+        # which does not exist, so `getattr(module, class_name)` raised AttributeError, the
+        # blanket `except ... Exception` below swallowed it, and the factory returned None.
+        # THE POSITION-TRACKING CONNECTOR WAS THEREFORE NEVER RUN, on any project, ever — and
+        # the UI labels a None connector "Skipped — credentials not configured", so the failure
+        # read as a billing/setup problem the whole time. That is why keyword_rankings had
+        # volume and difficulty but no measured position, why Visibility showed "no positions
+        # on N keywords", and why no visibility snapshot ever accumulated. A typo in a name
+        # resolved by string lookup fails at runtime, not at import — see the test below it.
+        "dataforseo_serp":             ("pipeline.connectors.dataforseo_serp",             "DataForSEOSERPConnector"),
         "dataforseo_backlinks":        ("pipeline.connectors.dataforseo_backlinks",        "DataForSEOBacklinksConnector"),
         "dataforseo_labs_competitors": ("pipeline.connectors.dataforseo_labs_competitors", "DataForSEOLabsCompetitorsConnector"),
         "dataforseo_onpage":           ("pipeline.connectors.dataforseo_onpage",           "DataForSEOOnPageConnector"),
@@ -326,11 +344,16 @@ def _run_post_sync(site_url: str, connectors_run: list[str]) -> None:
 # sync_all
 # ---------------------------------------------------------------------------
 
-def sync_all(site_url: str, run_id: int) -> dict:
+def sync_all(site_url: str, run_id: int, site_pk: int | None = None) -> dict:
     """
     Run all active connectors for site_url.
     Updates the RefreshRun progress row after each connector completes.
     Called by the `run_sync` management command, in its own process.
+
+    `site_pk` identifies the PROJECT this run belongs to (see RefreshRun.site_pk). It is
+    attached to every connector as `connector.site_pk`, the same way `only_keywords` is
+    attached below, so location-aware connectors can resolve their own tracking location.
+    None means "no specific project" — connectors then fall back to the by-domain lookup.
 
     Returns a summary dict: {completed, total, records_written, errors}.
     """
@@ -378,6 +401,10 @@ def sync_all(site_url: str, run_id: int) -> dict:
             completed += 1
             RefreshRun.objects.filter(pk=run_id).update(completed_count=completed)
             continue
+
+        # Which project this run belongs to. Read by the location-aware connectors with
+        # getattr(self, "site_pk", None); harmless for every other connector.
+        connector.site_pk = site_pk
 
         # NOTE: scope='all' deliberately has NO incremental narrowing. Narrowing belongs to
         # sync_page's `positioning_new` scope, whose whole purpose is to measure only the
@@ -446,11 +473,13 @@ def sync_all(site_url: str, run_id: int) -> dict:
 # sync_page
 # ---------------------------------------------------------------------------
 
-def sync_page(page: str, site_url: str, run_id: int) -> dict:
+def sync_page(page: str, site_url: str, run_id: int, site_pk: int | None = None) -> dict:
     """
     Run only the connectors relevant to `page` for site_url.
     Updates the RefreshRun progress row after each connector completes.
     Called by the `run_sync` management command, in its own process.
+
+    `site_pk` — see `sync_all`.
 
     Returns a summary dict: {completed, total, records_written, errors}.
     """
@@ -497,8 +526,16 @@ def sync_page(page: str, site_url: str, run_id: int) -> dict:
     # Resolve the incremental keyword subset once, before any connector runs.
     incremental_kws = None
     if page in _INCREMENTAL_SCOPES:
+        from pipeline.services.site_service import resolve_tracking_location
         from pipeline.utils.keywords import keywords_needing_backfill
-        incremental_kws = keywords_needing_backfill(site_url)
+        # Scoped to the project that pressed the button. Unscoped, "Track These New Keywords"
+        # bought DataForSEO lookups for every sibling project's untracked keywords too — the
+        # same domain-wide pool that filled this project's "Newly Added Keywords" card with
+        # keywords nobody here had chosen.
+        incremental_kws = keywords_needing_backfill(
+            site_url, site_pk=site_pk,
+            location=resolve_tracking_location(site_pk, site_url),
+        )
         if not incremental_kws:
             # Nothing outstanding. Finishing here is the point of the scope: falling through
             # would re-query every tracked keyword, which is the expensive full sync the user
@@ -528,6 +565,9 @@ def sync_page(page: str, site_url: str, run_id: int) -> dict:
             completed += 1
             RefreshRun.objects.filter(pk=run_id).update(completed_count=completed)
             continue
+
+        # Which project this run belongs to — see the same line in sync_all.
+        connector.site_pk = site_pk
 
         # Narrow this run to the keywords that actually need measuring, for scopes that ask
         # for it. `incremental_kws` is resolved ONCE above, before any connector runs; if it

@@ -33,6 +33,8 @@ from pipeline.db.schema import (
     SavedKeyword, BacklinksSnapshot,
     AuditSnapshot, AdSearchTerm, GA4CampaignDaily, ConnectorCost,
     PageCrawlMeta, ensure_page_speed_columns, ensure_backlinks_columns,
+    ensure_ranking_location_columns, ensure_ranking_location_keys, DEFAULT_LOCATION,
+    ensure_saved_keyword_project, UNOWNED_SITE_PK,
 )
 from pipeline.utils.logger import get_logger
 
@@ -123,10 +125,10 @@ def _dedupe_by_keys(records: list[dict], keys: tuple[str, ...]) -> list[dict]:
     otherwise preserved (the survivor keeps the first occurrence's position) so batching stays
     deterministic and diffable.
 
-    A `None` in a key column is compared like any other value here. Note that Postgres does
-    NOT treat NULL as conflicting in the index itself, so records with a NULL key column
-    bypass the upsert and duplicate in the table -- a separate open issue tracked in
-    `.claude/SKILLS.md` §9 (`upsert_seo_daily`, `upsert_ad_search_terms`).
+    A `None` in a key column is compared like any other value here. Neither Postgres nor
+    SQLite treats NULL as conflicting in the unique index itself, so a record with a NULL
+    key column would bypass the upsert and duplicate on every re-sync -- which is why
+    upserts with nullable key columns run `_coerce_null_keys` first and store `""` instead.
     """
     if len(records) < 2:
         return records
@@ -149,6 +151,20 @@ def _dedupe_by_keys(records: list[dict], keys: tuple[str, ...]) -> list[dict]:
             f"({len(records)} in, {len(out)} out)"
         )
     return out
+
+
+def _coerce_null_keys(records: list[dict], keys: tuple[str, ...]) -> None:
+    """Replace None with "" in the given conflict-key columns, in place.
+
+    NULL never equals NULL in a unique index (Postgres and SQLite alike), so a row with a
+    NULL key column slips past ON CONFLICT and inserts a fresh duplicate on every re-sync.
+    Storing the empty string instead keeps the upsert honest; readers only group/display
+    these columns, they never filter on IS NULL.
+    """
+    for r in records:
+        for col in keys:
+            if r.get(col) is None:
+                r[col] = ""
 
 
 def ensure_tables(session: Session, *models) -> None:
@@ -178,14 +194,10 @@ def upsert_seo_daily(session: Session, records: list[dict], site_id: Optional[st
 
     _ensure_site_id(records, site_id)
 
-    for r in records:
-        r.setdefault("country", None)
-        r.setdefault("device", None)
-        r.setdefault("landing_page", None)
-
     insert = upsert_insert(session)
     BATCH_SIZE = max_batch_size(session, 60)
     _upsert_keys = ("date", "site_id", "country", "device", "landing_page")
+    _coerce_null_keys(records, ("country", "device", "landing_page"))
     records = _dedupe_by_keys(records, _upsert_keys)
     update_cols = [k for k in records[0] if k not in _upsert_keys]
     total_written = 0
@@ -326,19 +338,48 @@ def upsert_ga4_daily_totals(session: Session, records: list[dict], site_id: Opti
 # Keyword Rankings
 # ─────────────────────────────────────────────
 
+# Engines already reconciled for the `location` change this process. The reconcile is
+# idempotent and cheap, but it runs an inspector over two tables and `upsert_keyword_rankings`
+# is called once per batch of 80 rows — doing it every time would put a schema inspection in
+# the middle of a 200k-row write. Keyed by engine so a process talking to two databases
+# (the test suite creates one per case) reconciles each of them.
+_RANKING_LOCATION_READY: set = set()
+
+
+def _ensure_ranking_location(session: Session) -> None:
+    """Make sure this database has the `location` column and its unique key. Once per engine."""
+    bind = session.get_bind()
+    key = id(bind)
+    if key in _RANKING_LOCATION_READY:
+        return
+    ensure_ranking_location_columns(session)
+    ensure_ranking_location_keys(session)
+    _RANKING_LOCATION_READY.add(key)
+
+
 def upsert_keyword_rankings(session: Session, records: list[dict], site_id: Optional[str] = None) -> int:
-    """Upsert keyword rankings. Unique on (date, site_id, keyword)."""
+    """Upsert keyword rankings. Unique on (date, site_id, keyword, location)."""
     if not records:
         return 0
+
+    # `location` was added to an already-shipped table and joined its unique key, so a database
+    # created before that has neither — and both the INSERT's column list and its ON CONFLICT
+    # target would fail. Same self-provisioning contract as ensure_page_speed_columns above.
+    _ensure_ranking_location(session)
 
     _ensure_site_id(records, site_id)
     # site_id is mandatory under the new constraint — default to "" if caller forgot.
     for r in records:
         r.setdefault("site_id", "")
+        # `location` is part of the key, so a NULL would bypass ON CONFLICT on Postgres and
+        # duplicate the row on every sync. A writer that does not know its location is writing
+        # the national SERP, which is what DEFAULT_LOCATION means.
+        if not r.get("location"):
+            r["location"] = DEFAULT_LOCATION
 
     insert = upsert_insert(session)
     BATCH_SIZE = max_batch_size(session, 80)
-    _upsert_keys = ("date", "site_id", "keyword")
+    _upsert_keys = ("date", "site_id", "keyword", "location")
     records = _dedupe_by_keys(records, _upsert_keys)
     update_cols = [k for k in records[0] if k not in _upsert_keys]
     total = 0
@@ -712,18 +753,22 @@ def upsert_comparative_metrics(session: Session, records: list[dict], site_id: O
 # ─────────────────────────────────────────────
 
 def upsert_competitor_keyword_rankings(session: Session, records: list[dict], site_id: Optional[str] = None) -> int:
-    """Upsert per-keyword competitor positions. Unique on (date, site_id, keyword, competitor_domain)."""
+    """Upsert per-keyword competitor positions.
+    Unique on (date, site_id, keyword, competitor_domain, location)."""
     if not records:
         return 0
 
     ensure_tables(session, CompetitorKeywordRanking)
+    _ensure_ranking_location(session)   # see upsert_keyword_rankings
     _ensure_site_id(records, site_id)
     for r in records:
         r.setdefault("site_id", "")
+        if not r.get("location"):
+            r["location"] = DEFAULT_LOCATION
 
     insert = upsert_insert(session)
     BATCH_SIZE = max_batch_size(session, 60)
-    _upsert_keys = ("date", "site_id", "keyword", "competitor_domain")
+    _upsert_keys = ("date", "site_id", "keyword", "competitor_domain", "location")
     records = _dedupe_by_keys(records, _upsert_keys)
     update_cols = [k for k in records[0] if k not in _upsert_keys]
     total = 0
@@ -852,20 +897,30 @@ def upsert_llm_cited_pages(session: Session, records: list[dict],
 # ─────────────────────────────────────────────
 
 def upsert_saved_keywords(session: Session, records: list[dict], site_id: Optional[str] = None) -> int:
-    """Upsert saved research keywords. Unique on (site_id, keyword, location).
-    Re-saving the same keyword/location updates its metrics in place."""
+    """Upsert tracked keywords. Unique on (site_pk, site_id, keyword, location).
+
+    `site_pk` is the OWNING PROJECT and leads the key — several projects share one `site_id`
+    (see the SavedKeyword model), so without it a second project tracking a keyword its sibling
+    already tracks would UPDATE the sibling's row instead of getting its own. Re-saving the same
+    keyword for the same project updates its metrics in place, as before.
+    """
     if not records:
         return 0
 
     ensure_tables(session, SavedKeyword)
+    ensure_saved_keyword_project(session)   # self-provisions site_pk on a pre-existing database
     _ensure_site_id(records, site_id)
     for r in records:
         r.setdefault("site_id", "")
         r.setdefault("location", "United States")
+        # Never NULL: it is a conflict-target column, and Postgres does not treat NULL = NULL as
+        # a conflict, so a null here would bypass ON CONFLICT and duplicate on every save.
+        if r.get("site_pk") is None:
+            r["site_pk"] = UNOWNED_SITE_PK
 
     insert = upsert_insert(session)
     BATCH_SIZE = max_batch_size(session, 80)
-    _upsert_keys = ("site_id", "keyword", "location")
+    _upsert_keys = ("site_pk", "site_id", "keyword", "location")
     records = _dedupe_by_keys(records, _upsert_keys)
     update_cols = [k for k in records[0] if k not in _upsert_keys and k != "id"]
     total = 0
@@ -946,8 +1001,7 @@ def upsert_ad_search_terms(session: Session, records: list[dict], site_id: Optio
         return 0
     ensure_tables(session, AdSearchTerm)
     _ensure_site_id(records, site_id)
-    for r in records:
-        r.setdefault("campaign_id", None)
+    _coerce_null_keys(records, ("campaign_id",))
     records = _dedupe_by_keys(records, ("date", "site_id", "term", "campaign_id"))
     insert = upsert_insert(session)
     total = 0

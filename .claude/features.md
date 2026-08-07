@@ -154,8 +154,38 @@ current user's initials, username and role, plus the change-password and logout 
 - **Range switch** — `7d` / `30d` / `90d`. Only refetches on pages that are range-aware
   (Overview, Position Tracking, Off-site, and the four Ads pages).
 - **Page refresh button** (green, "Fetch …") — appears only on pages that map to a sync scope.
-  Spins and disables while that scope is running.
 - **Refresh all button** (indigo) — runs every connector in `ALL_CONNECTORS`.
+
+**One refresh runs per project at a time**, enforced server-side in `start_sync_run` (a second
+request attaches to the run in flight rather than forking a duplicate that would race on
+`SyncLog`'s unique row and double-spend metered DataForSEO calls). Since 2026-08-06 the buttons
+report that honestly, in four states — each carries the reason as a `title`:
+
+| State | Label | When |
+|---|---|---|
+| busy | *Syncing…*, spinner, disabled | this page's own scope is the run in flight |
+| queued | *Queued — after X*, grey, disabled | this page's scope is waiting behind that run |
+| blocked | normal label, clickable | a **different** scope is running; the click queues this one |
+| idle | *Fetch …* | nothing running |
+
+The queue is real (`state.sync.queued`), not a label: when the running sync finishes,
+`_pollSyncTask` starts the queued scope automatically and the banner names it under
+*"Queued next: …"*. **Stop drops the queue** — a cancelled run never hands off, because
+silently running the next thing after the user pressed Stop is the opposite of Stop.
+
+Two bugs this replaced, both of which made a button lie: `isPageSyncing` was
+`syncing && scope !== 'all'` ("some narrow scope is running"), so one Positions refresh put a
+spinner on *every* page's button at once; and `startSync()` opened with a bare `return` when a
+sync was active, so clicking a second page's Refresh issued no request, raised no toast and
+changed nothing — indistinguishable from a dead button.
+
+**Connection lost** is its own state, and recoverable. The poll loop used to clear the progress
+bar after 6 consecutive failures — three seconds at the 500 ms cadence — and tell the user to
+reload, while a 20-minute server-side run carried on fine. It now marks the run `stalled`, turns
+the bar amber with *"Connection lost — reconnecting…"*, backs off to 5 s, and clears itself on
+the first successful tick. Only after ~5 minutes of failure does it give up, and even then the
+wording says the sync may still be running rather than claiming it failed — losing the poll says
+nothing about the process.
 - **Stop** — the sync banner carries a Stop control while any refresh is running. It takes
   effect within a couple of seconds, keeps everything already written, and skips every
   connector that had not started; the one in flight may already be billed. No confirmation —
@@ -385,10 +415,16 @@ in Position Tracking is **allowed** — it registers a second, independent proje
 same domain (its own tracking-area settings, keyword list and competitors), sent to
 `POST /api/projects` with `allow_duplicate: true`. This is the one project-creation path that
 allows it: the topbar "+" add-site popover and Settings still reject a domain that is already
-registered (`add_site()` defaults `allow_duplicate` to `False` there). Because Position
-Tracking's own data (`saved_keywords`, `keyword_rankings`) is keyed by the raw domain string, not
-by project id, duplicate projects for the same domain share the same tracked-keyword pool and
-ranking history — they differ in name and tracking-area settings, not in underlying SEO data.
+registered (`add_site()` defaults `allow_duplicate` to `False` there).
+
+**Duplicate projects on one domain are fully independent as of 2026-08-06.** They no longer
+share a keyword pool: `saved_keywords.site_pk` holds the owning `sites.id`, so each project's
+tracked list, "Newly Added Keywords" card and Rankings Overview are its own, and two projects
+may track the same keyword in the same market. Measurements are separated by
+`keyword_rankings.location`. Both were previously keyed by the domain string alone, which is why
+a brand-new project used to open showing 28 keywords its user had never added and why several
+city projects reported byte-identical numbers. What they still share is anything genuinely
+site-wide: GSC/GA4 traffic, pages, backlinks, the audit crawl and research keyword lists.
 
 Search engine, device and language are **stored on the `sites` row** (`search_engine`, `device`,
 `language`) and read back by the workspace header and the Edit modal. They used to be collected
@@ -430,8 +466,23 @@ Three workspace tabs:
   rank connector has ever captured. The "All (N)" tab count reflects this table's own row count,
   not the portfolio-wide `Tracked keywords` KPI above it.
 - **Newly Added Keywords — Not Tracked Yet** — a separate, tinted card shown only when non-empty,
-  for every tracked keyword with no measured position yet (`pos == null`): keyword, volume, KD,
-  CPC, intent — no Pos/Δ/clicks columns, since there is genuinely no measurement to show. This is
+  for every tracked keyword **no rank connector has ever checked** (`measured === false`, from
+  `keyword_rankings.rank_checked_at`): keyword, volume, KD, CPC, intent — no Pos/Δ/clicks
+  columns, since there is genuinely no measurement to show. This is
+
+  > **The split is on `measured`, not on `pos`** (changed 2026-08-06). `pos == null` means two
+  > different things — *nobody has looked* and *looked, and the domain is not in the top 30* —
+  > and every table on this page used to conflate them. A keyword measured by the refresh the
+  > user had just watched succeed went straight back into this card under copy reading "no
+  > captured position yet", above a button offering to buy the measurement again; the Rankings
+  > Overview grid dropped it entirely, which hid exactly the rows where a competitor ranks and
+  > you do not. `rank_checked_at` is written by `dataforseo_serp` (**including** when it writes
+  > `position: NULL` for a domain outside the top 30) and by `gsc_keywords` (a query row means
+  > the page was served), and never by `dataforseo_keywords`, which only prices a keyword.
+  > `keywords_needing_backfill` reads the same column instead of guessing from
+  > `position IS NOT NULL OR impressions > 0` — that guess re-bought every genuinely unranked
+  > keyword on every incremental sync.
+
   what a "Send keywords → Position Tracking" from the Keyword Explorer lands in first. Its own
   "Track These New Keywords" button runs the `positions_new` sync scope (`h.refreshNewKeywords`,
   §11/`app.js`), which `sync_engine.sync_page` narrows to exactly `keywords_needing_backfill`'s
@@ -821,6 +872,18 @@ composer's quick-add shortcuts) are real too, generated from the tracked brand +
 same deterministic template expansion `/api/prompt-research` uses — empty only when no brand has
 been saved yet, which is the normal state the very first time a brand-new project's wizard opens.
 
+**As of 2026-08-06, all four answer engines are real, not just ChatGPT.** `run`/`inspect`
+previously called OpenAI's own chat-completions API directly, so Claude/Gemini/Perplexity had no
+credential path at all and were permanently `not_connected`. They now go through DataForSEO's AI
+Optimization **LLM Responses** API (`ai_optimization/<llm_type>/llm_responses/live`) on the same
+`DATAFORSEO_LOGIN`/`DATAFORSEO_PASSWORD` pair every other DataForSEO connector uses — no per-
+provider key, pay-as-you-go (no subscription commitment). `cost` per check is the USD figure
+DataForSEO's own response reports, not a hardcoded price table. Turning a prompt's **web search**
+toggle on now really changes the request, and the answer's `citations` become the real, provider-
+verified source list DataForSEO returns — previously `webSearch` was stored and ignored and
+`citations` was always `[]`. This is unrelated to DataForSEO's separate **LLM Mentions** product
+(see below) — see `api-reference.md`'s `/ai` section for the full distinction.
+
 As of the 2026-07-31 LLM Mentions feature, **share-of-voice, the brand-mentions/AI-impressions/
 cited-pages KPIs, your most-cited pages, and the domains-dominating-AI-answers list are real
 too** — read back weekly from DataForSEO's LLM Mentions API by the `dataforseo_llm_mentions`
@@ -839,13 +902,17 @@ revision of this document — do not describe AI share-of-voice as unbuilt.
   latest one or two stored weeks — the response's `trend` field is still always `[]`, and the
   chart the platform-toggle chips are meant to drive stays empty until it is wired to read the
   accumulating weekly history. Nothing is fabricated to fill it.
-- **Claude, Gemini and Perplexity mention tracking does not exist, at any price.** DataForSEO's
-  LLM Mentions API covers exactly two platforms — Google AI Overviews and ChatGPT
-  (`mentionPlatforms`, 2 entries) — full stop; there is no paid tier or alternate endpoint that
-  adds the other three. The Prompts tab's separate four-engine list (`llmPlatforms`: ChatGPT,
-  Claude, Gemini, Perplexity) is unrelated — it comes from this deployment's own LLM API keys via
-  `run`/`inspect`, not from DataForSEO, and the two lists must not be confused (see
-  `api-reference.md`'s `/ai` section and `SKILLS.md` §9).
+- **Claude, Gemini and Perplexity *mention tracking* (share-of-voice) does not exist, at any
+  price.** DataForSEO's **LLM Mentions** API — a separate product from the LLM Responses API that
+  now powers the Prompts tab — covers exactly two platforms, Google AI Overviews and ChatGPT
+  (`mentionPlatforms`, 2 entries), full stop; there is no paid tier or alternate endpoint that
+  adds the other three. It also requires its own **$100/mo minimum commitment** (deployment does
+  not currently subscribe to it — a deliberate, cost-driven decision, not an oversight). This is
+  *not* the same gap as the old "only chatgpt is connectable" limitation on the Prompts tab, which
+  was fixed 2026-08-06: the Prompts tab's four-engine list (`llmPlatforms`: ChatGPT, Claude,
+  Gemini, Perplexity) now runs real checks against all four via DataForSEO's LLM Responses API
+  (pay-as-you-go, already active). The two lists — and the two DataForSEO products behind them —
+  must not be confused (see `api-reference.md`'s `/ai` section and `SKILLS.md` §9).
 - AI Keywords' `mentions`/`gap` columns are honestly `0`/`false` for every row: nothing in the
   schema links an `AIKeywordData` row to a specific `AIPrompt`, so there is no reliable way to say
   "this keyword's prompt got mentioned" without guessing — an earlier revision derived them from

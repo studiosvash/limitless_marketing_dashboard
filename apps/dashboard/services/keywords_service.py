@@ -9,6 +9,7 @@ from datetime import date
 import pandas as pd
 from sqlalchemy import func, select
 
+from apps.dashboard.services.shared_queries import _location_clause
 from pipeline.db.schema import KeywordRanking
 from pipeline.utils.db_connection import get_session
 
@@ -56,13 +57,24 @@ def to_api_keyword(row: dict, extras: dict | None = None) -> dict:
         # yet. keywords_service's own rows never carry "action", so this stays "sync" for
         # every caller except positioning_service.
         "source": "new" if row.get("action") == "new" else "sync",
+        # HAS A RANK CONNECTOR EVER LOOKED AT THIS KEYWORD?
+        # Not the same question as "does it have a position". A keyword measured today and
+        # found nowhere in the top 30 is `measured: true, pos: null` — a real result. One that
+        # has only ever been priced by dataforseo_keywords is `measured: false, pos: null`.
+        # The Positioning page splits its two tables on THIS, not on `pos`: splitting on `pos`
+        # put every just-measured non-ranking keyword back into "Newly Added Keywords — Not
+        # Tracked Yet", telling the user the refresh they had just watched succeed had not
+        # happened, and offering to buy it again.
+        "measured": row.get("rank_checked_at") is not None,
         "serpFeatures": extra.get("serp_features") or [],
         "competition": extra.get("competition"),
     }
 
 
 def get_keyword_intelligence_raw(site_id: str, curr_start: date, curr_end: date,
-                                  prev_start: date, prev_end: date, tracked_only: bool = False) -> dict:
+                                  prev_start: date, prev_end: date, tracked_only: bool = False,
+                                  location: str | None = None,
+                                  site_pk: int | None = None) -> dict:
     """Keyword health score and action buckets. Identical to the pre-extraction
     _get_keyword_intelligence, except all_keywords is now built from `merged` (carries
     prev_position/pos_change on every row) instead of `df` (current period only) — the old
@@ -71,7 +83,9 @@ def get_keyword_intelligence_raw(site_id: str, curr_start: date, curr_end: date,
         tracked_lower = None
         if tracked_only:
             from pipeline.utils.keywords import load_tracked_keywords
-            tracked_kws = load_tracked_keywords(site_id)
+            # `site_pk` scopes the tracked list to one project (`location` is the weaker
+            # fallback for a caller that only has that) — see load_tracked_keywords.
+            tracked_kws = load_tracked_keywords(site_id, location=location, site_pk=site_pk)
             if not tracked_kws:
                 return {
                     "health_score": 0, "health_label": "No Data", "health_color": "#94a3b8",
@@ -99,8 +113,19 @@ def get_keyword_intelligence_raw(site_id: str, curr_start: date, curr_end: date,
                         # JSON text; MAX just picks the non-null one — every row for a
                         # keyword carries the same series from the same connector run.
                         func.max(KeywordRanking.trend).label("trend"),
+                        # The most recent date a rank connector actually looked. NULL means
+                        # never — which is a different fact from "looked and found nothing",
+                        # and the only way the UI can tell an unmeasured keyword from an
+                        # unranked one. See KeywordRanking.rank_checked_at.
+                        func.max(KeywordRanking.rank_checked_at).label("rank_checked_at"),
                     )
-                    .where(KeywordRanking.site_id == site_id, KeywordRanking.date >= start, KeywordRanking.date <= end)
+                    .where(KeywordRanking.site_id == site_id, KeywordRanking.date >= start, KeywordRanking.date <= end,
+                           # Measurements must be scoped to this project's market, not just its
+                           # tracked-keyword TEXT: two city projects sharing "event staffing"
+                           # are two captures, and averaging them reported a position neither
+                           # city has (see shared_queries._location_clause, which every other
+                           # KeywordRanking read already applies).
+                           *_location_clause(KeywordRanking, location))
                 )
                 if tracked_lower is not None:
                     stmt = stmt.where(func.lower(KeywordRanking.keyword).in_(tracked_lower))
@@ -250,18 +275,24 @@ def get_keyword_intelligence_raw(site_id: str, curr_start: date, curr_end: date,
         }
 
 
-def query_saved_keyword_extras(site_id: str) -> dict:
+def query_saved_keyword_extras(site_id: str, site_pk: int | None = None) -> dict:
     """{lower(keyword): {"serp_features": [...], "competition": "LOW"|...}} from
     saved_keywords — research-time facts the Explorer captured that the sync tables never
     carry. They were stored on every Track click and then read by nothing; the tracked
     table showed a keyword's SERP features in the research view and dropped them the
-    moment it was tracked (found in the 2026-08-03 surfacing audit)."""
-    from pipeline.db.schema import SavedKeyword
+    moment it was tracked (found in the 2026-08-03 surfacing audit).
+
+    `site_pk` scopes it to one project, like every other saved_keywords read — several projects
+    share a `site_id`, and this map would otherwise answer with a sibling's research snapshot
+    for a keyword the two happen to share."""
+    from pipeline.db.schema import SavedKeyword, ensure_saved_keyword_project
     try:
         with get_session() as session:
+            ensure_saved_keyword_project(session)
+            from pipeline.services.saved_keyword_service import project_scope
             rows = session.execute(
                 select(SavedKeyword.keyword, SavedKeyword.serp_features, SavedKeyword.competition)
-                .where(SavedKeyword.site_id == site_id)
+                .where(*project_scope(site_id, site_pk))
             ).all()
     except Exception:
         import logging; logging.getLogger(__name__).error("query_saved_keyword_extras failed", exc_info=True)
@@ -330,7 +361,7 @@ def _bucket_intent(value, counts: dict) -> None:
         counts["navigational"] += 1
 
 
-def query_keyword_portfolio_raw(site_id: str) -> dict:
+def query_keyword_portfolio_raw(site_id: str, site_pk: int | None = None) -> dict:
     """Portfolio-wide KPI inputs over EVERY keyword saved for this site — the position-
     tracking list (`saved_keywords`) ∪ every research list (`keyword_list_entries`) —
     deduplicated case-insensitively across all of them.
@@ -346,7 +377,7 @@ def query_keyword_portfolio_raw(site_id: str) -> dict:
     values; one with no known volume anywhere contributes 0 volume but still counts as a
     keyword — membership is the fact being counted, metrics are best-known.
     """
-    from pipeline.db.schema import KeywordListEntry, SavedKeyword
+    from pipeline.db.schema import KeywordListEntry, SavedKeyword, ensure_saved_keyword_project
     from pipeline.db.writer import ensure_tables
 
     portfolio: dict[str, dict] = {}   # lower(kw) -> {volume, kd, intent, rank}
@@ -375,11 +406,18 @@ def query_keyword_portfolio_raw(site_id: str) -> dict:
             ):
                 _absorb(kw, vol, kd, intent, RANK_LIST)
 
-            for kw, vol, kd, intent in session.execute(
+            # Scoped to this project: the tracked list is per-project (several projects share a
+            # site_id), so an unscoped read counts a sibling's keywords into this project's
+            # "Total keywords" KPI. Research lists (`keyword_list_entries` above) are genuinely
+            # site-wide and stay unscoped.
+            from pipeline.services.saved_keyword_service import project_scope
+            ensure_saved_keyword_project(session)
+            saved_query = (
                 select(SavedKeyword.keyword, SavedKeyword.search_volume,
                        SavedKeyword.keyword_difficulty, SavedKeyword.intent)
-                .where(SavedKeyword.site_id == site_id)
-            ):
+                .where(*project_scope(site_id, site_pk))
+            )
+            for kw, vol, kd, intent in session.execute(saved_query):
                 _absorb(kw, vol, kd, intent, RANK_SAVED)
 
             if portfolio:
@@ -423,20 +461,27 @@ def query_keyword_portfolio_raw(site_id: str) -> dict:
 
 
 def build_keywords_response(site_id: str, curr_start: date, curr_end: date,
-                             prev_start: date, prev_end: date) -> dict:
+                             prev_start: date, prev_end: date,
+                             location: str | None = None,
+                             site_pk: int | None = None) -> dict:
     """HANDOFF_SPEC.md `keywords` view shape — verified against the real fixture's
     keywordsView() in Limitless marketing dashboard2/app/api.js. See
-    .claude/api-reference.md for the field mapping."""
-    intel = get_keyword_intelligence_raw(site_id, curr_start, curr_end, prev_start, prev_end, tracked_only=True)
+    .claude/api-reference.md for the field mapping.
+
+    `site_pk` scopes the tracked-keyword reads to one project and `location` scopes the
+    measurements to its market — same two axes as `build_positions_response`, and for the same
+    reason: several projects can share one `site_id`."""
+    intel = get_keyword_intelligence_raw(site_id, curr_start, curr_end, prev_start, prev_end,
+                                         tracked_only=True, location=location, site_pk=site_pk)
 
     # Portfolio scope (owner decision, 2026-08-03): total / volume / intent / difficulty
     # cover every keyword saved anywhere for this site (tracked ∪ lists, deduplicated).
     # avg_pos and total_clicks stay tracked-only — only tracked keywords have measured
     # positions and click attribution. A site with nothing saved falls back to the synced-
     # rankings figures so its page is not blanked by the scope change.
-    portfolio = query_keyword_portfolio_raw(site_id)
+    portfolio = query_keyword_portfolio_raw(site_id, site_pk=site_pk)
     has_portfolio = portfolio["total"] > 0
-    extras = query_saved_keyword_extras(site_id)
+    extras = query_saved_keyword_extras(site_id, site_pk=site_pk)
 
     return {
         "kpis": {

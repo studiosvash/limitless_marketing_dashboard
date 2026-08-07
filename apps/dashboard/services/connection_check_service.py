@@ -237,8 +237,9 @@ def _check_openai() -> dict:
     key = os.getenv("OPENAI_API_KEY")
     if not key:
         return _check("openai", STATE_ABSENT,
-                      "OPENAI_API_KEY is not set — AI prompt runs and the Answer Inspector "
-                      "will be unavailable.")
+                      "OPENAI_API_KEY is not set — the AI overview summary will be "
+                      "unavailable. (Prompt runs and the Answer Inspector go through "
+                      "DataForSEO, not this key.)")
     try:
         import requests
         resp = requests.get("https://api.openai.com/v1/models",

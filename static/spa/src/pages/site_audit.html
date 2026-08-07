@@ -105,6 +105,15 @@
             </sc-if>
           </div>
 
+          <!-- Run in progress. A run is a long synchronous paid request; without this the page
+               sat perfectly still and the user pressed Run again, starting another paid run. -->
+          <sc-if value="{{ aiv.running }}" hint-placeholder-val="{{ false }}">
+            <div role="status" aria-live="polite" style="display: flex; align-items: center; gap: 10px; margin: 0 0 16px; padding: 11px 16px; border: 1px solid #bfdbfe; background: #eff6ff; border-radius: 10px; font-size: 13px; color: #1d4ed8;">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="flex-shrink: 0;"><path d="M21 12a9 9 0 1 1-6.2-8.6"/></svg>
+              <span>{{ aiv.runBanner }}</span>
+            </div>
+          </sc-if>
+
           <!-- sub-tabs -->
           <div style="display: flex; gap: 2px; border-bottom: 1px solid #e2e8f0;">
             <sc-for list="{{ aiv.subTabs }}" as="t" hint-placeholder-count="5">
@@ -653,15 +662,15 @@
                 </div>
                 <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px;">
                   <div>
-                    <label style="font-size: 12px; font-weight: 600; color: #334155; display: block; margin-bottom: 6px;">Country</label>
-                    <input value="{{ aiv.cfg.country }}" onChange="{{ aiv.cfg.countrySet }}" style="{{ aiv.inputStyle }}" />
+                    <label style="font-size: 12px; font-weight: 600; color: #334155; display: block; margin-bottom: 6px;">Country <span style="font-weight: 400; color: #94a3b8;">web search only</span></label>
+                    <input value="{{ aiv.cfg.country }}" onChange="{{ aiv.cfg.countrySet }}" placeholder="e.g. US" title="Country code (US, GB, IN…) or name. Applies only when Web search is on — it scopes the web results the answer is grounded in." style="{{ aiv.inputStyle }}" />
                   </div>
                   <div>
-                    <label style="font-size: 12px; font-weight: 600; color: #334155; display: block; margin-bottom: 6px;">City <span style="font-weight: 400; color: #94a3b8;">optional</span></label>
-                    <input value="{{ aiv.cfg.city }}" onChange="{{ aiv.cfg.citySet }}" placeholder="e.g. Austin" style="{{ aiv.inputStyle }}" />
+                    <label style="font-size: 12px; font-weight: 600; color: #334155; display: block; margin-bottom: 6px;">City <span style="font-weight: 400; color: #94a3b8;">not applied</span></label>
+                    <input value="{{ aiv.cfg.city }}" onChange="{{ aiv.cfg.citySet }}" placeholder="e.g. Austin" title="Saved as a note only. The answer-engine API accepts no city — country is the finest geography it supports, so this value is not sent." style="{{ aiv.inputStyle }}; background:#f8fafc; color:#94a3b8" />
                   </div>
                   <div>
-                    <label style="font-size: 12px; font-weight: 600; color: #334155; display: block; margin-bottom: 6px;">Cadence</label>
+                    <label style="font-size: 12px; font-weight: 600; color: #334155; display: block; margin-bottom: 6px;">Cadence <span style="font-weight: 400; color: #94a3b8;">manual runs only</span></label>
                     <select value="{{ aiv.cfg.cadence }}" onChange="{{ aiv.cfg.cadenceSet }}" style="{{ aiv.inputStyle }}">
                       <option value="daily">Daily</option>
                       <option value="weekly">Weekly</option>

@@ -27,7 +27,11 @@
        notifications_service.py / budget_service.py. */
     notifications: { items: [], unread: 0 },
     budget: null,
-    sync: { active: false, progress: 0, step: '', cost: 0, steps: [], warnings: [] },
+    /* `queued` — a refresh the user asked for while another was running; drained by
+       _pollSyncTask when the slot frees. `stalled` — the browser cannot currently reach the
+       server; the run itself is a separate process and is probably fine. Both are rendered,
+       never inferred: a button must be able to say which of the two it is in. */
+    sync: { active: false, progress: 0, step: '', cost: 0, steps: [], warnings: [], queued: null, stalled: false },
     syncPanelOpen: false,
     freshness: 'Weekly · Mon',
     doQuery: '', doData: null, doLoading: false, doError: null, doSel: [], doTracked: [],
@@ -715,9 +719,34 @@
    *                When supplied the POST /api/projects/<slug>/sync call is skipped and we go
    *                straight to polling, avoiding a redundant second sync run. */
   startSync(scope, preTaskId, force) {
-    if (this.state.sync.active && (!this.state.sync.projectId || this.state.sync.projectId === this.state.projectId)) return;
     const pid = this.state.projectId;
     const activeScope = scope || 'all';
+
+    /* A sync for this project is already in flight. Only one runs per project — the server
+       enforces that in start_sync_run — so this click cannot start now.
+       QUEUE IT AND SAY SO. This used to be a bare `return`: no request, no toast, no state
+       change, so pressing Refresh on a second page did nothing and looked identical to a dead
+       button. The user is owed one of two truthful answers, and "already running" is one of
+       them; silence is not. */
+    const busy = this.state.sync.active
+      && (!this.state.sync.projectId || this.state.sync.projectId === pid);
+    if (busy && preTaskId == null) {
+      const running = this.state.sync.scope || 'all';
+      if (running === activeScope) {
+        this.notify('That refresh is already running — its progress is in the bar above.');
+        return;
+      }
+      const q = this.state.sync.queued;
+      if (q && q.scope === activeScope && q.projectId === pid) {
+        this.notify('Already queued — it starts when the current refresh finishes.');
+        return;
+      }
+      this.setState(st => ({ sync: Object.assign({}, st.sync, {
+        queued: { scope: activeScope, projectId: pid, force: !!force },
+      }) }));
+      this.notify('Queued — this starts as soon as the ' + running + ' refresh finishes.');
+      return;
+    }
 
     if (preTaskId != null) {
       // Task already created server-side — skip POST /sync and go straight to polling.
@@ -813,7 +842,9 @@
       },
     });
 
-    const POLL_GIVE_UP = 6;   // consecutive failed ticks before giving up on this run
+    const POLL_GIVE_UP = 6;        // consecutive failures before we ADMIT the connection is lost
+    const RECONNECT_MS = 5000;     // …then back off hard instead of hammering a dead network
+    const RECONNECT_GIVE_UP = 66;  // 6 fast + 60 slow ticks ≈ 5 minutes of trying before stopping
     const SLOWDOWN_AFTER_MS = 6000;
     const FAST_MS = 500, SLOW_MS = 2000;
     let pollFails = 0;
@@ -828,6 +859,15 @@
       window.FuseAPI.get('/api/tasks/' + taskId).then(st => {
         inFlight = false;
         if (!this._alive) { clearInterval(this._iv); return; }
+
+        /* Reconnected. One good tick is proof, so clear the "connection lost" banner and put
+           the poll cadence back — otherwise a single blip would leave the bar polling every
+           5 s and captioned "reconnecting" for the rest of a 20-minute run. */
+        if (pollFails >= POLL_GIVE_UP) {
+          clearInterval(this._iv);
+          this._iv = setInterval(tick, slowedDown ? SLOW_MS : FAST_MS);
+          this.setState(s => ({ sync: Object.assign({}, s.sync, { stalled: false }) }));
+        }
         pollFails = 0;
 
         if (!slowedDown && Date.now() - startedAt > SLOWDOWN_AFTER_MS) {
@@ -839,11 +879,13 @@
         if (st.done) {
           clearInterval(this._iv); this._iv = null;
           const wasCancelled = st.status === 'cancelled';
+          /* Read the queue BEFORE the state reset below clears it. */
+          const queued = this.state.sync.queued;
           this.setState(s => {
             const cache = {};
             Object.keys(s.cache).forEach(k2 => { if (k2.indexOf(pid + ':') !== 0) cache[k2] = s.cache[k2]; });
             return {
-              sync: { active: false, scope: null, progress: 1, step: 'Done', cost: estCost, projectId: null, startTime: null, steps: [], warnings: [], stopping: false },
+              sync: { active: false, scope: null, progress: 1, step: 'Done', cost: estCost, projectId: null, startTime: null, steps: [], warnings: [], stopping: false, queued: null, stalled: false },
               /* A cancelled run did NOT refresh the page, so the freshness pill must not claim
                  it did. Whatever it wrote before stopping is still real, hence the refetch. */
               freshness: wasCancelled ? s.freshness : 'Just now',
@@ -869,6 +911,23 @@
           const scopeNotif = { domain_checks: 'Domain checks refreshed for ' + dom, audit: 'Crawl complete — Site Audit refreshed for ' + dom, positions: 'Positioning data refreshed for ' + dom, positions_new: 'New keywords measured for ' + dom, positioning_new: 'New keywords measured for ' + dom, positioning: 'Positioning data refreshed for ' + dom, keywords: 'Keywords data refreshed for ' + dom, backlinks: 'Backlinks data refreshed for ' + dom, ads: 'Ads data refreshed for ' + dom, ai: 'AI Optimization data refreshed for ' + dom, overview: 'Overview data refreshed for ' + dom, seo: 'SEO data refreshed for ' + dom };
           this.notify(scopeNotif[scope] || (scope === 'all' ? ('All modules refreshed for ' + dom) : (scope + ' refreshed for ' + dom)));
           }
+
+          /* Drain the queue. A refresh the user asked for while another was running is a real
+             instruction, not a suggestion — it runs now that the slot is free. Deferred a tick
+             so the state reset above has landed and startSync() does not see itself as busy.
+             A queue entry for a project the user has since left is dropped rather than fired
+             at whatever project happens to be open. */
+          if (queued && queued.projectId === pid && !wasCancelled) {
+            setTimeout(() => {
+              if (!this._alive || this.state.projectId !== pid) return;
+              this.notify('Starting the queued ' + queued.scope + ' refresh…');
+              this.startSync(queued.scope, null, queued.force);
+            }, 400);
+          } else if (queued && wasCancelled) {
+            /* Stop means stop. Silently running the next thing after the user pressed Stop
+               would be the opposite of what they asked for. */
+            this.notify('The queued ' + queued.scope + ' refresh was dropped because you stopped this one.');
+          }
         } else {
           this.setState(s => ({ sync: Object.assign({}, s.sync, {
             active: true, scope, progress: st.progress, step: st.step, cost: estCost, projectId: pid,
@@ -879,14 +938,31 @@
         inFlight = false;
         if (!this._alive) { clearInterval(this._iv); return; }
         pollFails++;
-        if (pollFails < POLL_GIVE_UP) return;
+
+        /* CONNECTION LOST — say so, keep trying, and recover on its own.
+           This used to give up after POLL_GIVE_UP consecutive failures, which at the 500 ms
+           cadence is THREE SECONDS: any brief network blip, laptop sleep, or dev-server
+           reload tore down a live progress bar and told the user to reload the page, while a
+           20-minute sync carried on fine behind it. The run is a server-side process; losing
+           the poll says nothing about it.
+
+           So: mark the bar `stalled` (the banner reads "Connection lost — reconnecting…"),
+           slow the polling right down so a flapping network is not hammered, and let a single
+           successful tick clear it. The bar is never silently frozen and never lies about the
+           run being dead. Only after RECONNECT_GIVE_UP — minutes, not seconds — do we admit
+           we cannot re-establish contact, and even then the wording says the sync may still
+           be running rather than claiming it failed. */
+        if (pollFails >= POLL_GIVE_UP && !this.state.sync.stalled) {
+          this.setState(s => ({ sync: Object.assign({}, s.sync, { stalled: true }) }));
+          clearInterval(this._iv);
+          this._iv = setInterval(tick, RECONNECT_MS);
+        }
+        if (pollFails < RECONNECT_GIVE_UP) return;
+
         clearInterval(this._iv); this._iv = null;
-        /* The sync itself may well still be running server-side — we have only lost sight
-           of it — so the message says that instead of claiming the refresh failed, and the
-           progress bar is cleared rather than left frozen at whatever % it reached. */
-        this.setState({ sync: { active: false, scope: null, progress: 0, step: '', cost: estCost, projectId: null, startTime: null, steps: [], warnings: [] } });
+        this.setState({ sync: { active: false, scope: null, progress: 0, step: '', cost: estCost, projectId: null, startTime: null, steps: [], warnings: [], queued: null, stalled: false } });
         const why = (err && err.detail) ? ' (' + err.detail + ')' : '';
-        this.notify('Lost track of the refresh' + why + ' — the sync may still be running. Reload the page to check.');
+        this.notify('Still cannot reach the server' + why + ' — the sync may well still be running. Reload the page to re-attach to it.');
       });
     };
     this._iv = setInterval(tick, FAST_MS);
@@ -968,8 +1044,34 @@
      the SERP drawer and the tracked-keyword writes (`site.location` server-side) are all
      already keyed to it; the explorer dropdown is a transient, per-search control. */
   doLocation() {
+    /* The market this page reads in, always a COUNTRY — see doCountryOptions.
+
+       An explicit pick wins; otherwise it follows the active project, degraded to its country
+       so the value always matches an option in the picker. Keeping the fallback live (rather
+       than copying the project's value into state) means switching project moves the market
+       with it until the user overrides it deliberately. */
+    if (this.state.doLoc) return this.state.doLoc;
     const p = (this.state.projects || []).find(x => x.id === this.state.projectId) || {};
-    return p.location || 'United States';
+    return this.doCountryOf(p.location);
+  }
+
+  /* "United States - New Jersey" -> "United States". The SPA stores a market as
+     "Country - Region"; the country is the part before the dash. Mirrors the server-side
+     `dataforseo_live_serp.country_of`, which is the authority — this is only so the picker
+     can show the value that will actually be queried. */
+  doCountryOf(location) {
+    return String(location || '').split(' - ')[0].trim() || 'United States';
+  }
+
+  /* DataForSEO Labs — the API behind this page — supports COUNTRY locations only ("the only
+     supported location_type"), unlike the SERP API that powers per-city Position Tracking.
+     So the picker offers countries and nothing else: listing cities it would have to silently
+     collapse would be a control that lies about what it does. Per-city measurement lives in
+     Position Tracking. */
+  doCountryOptions() {
+    return ['United States', 'Canada', 'United Kingdom', 'Australia', 'India', 'Germany',
+            'France', 'Spain', 'Italy', 'Netherlands', 'Brazil', 'Mexico', 'Japan',
+            'Singapore', 'United Arab Emirates'];
   }
 
   /* Google's `near` param needs a city/region and silently does nothing for a bare
@@ -2475,13 +2577,33 @@
       });
   }
   aiRun(body) {
+    /* A run is a SYNCHRONOUS request that asks every tracked engine every selected prompt —
+       minutes of wall-clock for a handful of prompts. It used to fire with no busy state at
+       all: nothing on screen changed until the response landed, so the page looked dead, the
+       user pressed Run again (seven POSTs in one session in the reported case), each press
+       started ANOTHER full paid run, and the browser eventually abandoned the earliest
+       requests ("Broken pipe" server-side) while their charges had already been incurred.
+
+       `aiRunning` is therefore both the progress indicator and the double-submit guard. */
+    if (this.state.aiRunning) return;
+    this.setState({ aiRunning: true });
     this.aiPost('run', body)
       .then(r => {
         if (!this._alive) return;
+        this.setState({ aiRunning: false });
         this.aiReload();
-        this.notify('Ran ' + r.ran + ' prompt' + (r.ran === 1 ? '' : 's') + ' across LLMs · ' + this.money(r.cost));
+        /* `checked` counts the engine calls that really returned an answer; `ran` counts the
+           prompts attempted. They differ whenever an engine failed, and reporting only `ran`
+           made a run where every check errored read as a complete success. */
+        const detail = (r.checked != null && r.checked !== r.ran)
+          ? ' · ' + r.checked + ' check' + (r.checked === 1 ? '' : 's') + ' answered'
+          : '';
+        this.notify('Ran ' + r.ran + ' prompt' + (r.ran === 1 ? '' : 's') + ' across LLMs'
+          + detail + ' · ' + this.money(r.cost)
+          + (r.detail ? ' — ' + r.detail : ''));
       }).catch(err => {
         if (!this._alive) return;
+        this.setState({ aiRunning: false });
         /* a run costs money and takes time — silence here reads as "nothing happened yet",
            and the user presses it again */
         this.notify(this.errText(err, 'Could not run the prompts'));
@@ -2584,8 +2706,12 @@
     const rActive = { padding: '6px 12px', background: '#f1f5f9', color: '#1e293b', fontWeight: 500, cursor: 'pointer' };
     const syncing = s.sync.active && (!s.sync.projectId || s.sync.projectId === s.projectId);
     const activeScope = syncing ? (s.sync.scope || 'all') : null;
-    const isPageSyncing = syncing && activeScope && activeScope !== 'all';
     const isAllSyncing = syncing && activeScope === 'all';
+    /* isPageSyncing is computed further down, once `pageScope` exists — it has to compare the
+       running scope against THIS PAGE'S OWN scope. It used to be `syncing && activeScope !==
+       'all'`, i.e. "some narrow scope is running", so a Positions refresh put a spinner and a
+       "Syncing…" label on the Keywords button, the Backlinks button and every other page's
+       button at once. Six pages claiming to be fetching while one was. */
 
     const tabToScope = {
       overview: 'overview',
@@ -2623,6 +2749,32 @@
       domain_checks: 'Domain Checks', ai: 'AI Data', ads: 'Ads',
     };
     const pageScope = tabToScope[tab];
+
+    /* ── What THIS page's refresh button is actually doing ────────────────────────────────
+       Four distinct, honest states. Only one sync runs per project at a time (the server
+       enforces it in start_sync_run), so a page whose scope is not the one in flight must not
+       borrow its spinner:
+
+         busy      this page's own scope is the run in flight        -> "Syncing…", disabled
+         queued    this page's scope is waiting behind that run      -> "Queued — after X"
+         blocked   a different scope is running, nothing queued yet  -> clickable; the click
+                   queues it and says so, instead of the silent no-op it used to be
+         idle      nothing running                                   -> "Fetch <page>"
+
+       `queued` is a real client-side queue (state.sync.queued), not a label: when the running
+       sync finishes, _pollSyncTask starts it. Before this, clicking a second page's Refresh
+       while any sync ran hit an early `return` in startSync() — no request, no toast, no
+       change. The button looked alive and did nothing, which is indistinguishable from a
+       broken button. */
+    const queuedScope = (s.sync.queued && s.sync.queued.projectId === s.projectId)
+      ? s.sync.queued.scope : null;
+    const isPageSyncing = syncing && !!pageScope && activeScope === pageScope;
+    const isPageQueued = !!pageScope && queuedScope === pageScope;
+    const isPageBlocked = syncing && !!pageScope && !isPageSyncing && !isPageQueued;
+    const isAllQueued = queuedScope === 'all';
+    const runningLabel = activeScope
+      ? (activeScope === 'all' ? 'all modules' : (scopeToLabel[activeScope] || activeScope))
+      : '';
 
     const data = s.cache[this.key(tab)];
     const alertsData = s.cache[this.key('alerts')];
@@ -2953,14 +3105,37 @@
       addSite: this.addSiteVals(s),
       rangeStyle: { d7: s.range === '7d' ? rActive : rBase, d28: s.range === '28d' ? rActive : rBase, d90: s.range === '90d' ? rActive : rBase },
       hasPageRefresh: !!pageScope,
-      refreshPageLabel: isPageSyncing ? 'Syncing…' : (tabToLabel[tab] || 'Fetch page'),
-      refreshPageBtnStyle: { display: 'inline-flex', alignItems: 'center', gap: '8px', borderRadius: '8px', background: isPageSyncing ? '#6ee7b7' : '#10b981', color: 'white', fontSize: '14px', fontWeight: 500, padding: '8px 16px', boxShadow: '0 1px 2px rgba(0,0,0,0.05)', cursor: isPageSyncing ? 'default' : 'pointer' },
+      /* Label says which of the four states this button is in — never "Syncing…" for a run
+         that belongs to another page. `title` carries the reason, so a disabled-looking
+         button always explains itself on hover. */
+      refreshPageLabel: isPageSyncing ? 'Syncing…'
+        : isPageQueued ? ('Queued — after ' + runningLabel)
+        : (tabToLabel[tab] || 'Fetch page'),
+      refreshPageTitle: isPageSyncing ? 'This page is fetching now.'
+        : isPageQueued ? ('Waiting for the ' + runningLabel + ' refresh to finish, then this one starts automatically.')
+        : isPageBlocked ? ('A ' + runningLabel + ' refresh is running — click to queue this one behind it.')
+        : 'Fetch fresh data for this page only.',
+      refreshPageBtnStyle: { display: 'inline-flex', alignItems: 'center', gap: '8px', borderRadius: '8px', background: isPageSyncing ? '#6ee7b7' : (isPageQueued ? '#94a3b8' : '#10b981'), color: 'white', fontSize: '14px', fontWeight: 500, padding: '8px 16px', boxShadow: '0 1px 2px rgba(0,0,0,0.05)', cursor: (isPageSyncing || isPageQueued) ? 'default' : 'pointer' },
       refreshPageIconStyle: isPageSyncing ? { animation: 'fuseSpin 1s linear infinite' } : {},
-      refreshLabel: isAllSyncing ? 'Syncing all…' : 'Refresh all',
-      refreshBtnStyle: { display: 'inline-flex', alignItems: 'center', gap: '8px', borderRadius: '8px', background: isAllSyncing ? '#818cf8' : '#4f46e5', color: 'white', fontSize: '14px', fontWeight: 500, padding: '8px 16px', boxShadow: '0 1px 2px rgba(0,0,0,0.05)', cursor: isAllSyncing ? 'default' : 'pointer' },
+      refreshLabel: isAllSyncing ? 'Syncing all…'
+        : isAllQueued ? ('Queued — after ' + runningLabel)
+        : 'Refresh all',
+      refreshBtnStyle: { display: 'inline-flex', alignItems: 'center', gap: '8px', borderRadius: '8px', background: isAllSyncing ? '#818cf8' : (isAllQueued ? '#94a3b8' : '#4f46e5'), color: 'white', fontSize: '14px', fontWeight: 500, padding: '8px 16px', boxShadow: '0 1px 2px rgba(0,0,0,0.05)', cursor: (isAllSyncing || isAllQueued) ? 'default' : 'pointer' },
       refreshIconStyle: isAllSyncing ? { animation: 'fuseSpin 1s linear infinite' } : {},
+      refreshAllTitle: isAllSyncing ? 'Every module is fetching now.'
+        : isAllQueued ? ('Waiting for the ' + runningLabel + ' refresh to finish, then this one starts automatically.')
+        : (syncing ? ('A ' + runningLabel + ' refresh is running — click to queue a full refresh behind it.')
+                   : 'Fetch fresh data for every module. Takes 20-30 minutes.'),
       freshness: s.freshness,
-      syncing, syncScopeLabel: activeScope === 'all' ? 'all modules' : (scopeToLabel[activeScope] || activeScope || ''), syncStep: s.sync.step, syncPct: Math.round(s.sync.progress * 100),
+      syncing, syncScopeLabel: runningLabel, syncStep: s.sync.step, syncPct: Math.round(s.sync.progress * 100),
+      /* Amber while the browser cannot reach the server, indigo while it can. The colour is
+         the fastest signal that the bar has stopped advancing for a reason. */
+      syncStalled: !!s.sync.stalled,
+      syncTitleColor: s.sync.stalled ? '#b45309' : '#4338ca',
+      syncBarColor: s.sync.stalled ? '#f59e0b' : '#4f46e5',
+      syncQueuedLabel: queuedScope
+        ? (queuedScope === 'all' ? 'all modules' : (scopeToLabel[queuedScope] || queuedScope))
+        : '',
       syncPctText: Math.round(s.sync.progress * 100) + '%', syncCostText: this.money(s.sync.cost), syncEtaText,
       syncElapsedText, syncSteps, syncStepsCount: syncSteps.length,
       syncPanelOpen: s.syncPanelOpen,
@@ -3209,7 +3384,11 @@
       vals.ptItemStyle = subItem(vals.sendSubPt);
       vals.listItemStyle = subItem(vals.sendSubList);
       const selRows = () => this.selectedRows();
-      vals.sendProjects = vals.projects.map(p => ({ domain: p.domain, onSend: () => this.sendKwsToTracking(p.id, selRows()) }));
+      // Label each row with the PROJECT name, not the domain: several projects can share one
+      // domain, so "Share in premierstaff.com" three times gave the user no way to tell which
+      // tracking project they were sending keywords to. Falls back to the domain for a project
+      // saved without a name.
+      vals.sendProjects = vals.projects.map(p => ({ label: p.name || p.domain, onSend: () => this.sendKwsToTracking(p.id, selRows()) }));
       vals.sendLists = s.kwLists.map(l => ({ name: l.name, count: l.keywords.length, onAdd: () => this.addKwsToList(l.id, selRows()) }));
       vals.noLists = s.kwLists.length === 0;
       vals.newListName = s.newListName;

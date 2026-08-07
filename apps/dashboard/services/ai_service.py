@@ -262,8 +262,9 @@ def _history_entry(result: dict, question: str, prompt_id) -> dict:
             # Real: no geo-targeting is applied to the request, so there is no location to name.
             "location": "No location targeting",
             "paragraphs": result.get("paragraphs") or [],
-            # Always empty — the chat-completions API returns prose, not verified sources.
-            "citations": [],
+            # Provider-verified sources from a web-search-enabled DataForSEO check; [] when the
+            # prompt ran without web search. Never URLs scraped out of the answer prose.
+            "citations": result.get("citations") or [],
         },
     }
 
@@ -322,6 +323,15 @@ def run_prompt_checks(site_id: str, prompts: list) -> dict:
         if not isinstance(results, dict):
             results = {}
 
+        # The modal's webSearch toggle used to be stored and never consumed; it now really
+        # switches the DataForSEO check to a web-search-enabled answer (with citations), and
+        # `country` geo-scopes those web results. `city` is still stored and NOT sent: the LLM
+        # Responses endpoint has no city parameter, and inventing one would be a setting that
+        # pretends to work.
+        prompt_cfg = get_prompt_cfg(site_id, prompt.id)
+        web_search = bool(prompt_cfg.get("webSearch"))
+        country = prompt_cfg.get("country")
+
         ran_any = False
         for platform in platforms:
             if not is_platform_connected(platform):
@@ -330,7 +340,8 @@ def run_prompt_checks(site_id: str, prompts: list) -> dict:
                 results[platform] = _cell(not_connected_result(platform))
                 not_connected.add(platform)
                 continue
-            result = check_prompt(prompt.text, brand, aliases, competitors, platform=platform)
+            result = check_prompt(prompt.text, brand, aliases, competitors, platform=platform,
+                                  web_search=web_search, country=country)
             results[platform] = _cell(result)
             if not result.get("ok"):
                 continue

@@ -124,6 +124,52 @@ def get_site(session, site_id: Optional[str] = None) -> Optional[Site]:
     ).scalars().first()
 
 
+def get_site_by_pk(session, site_pk: Optional[int]) -> Optional[Site]:
+    """The exact `sites` row, by primary key. None when `site_pk` is falsy or unknown.
+
+    Distinct from `get_site()`, which looks up by `site_url` and CANNOT identify a project when
+    several share a domain — it returns the first match. Anything that needs one project's own
+    settings (its tracking location, above all) has to come through here.
+    """
+    if not site_pk:
+        return None
+    _ensure_columns(session)
+    return session.execute(select(Site).where(Site.id == site_pk)).scalars().first()
+
+
+def resolve_tracking_location(site_pk: Optional[int] = None,
+                              site_id: Optional[str] = None) -> str:
+    """The location a sync should query SERPs in, for THIS project.
+
+    Resolution order, and why:
+
+      1. `site_pk` — the project that actually triggered the run. The only source that is
+         correct when several projects track one domain in different cities.
+      2. `site_id` — the domain. Right for the scheduled per-domain sync and for older runs
+         with no pk recorded; ambiguous (first match wins) when siblings exist, which is why
+         it is the fallback and not the primary.
+      3. `DEFAULT_LOCATION` — a project with a blank location field. That is the real stored
+         value for projects created before the wizard collected one, and "United States" is
+         what those were being fetched with regardless.
+
+    Always returns a non-empty string in the SPA's display form; the DataForSEO wire form is
+    produced separately by `normalize_location_name`.
+    """
+    from pipeline.db.schema import DEFAULT_LOCATION
+
+    try:
+        with get_session() as session:
+            site = get_site_by_pk(session, site_pk)
+            if site is None and site_id:
+                site = get_site(session, site_id)
+            location = (getattr(site, "location", "") or "").strip() if site else ""
+    except Exception:
+        logger.error("[site_service] could not resolve tracking location for "
+                     "site_pk=%r site_id=%r", site_pk, site_id, exc_info=True)
+        return DEFAULT_LOCATION
+    return location or DEFAULT_LOCATION
+
+
 def get_default_site_id() -> str:
     with get_session() as session:
         _ensure_columns(session)
