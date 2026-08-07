@@ -285,7 +285,9 @@ def query_top_audit_pages_raw(site_id: str, limit: int = 10) -> list[dict]:
         variants.append(f"sc-domain:{site_id}")
 
     try:
+        from pipeline.db.schema import ensure_page_speed_columns
         with get_session() as session:
+            ensure_page_speed_columns(session)
             rows = session.execute(
                 select(PageSpeed)
                 .where(PageSpeed.site_id.in_(variants), PageSpeed.strategy == "mobile")

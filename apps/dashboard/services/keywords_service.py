@@ -97,7 +97,11 @@ def get_keyword_intelligence_raw(site_id: str, curr_start: date, curr_end: date,
                 }
             tracked_lower = [k.lower() for k in tracked_kws]
 
+        from pipeline.db.schema import ensure_ranking_location_columns, ensure_ranking_location_keys
         with get_session() as session:
+            ensure_ranking_location_columns(session)
+            ensure_ranking_location_keys(session)
+            
             def get_kw_df(start, end):
                 stmt = (
                     select(

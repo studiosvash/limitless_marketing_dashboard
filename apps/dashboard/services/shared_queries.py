@@ -114,7 +114,10 @@ def _get_keywords_overview(site_id: str, limit: int = 5) -> list[dict]:
     dead, unrouted module that cannot even import — see skills.md §10.)
     """
     try:
+        from pipeline.db.schema import ensure_ranking_location_columns, ensure_ranking_location_keys
         with get_session() as session:
+            ensure_ranking_location_columns(session)
+            ensure_ranking_location_keys(session)
             rows = session.execute(
                 select(
                     KeywordRanking.keyword,
@@ -188,7 +191,10 @@ def _get_ranking_distribution(site_id: str, curr_start: date, curr_end: date,
                     "top3_pct": 0, "top4_10_pct": 0, "top11_20_pct": 0, "rest_pct": 0}
 
         tracked_lower = [k.lower() for k in tracked_kws]
+        from pipeline.db.schema import ensure_ranking_location_columns, ensure_ranking_location_keys
         with get_session() as session:
+            ensure_ranking_location_columns(session)
+            ensure_ranking_location_keys(session)
             rows = session.execute(
                 select(
                     KeywordRanking.keyword,
@@ -258,7 +264,10 @@ def _get_position_changes(site_id: str, curr_start: date, curr_end: date, prev_s
             return {k: [] if "count" not in k else 0 for k in ["improved", "improved_count", "declined", "declined_count", "new", "new_count", "lost", "lost_count"]}
 
         tracked_lower = [k.lower() for k in tracked_kws]
+        from pipeline.db.schema import ensure_ranking_location_columns, ensure_ranking_location_keys
         with get_session() as session:
+            ensure_ranking_location_columns(session)
+            ensure_ranking_location_keys(session)
             # Get current period keywords with enriched data
             curr_rows = session.execute(
                 select(
@@ -401,7 +410,10 @@ def _get_competitor_map(site_id: str, limit: int = 12, location: str | None = No
         if not competitors:
             return {**empty, "status": "no_competitors", "tracked_total": len(tracked_kws)}
 
+        from pipeline.db.schema import ensure_ranking_location_columns, ensure_ranking_location_keys
         with get_session() as session:
+            ensure_ranking_location_columns(session)
+            ensure_ranking_location_keys(session)
             from pipeline.db.writer import ensure_tables
             ensure_tables(session, CompetitorKeywordRanking)  # idempotent; clean pre-first-refresh state
 
@@ -575,7 +587,10 @@ def _get_competitor_grid(site_id: str, limit: int = 100, location: str | None = 
         if not competitors:
             return {"status": "no_competitors", "competitors": [], "rows": [], "dates": []}
 
+        from pipeline.db.schema import ensure_ranking_location_columns, ensure_ranking_location_keys
         with get_session() as session:
+            ensure_ranking_location_columns(session)
+            ensure_ranking_location_keys(session)
             from pipeline.db.writer import ensure_tables
             ensure_tables(session, CompetitorKeywordRanking)  # idempotent; clean empty state pre-first-refresh
             dates = session.execute(
