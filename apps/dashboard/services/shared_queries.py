@@ -172,6 +172,27 @@ def _location_clause(model, location: str | None) -> list:
     return [model.location == location] if location else []
 
 
+# Google organic CTR by position — the same curve, values and rounding rule as the SPA's
+# buildVisibilityScores (positioning.js), so the project list and the workspace Overview can
+# never disagree about what "visibility" means. #1 = 31.7 … #10 = 1.8, ~0 past #20.
+_CTR_CURVE = [31.7, 24.7, 18.7, 13.3, 9.5, 6.8, 4.9, 3.5, 2.5, 1.8,
+              1.4, 1.2, 1.0, 0.9, 0.8, 0.7, 0.6, 0.5, 0.45, 0.4]
+_PERFECT_CTR = _CTR_CURVE[0]
+
+
+def _position_credit(pos) -> float:
+    """CTR points a single keyword earns at `pos`. Positions arrive as 1-dp averages (and as
+    Decimal from Postgres), so round to the whole position the curve is defined at."""
+    try:
+        p = float(pos)
+    except (TypeError, ValueError):
+        return 0.0
+    if p < 1 or p > 100:
+        return 0.0
+    r = round(p)
+    return _CTR_CURVE[r - 1] if r <= 20 else (0.05 if r <= 50 else 0.02)
+
+
 def _get_ranking_distribution(site_id: str, curr_start: date, curr_end: date,
                               location: str | None = None,
                               site_pk: int | None = None) -> dict:
@@ -187,7 +208,7 @@ def _get_ranking_distribution(site_id: str, curr_start: date, curr_end: date,
         tracked_kws = load_tracked_keywords(site_id, location=location, site_pk=site_pk)
         if not tracked_kws:
             return {"total": 0, "top3": 0, "top10": 0, "top20": 0, "top50": 0, "top100": 0,
-                    "avg_position": 0, "total_clicks": 0, "total_impressions": 0,
+                    "avg_position": 0, "total_clicks": 0, "total_impressions": 0, "visibility": None,
                     "top3_pct": 0, "top4_10_pct": 0, "top11_20_pct": 0, "rest_pct": 0}
 
         tracked_lower = [k.lower() for k in tracked_kws]
@@ -213,8 +234,10 @@ def _get_ranking_distribution(site_id: str, curr_start: date, curr_end: date,
             ).all()
 
             if not rows:
+                # No capture in the window at all: visibility is unknown (None → the UI's "—"),
+                # NOT 0 — 0 is reserved for "measured and ranks nowhere", which is information.
                 return {"total": len(tracked_kws), "top3": 0, "top10": 0, "top20": 0, "top50": 0, "top100": 0,
-                        "avg_position": 0, "total_clicks": 0, "total_impressions": 0,
+                        "avg_position": 0, "total_clicks": 0, "total_impressions": 0, "visibility": None,
                         "top3_pct": 0, "top4_10_pct": 0, "top11_20_pct": 0, "rest_pct": 0}
 
             total = len(tracked_kws)
@@ -229,6 +252,13 @@ def _get_ranking_distribution(site_id: str, curr_start: date, curr_end: date,
             total_clicks = sum(int(r.clicks or 0) for r in rows)
             total_impressions = sum(int(r.impressions or 0) for r in rows)
 
+            # Semrush-style visibility: CTR points earned over a perfect score of #1 on EVERY
+            # tracked keyword. A keyword with no ranking earns 0 but stays in the denominator —
+            # averaging only ranked keywords is how a project ranking on 1 of 48 keywords
+            # (its brand name, position 2.2) once displayed 82%.
+            earned = sum(_position_credit(r.avg_pos) for r in rows)
+            visibility = round(earned / (total * _PERFECT_CTR) * 100, 1) if total else None
+
             # Percentage buckets for the distribution bar
             top3_pct = round(top3 / total * 100) if total else 0
             top4_10_pct = round((top10 - top3) / total * 100) if total else 0
@@ -241,6 +271,7 @@ def _get_ranking_distribution(site_id: str, curr_start: date, curr_end: date,
                 "avg_position": round(avg_pos, 1),
                 "total_clicks": total_clicks,
                 "total_impressions": total_impressions,
+                "visibility": visibility,
                 "top3_pct": top3_pct,
                 "top4_10_pct": top4_10_pct,
                 "top11_20_pct": top11_20_pct,
@@ -249,7 +280,7 @@ def _get_ranking_distribution(site_id: str, curr_start: date, curr_end: date,
     except Exception as e:
         import logging; logging.getLogger(__name__).error(f"_get_ranking_distribution error: {e}", exc_info=True)
         return {"total": 0, "top3": 0, "top10": 0, "top20": 0, "top50": 0, "top100": 0,
-                "avg_position": 0, "total_clicks": 0, "total_impressions": 0,
+                "avg_position": 0, "total_clicks": 0, "total_impressions": 0, "visibility": None,
                 "top3_pct": 0, "top4_10_pct": 0, "top11_20_pct": 0, "rest_pct": 0}
 
 def _get_position_changes(site_id: str, curr_start: date, curr_end: date, prev_start: date,

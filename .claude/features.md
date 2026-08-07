@@ -398,8 +398,12 @@ This page has **two views**.
 ### 7a. Project list (default)
 
 A search box, an "All projects" filter, and a row per project: name/domain, location, device,
-tracked-keyword count, visibility bar (derived from average position), improved/declined counts,
-and last-updated. Clicking a row opens that project's workspace.
+tracked-keyword count, visibility bar (the backend's Semrush-style CTR-weighted `visibility`
+field — see `GET /api/projects` in `api-reference.md`; `null` renders `—`, a real 0 renders
+`0%`), improved/declined counts, and last-updated. Clicking a row opens that project's
+workspace. The cell must never derive a score from `avg_position` — that formula ignored
+unranked keywords and once showed 82% for a project ranking on 1 of 48 tracked keywords
+(`static/spa/tests/project_list_visibility.test.js` pins this).
 
 **+ New project** opens the **Create SEO Project wizard** — four steps with a progress rail:
 
@@ -831,10 +835,17 @@ Perplexity) and manage the prompts you want to monitor.
 2. **Prompts** — a **Prompt Explorer** (seed terms → template-expanded prompt ideas, selectable
    and addable to a list), list-filter chips, a list manager (create / rename / delete), a
    **composer** for adding prompts in bulk with suggestion shortcuts, and the main
-   **Tracked Prompts × LLMs** grid — one row per prompt, one column per model, expandable to per-
-   model snippets. A checkbox per row plus a header "select all" drive a bulk toolbar
-   (**Remove selected**) once ≥1 row is checked, in addition to each row's own Run now,
-   Inspect, Settings and Remove actions.
+   **Tracked Prompts × LLMs** grid — one row per prompt, one column per model. Each cell states
+   its real observed state: `off` (model untracked), `Not run` (tracked, never checked),
+   `No key` (DataForSEO credentials missing at run time), `Error` (provider failure),
+   `Not mentioned` / `Mentioned` / `Cited #n` (a completed check's verdict) — a paid-for
+   "absent" verdict is never rendered the same as "never run", which is the bug that made
+   completed runs look like nothing happened. Rows have no expander: **clicking a row opens
+   that prompt's latest stored answer in the Answer Inspector** (free — it re-reads history,
+   never re-runs), or an honest "not run yet" panel when no check exists; the row's inline
+   actions are **Run · $** / **Settings** / **×** (remove). A checkbox per row plus a header
+   "select all" drive a bulk toolbar (**Run selected · $** via `{promptIds}`, and
+   **Remove selected**) once ≥1 row is checked.
    The **Prompt settings** modal edits the prompt's question text itself (blank/whitespace-only
    edits are ignored, never saved) alongside which models to check, web-search on/off, country,
    city, cadence and which list the prompt belongs to — all persist and round-trip
@@ -849,7 +860,13 @@ Perplexity) and manage the prompts you want to monitor.
    (All / AI-heavy / Gaps / Mentioned), a search box, multi-select with bulk *add as prompts to a
    list*, and CSV export.
 4. **Answer Inspector** — ask any question and see the answer with your brand's mentions
-   highlighted plus the citation list.
+   highlighted plus the citation list. A **"Competitors in this answer"** chip row shows every
+   tracked competitor the answer really named (`Mentioned` or `Cited #n`, hover for the
+   sentence) — read from the `competitors` array `analyze_answer` has always stored on each
+   check. Citations are numbered by list position with the domain parsed from the URL and a
+   *You* tag on hostname match (the stored pairs are bare `{title, url}` — rendering `c.n`/
+   `c.domain`/`c.isYou` directly printed "[undefined]"). Prompt-row meta lines also flag
+   "⚠ competitors in answers: …" as the union across that prompt's stored model results.
 5. **History** — previous inspections with verdict, position and cost.
 
 ### Setup wizard

@@ -744,9 +744,11 @@ class ProjectAIActionView(APIView):
         """Run tracked prompts against their tracked answer engines, for real.
 
         Scope comes from the body, matching what the SPA sends: `{promptId}` for one row's
-        "Run now", `{listId}` for "Run <list> now", `{}` for "Run all now". Costs real money,
-        which is why it is a POST the user pressed and never part of the page GET."""
+        "Run now", `{promptIds}` for the checkbox toolbar's "Run selected", `{listId}` for
+        "Run <list> now", `{}` for "Run all now". Costs real money, which is why it is a POST
+        the user pressed and never part of the page GET."""
         prompt_id = request.data.get("promptId")
+        prompt_ids = request.data.get("promptIds")
         list_id = request.data.get("listId")
         qs = AIPrompt.objects.filter(site_url=site_id)
         if prompt_id is not None:
@@ -755,6 +757,10 @@ class ProjectAIActionView(APIView):
                 # Same false-success reasoning as _handle_prompts_config: telling the SPA "ran"
                 # for a prompt that does not exist here is worse than a clean 404.
                 return Response({"detail": "Prompt not found"}, status=404)
+        elif prompt_ids is not None:
+            qs = qs.filter(id__in=prompt_ids)
+            if not qs.exists():
+                return Response({"detail": "Prompts not found"}, status=404)
         elif list_id is not None:
             qs = qs.filter(list_id=list_id)
         return Response(run_prompt_checks(site_id, list(qs)))

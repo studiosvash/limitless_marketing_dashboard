@@ -3,7 +3,9 @@
       vals.showAi = true;
       const d = data;
       const llm = d.llmPlatforms;
-      const money3 = c => '$' + Number(c || 0).toFixed(c > 0 && c < 0.1 ? 3 : 2);
+      /* 4 decimals under half a cent: a real $0.0008 check rendered "$0.000", which reads as
+         free — the one thing a price label must never do here. */
+      const money3 = c => '$' + Number(c || 0).toFixed(c > 0 && c < 0.005 ? 4 : c > 0 && c < 0.1 ? 3 : 2);
       const runCostOf = pr => pr.cfg.models.length * d.costs.model;
       const inputStyle = { padding: '9px 12px', fontSize: '13px', border: '1px solid #cbd5e1', borderRadius: '8px', background: 'white', color: '#0f172a', width: '100%' };
       const redBtn = { display: 'inline-flex', alignItems: 'center', gap: '6px', cursor: 'pointer', padding: '7px 14px', fontSize: '12.5px', fontWeight: 600, color: '#dc2626', border: '1px solid #fecaca', borderRadius: '8px', background: '#fff5f5', whiteSpace: 'nowrap' };
@@ -111,7 +113,7 @@
         aiv.hasPrompts = prompts.length > 0;
 
         const sub2 = s.aiSub;
-        const goSub = v => { this.setState({ aiSub: v, aiOpen: null }); this.pushNav({ aiSub: v }); };
+        const goSub = v => { this.setState({ aiSub: v }); this.pushNav({ aiSub: v }); };
         const subBase2 = { padding: '10px 16px', fontSize: '13px', fontWeight: 600, cursor: 'pointer', color: '#64748b', borderBottom: '2px solid transparent', marginBottom: '-1px' };
         aiv.subTabs = [['visibility', 'AI Visibility'], ['prompts', 'Prompts (' + prompts.length + ')'], ['aikw', 'AI Keywords (' + d.aiKeywords.length + ')'], ['inspector', 'Answer Inspector'], ['history', 'History (' + d.history.length + ')']].map(t => ({
           label: t[1],
@@ -302,12 +304,19 @@
           /* --- prompt table --- */
           aiv.noPrompts = prompts.length === 0;
           aiv.platNames = llm.map(pl2 => pl2.name);
-          aiv.promptGridCols = '28px minmax(280px, 1.8fr) repeat(' + llm.length + ', 1fr)';
-          const cell = r => {
-            if (!r) return { label: 'off', style: Object.assign(chip('#f8fafc', '#cbd5e1'), { fontSize: '11px', fontWeight: 500 }) };
-            if (!r.mentioned) return { label: '—', style: { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', minWidth: '44px', height: '24px', borderRadius: '4px', fontSize: '12px', fontWeight: 600, background: '#f8fafc', color: '#cbd5e1' } };
-            if (r.cited) return { label: 'Cited #' + r.position, style: { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', minWidth: '44px', height: '24px', padding: '0 8px', borderRadius: '4px', fontSize: '12px', fontWeight: 700, background: '#d1fae5', color: '#047857' } };
-            return { label: 'Mentioned', style: { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', minWidth: '44px', height: '24px', padding: '0 8px', borderRadius: '4px', fontSize: '12px', fontWeight: 600, background: '#dbeafe', color: '#1d4ed8' } };
+          aiv.promptGridCols = '28px minmax(220px, 1.6fr) repeat(' + llm.length + ', minmax(88px, 1fr)) 230px';
+          /* Every state a check can really be in gets its own label. A run whose answer simply
+             did not mention the brand used to render the same "—" as a never-run cell, so a
+             completed (and paid-for) check looked like nothing had happened. */
+          const pill = (bg, fg, w) => ({ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', minWidth: '44px', height: '24px', padding: '0 8px', borderRadius: '4px', fontSize: '12px', fontWeight: w || 600, background: bg, color: fg });
+          const cell = (tracked, r) => {
+            if (!tracked) return { label: 'off', style: Object.assign(chip('#f8fafc', '#cbd5e1'), { fontSize: '11px', fontWeight: 500 }) };
+            if (!r || !r.state) return { label: 'Not run', style: pill('#f8fafc', '#94a3b8', 500) };
+            if (r.state === 'not_connected') return { label: 'No key', style: pill('#fef3c7', '#b45309') };
+            if (r.state === 'error') return { label: 'Error', style: pill('#fee2e2', '#b91c1c') };
+            if (r.cited) return { label: 'Cited #' + r.position, style: pill('#d1fae5', '#047857', 700) };
+            if (r.mentioned) return { label: 'Mentioned', style: pill('#dbeafe', '#1d4ed8') };
+            return { label: 'Not mentioned', style: pill('#fee2e2', '#b91c1c') };
           };
           const visPrompts = prompts.filter(pr => s.aiListFilter === 'all' || pr.listId === s.aiListFilter);
           aiv.promptEmptyFiltered = prompts.length > 0 && visPrompts.length === 0;
@@ -324,45 +333,54 @@
           aiv.promptSelCount = visPromptSel.length + ' selected';
           aiv.promptClearSel = () => this.setState({ aiPromptSel: [] });
           aiv.promptRemoveSel = () => this.aiRemovePrompts(visPromptSel.map(pr => pr.id));
+          const selCost = visPromptSel.reduce((a2, pr) => a2 + runCostOf(pr), 0);
+          aiv.promptRunSelLabel = running ? 'Running…' : 'Run selected · ' + money3(selCost);
+          aiv.promptRunSelStyle = running ? Object.assign({}, redBtn, { background: '#fca5a5', cursor: 'default' }) : redBtn;
+          aiv.promptRunSel = () => { if (!running && visPromptSel.length) this.aiRun({ promptIds: visPromptSel.map(pr => pr.id) }); };
 
+          /* Row click opens the prompt in the Answer Inspector — showing the answer that was
+             ALREADY paid for when one exists. The old "Inspect answer" button fired a fresh
+             paid check on every click; a stored answer must never cost money to re-read.
+             `aiInspEntry: false` (not null) is the explicit "this prompt has never been run"
+             sentinel — null/undefined mean "no selection" and fall back to the latest history
+             entry, which would show some OTHER prompt's answer here. */
+          const openInspector = pr => {
+            const stored2 = d.history.find(e => e.promptId === pr.id) || null;
+            this.setState({ aiInspEntry: stored2 || false, aiInspQ: pr.text, aiInspPromptId: pr.id, aiSub: 'inspector' });
+            this.pushNav({ aiSub: 'inspector' });
+          };
           aiv.promptRows = visPrompts.map(pr => {
-            const open = s.aiOpen === pr.id;
             const prSelOn = promptSelSet.has(pr.id);
             /* `results` is {} until the prompt has actually been run — build_ai_response says so
-               explicitly ("Real observed results keyed by platform id -- {} until this prompt is
-               actually run"). So a TRACKED model routinely has no result entry, and reading
-               through pr.results[id] without a guard threw a TypeError. There is no try/catch
-               around renderVals(), so that throw killed the whole vals() build and the entire
-               SPA render went blank — the reported "Prompts tab bugs out".
-               It became reachable when _handle_setup started seeding tracked_models with
-               connectable_platforms(): every prompt the setup wizard creates on a new project
-               has models but no results, so a fresh project crashed on first visit.
-               cell() already tolerates null; these two reads did not. */
+               explicitly. A TRACKED model routinely has no result entry, so every read through
+               pr.results[id] stays guarded (an unguarded read here once blanked the whole SPA). */
             const res = pl2 => pr.results[pl2.id] || null;
-            const citedN = llm.filter(pl2 => pr.cfg.models.includes(pl2.id) && (res(pl2) || {}).cited).length;
+            const metaParts = [];
+            const flt2 = d.lists.find(l => l.id === pr.listId);
+            if (flt2) metaParts.push(flt2.name);
+            metaParts.push(pr.cfg.models.length + ' model' + (pr.cfg.models.length === 1 ? '' : 's'));
+            metaParts.push(pr.cfg.cadence);
+            if (pr.cfg.city || pr.cfg.country) metaParts.push(pr.cfg.city || pr.cfg.country);
+            metaParts.push(pr.lastRun ? 'last run ' + String(pr.lastRun).replace('T', ' ').slice(0, 16) : 'not run yet');
+            /* Tracked competitors named in this prompt's stored answers (union across models) —
+               the per-answer detail lives in the Inspector, this is the at-a-glance flag. */
+            const compSeen = {};
+            llm.forEach(pl2 => { const r2 = res(pl2); ((r2 && r2.competitors) || []).forEach(c2 => { compSeen[c2.name] = 1; }); });
+            const compNames = Object.keys(compSeen);
+            if (compNames.length) metaParts.push('⚠ competitors in answers: ' + compNames.join(', '));
             return {
-              text: pr.text, open,
-              meta: listName(pr.listId) + ' · ' + pr.cfg.models.length + ' model' + (pr.cfg.models.length === 1 ? '' : 's') + ' · ' + pr.cfg.cadence + ' · ' + (pr.cfg.city || pr.cfg.country) + (pr.lastRun ? ' · last run ' + pr.lastRun : ' · not run yet'),
-              cells: llm.map(pl2 => cell(pr.cfg.models.includes(pl2.id) ? res(pl2) : null)),
+              text: pr.text,
+              meta: metaParts.join(' · '),
+              cells: llm.map(pl2 => cell(pr.cfg.models.includes(pl2.id), res(pl2))),
               checked: prSelOn,
               checkStyle: { width: '15px', height: '15px', borderRadius: '4px', border: '1.5px solid ' + (prSelOn ? '#4f46e5' : '#cbd5e1'), background: prSelOn ? '#4f46e5' : 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, color: 'white', fontSize: '10px', fontWeight: 700, cursor: 'pointer' },
               toggleSel: e => { e.stopPropagation(); this.setState(st => ({ aiPromptSel: prSelOn ? (st.aiPromptSel || []).filter(x => x !== pr.id) : (st.aiPromptSel || []).concat([pr.id]) })); },
-              toggle: () => this.setState({ aiOpen: open ? null : pr.id }),
-              chev: { color: '#cbd5e1', fontSize: '18px', transform: open ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s ease', flexShrink: 0 },
-              coverage: citedN + ' of ' + pr.cfg.models.length + ' models cite you',
-              details: llm.filter(pl2 => pr.cfg.models.includes(pl2.id)).map(pl2 => ({
-                name: pl2.name,
-                dot: { width: '8px', height: '8px', borderRadius: '50%', background: pl2.color, flexShrink: 0 },
-                /* Honest placeholder rather than a blank paragraph: the row exists because the
-                   model is tracked, and "not run yet" is the actual state, not missing data. */
-                snippet: (res(pl2) || {}).snippet || 'Not run yet — press “Run now” to check this model.'
-              })),
-              runLabel: running ? 'Running…' : 'Run now · ' + money3(runCostOf(pr)),
-              runStyle: running ? Object.assign({}, redBtn, { background: '#fca5a5', cursor: 'default' }) : redBtn,
-              run: () => { if (!running) this.aiRun({ promptId: pr.id }); },
-              inspect: () => this.aiInspect(pr.text, pr.id),
-              cfgOpen: () => this.setState({ aiCfgOpen: pr.id, aiCfgDraft: Object.assign({}, pr.cfg, { models: pr.cfg.models.slice(), listId: pr.listId, text: pr.text }) }),
-              remove: () => this.aiRemovePrompts([pr.id])
+              openIns: () => openInspector(pr),
+              runLabel: running ? 'Running…' : 'Run · ' + money3(runCostOf(pr)),
+              runStyle: running ? Object.assign({}, redBtn, { background: '#fca5a5', cursor: 'default', padding: '6px 10px' }) : Object.assign({}, redBtn, { padding: '6px 10px' }),
+              run: e => { e.stopPropagation(); if (!running) this.aiRun({ promptId: pr.id }); },
+              cfgOpen: e => { e.stopPropagation(); this.setState({ aiCfgOpen: pr.id, aiCfgDraft: Object.assign({}, pr.cfg, { models: pr.cfg.models.slice(), listId: pr.listId, text: pr.text }) }); },
+              remove: e => { e.stopPropagation(); this.aiRemovePrompts([pr.id]); }
             };
           });
           const flt = d.lists.find(l => l.id === s.aiListFilter);
@@ -504,13 +522,20 @@
 
         if (sub2 === 'inspector') {
           aiv.inspQ = s.aiInspQ;
-          aiv.inspQSet = e => this.setState({ aiInspQ: e.target.value });
-          aiv.inspQKey = e => { if (e.key === 'Enter') this.aiInspect(this.state.aiInspQ, null); };
-          aiv.inspRun = () => this.aiInspect(this.state.aiInspQ, null);
+          /* Editing the question by hand detaches it from any tracked prompt — otherwise the
+             next inspection would be filed against a prompt whose text it no longer matches. */
+          aiv.inspQSet = e => this.setState({ aiInspQ: e.target.value, aiInspPromptId: null });
+          const inspGo = () => this.aiInspect(this.state.aiInspQ, this.state.aiInspPromptId || null);
+          aiv.inspQKey = e => { if (e.key === 'Enter') inspGo(); };
+          aiv.inspRun = inspGo;
           aiv.inspRunLabel = s.aiInspecting ? 'Inspecting…' : 'Inspect now · ' + money3(d.costs.inspect);
           aiv.inspRunStyle = Object.assign({}, redBtn, { padding: '9px 16px', fontSize: '13px' });
-          const entry = s.aiInspEntry || d.history[0] || null;
+          /* false = a prompt row was opened that has never been run: show the honest "not run
+             yet" panel instead of silently falling back to some other question's answer. */
+          const entry = s.aiInspEntry === false ? null : (s.aiInspEntry || d.history[0] || null);
           aiv.inspHasEntry = !!entry;
+          aiv.inspNotRun = s.aiInspEntry === false && !s.aiInspecting;
+          aiv.inspNotRunQ = '“' + (s.aiInspQ || '') + '”';
           aiv.inspecting = s.aiInspecting;
           if (entry) {
             const sc2 = entry.scrape;
@@ -519,18 +544,41 @@
             aiv.inspMeta = sc2.model + ' · ' + sc2.location + ' · captured ' + entry.ts;
             aiv.inspVerdict = entry.verdict === 'cited' ? 'You are cited at position #' + entry.position : entry.verdict === 'mentioned' ? 'You are mentioned but not cited' : 'You are not mentioned in this answer';
             aiv.inspVerdictStyle = Object.assign({}, vc.style, { fontSize: '12px', padding: '4px 10px', borderRadius: '999px' });
+            /* Tracked competitors the answer really named — analyze_answer has always detected
+               and stored these on every check; they were just never rendered anywhere. */
+            const compHits = entry.competitors || [];
+            aiv.inspHasComps = compHits.length > 0;
+            aiv.inspComps = compHits.map(c2 => ({
+              name: c2.name,
+              label: c2.cited ? 'Cited #' + c2.position : 'Mentioned',
+              snippet: c2.snippet || '',
+              style: Object.assign(chip(c2.cited ? '#fef3c7' : '#f3e8ff', c2.cited ? '#b45309' : '#7e22ce'), { fontSize: '11px', padding: '3px 9px', borderRadius: '999px' })
+            }));
+            /* Display cleanup only: the model writes markdown emphasis; raw ** around every
+               name is noise in a plain-text render. Verdicts are computed on the raw answer. */
+            const unmd = t => String(t || '').replace(/\*\*|__/g, '');
             aiv.inspParas = sc2.paragraphs.map(pa => ({
-              text: pa.text,
+              text: unmd(pa.text),
               style: pa.hit
                 ? { fontSize: '14px', lineHeight: 1.65, color: '#312e81', background: '#eef2ff', border: '1px solid #c7d2fe', borderRadius: '8px', padding: '12px 14px', margin: 0 }
                 : { fontSize: '14px', lineHeight: 1.65, color: '#334155', margin: 0, padding: '0 14px' }
             }));
-            aiv.inspCites = sc2.citations.map(c2 => ({
-              n: '[' + c2.n + ']', title: c2.title, domain: c2.domain,
-              rowStyle: { display: 'flex', alignItems: 'flex-start', gap: '10px', padding: '10px 14px', borderTop: '1px solid #f8fafc', background: c2.isYou ? '#eef2ff' : 'transparent' },
-              titleStyle: { fontSize: '13px', fontWeight: c2.isYou ? 700 : 500, color: c2.isYou ? '#4338ca' : '#334155' },
-              youChip: c2.isYou
-            }));
+            /* Citations arrive from check_prompt as bare {title, url} pairs — n/domain/isYou
+               were never on them, so the list rendered "[undefined]" with blank domains. The
+               ordinal is the list position; the domain comes off the URL; "You" is a real
+               hostname match against this project's domain. */
+            aiv.inspCites = sc2.citations.map((c2, i2) => {
+              const host = c2.domain || ((String(c2.url || '').match(/^https?:\/\/(?:www\.)?([^\/]+)/) || [])[1] || '');
+              const isYou = c2.isYou != null ? c2.isYou
+                : !!host && (host === project.domain || host.endsWith('.' + project.domain));
+              return {
+                n: '[' + (c2.n != null ? c2.n : i2 + 1) + ']',
+                title: c2.title || host || c2.url || '', domain: host,
+                rowStyle: { display: 'flex', alignItems: 'flex-start', gap: '10px', padding: '10px 14px', borderTop: '1px solid #f8fafc', background: isYou ? '#eef2ff' : 'transparent' },
+                titleStyle: { fontSize: '13px', fontWeight: isYou ? 700 : 500, color: isYou ? '#4338ca' : '#334155' },
+                youChip: isYou
+              };
+            });
           }
         }
 
@@ -543,7 +591,7 @@
               verdictLabel: vc.label, verdictStyle: vc.style,
               pos: e.position ? '#' + e.position : '—',
               costFmt: money3(e.cost),
-              open: () => { this.setState({ aiInspEntry: e, aiSub: 'inspector' }); this.pushNav({ aiSub: 'inspector' }); }
+              open: () => { this.setState({ aiInspEntry: e, aiInspQ: e.question, aiInspPromptId: e.promptId || null, aiSub: 'inspector' }); this.pushNav({ aiSub: 'inspector' }); }
             };
           });
         }

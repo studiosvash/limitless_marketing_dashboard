@@ -108,6 +108,7 @@ Lists active sites (`Site.is_active == 1`), ordered by `site_url`.
   "location": "United States",
   "tracked_keywords_count": 42,
   "avg_position": 12.4,
+  "visibility": 1.6,
   "improved_count": 5,
   "declined_count": 2,
   "last_updated": "2 days ago"
@@ -115,11 +116,19 @@ Lists active sites (`Site.is_active == 1`), ordered by `site_url`.
 ```
 
 `id` is the slug. `domain` is `_bare_domain(site.site_url)` (scheme, `sc-domain:` prefix and
-trailing slash stripped). The last five fields come from `ProjectSerializer._pos_summary()`,
+trailing slash stripped). The last six fields come from `ProjectSerializer._pos_summary()`,
 which runs a **fixed rolling 30-day window ending today** (not the request's `range`) over
 `KeywordRanking`, caches the result on the instance, and degrades to zeros +
 `"No sync yet"` on any exception. `last_updated` is a human string: `"Today"`, `"Yesterday"`,
 `"N days ago"`, or `"No sync yet"`.
+
+`visibility` is the Semrush-style CTR-weighted score (0–100, 1 dp) computed in
+`_get_ranking_distribution`: each tracked keyword earns the CTR of its average position
+(#1 = 31.7 … #10 = 1.8, ~0 past #20 — the same curve as the SPA's `buildVisibilityScores`),
+divided by a perfect #1 on **every** tracked keyword. Keywords with no ranking earn 0 but stay
+in the denominator. `null` means "never captured in the window" (UI shows `—`); `0.0` means
+"captured, ranks nowhere" — a real number. Never derive visibility from `avg_position`: it
+averages ranked keywords only, which once made 1 branded keyword at #2 out of 48 read as 82%.
 
 **Related frontend:** topbar site selector, Position Tracking project list.
 
@@ -1066,7 +1075,7 @@ An unmapped action returns **400** `{"detail": "Unknown or not-yet-available act
 | `prompts-remove` | `{id}` | Deletes the prompt | `{}` |
 | `prompts-config` | `{id, cfg: {models, webSearch, country, city, cadence}, listId}` | Persists `tracked_models` from `cfg.models` and optionally moves the prompt to another list. `cadence`/`country`/`city`/`webSearch` now round-trip through `ai_service.set_prompt_cfg`/`get_prompt_cfg` (`PROMPT_CFG_KEY` in the `ProjectSettings` blob — `AIPrompt` itself has no columns for them). Unknown id → **404** | `{}` |
 | `lists` | `{op: "create"\|"rename"\|"delete", id, name}` | CRUD on `AIPromptList`. `create` → `{"id": n}`. `rename` on an unknown id → **404**. `delete` is idempotent. Unknown `op` → **400** | varies |
-| `run` | `{promptId}` \| `{listId}` \| `{}` (all tracked) | Runs the scoped prompts against their tracked answer engines for real, through `pipeline/services/ai_visibility_service.run_prompt_checks` — costs real money, which is why this is a POST the user pressed rather than part of the page GET. Unknown `promptId` → **404** | the `run_prompt_checks` result |
+| `run` | `{promptId}` \| `{promptIds: [..]}` \| `{listId}` \| `{}` (all tracked) | Runs the scoped prompts against their tracked answer engines for real, through `pipeline/services/ai_visibility_service.run_prompt_checks` — costs real money, which is why this is a POST the user pressed rather than part of the page GET. `promptIds` is the checkbox toolbar's "Run selected"; ids from other projects are excluded by the site filter. Unknown `promptId` or a `promptIds` list matching nothing → **404** | the `run_prompt_checks` result |
 | `inspect` | `{question, promptId?}` | One ad-hoc live answer-engine check for the Answer Inspector (`ai_visibility_service.inspect_question`); the result is also persisted as a `history` entry | the stored entry, or **503** (engine not connected) / **400** (other failure) with `{"detail": "..."}` |
 
 *(Corrected 2026-07-31: this section previously said `run`/`inspect` were "deliberately

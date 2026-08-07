@@ -361,7 +361,7 @@
               <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
                 <div style="padding: 14px 20px; border-bottom: 1px solid #f1f5f9; display: flex; align-items: center; justify-content: space-between;">
                   <h2 style="font-size: 14px; font-weight: 600; margin: 0;">Tracked Prompts × LLMs</h2>
-                  <span style="font-size: 11px; color: #94a3b8;">LLM Responses API · click a row for answers &amp; actions</span>
+                  <span style="font-size: 11px; color: #94a3b8;">LLM Responses API · click a row to open its answer in the Inspector</span>
                 </div>
                 <sc-if value="{{ aiv.promptAnySel }}" hint-placeholder-val="{{ false }}">
                   <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 20px; background: #f5f7ff; border-bottom: 1px solid #f1f5f9;">
@@ -369,49 +369,31 @@
                       <span style="font-size: 12px; font-weight: 600; color: #4338ca;">{{ aiv.promptSelCount }}</span>
                       <span onClick="{{ aiv.promptClearSel }}" style="font-size: 12px; color: #64748b; cursor: pointer;" style-hover="color:#0f172a">Clear</span>
                     </div>
-                    <span onClick="{{ aiv.promptRemoveSel }}" style="font-size: 12.5px; font-weight: 600; color: #dc2626; cursor: pointer; padding: 6px 12px; border: 1px solid #fecaca; border-radius: 8px; background: #fff5f5;" style-hover="background:#fee2e2">Remove selected</span>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                      <div onClick="{{ aiv.promptRunSel }}" style="{{ aiv.promptRunSelStyle }}" style-hover="background:#fee2e2">{{ aiv.promptRunSelLabel }}</div>
+                      <span onClick="{{ aiv.promptRemoveSel }}" style="font-size: 12.5px; font-weight: 600; color: #dc2626; cursor: pointer; padding: 6px 12px; border: 1px solid #fecaca; border-radius: 8px; background: #fff5f5;" style-hover="background:#fee2e2">Remove selected</span>
+                    </div>
                   </div>
                 </sc-if>
                 <div style="display: grid; grid-template-columns: {{ aiv.promptGridCols }}; gap: 8px; padding: 9px 20px; font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8; border-bottom: 1px solid #f8fafc; align-items: center;">
                   <span onClick="{{ aiv.promptToggleAll }}" style="{{ aiv.promptAllCheckStyle }}"><sc-if value="{{ aiv.promptAllChecked }}" hint-placeholder-val="{{ false }}">✓</sc-if></span>
                   <span>Prompt</span>
                   <sc-for list="{{ aiv.platNames }}" as="n" hint-placeholder-count="4"><span style="text-align: center;">{{ n }}</span></sc-for>
+                  <span style="text-align: right;">Actions</span>
                 </div>
                 <sc-for list="{{ aiv.promptRows }}" as="pr" hint-placeholder-count="6">
-                  <div style="border-top: 1px solid #f8fafc;">
-                    <div onClick="{{ pr.toggle }}" style="display: grid; grid-template-columns: {{ aiv.promptGridCols }}; gap: 8px; align-items: center; padding: 12px 20px; cursor: pointer;" style-hover="background:#f8fafc">
-                      <span onClick="{{ pr.toggleSel }}" style="{{ pr.checkStyle }}"><sc-if value="{{ pr.checked }}" hint-placeholder-val="{{ false }}">✓</sc-if></span>
-                      <div style="display: flex; align-items: center; gap: 8px; min-width: 0;">
-                        <span style="{{ pr.chev }}">›</span>
-                        <div style="min-width: 0;">
-                          <div style="font-size: 13px; font-weight: 500; color: #334155; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">{{ pr.text }}</div>
-                          <div style="font-size: 11px; color: #94a3b8; margin-top: 2px;">{{ pr.meta }}</div>
-                        </div>
-                      </div>
-                      <sc-for list="{{ pr.cells }}" as="c" hint-placeholder-count="4"><div style="text-align: center;"><span style="{{ c.style }}">{{ c.label }}</span></div></sc-for>
+                  <div onClick="{{ pr.openIns }}" style="display: grid; grid-template-columns: {{ aiv.promptGridCols }}; gap: 8px; align-items: center; padding: 12px 20px; cursor: pointer; border-top: 1px solid #f8fafc;" style-hover="background:#f8fafc">
+                    <span onClick="{{ pr.toggleSel }}" style="{{ pr.checkStyle }}"><sc-if value="{{ pr.checked }}" hint-placeholder-val="{{ false }}">✓</sc-if></span>
+                    <div style="min-width: 0;">
+                      <div style="font-size: 13px; font-weight: 500; color: #334155; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">{{ pr.text }}</div>
+                      <div style="font-size: 11px; color: #94a3b8; margin-top: 2px;">{{ pr.meta }}</div>
                     </div>
-                    <sc-if value="{{ pr.open }}" hint-placeholder-val="{{ false }}">
-                      <div style="padding: 4px 20px 16px 48px; display: flex; flex-direction: column; gap: 8px; background: #fcfcfd;">
-                        <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;">
-                          <span style="font-size: 12px; font-weight: 600; color: #64748b;">{{ pr.coverage }}</span>
-                          <div style="display: flex; gap: 8px; align-items: center;">
-                            <div onClick="{{ pr.run }}" style="{{ pr.runStyle }}" style-hover="background:#fee2e2">{{ pr.runLabel }}</div>
-                            <div onClick="{{ pr.inspect }}" style="cursor: pointer; padding: 7px 14px; font-size: 12.5px; font-weight: 600; color: #4f46e5; border: 1px solid #c7d2fe; border-radius: 8px; background: #f5f7ff;" style-hover="background:#eef2ff">Inspect answer</div>
-                            <div onClick="{{ pr.cfgOpen }}" style="cursor: pointer; padding: 7px 14px; font-size: 12.5px; font-weight: 600; color: #334155; border: 1px solid #cbd5e1; border-radius: 8px; background: white;" style-hover="background:#f8fafc">Settings</div>
-                            <span onClick="{{ pr.remove }}" style="font-size: 12px; color: #94a3b8; cursor: pointer; padding: 0 4px;" style-hover="color:#dc2626">Remove</span>
-                          </div>
-                        </div>
-                        <sc-for list="{{ pr.details }}" as="d" hint-placeholder-count="4">
-                          <div style="display: flex; align-items: flex-start; gap: 10px; padding: 9px 12px; border: 1px solid #f1f5f9; border-radius: 8px; background: white;">
-                            <span style="{{ d.dot }}"></span>
-                            <div style="flex: 1; min-width: 0;">
-                              <span style="font-size: 12px; font-weight: 700; color: #334155;">{{ d.name }}</span>
-                              <p style="font-size: 12.5px; color: #64748b; margin: 4px 0 0; line-height: 1.5;">{{ d.snippet }}</p>
-                            </div>
-                          </div>
-                        </sc-for>
-                      </div>
-                    </sc-if>
+                    <sc-for list="{{ pr.cells }}" as="c" hint-placeholder-count="4"><div style="text-align: center;"><span style="{{ c.style }}">{{ c.label }}</span></div></sc-for>
+                    <div style="display: flex; gap: 6px; align-items: center; justify-content: flex-end;">
+                      <div onClick="{{ pr.run }}" style="{{ pr.runStyle }}" style-hover="background:#fee2e2">{{ pr.runLabel }}</div>
+                      <div onClick="{{ pr.cfgOpen }}" style="cursor: pointer; padding: 6px 10px; font-size: 12.5px; font-weight: 600; color: #334155; border: 1px solid #cbd5e1; border-radius: 8px; background: white;" style-hover="background:#f8fafc">Settings</div>
+                      <span onClick="{{ pr.remove }}" title="Remove prompt" style="font-size: 14px; font-weight: 700; color: #94a3b8; cursor: pointer; padding: 2px 6px;" style-hover="color:#dc2626">×</span>
+                    </div>
                   </div>
                 </sc-for>
               </div>
@@ -502,11 +484,25 @@
                 <div onClick="{{ aiv.inspRun }}" style="{{ aiv.inspRunStyle }}" style-hover="background:#fee2e2">{{ aiv.inspRunLabel }}</div>
               </div>
             </div>
+            <sc-if value="{{ aiv.inspNotRun }}" hint-placeholder-val="{{ false }}">
+              <div style="border-radius: 12px; background: white; border: 1px dashed #cbd5e1; padding: 44px 20px; text-align: center;">
+                <p style="font-size: 14px; font-weight: 600; color: #334155; margin: 0;">{{ aiv.inspNotRunQ }} has not been run yet</p>
+                <p style="font-size: 13px; color: #94a3b8; margin: 6px 0 0;">Press “Inspect now” above for a live answer, or “Run” on the prompt row to check every tracked model.</p>
+              </div>
+            </sc-if>
             <sc-if value="{{ aiv.inspHasEntry }}" hint-placeholder-val="{{ true }}">
               <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
                 <span style="{{ aiv.inspVerdictStyle }}">{{ aiv.inspVerdict }}</span>
                 <span style="font-size: 12px; color: #94a3b8;">{{ aiv.inspMeta }}</span>
               </div>
+              <sc-if value="{{ aiv.inspHasComps }}" hint-placeholder-val="{{ false }}">
+                <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                  <span style="font-size: 12px; font-weight: 600; color: #64748b;">Competitors in this answer:</span>
+                  <sc-for list="{{ aiv.inspComps }}" as="c" hint-placeholder-count="2">
+                    <span title="{{ c.snippet }}" style="{{ c.style }}">{{ c.name }} · {{ c.label }}</span>
+                  </sc-for>
+                </div>
+              </sc-if>
               <div style="display: grid; grid-template-columns: 1.7fr 1fr; gap: 16px; align-items: start;">
                 <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
                   <div style="padding: 14px 20px; border-bottom: 1px solid #f1f5f9;">
@@ -540,7 +536,7 @@
             <sc-if value="{{ aiv.histEmpty }}" hint-placeholder-val="{{ false }}">
               <div style="border-radius: 12px; background: white; border: 1px dashed #cbd5e1; padding: 44px 20px; text-align: center;">
                 <p style="font-size: 14px; font-weight: 600; color: #334155; margin: 0;">No inspections yet</p>
-                <p style="font-size: 13px; color: #94a3b8; margin: 6px 0 0;">Run one from the Answer Inspector or the “Inspect answer” button on any tracked prompt.</p>
+                <p style="font-size: 13px; color: #94a3b8; margin: 6px 0 0;">Run one from the Answer Inspector, or press “Run” on any tracked prompt.</p>
               </div>
             </sc-if>
             <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">

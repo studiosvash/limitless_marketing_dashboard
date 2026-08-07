@@ -12,6 +12,7 @@ class ProjectSerializer(serializers.Serializer):
     location = serializers.CharField(allow_null=True)
     tracked_keywords_count = serializers.SerializerMethodField()
     avg_position = serializers.SerializerMethodField()
+    visibility = serializers.SerializerMethodField()
     improved_count = serializers.SerializerMethodField()
     declined_count = serializers.SerializerMethodField()
     last_updated = serializers.SerializerMethodField()
@@ -32,7 +33,7 @@ class ProjectSerializer(serializers.Serializer):
             tracked_kws = load_tracked_keywords(site.site_url, location=project_location,
                                                 site_pk=getattr(site, "id", None))
             if not tracked_kws:
-                summary = {"tracked": 0, "avg_pos": 0.0, "improved": 0, "declined": 0, "last_updated": "No sync yet"}
+                summary = {"tracked": 0, "avg_pos": 0.0, "visibility": None, "improved": 0, "declined": 0, "last_updated": "No sync yet"}
                 site._pos_summary_cache = summary
                 return summary
 
@@ -81,6 +82,9 @@ class ProjectSerializer(serializers.Serializer):
             summary = {
                 "tracked": dist.get("total", len(tracked_kws)),
                 "avg_pos": dist.get("avg_position", 0.0),
+                # Semrush-style CTR-weighted score from _get_ranking_distribution. None means
+                # "never captured" (renders as —); 0.0 means "captured, ranks nowhere".
+                "visibility": dist.get("visibility"),
                 "improved": changes.get("improved_count", 0),
                 "declined": changes.get("declined_count", 0),
                 "last_updated": updated_str,
@@ -89,7 +93,7 @@ class ProjectSerializer(serializers.Serializer):
             return summary
         except Exception as e:
             import logging; logging.getLogger(__name__).error(f"ProjectSerializer _pos_summary error: {e}", exc_info=True)
-            summary = {"tracked": 0, "avg_pos": 0.0, "improved": 0, "declined": 0, "last_updated": "No sync yet"}
+            summary = {"tracked": 0, "avg_pos": 0.0, "visibility": None, "improved": 0, "declined": 0, "last_updated": "No sync yet"}
             site._pos_summary_cache = summary
             return summary
 
@@ -98,6 +102,9 @@ class ProjectSerializer(serializers.Serializer):
 
     def get_avg_position(self, site) -> float:
         return self._pos_summary(site)["avg_pos"]
+
+    def get_visibility(self, site) -> float | None:
+        return self._pos_summary(site)["visibility"]
 
     def get_improved_count(self, site) -> int:
         return self._pos_summary(site)["improved"]

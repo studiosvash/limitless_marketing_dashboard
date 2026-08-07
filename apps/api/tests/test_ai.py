@@ -620,6 +620,33 @@ class AIRunPersistenceTests(APITestCase):
         self.assertEqual(resp.json()["ran"], 1)
         self.assertEqual(post.call_count, 1)
 
+    @mock.patch("pipeline.services.ai_visibility_service.requests.post")
+    def test_run_by_prompt_ids_scopes_to_the_selection_in_this_project_only(self, post):
+        # The checkbox toolbar's "Run selected" -- runs exactly the chosen prompts, and a
+        # cross-project id in the selection is silently excluded by the site filter rather
+        # than running another project's prompt on this project's bill.
+        post.return_value = _dfs_response(ANSWER_CITED)
+        second = AIPrompt.objects.create(site_url=SITE_URL, text="second prompt",
+                                         tracked_models=["chatgpt"])
+        AIPrompt.objects.create(site_url=SITE_URL, text="not selected",
+                                tracked_models=["chatgpt"])
+        other = AIPrompt.objects.create(site_url="https://other-project.com", text="not ours",
+                                        tracked_models=["chatgpt"])
+
+        resp = self.client_auth.post(
+            "/api/projects/fusehealth/ai/run",
+            {"promptIds": [self.prompt.id, second.id, other.id]}, format="json",
+        )
+        self.assertEqual(resp.json()["ran"], 2)
+        self.assertEqual(post.call_count, 2)
+
+    @mock.patch("pipeline.services.ai_visibility_service.requests.post")
+    def test_run_by_prompt_ids_with_no_match_is_a_clean_404(self, post):
+        resp = self.client_auth.post("/api/projects/fusehealth/ai/run",
+                                     {"promptIds": [999999]}, format="json")
+        post.assert_not_called()
+        self.assertEqual(resp.status_code, 404)
+
 
 class AIRunWithoutApiKeyTests(APITestCase):
     """Without DataForSEO credentials the whole feature degrades honestly -- rather than

@@ -200,18 +200,32 @@
       const projList = (s.projects || []).filter(p => !searchVal || (p.domain + ' ' + (p.name || '')).toLowerCase().includes(searchVal));
       const listCols = 'minmax(200px,2fr) 150px 90px 80px 80px 120px';
       vals.ptListGridCols = listCols;
+      /* Visibility is the backend's Semrush-style score (`visibility` on the project
+         payload): CTR-curve points for each tracked keyword's position — the same curve as
+         buildVisibilityScores below — over a perfect #1-on-every-keyword, with keywords that
+         rank nowhere still counted in the denominator. The previous (100 - avg_position)/1.2
+         mapping averaged RANKED keywords only, so one branded keyword at #2 out of 48
+         tracked read 82% when the honest CTR-weighted reading was ~1%. null means "never
+         captured" → "—" and an empty bar; 0 means "captured, ranks nowhere" — a real 0%.
+         Self-contained so tests/project_list_visibility.test.js can brace-match it. */
+      const listVisibility = p => {
+        const v = typeof p.visibility === 'number' ? p.visibility : null;
+        if (v == null) return { hasVis: false, vis: 0, label: '—', color: '#cbd5e1', barWidth: 0 };
+        return {
+          hasVis: true, vis: v,
+          label: parseFloat(v.toFixed(1)) + '%',
+          color: v >= 30 ? '#059669' : v >= 10 ? '#0891b2' : '#d97706',
+          /* A 0.4% project still deserves a visible sliver — width 0 is reserved for
+             a true 0, so "barely ranks" and "ranks nowhere" stay distinguishable. */
+          barWidth: v > 0 ? Math.max(v, 1.5) : 0
+        };
+      };
       vals.ptProjects = projList.map(p => {
         const isCur = p.id === s.projectId;
         const tracked = p.tracked_keywords_count || 0;
-        const avgPos = p.avg_position || 0;
-        /* Visibility is derived from the project's real average position. With no synced
-           position there is no honest number to show — the old `tracked > 0 ? 50 : 0`
-           invented a 50% score for every unsynced project. Show "—" and an empty bar. */
-        const hasVis = avgPos > 0;
-        const vis = hasVis ? Math.min(100, Math.max(5, Math.round((100 - avgPos) / 1.2))) : 0;
+        const lv = listVisibility(p);
         const improved = p.improved_count || 0;
         const declined = p.declined_count || 0;
-        const visColor = !hasVis ? '#cbd5e1' : (vis >= 45 ? '#059669' : vis >= 25 ? '#0891b2' : '#d97706');
         /* Row subtitle. `device` used to be the literal 'Desktop' for every project,
            regardless of what the wizard collected. The projects LIST endpoint
            (ProjectSerializer) does not expose the stored device/engine/language yet, so
@@ -223,8 +237,8 @@
           id: p.id, name: p.name || p.domain, domain: p.domain, location: p.location || '', device: p.device || '',
           sub: subParts.join(' · '),
           tracked: this.fmt(tracked), improved, declined,
-          visLabel: hasVis ? vis + '%' : '—', visColor,
-          visBarStyle: { width: vis + '%', height: '100%', background: visColor, borderRadius: '4px' },
+          visLabel: lv.label, visColor: lv.color,
+          visBarStyle: { width: lv.barWidth + '%', height: '100%', background: lv.color, borderRadius: '4px' },
           updated: p.last_updated || 'No sync yet',
           isCurrent: isCur,
           rowStyle: { display: 'grid', gridTemplateColumns: listCols, alignItems: 'center', padding: '14px 20px', borderTop: '1px solid #f1f5f9', cursor: 'pointer', background: isCur ? '#fafaff' : 'white' },

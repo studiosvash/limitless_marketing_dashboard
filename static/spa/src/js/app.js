@@ -58,7 +58,7 @@
     /* id of the audit check whose affected-page list is fully expanded (null = preview only) */
     auAllPages: null,
     auCmpA: null, auCmpB: null, auCmpFilter: 'all', auProg: { score: true, errors: true, warnings: true, notices: false, pages: false },
-    aiSub: 'visibility', /* keys must track mentionPlatforms' ids (llm_mentions_service.MENTION_PLATFORMS), not llmPlatforms' four-engine ids -- the two lists are deliberately separate */ aiPlat: { google: true, chat_gpt: true }, aiOpen: null,
+    aiSub: 'visibility', /* keys must track mentionPlatforms' ids (llm_mentions_service.MENTION_PLATFORMS), not llmPlatforms' four-engine ids -- the two lists are deliberately separate */ aiPlat: { google: true, chat_gpt: true },
     aiWiz: 1, aiWizBrand: null, aiWizAliases: null, aiWizComps: null, aiWizCompInput: '', aiWizSel: null, aiWizCustom: '', aiWizBusy: false,
     aiTgOpen: false, aiListFilter: 'all', aiListsOpen: false, aiNewPlName: '',
     aiComposerOpen: false, aiComposerText: '', aiComposerList: null,
@@ -503,7 +503,7 @@
       tab: snap.tab, projectId: snap.projectId, research: snap.research,
       kwSeg: snap.kwSeg, blFilter: snap.blFilter, alFilter: snap.alFilter,
       auSub: snap.auSub || 'overview', auOpen: null, auAllPages: null,
-      aiSub: snap.aiSub || 'visibility', aiOpen: null,
+      aiSub: snap.aiSub || 'visibility',
       seoOpen: this.state.seoOpen || this.SEOTABS.includes(snap.tab), adsOpen: this.state.adsOpen || this.ADSTABS.includes(snap.tab), error: null,
       selectedKws: [], sendOpen: false, exportOpen: false, sendSub: null, showLists: false
     });
