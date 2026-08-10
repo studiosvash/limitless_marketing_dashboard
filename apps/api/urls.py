@@ -61,6 +61,9 @@ urlpatterns = [
     path("research", views.KeywordResearchView.as_view(), name="keyword-research"),
     path("prompt-research", views.PromptResearchView.as_view(), name="prompt-research"),
     path("domain-overview", views.DomainOverviewView.as_view(), name="domain-overview"),
+    # Binary (application/pdf), not JSON — see DomainOverviewReportView. Listed BEFORE
+    # nothing in particular; the two paths do not overlap.
+    path("domain-overview/report", views.DomainOverviewReportView.as_view(), name="domain-overview-report"),
     path("live-serp", views.LiveSERPView.as_view(), name="live-serp"),
     # Connection check — the FOURTH sanctioned live-API endpoint (with research,
     # domain-overview and live-serp). Allowed to call out because a human pressed a button;

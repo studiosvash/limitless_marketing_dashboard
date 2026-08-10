@@ -812,6 +812,16 @@ class ProjectAIActionView(APIView):
             qs = qs.filter(list_id=list_id)
         return Response(start_ai_run(site_id, list(qs), force=bool(request.data.get("force"))))
 
+    def _handle_rescan(self, request, site_id):
+        """Re-score stored answers against the current targets. FREE — no engine is called.
+
+        `analyze_answer` is pure text analysis by design, so an answer already paid for can be
+        re-read whenever the brand, aliases or competitor list changes. Without this, fixing a
+        detection mistake in Targets meant re-buying every answer to learn something the
+        stored text already said."""
+        from apps.dashboard.services.ai_service import rescan_stored_answers
+        return Response(rescan_stored_answers(site_id))
+
     def _handle_inspect(self, request, site_id):
         """One ad-hoc answer-engine check for the Answer Inspector. Returns the stored history
         entry itself -- the SPA renders the response directly and then re-fetches."""
@@ -1744,3 +1754,53 @@ class AdsPromoteView(APIView):
                       site_pk=site.id)
         mark_promoted(site_id, term)
         return Response({"ok": True, "keyword": _tracked_keyword_body(term, {}, "ads_term")})
+
+
+# ---------------------------------------------------------------------------
+# Domain Overview PDF report — the FIRST non-JSON endpoint in apps/api.
+# ---------------------------------------------------------------------------
+@method_decorator(login_not_required, name="dispatch")
+class DomainOverviewReportView(APIView):
+    """POST /api/domain-overview/report -> application/pdf (attachment).
+
+    Returns a plain django.http.HttpResponse, NOT a DRF Response. Every other endpoint in
+    this module answers JSON, so DRF's content negotiation would try to run the PDF bytes
+    through JSONRenderer and fail; returning an HttpResponse bypasses renderer negotiation
+    entirely, which is the documented way to serve a binary body from an APIView.
+
+    Costs: this reads the same 24-hour caches the Domain Overview page fills and NEVER
+    triggers a backlink fetch. Generated straight after a lookup it costs $0. If even the
+    keyword cache is empty it may make the ONE DataForSEO Labs call the Analyze button would
+    have made -- the user explicitly asked for a report, the same sanctioned-user-action rule
+    that lets /api/domain-overview call out -- and says so both in the PDF and in the
+    X-Report-Fetched response header.
+
+    A missing PDF engine is a 501 with an actionable message, not a 500: WeasyPrint needs
+    cairo/pango system libraries a VPS does not have by default.
+    """
+    def post(self, request):
+        from django.http import HttpResponse
+
+        from apps.dashboard.services.domain_overview_report_service import generate_report
+
+        target = (request.data.get("target") or "").strip()
+        location = request.data.get("location") or "United States"
+        slug = request.data.get("project") or ""
+        if not target:
+            return Response({"detail": "Target URL is required"}, status=400)
+
+        site_id, site_pk = "", None
+        if slug:
+            project = resolve_project_or_404(slug)
+            site_id, site_pk = project.site_url, project.id
+
+        result = generate_report(target, location, site_id=site_id, site_pk=site_pk)
+        if result.get("status") != "ok":
+            return Response({"detail": result.get("error")},
+                            status=result.get("code", 500))
+
+        response = HttpResponse(result["pdf"], content_type="application/pdf")
+        response["Content-Disposition"] = f'attachment; filename="{result["filename"]}"'
+        # Empty when nothing was bought, which is the normal case.
+        response["X-Report-Fetched"] = ",".join(result.get("fetched") or [])
+        return response

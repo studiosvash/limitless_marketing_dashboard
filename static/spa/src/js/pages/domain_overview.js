@@ -107,6 +107,80 @@
         trackSelLabel: 'Track selected'
       };
 
+      /* ---- PDF report -----------------------------------------------------------------
+         The existing `downloadCsv` helper builds a Blob from a string it was handed; this
+         needs the OPPOSITE shape -- a Blob that comes back from the server -- so the
+         download half lives here rather than in app.js. Same createObjectURL / a.download /
+         revokeObjectURL dance, different source.
+
+         window.FuseAPI.post parses JSON, which would corrupt PDF bytes, so this is a raw
+         fetch carrying the same Bearer token the transport uses. Generation takes seconds
+         (the server renders the whole document), hence the explicit spinner state.
+
+         Cost: this reads the same 24-hour caches the page fills. Straight after a lookup it
+         is free; it NEVER buys backlinks; and if even the keyword cache has expired it makes
+         the one Labs call Analyze would have made and says so in the PDF. */
+      const downloadBlob = (name, blob) => {
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = name;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
+      };
+
+      vals.do.pdf = {
+        busy: !!s.doPdfBusy,
+        label: s.doPdfBusy ? 'Preparing PDF…' : 'Download PDF',
+        error: s.doPdfError || null,
+        /* Only offered once there is something to report on. A report of nothing is not a
+           useful artefact, and generating one could cost a Labs call. */
+        show: !!(s.doData && s.doData.status === 'ok'),
+        style: {
+          display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '9px 16px',
+          fontSize: '13px', fontWeight: 600, borderRadius: '8px', color: '#334155',
+          background: 'white', border: '1px solid #e2e8f0',
+          cursor: s.doPdfBusy ? 'default' : 'pointer', opacity: s.doPdfBusy ? 0.6 : 1
+        },
+        run: () => {
+          const q = (this.state.doQuery || '').trim();
+          if (!q || this.state.doPdfBusy) return;
+          this.setState({ doPdfBusy: true, doPdfError: null });
+          const cfg = (window.FuseAPI && window.FuseAPI.config) || {};
+          const headers = { 'Content-Type': 'application/json' };
+          if (cfg.authToken) headers['Authorization'] = 'Bearer ' + cfg.authToken;
+          fetch(String(cfg.baseUrl || '/').replace(/\/$/, '') + '/api/domain-overview/report', {
+            method: 'POST',
+            headers: headers,
+            body: JSON.stringify({ target: q, location: this.doLocation(), project: this.state.projectId })
+          })
+            .then(r => {
+              /* A 501 (no PDF engine on this server) and a 400 both answer JSON, not a PDF.
+                 Reading the body as a blob regardless would download a file containing an
+                 error message, which is worse than saying what went wrong. */
+              if (!r.ok) {
+                return r.json().catch(() => ({}))
+                  .then(j => { throw new Error(j.detail || ('Report failed (' + r.status + ')')); });
+              }
+              const cd = r.headers.get('Content-Disposition') || '';
+              const match = /filename="([^"]+)"/.exec(cd);
+              const name = match ? match[1] : 'domain-overview.pdf';
+              return r.blob().then(b => ({ name: name, blob: b }));
+            })
+            .then(out => {
+              if (!this._alive) return;
+              downloadBlob(out.name, out.blob);
+              this.setState({ doPdfBusy: false });
+            })
+            .catch(e => {
+              if (!this._alive) return;
+              this.setState({ doPdfBusy: false, doPdfError: String(e.message || e) });
+            });
+        }
+      };
+
       /* ---- backlinks / anchors / spam score -------------------------------------------
          A SECOND, deliberate press. The default Analyze buys one DataForSEO Labs call; this
          buys three Backlinks API calls (summary + 100 backlinks + 60 anchors), so it has its

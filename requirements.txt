@@ -41,6 +41,14 @@ google-analytics-data>=0.18.0
 google-ads>=24.0.0          # used once Google Ads credentials are provisioned
 cryptography>=42.0.0        # encrypts Ads platform credentials at rest (ProjectSettings.data)
 
+# --- PDF reports --------------------------------------------------------------
+# Renders templates/reports/*.html to PDF for the Domain Overview report endpoint.
+# NEEDS SYSTEM LIBRARIES: WeasyPrint binds to cairo, pango and libgobject at IMPORT time,
+# so `pip install` alone is not enough on a VPS -- see .claude/tech-stack.md for the
+# apt packages. It is imported lazily and the endpoint answers 501 when the import fails,
+# so a server without them still runs everything else.
+weasyprint>=62.0
+
 # --- Error monitoring (optional) ----------------------------------------------
 # Only imported when SENTRY_DSN is set (see config/settings/base.py). ~14 external API
 # integrations run inside a background sync thread; without this a failed connector is

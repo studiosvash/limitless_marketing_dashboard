@@ -1,0 +1,221 @@
+{% comment %}
+templates/reports/domain_overview.html — the Domain Overview PDF.
+
+Rendered by WeasyPrint on the server, never by a browser, so everything here is print CSS:
+@page for margins and the page counter, no JavaScript, no external requests (a PDF render
+that reaches out for a stylesheet or a webfont is a render that hangs on a firewalled VPS).
+
+`font_url` is a file:// URL for a bundled font when one is present. A PDF gets the SERVER's
+fonts, and a headless box has almost none — without this a unicode domain or an RTL anchor
+comes out as tofu boxes with nothing in the logs.
+
+Every "not loaded" block below is deliberate: a section this report did not buy says so.
+{% endcomment %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Domain Overview — {{ target }}</title>
+  <style>
+    {% if font_url %}
+    @font-face {
+      font-family: "ReportSans";
+      src: url("{{ font_url }}");
+      font-weight: 400;
+      font-style: normal;
+    }
+    {% endif %}
+
+    @page {
+      size: A4;
+      margin: 18mm 14mm 16mm;
+      @bottom-center {
+        content: "Page " counter(page) " of " counter(pages);
+        font-size: 8pt;
+        color: #94a3b8;
+      }
+    }
+
+    body {
+      font-family: {% if font_url %}"ReportSans", {% endif %}"DejaVu Sans", "Noto Sans", sans-serif;
+      font-size: 9pt;
+      color: #0f172a;
+      line-height: 1.45;
+    }
+
+    h1 { font-size: 18pt; margin: 0 0 2mm; }
+    h2 { font-size: 11pt; margin: 8mm 0 2mm; border-bottom: 1px solid #e2e8f0; padding-bottom: 1.5mm; }
+    .sub { color: #64748b; font-size: 9pt; margin: 0; }
+    .meta { color: #94a3b8; font-size: 8pt; margin: 1mm 0 0; }
+
+    .callout {
+      background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 2mm;
+      padding: 3mm 4mm; margin: 4mm 0; font-size: 8.5pt; color: #475569;
+    }
+    .callout.warn { background: #fffbeb; border-color: #fde68a; color: #92400e; }
+    .callout.absent { background: #ffffff; border-style: dashed; color: #64748b; }
+
+    .kpis { width: 100%; border-collapse: collapse; margin: 3mm 0 0; }
+    .kpis td { width: 33.33%; padding: 3mm 4mm; border: 1px solid #e2e8f0; }
+    .kpis .label { font-size: 7.5pt; text-transform: uppercase; letter-spacing: 0.06em; color: #64748b; }
+    .kpis .value { font-size: 15pt; font-weight: 700; color: #334155; }
+
+    table.data { width: 100%; border-collapse: collapse; margin-top: 2mm; }
+    table.data th {
+      text-align: left; font-size: 7.5pt; text-transform: uppercase; letter-spacing: 0.06em;
+      color: #94a3b8; font-weight: 500; border-bottom: 1px solid #e2e8f0; padding: 1.5mm 2mm;
+    }
+    table.data td { padding: 1.5mm 2mm; border-bottom: 1px solid #f1f5f9; vertical-align: top; }
+    table.data tr { page-break-inside: avoid; }
+    .num { text-align: right; }
+    .url { color: #94a3b8; font-size: 7.5pt; word-break: break-all; }
+    .caption { font-size: 8pt; color: #94a3b8; margin-top: 1.5mm; }
+
+    .pill { padding: 0.5mm 2mm; border-radius: 3mm; font-size: 7.5pt; font-weight: 700; }
+    .band-low { color: #059669; background: #ecfdf5; }
+    .band-medium { color: #b45309; background: #fffbeb; }
+    .band-high { color: #dc2626; background: #fef2f2; }
+    .band-unknown { color: #64748b; background: #f1f5f9; }
+  </style>
+</head>
+<body>
+
+<h1>Domain Overview</h1>
+<p class="sub">{{ target }}{% if project_name %} · registered project: {{ project_name }}{% endif %}</p>
+<p class="meta">
+  Generated {{ generated_at }} · Keyword market: {{ location }}
+  {% if location_downgraded %}(requested {{ requested_location }}; DataForSEO's domain database is country-level){% endif %}
+</p>
+
+{# What this report cost. Stated first, because it is the thing a user cannot otherwise
+   find out — a PDF that quietly bought API calls looks identical to one that did not. #}
+<div class="callout{% if fetched %} warn{% endif %}">{{ fetch_note }}</div>
+
+<h2>Organic performance</h2>
+{% if keywords_ok %}
+  <table class="kpis">
+    <tr>
+      <td><div class="label">Organic traffic</div><div class="value">{{ metrics.organic_traffic }}</div></td>
+      <td><div class="label">Traffic value</div><div class="value">{{ metrics.traffic_value }}</div></td>
+      <td><div class="label">Ranked keywords</div><div class="value">{{ metrics.ranked_keywords }}</div></td>
+    </tr>
+  </table>
+
+  <h2>Top organic keywords</h2>
+  <table class="data">
+    <thead>
+      <tr>
+        <th>Keyword</th><th>Intent</th><th class="num">Position</th>
+        <th class="num">Volume</th><th class="num">CPC</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in keyword_rows %}
+        <tr>
+          <td>{{ r.keyword }}<div class="url">{{ r.url }}</div></td>
+          <td>{{ r.intent }}</td>
+          <td class="num">{{ r.position }}</td>
+          <td class="num">{{ r.volume }}</td>
+          <td class="num">{{ r.cpc }}</td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="5">DataForSEO returned no ranked keywords for this target in {{ location }}.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="caption">{{ keyword_caption }}</p>
+{% else %}
+  <div class="callout absent">{{ keywords_error }}</div>
+{% endif %}
+
+<h2>Backlinks &amp; spam score</h2>
+{% if backlinks_loaded %}
+  <table class="kpis">
+    <tr>
+      <td><div class="label">Backlinks</div><div class="value">{{ bl_summary.backlinks }}</div></td>
+      <td><div class="label">Referring domains</div><div class="value">{{ bl_summary.ref_domains }}</div></td>
+      <td><div class="label">Spam score</div><div class="value">{{ spam_score_text }}</div></td>
+    </tr>
+  </table>
+  <p class="caption">
+    {{ spam.highSpamLinks|default:0 }} high-spam and {{ spam.mediumSpamLinks|default:0 }} medium-spam
+    links among the {{ spam.scoredLinks|default:0 }} scored links in the sample below;
+    {{ spam.unknownLinks|default:0 }} were not scored by DataForSEO.
+    Backlink data is worldwide — the Backlinks API has no market, so the keyword market above does not apply to it.
+  </p>
+
+  <table class="data">
+    <thead>
+      <tr><th>Referring domain</th><th>Anchor</th><th>Follow</th><th class="num">Rank</th><th class="num">Spam</th></tr>
+    </thead>
+    <tbody>
+      {% for l in link_rows %}
+        <tr>
+          <td>{{ l.domain }}<div class="url">{{ l.url }}</div></td>
+          <td>{{ l.anchor }}</td>
+          <td>{{ l.follow }}</td>
+          <td class="num">{{ l.rank }}</td>
+          <td class="num"><span class="pill band-{{ l.band }}">{{ l.spam }}</span></td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="caption">{{ link_caption }}</p>
+
+  <h2>Anchor text</h2>
+  <table class="data">
+    <thead>
+      <tr><th>Anchor</th><th>Type</th><th class="num">Backlinks</th><th class="num">Ref. domains</th><th class="num">Dofollow</th></tr>
+    </thead>
+    <tbody>
+      {% for a in anchor_rows %}
+        <tr>
+          <td>{{ a.anchor }}</td><td>{{ a.type }}</td>
+          <td class="num">{{ a.backlinks }}</td>
+          <td class="num">{{ a.refDomains }}</td>
+          <td class="num">{{ a.dofollowPct }}%</td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="5">DataForSEO returned no anchor breakdown for this target.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="caption">{{ anchor_caption }}</p>
+{% else %}
+  {# The honest absence. This report reads the 24-hour cache and never triggers a backlink
+     fetch: three billed API calls are not something a Download press should buy. #}
+  <div class="callout absent">
+    <strong>Backlinks not loaded for this report.</strong><br>
+    {{ backlinks_note }}
+  </div>
+{% endif %}
+
+<h2>Suggested AI prompts</h2>
+<p class="caption">{{ prompt_caption }}</p>
+{% if prompts.suggested %}
+  <table class="data">
+    <thead><tr><th>Prompt</th><th>Category</th><th class="num">AI volume</th></tr></thead>
+    <tbody>
+      {% for p in prompts.suggested %}
+        <tr><td>{{ p.text }}</td><td>{{ p.category }}</td><td class="num">not measured</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% else %}
+  <div class="callout absent">No keywords were available to expand into prompts.</div>
+{% endif %}
+
+{% if prompts.stored %}
+  <h2>Tracked prompts for {{ project_name }}</h2>
+  <p class="caption">The prompts this registered project already tracks. Shown because this
+    target resolves to a project in this workspace; an unregistered domain has none.</p>
+  <table class="data">
+    <thead><tr><th>Prompt</th></tr></thead>
+    <tbody>
+      {% for p in prompts.stored %}<tr><td>{{ p.text }}</td></tr>{% endfor %}
+    </tbody>
+  </table>
+{% endif %}
+
+</body>
+</html>
