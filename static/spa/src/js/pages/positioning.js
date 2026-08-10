@@ -30,8 +30,24 @@
         if (s.ptEditBusy) return;
         this.setState({ ptEditBusy: true });
         const kwLines = (s.ptEditKws || '').split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-        const kwsToSend = kwLines.map(kw => ({ kw: kw, volume: 0, kd: null, cpc: null, intent: 'Informational' }));
+        /* NAMES ONLY. This used to send `{volume: 0, kd: null, cpc: null, intent:
+           'Informational'}` for every row, and the endpoint cleared the list and rewrote it —
+           so each save overwrote every keyword's real search volume with a fabricated 0 and
+           wiped its difficulty, CPC and intent. The endpoint now reconciles by name and leaves
+           surviving rows alone; sending blanks here would have nothing to write over, but this
+           states the intent rather than relying on that. */
+        const kwsToSend = kwLines.map(kw => ({ kw: kw }));
         const comps = s.ptWizComps || [];
+
+        /* Clearing the whole list is legal but destructive, and a stray Ctrl+A in the textarea
+           looks identical to meaning it. Confirm when the save would empty a non-empty list. */
+        const hadKeywords = ((s.ptEditKwsInitial || '').split(/\r?\n/).filter(l => l.trim())).length;
+        if (!kwLines.length && hadKeywords) {
+          if (!window.confirm('Remove all ' + hadKeywords + ' tracked keywords from this project?')) {
+            this.setState({ ptEditBusy: false });
+            return;
+          }
+        }
 
         /* Search engine / device / language travel with the save. They used to be
            collected by the three selects above and then dropped on the floor — the PUT
@@ -46,10 +62,16 @@
            which is ES2020 and this bundle is ES2017. A rejection resolves to the error; a
            success resolves to null. */
         const settle = (p) => p.then(() => null, err => err || new Error('request failed'));
-        Promise.all([
-          settle(window.FuseAPI.put('/api/projects/' + s.projectId + '/settings', { project: { competitors: comps, name: s.ptEditName, location: s.ptEditLoc, search_engine: s.ptEditEngine, device: s.ptEditDevice, language: s.ptEditLang } })),
-          settle(window.FuseAPI.put('/api/projects/' + s.projectId + '/keywords', { keywords: kwsToSend }))
-        ]).then(results => {
+        /* SEQUENCED, not raced. These used to run inside one Promise.all, and the keywords
+           endpoint stamps new rows with `request.location or site.location` — so whether a
+           newly added keyword was filed under the old or the new location depended on which
+           request committed first. Settings lands the location, then the keyword reconcile
+           runs against it. */
+        settle(window.FuseAPI.put('/api/projects/' + s.projectId + '/settings', { project: { competitors: comps, name: s.ptEditName, location: s.ptEditLoc, search_engine: s.ptEditEngine, device: s.ptEditDevice, language: s.ptEditLang } }))
+          .then(settingsErr => settle(
+            window.FuseAPI.put('/api/projects/' + s.projectId + '/keywords', { keywords: kwsToSend })
+          ).then(kwErr => [settingsErr, kwErr]))
+          .then(results => {
           if (!this._alive) return;
           const settingsErr = results[0];
           const kwErr = results[1];
@@ -68,6 +90,11 @@
             return;
           }
           this.setState({ ptEditBusy: false, ptEditOpen: false });
+          /* The project list carries name, location and the visibility figure, and it is only
+             fetched at boot and after create/delete — so without this the switcher and the
+             list kept showing the pre-edit values for the rest of the session while the
+             workspace showed the new ones. */
+          window.FuseAPI.get('/api/projects').then(ps => { if (this._alive) this.setState({ projects: ps }); }).catch(() => {});
           this.startSync('positions');
           if (this.notify) this.notify('Project updated. Refreshing positions...');
         });
@@ -326,7 +353,8 @@
           meta: [proj.domain || '', wsEngine, wsDevice, wsLang, wsLoc].filter(Boolean).join(' · '),
           onEdit: () => {
             this.setState({
-              ptEditOpen: true, ptEditBusy: false, ptEditKws: '', ptWizComps: [], ptWizCompInput: '',
+              ptEditOpen: true, ptEditBusy: false, ptEditKws: '', ptEditKwsInitial: '',
+              ptWizComps: [], ptWizCompInput: '',
               ptEditDomain: proj.domain || '',
               ptEditName: proj.name || '',
               ptEditEngine: wsEngine,
@@ -341,6 +369,9 @@
                    not on what the header happened to have cached. */
                 this.setState({
                   ptEditKws: (res.project.tracked_keywords || []).join('\n'),
+                  /* What the modal opened with, so Save can tell "user cleared the box" from
+                     "the box never loaded" before it removes anyone's tracked list. */
+                  ptEditKwsInitial: (res.project.tracked_keywords || []).join('\n'),
                   ptWizComps: (res.project.competitors || []),
                   ptEditEngine: res.project.search_engine || wsEngine,
                   ptEditDevice: res.project.device || wsDevice,

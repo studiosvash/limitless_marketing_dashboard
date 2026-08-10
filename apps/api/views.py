@@ -448,14 +448,20 @@ class ProjectKeywordsView(APIView):
         return Response({"ok": True, "saved": saved, "keyword": _tracked_keyword_body(kw, request.data, "manual")})
 
     def put(self, request, slug):
-        """Bulk replace all tracked keywords for THIS project.
+        """Reconcile THIS project's tracked keyword list against the posted names.
 
-        The clear step goes through `clear_saved_keywords`, which is scoped to `site_pk`. This
-        used to issue its own `delete(SavedKeyword).where(site_id == ...)`, which wiped every
-        SIBLING project's tracked list on the same domain as a side effect of one project saving
-        its own — invisibly, because the response only reported the rows it then wrote back.
+        Adds what is missing, removes what is gone, and leaves every surviving row's metrics
+        alone. It used to clear the list and rewrite it from the body, which destroyed data on
+        every save: the Edit Project modal has no metrics to send, so it filled each row with
+        `volume: 0, kd: null, cpc: null, intent: 'Informational'` and each "Save Settings" press
+        overwrote real, paid-for search volumes with a fabricated 0 — reported as full volume
+        coverage afterwards, because `_volume_coverage` counts only nulls.
+
+        Scoping was already fixed: the clear ran through `clear_saved_keywords(site_pk=...)`
+        after an earlier `delete(SavedKeyword).where(site_id == ...)` had been wiping every
+        SIBLING project's list on the domain. `reconcile_saved_keywords` keeps that scoping.
         """
-        from pipeline.services.saved_keyword_service import clear_saved_keywords, save_keywords
+        from pipeline.services.saved_keyword_service import reconcile_saved_keywords
 
         site = resolve_project_or_404(slug)
         site_id = site.site_url
@@ -470,31 +476,32 @@ class ProjectKeywordsView(APIView):
         if not isinstance(batch, list):
             return Response({"detail": "keywords list required"}, status=400)
 
-        clear_saved_keywords(site_id, site_pk=site.id)
+        rows = []
+        for item in batch:
+            if not isinstance(item, dict):
+                continue
+            k = (item.get("kw") or item.get("keyword") or "").strip()
+            if not k:
+                continue
+            serp = item.get("serpFeatures") or item.get("serp_features") or []
+            rows.append({
+                "keyword": k,
+                # Metrics still travel, and are applied to rows that are genuinely NEW — the
+                # Keyword Explorer's send-to-project flow carries real ones. A caller that has
+                # none (the Edit modal) simply omits them, and the reconcile leaves existing
+                # rows untouched rather than writing its blanks over them.
+                "search_volume": item.get("volume") if item.get("volume") is not None else item.get("search_volume"),
+                "keyword_difficulty": item.get("kd") if item.get("kd") is not None else item.get("keyword_difficulty"),
+                "cpc": item.get("cpc"),
+                "intent": item.get("intent"),
+                # Stored comma-joined (saved_keywords.serp_features is Text); the SPA sent
+                # these all along conceptually but this mapper dropped them as NULL.
+                "serp_features": ",".join(serp) if isinstance(serp, list) else serp,
+                "competition": item.get("competition"),
+            })
 
-        if batch:
-            rows = []
-            for item in batch:
-                if not isinstance(item, dict):
-                    continue
-                k = (item.get("kw") or item.get("keyword") or "").strip()
-                if not k:
-                    continue
-                serp = item.get("serpFeatures") or item.get("serp_features") or []
-                rows.append({
-                    "keyword": k,
-                    "search_volume": item.get("volume") if item.get("volume") is not None else item.get("search_volume"),
-                    "keyword_difficulty": item.get("kd") if item.get("kd") is not None else item.get("keyword_difficulty"),
-                    "cpc": item.get("cpc"),
-                    "intent": item.get("intent"),
-                    # Stored comma-joined (saved_keywords.serp_features is Text); the SPA sent
-                    # these all along conceptually but this mapper dropped them as NULL.
-                    "serp_features": ",".join(serp) if isinstance(serp, list) else serp,
-                    "competition": item.get("competition"),
-                })
-            save_keywords(site_id, rows, location, site_pk=site.id)
-
-        return Response({"ok": True, "count": len(batch)})
+        result = reconcile_saved_keywords(site_id, rows, location, site_pk=site.id)
+        return Response({"ok": True, "count": len(rows), **result})
 
 
 @method_decorator(login_not_required, name="dispatch")

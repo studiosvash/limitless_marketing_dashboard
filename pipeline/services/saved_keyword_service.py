@@ -148,6 +148,49 @@ def save_keywords(site_id: str, rows: list[dict], location: Optional[str] = None
         return 0
 
 
+def reconcile_saved_keywords(site_id: str, rows: list[dict], location: Optional[str] = None,
+                             site_pk: Optional[int] = None) -> dict:
+    """Make this project's tracked list match `rows` by NAME. Returns {added, removed, kept}.
+
+    Inserts the keywords that are missing, deletes the ones no longer present, and NEVER touches
+    a surviving row. That last part is the whole point.
+
+    The bulk-replace endpoint used to clear the list and rewrite it from the request body. The
+    Edit Project modal has no metrics to send -- it fills every row with
+    `{volume: 0, kd: null, cpc: null, intent: 'Informational'}` -- so every "Save Settings" press
+    overwrote each keyword's real, paid-for search volume with a fabricated 0 and wiped its
+    difficulty, CPC and intent. The 0 was worse than a null, because `_volume_coverage` counts
+    only nulls: the response then reported full volume coverage over invented numbers.
+
+    Identity is the cleaned, case-folded keyword, so a cosmetic edit ("Festival Staffing" for
+    "festival staffing") is the same keyword and keeps its metrics rather than being deleted and
+    reinserted blank. Metrics on an INCOMING row are still honoured for rows that are genuinely
+    new -- the Keyword Explorer's send-to-project flow really does carry them.
+
+    Idempotent: reconciling the same list twice reports {added: 0, removed: 0}.
+    """
+    incoming: dict[str, dict] = {}
+    for row in rows or []:
+        rec = _clean_row(row if isinstance(row, dict) else {"keyword": row}, location)
+        if rec:
+            incoming.setdefault(rec["keyword"].lower(), rec)
+
+    existing = {(r["keyword"] or "").strip().lower(): r
+                for r in list_saved_keywords(site_id, site_pk)}
+
+    to_add = [incoming[k] for k in incoming.keys() - existing.keys()]
+    to_remove = [existing[k]["keyword"] for k in existing.keys() - incoming.keys()]
+
+    added = save_keywords(site_id, to_add, location, site_pk=site_pk) if to_add else 0
+    removed = 0
+    for kw in to_remove:
+        if delete_saved_keyword(site_id, kw, location or "", site_pk=site_pk):
+            removed += 1
+
+    return {"added": added, "removed": removed,
+            "kept": len(incoming.keys() & existing.keys())}
+
+
 def delete_saved_keyword(site_id: str, keyword: str, location: str,
                          site_pk: Optional[int] = None) -> bool:
     """Untrack one keyword for one project. Returns True if a row was deleted.
