@@ -238,7 +238,7 @@
                 <thead><tr style="text-align: left; color: #94a3b8; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;"><th style="width: 40px; padding: 10px 0 10px 20px;"><span onClick="{{ h.toggleAll }}" style="cursor: pointer; display: inline-flex;"><span style="{{ allCheckStyle }}"><sc-if value="{{ allChecked }}" hint-placeholder-val="{{ false }}"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg></sc-if></span></span></th><th style="font-weight: 500; padding: 10px 10px 10px 4px;">Keyword idea</th><th style="font-weight: 500; padding: 10px;">Intent</th><th style="font-weight: 500; padding: 10px; text-align: right;">Volume</th><th style="font-weight: 500; padding: 10px; text-align: center;">Trend</th><th style="font-weight: 500; padding: 10px; text-align: center;">KD%</th><th style="font-weight: 500; padding: 10px; text-align: center;" title="SERP Features">SF</th><th style="font-weight: 500; padding: 10px 20px 10px 10px; text-align: right;">CPC</th></tr></thead>
                 <tbody>
                   <sc-if value="{{ noRows }}" hint-placeholder-val="{{ false }}">
-                    <tr><td colspan="8" style="padding: 28px 20px; text-align: center; font-size: 13px; color: #94a3b8;">No keywords match this match type / filter combination.</td></tr>
+                    <tr><td colspan="8" style="padding: 28px 20px; text-align: center; font-size: 13px; color: #94a3b8;">{{ noRowsMsg }}</td></tr>
                   </sc-if>
                   <sc-for list="{{ resRows }}" as="r" hint-placeholder-count="4">
                     <tr style="border-top: 1px solid #f1f5f9; background: {{ r.rowBg }};" style-hover="background:#f8fafc">

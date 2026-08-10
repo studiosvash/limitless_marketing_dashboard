@@ -56,6 +56,11 @@ def _to_spa_row(old_row: dict, tracked: set[str]) -> dict:
     return {
         "kw": kw,
         "match": "exact",
+        # Provenance, alongside `match` — see _enrich_expanded_row. These rows come from the
+        # literal-seed keyword_overview lookup, not from any expansion algorithm, so they
+        # belong to no expansion tab but All/Exact.
+        "source": "lookup",
+        "sources": ["lookup"],
         "volume": old_row.get("search_volume") or 0,
         "kd": old_row.get("keyword_difficulty") or 0,
         "cpc": old_row.get("cpc") or 0,
@@ -70,9 +75,16 @@ def _enrich_expanded_row(row: dict, tracked: set[str]) -> dict:
     """Enrich an expanded row from expand_keywords with the site's tracked status."""
     kw = row.get("kw") or ""
     intent = row.get("intent") or "informational"
+    sources = row.get("sources") or ([row["source"]] if row.get("source") else [])
     return {
         "kw": kw,
         "match": row.get("match", "broad"),
+        # PROVENANCE, and it must survive this mapping: `match` is a string-shape bucket and
+        # the Related tab cannot be derived from it (related_keywords returns keywords that
+        # contain the seed, which shape-classify as `phrase`). Dropping these two fields here
+        # would empty that tab again no matter what the connector tags.
+        "source": row.get("source") or (sources[0] if sources else "ideas"),
+        "sources": sources or ["ideas"],
         "volume": row.get("volume") or 0,
         "kd": row.get("kd") or 0,
         "cpc": row.get("cpc") or 0,

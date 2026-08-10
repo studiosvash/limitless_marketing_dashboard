@@ -1198,11 +1198,21 @@
       broad: ['broad', 'phrase', 'exact'],
       phrase: ['phrase', 'exact'],
       exact: ['exact'],
-      questions: ['questions'],
-      related: ['related']
+      questions: ['questions']
     };
-    const allow = sets[s.matchType];
-    let rows = allow ? s.research.rows.filter(r => allow.includes(r.match)) : s.research.rows.slice();
+    /* Related is PROVENANCE, not word shape. `related_keywords/live` returns Google's
+       "searches related to", which almost always CONTAINS the seed, so every one of those
+       rows shape-classifies as `phrase` — this tab filtered on `match === 'related'` and
+       rendered empty over rows DataForSEO had returned and billed for. `sources` records
+       which fetch produced each row. The `match === 'related'` fallback keeps a search
+       cached in localStorage under the old contract working. */
+    let rows;
+    if (s.matchType === 'related') {
+      rows = s.research.rows.filter(r => (r.sources || (r.source ? [r.source] : [])).indexOf('related') >= 0 || r.match === 'related');
+    } else {
+      const allow = sets[s.matchType];
+      rows = allow ? s.research.rows.filter(r => allow.includes(r.match)) : s.research.rows.slice();
+    }
     if (s.resVolMin > 0) rows = rows.filter(r => r.volume >= s.resVolMin);
     if (s.resKdMin > 0 || s.resKdMax < 100) rows = rows.filter(r => r.kd >= s.resKdMin && r.kd <= s.resKdMax);
     if (s.resIntents.length) rows = rows.filter(r => s.resIntents.includes(r.intent));
@@ -2719,6 +2729,13 @@
       keywords: 'keywords',
       positioning: 'positions',
       backlinks: 'backlinks',
+      /* Off-site had NO entry here, so `tabToScope['offsite']` was undefined, `startSync`
+         had no scope to start, and both the page refresh button and the empty state's
+         "⚡ Fetch Off-site Data Now" were silent no-ops — the one button a user with no
+         off-site data is told to press. Every number on the page comes from GA4, which the
+         `overview` scope runs (PAGE_CONNECTORS.overview = ["gsc", "ga4"]); there is no
+         narrower scope to point at, because no separate off-site connector exists. */
+      offsite: 'overview',
       pages: 'audit',
       ai: 'ai',
       ads: 'ads',
@@ -2913,7 +2930,7 @@
       exportTopPages: () => { const d = s.cache[this.key('overview')]; if (d) this.downloadCsv(project.domain + '-top-pages.csv', [['page', 'url'], ['clicks', 'clicks'], ['impressions', 'impressions'], ['ctr', 'ctr']], d.topPages); },
       exportKeywords: () => { const d = s.cache[this.key('keywords')]; if (d) this.downloadCsv(project.domain + '-keywords.csv', [['keyword', 'kw'], ['intent', 'intent'], ['position', 'pos'], ['volume', 'volume'], ['kd', 'kd'], ['cpc', 'cpc'], ['clicks', 'clicks'], ['url', 'url']], d.keywords); },
       exportBacklinks: () => { const d = s.cache[this.key('backlinks')]; if (d) this.downloadCsv(project.domain + '-backlinks.csv', [['domain', 'domain'], ['url_from', 'url_from'], ['anchor', 'anchor'], ['status', 'status'], ['dofollow', 'dofollow'], ['domain_rank', 'rank'], ['page_rank', 'page_rank'], ['spam_score', 'spam_score'], ['first_seen', 'firstSeen'], ['target', 'target']], d.links); },
-      exportReferrers: () => { const d = s.cache[this.key('offsite')]; if (d) this.downloadCsv(project.domain + '-referring-domains.csv', [['domain', 'domain'], ['domain_rank', 'rank'], ['sessions', 'sessions'], ['engaged_sessions', 'engagedSessions'], ['engagement_rate', 'engagedRate'], ['key_events', 'keyEvents'], ['revenue', 'revenue'], ['tracked_as_backlink', 'tracked']], d.referrers); },
+      exportReferrers: () => { const d = s.cache[this.key('offsite')]; if (d) this.downloadCsv(project.domain + '-referring-domains.csv', [['domain', 'domain'], ['domain_rank', 'authorityScore'], ['sessions', 'sessions'], ['engagement_rate', 'engagementRate'], ['key_events', 'keyEvents'], ['revenue', 'revenue']], d.referrers); },
       exportSocial: () => { const d = s.cache[this.key('offsite')]; if (d) this.downloadCsv(project.domain + '-off-site-social.csv', [['platform', 'platform'], ['source', 'source'], ['channel', 'channel'], ['impressions', 'impressions'], ['sessions', 'sessions'], ['engagement_rate', 'engagedRate'], ['key_events', 'keyEvents'], ['revenue', 'revenue']], d.social); },
       exportPages: () => { const d = s.cache[this.key('pages')]; if (d) this.downloadCsv(project.domain + '-crawled-pages.csv', [['url', 'url'], ['score', 'score'], ['status', 'statusCode'], ['errors', 'errors'], ['warnings', 'warnings'], ['notices', 'notices'], ['depth', 'depth'], ['in_links', 'inLinks'], ['load_ms', 'loadTimeMs']], d.crawledPages); },
       auGoIssues: () => { this.setState({ auSub: 'issues', auSev: 'all', auCat: 'all' }); this.pushNav({ auSub: 'issues' }); },
@@ -3380,6 +3397,14 @@
       vals.noneSelected = selCount === 0;
       vals.selectedCount = selCount;
       vals.noRows = visRows.length === 0;
+      /* An empty Related tab has two different causes and the reader has to be able to tell
+         them apart: the seed genuinely has no "searches related to" graph, or the filters
+         hid what came back. Before provenance tagging there was a third cause — the rows
+         arrived and were mislabelled — and the generic message covered for it. */
+      const anyRelated = s.research.rows.some(r => (r.sources || (r.source ? [r.source] : [])).indexOf('related') >= 0 || r.match === 'related');
+      vals.noRowsMsg = (s.matchType === 'related' && !anyRelated)
+        ? 'DataForSEO returned no related searches for this seed.'
+        : 'No keywords match this match type / filter combination.';
       vals.toolbarBg = selCount > 0 ? '#f5f7ff' : '#f8fafc';
       vals.exportScopeLabel = selCount > 0 ? '(' + selCount + ')' : '(all ' + visRows.length + ')';
 

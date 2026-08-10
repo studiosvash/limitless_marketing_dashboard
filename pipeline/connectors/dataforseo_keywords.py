@@ -294,12 +294,20 @@ class DataForSEOKeywordsConnector(BaseConnector):
 
     @staticmethod
     def _classify_match(kw: str, seed_phrases: list[str], seed_token_sets: list[set]) -> str:
-        """Bucket a keyword_ideas result relative to the seeds for the SPA's tab filters.
-        keyword_ideas IS the 'broad' category-relevance set (widest net — includes terms that
-        don't contain the seed), so the default is 'broad'; only the narrower forms peel off.
-        Precedence: exact > questions > phrase > broad. ('related' is reserved for a future
-        related_keywords call and stays empty here.) seed_token_sets is unused now but kept for
-        signature stability with callers/tests."""
+        """Bucket a result by the SHAPE OF ITS WORDS relative to the seeds, for the SPA's
+        Broad / Phrase / Exact / Questions tabs. Precedence: exact > questions > phrase >
+        broad. seed_token_sets is unused now but kept for signature stability.
+
+        This never returns 'related', and must not: which algorithm produced a row is
+        PROVENANCE, and it lives on `source`/`sources` (see expand_keywords). The Related tab
+        used to be fed from here — a row was tagged 'related' only if this function said
+        'broad' — and `related_keywords/live` returns Google's "searches related to", which
+        almost always CONTAINS the seed. For DataForSEO's own documented example (seed
+        "keyword research" -> "free keyword research", "keyword research tools", "best free
+        keyword research tool", "keyword research google ads") not one row would have
+        qualified: all four shape-classify as 'phrase', so the Related tab rendered empty
+        over rows the API had returned and billed for, while the rows themselves sat under
+        the wrong tabs. Two different questions need two different fields."""
         k = (kw or "").lower().strip()
         if not k:
             return "broad"
@@ -341,12 +349,20 @@ class DataForSEOKeywordsConnector(BaseConnector):
         sit at the top level. With the un-nested path the API rejects the whole task with
         40501 "Invalid Field: 'order_by'", the warning was swallowed upstream, and the
         Explorer's Related tab silently showed zero results forever (found 2026-08-03).
+
+        `depth` is REQUIRED for `limit` to mean anything. This endpoint walks the "searches
+        related to" graph outward from the seed, and DataForSEO defaults to depth 1, which is
+        AT MOST 8 keywords — so a `limit` of 50 was inert and the tab was starved at the
+        source even once its rows were tagged correctly. Depth 2 returns ~50-72 rows and adds
+        roughly $0.005-0.01 to a search; depth 3 jumps to ~500 rows and is not worth the bill
+        for a tab that sits beside five others.
         """
         payload = [{
             "keyword": (seed or "").lower().strip(),
             "location_name": location_name,
             "language_name": "English",
             "include_serp_info": True,
+            "depth": 2,
             "limit": max(1, min(limit, 500)),
             "order_by": ["keyword_data.keyword_info.search_volume,desc"],
         }]
@@ -449,13 +465,26 @@ class DataForSEOKeywordsConnector(BaseConnector):
             "serpFeatures": list(serp_types) if serp_types else [],
         }
 
+    # How many seeds the per-seed endpoints fan out over. Both related_keywords and
+    # keyword_suggestions take ONE seed per task and are billed per task, so this is a direct
+    # multiplier on what a search costs. keyword_ideas and the question filter take the whole
+    # seed list in one task and are not capped.
+    RELATED_SEED_CAP = 3
+
     def expand_keywords(self, seeds: list[str], location_name: str = "United States",
                         limit: int = 100, site_id: str = "") -> dict:
         """Keyword Explorer expansion. Read-only — never writes analytics rows. Always returns a
         dict the endpoint can branch on:
 
             {"status": "ok"|"error", "location": str, "cost": float,
-             "rows": [{kw, volume, kd, cpc, intent, match, monthly, serpFeatures}], "error": str|None}
+             "rows": [{kw, volume, kd, cpc, intent, match, source, sources[], monthly,
+                       serpFeatures}],
+             "error": str|None}
+
+        `match` answers "what shape is this keyword relative to the seed" and drives the
+        Broad / Phrase / Exact / Questions tabs. `source` (and `sources`, every algorithm that
+        returned the keyword) answers "where did this row come from" and drives the Related
+        tab. See _absorb below for why they cannot be the same field.
 
         The returned `cost` is unchanged (the SPA renders it); it is now ALSO appended to
         connector_costs so Settings can total it. `site_id` is optional and only attributes
@@ -482,10 +511,16 @@ class DataForSEOKeywordsConnector(BaseConnector):
         # DataForSEO location_name. Normalise for the API, keep the display form in the response.
         api_location = normalize_location_name(location_name)
 
-        ideas_payload, related_payload, questions_payload = {}, {}, {}
-        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
+        ideas_payload, questions_payload = {}, {}
+        related_payloads: list[dict] = []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2 + self.RELATED_SEED_CAP) as pool:
             f_ideas = pool.submit(self._fetch_keyword_ideas, cleaned, api_location, limit)
-            f_related = pool.submit(self._fetch_related_keywords, cleaned[0], api_location, min(limit, 50))
+            # related_keywords/live takes ONE seed string per task, so fanning out over the
+            # seeds means one task each. Capped: it is billed per task and the Related tab is
+            # one of six, so three seeds is the ceiling this Explorer buys. Running it for
+            # `cleaned[0]` alone meant seeds 2..n contributed nothing to that tab at all.
+            f_related = [pool.submit(self._fetch_related_keywords, s, api_location, min(limit, 50))
+                         for s in cleaned[:self.RELATED_SEED_CAP]]
             # Question-filtered keyword_ideas, NOT keyword_suggestions — suggestions requires
             # the full seed phrase inside every result, which excludes almost every real
             # question; see _fetch_question_ideas. (An earlier revision built question-
@@ -500,10 +535,11 @@ class DataForSEOKeywordsConnector(BaseConnector):
                 return {"status": "error", "location": location_name, "cost": 0, "rows": [],
                         "error": f"Couldn't fetch keyword ideas: {exc}"}
 
-            try:
-                related_payload = f_related.result()
-            except Exception as exc:
-                self.logger.warning(f"[dataforseo_keywords] expand_keywords related failed: {exc}")
+            for fut in f_related:
+                try:
+                    related_payloads.append(fut.result())
+                except Exception as exc:
+                    self.logger.warning(f"[dataforseo_keywords] expand_keywords related failed: {exc}")
 
             try:
                 questions_payload = f_questions.result()
@@ -515,49 +551,63 @@ class DataForSEOKeywordsConnector(BaseConnector):
         # read happened to be right, but the per-task rows are the documented source of truth.
         total_cost = (
             extract_cost(ideas_payload)
-            + extract_cost(related_payload)
+            + sum(extract_cost(p) for p in related_payloads)
             + extract_cost(questions_payload)
         )
 
         seed_phrases = [s.lower().strip() for s in cleaned]
         seed_token_sets = [set(re.findall(r"[a-z0-9]+", p)) for p in seed_phrases]
 
-        rows = []
-        seen_kws = set()
+        rows: list[dict] = []
+        by_kw: dict[str, dict] = {}
 
-        # 1. Parse main keyword ideas (broad, phrase, exact, questions)
-        task_ideas = (ideas_payload.get("tasks") or [{}])[0]
-        for item in ((task_ideas.get("result") or [{}])[0].get("items") or []):
-            row = self._parse_idea_item(item)
-            if row and row["kw"].lower() not in seen_kws:
-                seen_kws.add(row["kw"].lower())
-                row["match"] = self._classify_match(row["kw"], seed_phrases, seed_token_sets)
-                rows.append(row)
+        def _items_of(payload: dict) -> list:
+            task = (payload.get("tasks") or [{}])[0] or {}
+            return ((task.get("result") or [{}])[0] or {}).get("items") or []
 
-        # 2. Parse related keywords
-        task_related = (related_payload.get("tasks") or [{}])[0]
-        for item in ((task_related.get("result") or [{}])[0].get("items") or []):
-            row = self._parse_idea_item(item)
-            if row and row["kw"].lower() not in seen_kws:
-                seen_kws.add(row["kw"].lower())
-                match_class = self._classify_match(row["kw"], seed_phrases, seed_token_sets)
-                row["match"] = "related" if match_class == "broad" else match_class
-                rows.append(row)
+        def _absorb(item: dict, source: str) -> None:
+            """One row per keyword, tagged with EVERY algorithm that returned it.
 
-        # 3. Parse keyword suggestions
-        task_questions = (questions_payload.get("tasks") or [{}])[0]
-        for item in ((task_questions.get("result") or [{}])[0].get("items") or []):
+            Two independent axes, and conflating them is what emptied the Related tab:
+
+              * `match`   — the shape of the words (Broad / Phrase / Exact / Questions tabs).
+              * `source` / `sources` — which fetch produced the row (the Related tab).
+
+            The dedup also used to STARVE related: `seen_kws` was filled from keyword_ideas
+            (limit 100, volume-desc) before the related loop ran, and "searches related to"
+            keywords are popular by definition, so most were already claimed and dropped on
+            the floor. Keeping one row but recording the extra provenance costs nothing, keeps
+            the All tab free of duplicates, and stops a related keyword vanishing merely
+            because a higher-volume algorithm saw it first.
+            """
             row = self._parse_idea_item(item)
-            if row and row["kw"].lower() not in seen_kws:
-                seen_kws.add(row["kw"].lower())
-                row["match"] = self._classify_match(row["kw"], seed_phrases, seed_token_sets)
-                rows.append(row)
+            if not row:
+                return
+            key = row["kw"].lower()
+            known = by_kw.get(key)
+            if known is not None:
+                if source not in known["sources"]:
+                    known["sources"].append(source)
+                return
+            row["match"] = self._classify_match(row["kw"], seed_phrases, seed_token_sets)
+            row["source"] = source
+            row["sources"] = [source]
+            by_kw[key] = row
+            rows.append(row)
+
+        for item in _items_of(ideas_payload):
+            _absorb(item, "ideas")
+        for payload in related_payloads:
+            for item in _items_of(payload):
+                _absorb(item, "related")
+        for item in _items_of(questions_payload):
+            _absorb(item, "questions")
 
         # `units` = keyword rows returned. Labs ideas/related/suggestions all meter per
         # returned keyword, so this is the honest denominator for cost-per-keyword.
         record_cost(
             self.name, site_id, total_cost, units=len(rows),
-            notes=f"labs keyword_ideas+related_keywords+keyword_suggestions ({api_location})",
+            notes=f"labs keyword_ideas+related_keywords(depth 2)+question ideas ({api_location})",
         )
 
         return {"status": "ok", "location": location_name, "cost": round(float(total_cost), 4),

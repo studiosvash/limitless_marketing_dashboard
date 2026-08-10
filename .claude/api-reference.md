@@ -1458,9 +1458,23 @@ back to `lookup_keywords()` on failure, then a second `lookup_keywords()` pass t
 seed the expansion omitted.
 
 **Response** `{"rows": [...], "cost": <float>, "location": "...", "status": "ok", "error"?: "..."}`
-where each row is `{kw, match, volume, kd, cpc, intent, serpFeatures[], monthly[], tracked}`.
-`match` ∈ `exact|broad|phrase|questions|related`; `tracked` reflects whether the site already has
-`KeywordRanking` rows for that keyword.
+where each row is
+`{kw, match, source, sources[], volume, kd, cpc, intent, serpFeatures[], monthly[], tracked}`.
+`tracked` reflects whether the site already has `KeywordRanking` rows for that keyword.
+
+**`match` and `source` are two different axes and the SPA reads both:**
+
+| Field | Question it answers | Values | Drives |
+|---|---|---|---|
+| `match` | what shape are these words relative to the seed? | `exact`\|`phrase`\|`questions`\|`broad` | Broad / Phrase / Exact / Questions tabs |
+| `sources` | which fetch(es) returned this keyword? | `ideas`, `related`, `questions`, `suggestions`, `lookup` | Related tab |
+
+`source` is the first (primary) entry of `sources`; a keyword returned by more than one
+algorithm appears **once**, with every algorithm listed. `match` never carries the value
+`related` — deriving the Related tab from word shape emptied it, because
+`related_keywords/live` returns keywords that contain the seed and those classify as `phrase`.
+Rows cached by the SPA before this field existed still carry `match: "related"`, and the tab
+filter accepts either form.
 
 Returns honest empty rows (never fabricated data) when DataForSEO is unavailable.
 
