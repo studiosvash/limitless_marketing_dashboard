@@ -32,7 +32,7 @@ from pipeline.db.schema import (
     LLMCitedPage, LLMMentionMetric,
     SavedKeyword, BacklinksSnapshot,
     AuditSnapshot, AdSearchTerm, GA4CampaignDaily, ConnectorCost,
-    PageCrawlMeta, ensure_page_speed_columns, ensure_backlinks_columns,
+    PageCrawlMeta, ensure_page_speed_columns, ensure_backlink_url_from_key,
     ensure_ranking_location_columns, ensure_ranking_location_keys, DEFAULT_LOCATION,
     ensure_saved_keyword_project, UNOWNED_SITE_PK,
 )
@@ -499,21 +499,36 @@ def upsert_ad_metrics(session: Session, records: list[dict], site_id: Optional[s
 # ─────────────────────────────────────────────
 
 def upsert_backlinks(session: Session, records: list[dict], site_id: Optional[str] = None) -> int:
-    """Upsert backlinks. Unique on (site_id, referring_domain, target_url)."""
+    """Upsert backlinks. Unique on (site_id, referring_domain, url_from, target_url).
+
+    `url_from` — the exact page carrying the link — is part of the key because a backlink is
+    identified by the page that hosts it, not by the domain that hosts that page. Without it,
+    a referring domain linking to the same target from 200 pages collapsed into one stored row
+    and 199 were discarded here, in `_dedupe_by_keys`, before the INSERT ran.
+    """
     if not records:
         return 0
 
     # `select(Backlink)` / `insert(Backlink)` reference url_from/page_from_rank/spam_score,
-    # which do not exist on a `backlinks` table created before those columns were added.
-    ensure_backlinks_columns(session)
+    # which do not exist on a `backlinks` table created before those columns were added — and
+    # `url_from` additionally has to be filled and keyed on before this upsert is correct, so
+    # the write path carries the whole migration rather than only its column half. `init_db()`
+    # is a management-command entry point; without a lazy caller a deployed database would
+    # never acquire the new key and would keep collapsing source pages on every sync.
+    ensure_backlink_url_from_key(session)
 
     _ensure_site_id(records, site_id)
     for r in records:
         r.setdefault("site_id", "")
+        # `url_from` is part of the key, so a NULL would bypass ON CONFLICT on Postgres and
+        # duplicate the row on every sync (skills.md §9). '' is what the connector already
+        # writes when DataForSEO omits the field: source page unknown.
+        if r.get("url_from") is None:
+            r["url_from"] = ""
 
     insert = upsert_insert(session)
     BATCH_SIZE = max_batch_size(session, 80)
-    _upsert_keys = ("site_id", "referring_domain", "target_url")
+    _upsert_keys = ("site_id", "referring_domain", "url_from", "target_url")
     records = _dedupe_by_keys(records, _upsert_keys)
     update_cols = [k for k in records[0] if k not in _upsert_keys]
     total = 0

@@ -26,7 +26,9 @@ from pipeline.db.writer import _dedupe_by_keys, upsert_backlinks
 class DedupeByKeysTests(unittest.TestCase):
     """Pure-function behaviour. Dialect-independent, so these assertions are the real contract."""
 
-    KEYS = ("site_id", "referring_domain", "target_url")
+    # The live backlinks key. `url_from` joined it on 2026-08-10 — see
+    # `test_two_source_pages_on_one_domain_are_two_backlinks` below.
+    KEYS = ("site_id", "referring_domain", "url_from", "target_url")
 
     def test_returns_input_untouched_when_nothing_duplicates(self):
         records = [
@@ -61,16 +63,46 @@ class DedupeByKeysTests(unittest.TestCase):
         self.assertEqual(out[0]["anchor"], "last")
 
     def test_the_real_backlinks_shape_site_wide_footer_links(self):
-        """The production case: one referring domain links to the same target from N pages, and
-        the connector discards url_from, so all N collapse to one conflict key."""
+        """The production case: one referring domain links to the same target from N pages.
+
+        This test used to assert `len(out) == 1` and call that correct, because `url_from` was
+        not in the key — so 199 of these 200 rows were thrown away in Python before the insert
+        and the survivor kept whichever source URL arrived last. A site-wide footer link from a
+        200-page blog IS 200 backlinks; it is what DataForSEO bills for, what Semrush shows,
+        and what made the stored profile read 362 against DataForSEO's own 729. Nothing about
+        the dedupe helper changed — the KEY did, and the helper now correctly keeps all 200.
+        """
         records = [
             {"site_id": "a.com", "referring_domain": "blog.com", "target_url": "https://a.com/",
+             "url_from": f"https://blog.com/post-{i}",
              "anchor": f"link {i}", "dofollow": True, "domain_rank": 50}
             for i in range(200)
         ]
         out = _dedupe_by_keys(records, self.KEYS)
+        self.assertEqual(len(out), 200)
+        self.assertEqual({r["url_from"] for r in out}, {f"https://blog.com/post-{i}" for i in range(200)})
+
+    def test_two_source_pages_on_one_domain_are_two_backlinks(self):
+        """The minimal statement of the same rule, so the intent survives a refactor."""
+        out = _dedupe_by_keys([
+            {"site_id": "a.com", "referring_domain": "blog.com", "target_url": "https://a.com/",
+             "url_from": "https://blog.com/a"},
+            {"site_id": "a.com", "referring_domain": "blog.com", "target_url": "https://a.com/",
+             "url_from": "https://blog.com/b"},
+        ], self.KEYS)
+        self.assertEqual(len(out), 2)
+
+    def test_the_same_source_page_twice_still_collapses(self):
+        """The dedupe helper's real job is unchanged: DataForSEO can return the same source
+        page twice in one response, and Postgres refuses a batch that conflicts with itself."""
+        out = _dedupe_by_keys([
+            {"site_id": "a.com", "referring_domain": "blog.com", "target_url": "https://a.com/",
+             "url_from": "https://blog.com/a", "anchor": "first"},
+            {"site_id": "a.com", "referring_domain": "blog.com", "target_url": "https://a.com/",
+             "url_from": "https://blog.com/a", "anchor": "last"},
+        ], self.KEYS)
         self.assertEqual(len(out), 1)
-        self.assertEqual(out[0]["anchor"], "link 199")
+        self.assertEqual(out[0]["anchor"], "last")
 
     def test_differing_only_outside_the_key_still_collapses(self):
         out = _dedupe_by_keys([
@@ -110,7 +142,26 @@ class UpsertBacklinksDedupeIntegrationTests(unittest.TestCase):
         with self.Session() as s:
             return s.execute(select(Backlink)).scalars().all()
 
+    def test_one_row_per_source_page_survives_the_round_trip(self):
+        """The key change, asserted through the writer rather than the helper alone."""
+        batch = [
+            {"referring_domain": "blog.com", "target_url": "https://a.com/",
+             "url_from": f"https://blog.com/p{i}", "anchor": f"anchor {i}"}
+            for i in range(50)
+        ]
+        with self.Session() as s:
+            upsert_backlinks(s, batch, site_id="a.com")
+            s.commit()
+
+        self.assertEqual(len(self._rows()), 50)
+
     def test_a_batch_full_of_duplicates_writes_one_row_with_the_last_values(self):
+        """Same source page repeated — the case `_dedupe_by_keys` genuinely exists for.
+
+        These records carry no `url_from` at all, which `upsert_backlinks` normalises to ''
+        rather than leaving NULL: a NULL in a conflict-target column bypasses ON CONFLICT
+        entirely on Postgres and duplicates on every sync (skills.md §9).
+        """
         batch = [
             {"referring_domain": "blog.com", "target_url": "https://a.com/",
              "anchor": f"anchor {i}", "dofollow": True, "domain_rank": i}
@@ -124,6 +175,7 @@ class UpsertBacklinksDedupeIntegrationTests(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0].anchor, "anchor 49")
         self.assertEqual(rows[0].domain_rank, 49)
+        self.assertEqual(rows[0].url_from, "")   # never NULL — see the docstring above
 
     def test_duplicates_do_not_cost_the_other_rows_in_the_batch(self):
         """The outage's real damage: one bad key rolled back the ENTIRE 1000-row batch."""

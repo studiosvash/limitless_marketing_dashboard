@@ -365,7 +365,13 @@ class Backlink(Base):
     last_seen = Column(Date, nullable=True)
     # The exact page that carries the link (DataForSEO `url_from`). Without this the Backlinks
     # table could only show the referring DOMAIN, never a link to the actual page.
-    url_from = Column(Text, nullable=True)
+    #
+    # NOT NULL with a '' default, and part of the unique key below. Both halves are load-bearing:
+    # Postgres does not treat NULL = NULL as a conflict inside a unique index, so a nullable key
+    # column would bypass ON CONFLICT and duplicate the row on EVERY sync (skills.md §9). '' is
+    # the same value the connector already writes when DataForSEO omits url_from, so
+    # "source page unknown" has one representation rather than two.
+    url_from = Column(Text, nullable=False, default="", server_default="")
     # The referring PAGE's own authority (DataForSEO `page_from_rank`), 0-1000 -- distinct from
     # `domain_rank` above, which is domain-wide.
     page_from_rank = Column(Integer, nullable=True)
@@ -373,7 +379,22 @@ class Backlink(Base):
     spam_score = Column(Integer, nullable=True)
 
     __table_args__ = (
-        UniqueConstraint("site_id", "referring_domain", "target_url", name="uq_backlink_site"),
+        # RENAMED from uq_backlink_site, and `url_from` joined it on 2026-08-10.
+        #
+        # A backlink is identified by the PAGE that carries it, not by the domain that hosts
+        # that page. Under the old three-column key a referring domain that linked to the same
+        # target from 200 pages — a site-wide footer or nav link, the commonest shape there is —
+        # stored ONE row, and `_dedupe_by_keys` discarded the other 199 in Python before the
+        # insert ever ran. The exact source URLs the Backlinks table is supposed to show could
+        # not be held by this table at all, and every count derived from `len(rows)` was
+        # deflated by the same factor: 362 stored against DataForSEO's own 729 for one profile.
+        #
+        # The rename is mandatory, not cosmetic: `_swap_unique_constraint` decides whether a
+        # database has already been reconciled by looking for the NEW NAME, so redefining
+        # `uq_backlink_site` in place would leave every existing database on the old key
+        # silently and forever.
+        UniqueConstraint("site_id", "referring_domain", "url_from", "target_url",
+                         name="uq_backlink_site_url_from"),
     )
 
 
@@ -1053,12 +1074,27 @@ _PAGE_SPEED_ADDED_COLUMNS = (
 
 # `backlinks.url_from` / `page_from_rank` / `spam_score` — DataForSEO returns all three on
 # every backlink row (see pipeline/connectors/dataforseo_backlinks.py), but the original table
-# had no columns for them, so they were fetched and then discarded. Nullable, no default: a
-# backlink synced before this migration has genuinely unknown values, not zero.
+# had no columns for them, so they were fetched and then discarded.
+#
+# The two ranks stay nullable with no default: a backlink synced before this migration has a
+# genuinely unknown authority, not zero. `url_from` is the exception, and deliberately so — it
+# is part of the unique key (see the Backlink model), and a NULL in a conflict-target column
+# bypasses ON CONFLICT on Postgres and duplicates the row on every sync. DEFAULT '' means an
+# existing row lands on a real value in the same ALTER, and '' reads as "source page unknown",
+# which is exactly what those rows are.
 _BACKLINKS_ADDED_COLUMNS = (
-    ("url_from", "TEXT", None),
+    ("url_from", "TEXT", ""),
     ("page_from_rank", "INTEGER", None),
     ("spam_score", "INTEGER", None),
+)
+
+# (table, old constraint name, new constraint name, new column tuple) for the 2026-08-10
+# backlinks key change. Same mechanism, and same reason for the rename, as the ranking-location
+# keys above: `_swap_unique_constraint` reads the NAME to decide whether a database is already
+# reconciled.
+_BACKLINK_URL_FROM_KEY = (
+    "backlinks", "uq_backlink_site", "uq_backlink_site_url_from",
+    ("site_id", "referring_domain", "url_from", "target_url"),
 )
 
 # `keyword_rankings.location` / `competitor_keyword_rankings.location` — see the column comments
@@ -1297,6 +1333,98 @@ def ensure_ranking_location_keys(session_or_engine) -> list[str]:
                 # is the pre-existing behaviour rather than a new failure.
                 logger.error("[schema] could not swap the unique key on %s", table,
                              exc_info=True)
+        return changed
+
+    if isinstance(session_or_engine, Session):
+        return _do(session_or_engine.connection())
+    with session_or_engine.begin() as conn:
+        return _do(conn)
+
+
+def _backfill_backlink_url_from(conn) -> int:
+    """Give every `backlinks` row with a NULL `url_from` the '' that means "unknown source page".
+
+    Returns the number of rows changed.
+
+    Runs between the ALTER that (re)declares the column and the constraint swap that puts it in
+    the unique key — the same sequence `_backfill_saved_keyword_projects` documents, for a
+    sharper reason: `url_from` is about to become a conflict-target column, and Postgres does
+    not treat NULL = NULL as a conflict inside a unique index. A single NULL left behind would
+    bypass ON CONFLICT and re-insert that row on every sync, forever. On SQLite the rebuild in
+    `_swap_unique_constraint` would simply refuse (NOT NULL constraint failed) and the whole
+    swap would be logged and skipped.
+
+    '' rather than a guessed URL: these rows were synced before `url_from` existed as a column,
+    so the page that carried the link was never recorded. The connector already writes '' when
+    DataForSEO omits the field, so this is the existing representation of the same fact, not a
+    new sentinel — and the UI renders it as "source page unknown" rather than as a link.
+    """
+    inspector = inspect(conn)
+    if not inspector.has_table("backlinks"):
+        return 0
+    if "url_from" not in {c["name"] for c in inspector.get_columns("backlinks")}:
+        return 0
+    return conn.execute(
+        text("UPDATE backlinks SET url_from = '' WHERE url_from IS NULL")
+    ).rowcount or 0
+
+
+def _set_backlink_url_from_not_null(conn) -> bool:
+    """Make `backlinks.url_from` NOT NULL on an existing database. Returns True if it changed.
+
+    Postgres takes this directly: `ALTER TABLE ... ALTER COLUMN ... SET NOT NULL` is a catalog
+    change plus one validating scan, with no row copy. SQLite has no such statement — but it
+    does not need one, because `_swap_unique_constraint` rebuilds the table from the model
+    definition there, and the model already declares the column NOT NULL. Either way the
+    backfill above must have run first, or the change is rejected by whichever path applies.
+    """
+    inspector = inspect(conn)
+    if not inspector.has_table("backlinks"):
+        return False
+    col = next((c for c in inspector.get_columns("backlinks") if c["name"] == "url_from"), None)
+    if col is None or not col.get("nullable", True):
+        return False                      # already NOT NULL, or built that way by create_all
+    if conn.dialect.name == "sqlite":
+        return False                      # handled by the table rebuild in the swap
+    conn.execute(text('ALTER TABLE backlinks ALTER COLUMN url_from SET NOT NULL'))
+    return True
+
+
+def ensure_backlink_url_from_key(session_or_engine) -> bool:
+    """Move `backlinks` onto its per-SOURCE-PAGE key: fill `url_from`, forbid NULL, key on it.
+
+    Idempotent, never raises, safe on every read and write path — the same contract as
+    `ensure_saved_keyword_project` / `ensure_tracked_competitor_project`, and called lazily from
+    `writer.upsert_backlinks` for the same reason: `init_db()` is a management-command entry
+    point, so a deployed database would otherwise never acquire the new key and would keep
+    collapsing 200 source pages into one row on every sync.
+
+    Returns True if this call changed anything.
+
+    MUST run AFTER `ensure_backlinks_columns` — the column has to exist before a key can be
+    built over it — which is why `init_db` orders them that way and why this function re-runs
+    the column ALTER itself rather than assuming a caller did.
+
+    WHAT THIS MIGRATION CANNOT DO: recover the collapsed history. The 199-of-200 rows that the
+    old key discarded were dropped in Python before the INSERT, so they were never stored and
+    there is nothing in the database to expand. A full backlinks re-sync repopulates them; that
+    is the only way, and it is the approved plan. Rows already stored keep whatever `url_from`
+    they hold and are matched by the re-sync.
+    """
+    def _do(conn) -> bool:
+        changed = False
+        try:
+            changed = bool(_alter_missing_columns(conn, "backlinks", _BACKLINKS_ADDED_COLUMNS))
+            if _backfill_backlink_url_from(conn):
+                changed = True
+            table, old_name, new_name, cols = _BACKLINK_URL_FROM_KEY
+            if _swap_unique_constraint(conn, table, old_name, new_name, cols):
+                changed = True
+            if _set_backlink_url_from_not_null(conn):
+                changed = True
+        except Exception:
+            logger.error("[schema] could not move backlinks onto its per-source-page key",
+                         exc_info=True)
         return changed
 
     if isinstance(session_or_engine, Session):
@@ -1556,6 +1684,9 @@ def init_db(engine: Engine) -> None:
     ensure_site_columns(engine)
     ensure_page_speed_columns(engine)
     ensure_backlinks_columns(engine)
+    # Order matters here too: url_from must exist as a column before a unique key can be built
+    # over it, and its NULLs must be gone before that key can forbid them.
+    ensure_backlink_url_from_key(engine)
     ensure_site_url_not_unique(engine)
     # Order matters: the column has to exist before a unique key can be built over it.
     ensure_ranking_location_columns(engine)
