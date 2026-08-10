@@ -1376,10 +1376,15 @@ class PromptResearchView(APIView):
 
 @method_decorator(login_not_required, name="dispatch")
 class DomainOverviewView(APIView):
+    """One of the four sanctioned live-lookup endpoints. The view resolves the project and
+    delegates; the 24h cache, the spend gate and the tracked-keyword join all live in
+    `apps/dashboard/services/domain_overview_service.py`.
+
+    This used to be the only view in the codebase that constructed a connector itself.
+    """
     def post(self, request):
-        from django.core.cache import cache
-        from pipeline.connectors.dataforseo_domain_overview import DataForSEODomainOverviewConnector
-        
+        from apps.dashboard.services.domain_overview_service import run_domain_overview
+
         target = request.data.get("target") or ""
         location = request.data.get("location") or "United States"
         slug = request.data.get("project") or ""
@@ -1389,44 +1394,15 @@ class DomainOverviewView(APIView):
 
         # Resolve the project up front so the metered call can be attributed to it. Without a
         # site_id the DataForSEO spend lands on an unattributed "" row and Settings' cost
-        # breakdown under-reports whichever project actually ran the lookup.
-        cost_site_id = ""
+        # breakdown under-reports whichever project actually ran the lookup. An unknown slug
+        # is a 404, exactly as before -- resolve_project_or_404 raises Http404 and DRF turns
+        # that into the response.
+        site_id, site_pk = "", None
         if slug:
-            try:
-                cost_site_id = resolve_project_or_404(slug).site_url
-            except Http404:
-                raise
+            project = resolve_project_or_404(slug)
+            site_id, site_pk = project.site_url, project.id
 
-        cache_key = f"domain_overview_{target}_{location}"
-        result = cache.get(cache_key)
-        if result is None:
-            connector = DataForSEODomainOverviewConnector()
-            result = connector.get_domain_overview(target, location, site_id=cost_site_id)
-            if result.get("status") == "ok":
-                cache.set(cache_key, result, 60 * 60 * 24)  # 24 hours
-
-        # `tracked` is applied AFTER the cache read, never stored in it: the DataForSEO payload
-        # is identical for every project, but which of those keywords you already track is not.
-        # Baking it into the cached blob would show project A's tracking state to project B.
-        # Without a `project` the flag is simply absent -- the UI then shows Track on every row,
-        # which is harmless because save_keywords upserts.
-        if slug and result.get("status") == "ok" and result.get("keywords"):
-            try:
-                from pipeline.services.saved_keyword_service import list_saved_keywords
-                project = resolve_project_or_404(slug)
-                tracked = {(k.get("keyword") or "").strip().lower()
-                           for k in list_saved_keywords(project.site_url, site_pk=project.id)}
-                result = {**result, "keywords": [
-                    {**row, "tracked": (row.get("keyword") or "").strip().lower() in tracked}
-                    for row in result["keywords"]
-                ]}
-            except Http404:
-                raise
-            except Exception as e:
-                # A tracking-state lookup must never break the research result itself.
-                logger.warning(f"domain-overview tracked-flag lookup failed: {e}")
-
-        return Response(result)
+        return Response(run_domain_overview(target, location, site_id=site_id, site_pk=site_pk))
 
 
 @method_decorator(login_not_required, name="dispatch")
