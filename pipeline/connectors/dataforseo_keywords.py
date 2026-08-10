@@ -511,10 +511,19 @@ class DataForSEOKeywordsConnector(BaseConnector):
         # DataForSEO location_name. Normalise for the API, keep the display form in the response.
         api_location = normalize_location_name(location_name)
 
-        ideas_payload, questions_payload = {}, {}
+        ideas_payload, questions_payload, suggestions_payload = {}, {}, {}
         related_payloads: list[dict] = []
-        with concurrent.futures.ThreadPoolExecutor(max_workers=2 + self.RELATED_SEED_CAP) as pool:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=3 + self.RELATED_SEED_CAP) as pool:
             f_ideas = pool.submit(self._fetch_keyword_ideas, cleaned, api_location, limit)
+            # "Similar keywords" — full-text long-tail search, every result contains the seed
+            # phrase. This is what the Explorer's algorithm strip has always advertised on the
+            # Phrase tab, and until now nothing called it: _fetch_keyword_suggestions was
+            # implemented, tested against nothing, and had no production caller, so the UI
+            # named an endpoint the backend never hit. Same three-seed cap as related, and for
+            # the same reason — it posts ONE TASK PER SEED and is billed per task.
+            f_suggestions = pool.submit(self._fetch_keyword_suggestions,
+                                        cleaned[:self.RELATED_SEED_CAP], api_location,
+                                        min(limit, 50))
             # related_keywords/live takes ONE seed string per task, so fanning out over the
             # seeds means one task each. Capped: it is billed per task and the Related tab is
             # one of six, so three seeds is the ceiling this Explorer buys. Running it for
@@ -546,6 +555,11 @@ class DataForSEOKeywordsConnector(BaseConnector):
             except Exception as exc:
                 self.logger.warning(f"[dataforseo_keywords] expand_keywords questions failed: {exc}")
 
+            try:
+                suggestions_payload = f_suggestions.result()
+            except Exception as exc:
+                self.logger.warning(f"[dataforseo_keywords] expand_keywords suggestions failed: {exc}")
+
         # extract_cost sums tasks[].cost and falls back to the top-level total. That matters
         # for keyword_suggestions, which posts ONE TASK PER SEED — the old top-level-only
         # read happened to be right, but the per-task rows are the documented source of truth.
@@ -553,6 +567,7 @@ class DataForSEOKeywordsConnector(BaseConnector):
             extract_cost(ideas_payload)
             + sum(extract_cost(p) for p in related_payloads)
             + extract_cost(questions_payload)
+            + extract_cost(suggestions_payload)
         )
 
         seed_phrases = [s.lower().strip() for s in cleaned]
@@ -562,8 +577,21 @@ class DataForSEOKeywordsConnector(BaseConnector):
         by_kw: dict[str, dict] = {}
 
         def _items_of(payload: dict) -> list:
-            task = (payload.get("tasks") or [{}])[0] or {}
-            return ((task.get("result") or [{}])[0] or {}).get("items") or []
+            """Every item in a Labs live response, across EVERY task in it.
+
+            keyword_suggestions posts ONE TASK PER SEED, so `tasks` is a list as long as the
+            seed list and reading `tasks[0]` alone would silently drop seeds 2..n — the same
+            shape of loss the Related tab already suffered. The other three endpoints send a
+            single task and are unaffected by the wider read.
+            """
+            out: list = []
+            for task in (payload.get("tasks") or []):
+                if not isinstance(task, dict):
+                    continue
+                for block in (task.get("result") or []):
+                    if isinstance(block, dict):
+                        out.extend(block.get("items") or [])
+            return out
 
         def _absorb(item: dict, source: str) -> None:
             """One row per keyword, tagged with EVERY algorithm that returned it.
@@ -600,6 +628,8 @@ class DataForSEOKeywordsConnector(BaseConnector):
         for payload in related_payloads:
             for item in _items_of(payload):
                 _absorb(item, "related")
+        for item in _items_of(suggestions_payload):
+            _absorb(item, "suggestions")
         for item in _items_of(questions_payload):
             _absorb(item, "questions")
 
@@ -607,7 +637,8 @@ class DataForSEOKeywordsConnector(BaseConnector):
         # returned keyword, so this is the honest denominator for cost-per-keyword.
         record_cost(
             self.name, site_id, total_cost, units=len(rows),
-            notes=f"labs keyword_ideas+related_keywords(depth 2)+question ideas ({api_location})",
+            notes=("labs keyword_ideas+related_keywords(depth 2)+keyword_suggestions"
+                   f"+question ideas ({api_location})"),
         )
 
         return {"status": "ok", "location": location_name, "cost": round(float(total_cost), 4),

@@ -230,16 +230,64 @@ class RelatedFanOutTests(_NoNetwork):
         )
 
 
+class SuggestionsTests(_NoNetwork):
+    """keyword_suggestions/live — the endpoint the algorithm strip advertises on two tabs.
+
+    It was fully implemented and had NO production caller: the Explorer told the reader that
+    the Phrase tab came from `dataforseo_labs/google/keyword_suggestions` while the backend
+    never once called it. The UI claimed something the backend did not do."""
+
+    def _run(self, suggestions, seeds=("event staffing",)):
+        seen = []
+        c = self._connector()
+        c._fetch_keyword_ideas = lambda s, loc, lim: _task([], 0.002)
+        c._fetch_related_keywords = lambda s, loc, lim: _task([], 0.001)
+        c._fetch_question_ideas = lambda s, loc, lim: _task([], 0.001)
+
+        def sugg(s, loc, lim):
+            seen.append(list(s))
+            return _task(suggestions, 0.002)
+
+        c._fetch_keyword_suggestions = sugg
+        return c.expand_keywords(list(seeds), "United States"), seen
+
+    def test_suggestions_are_actually_fetched(self):
+        res, seen = self._run([_item("event staffing companies nyc", 260)])
+        self.assertEqual(len(seen), 1, "_fetch_keyword_suggestions was never called")
+        self.assertEqual(res["status"], "ok")
+        self.assertIn("event staffing companies nyc", [r["kw"] for r in res["rows"]])
+
+    def test_suggestion_rows_carry_suggestions_provenance(self):
+        res, _ = self._run([_item("event staffing companies nyc", 260)])
+        row = next(r for r in res["rows"] if r["kw"] == "event staffing companies nyc")
+        self.assertEqual(row["source"], "suggestions")
+        self.assertIn("suggestions", row["sources"])
+
+    def test_suggestion_rows_land_on_the_phrase_tab(self):
+        """Every keyword_suggestions result contains the full seed phrase, which is exactly
+        what the Phrase tab means — so the strip's claim becomes true without a special case."""
+        res, _ = self._run([_item("event staffing companies nyc", 260)])
+        row = next(r for r in res["rows"] if r["kw"] == "event staffing companies nyc")
+        self.assertEqual(row["match"], "phrase")
+
+    def test_seed_fan_out_is_capped(self):
+        """One task PER SEED, billed per task — cost scales with seed count, so it is capped
+        at the same three seeds related_keywords uses."""
+        _, seen = self._run([], seeds=("alpha", "beta", "gamma", "delta", "epsilon"))
+        self.assertEqual(seen, [["alpha", "beta", "gamma"]])
+
+
 class CostTests(_NoNetwork):
     def test_cost_sums_every_task_that_ran(self):
         c = self._connector()
         c._fetch_keyword_ideas = lambda s, loc, lim: _task([_item("a", 1)], 0.002)
         c._fetch_related_keywords = lambda s, loc, lim: _task([_item("b", 1)], 0.001)
         c._fetch_question_ideas = lambda s, loc, lim: _task([_item("c", 1)], 0.001)
-        c._fetch_keyword_suggestions = lambda s, loc, lim: _task([], 0.0)
+        c._fetch_keyword_suggestions = lambda s, loc, lim: _task([_item("d", 1)], 0.002)
         res = c.expand_keywords(["seed one", "seed two"], "United States")
-        # two seeds -> two related tasks at 0.001 each, plus ideas 0.002 and questions 0.001
-        self.assertAlmostEqual(res["cost"], 0.005, places=6)
+        # two seeds -> two related tasks at 0.001 each, plus ideas 0.002, questions 0.001 and
+        # suggestions 0.002 (extract_cost sums tasks[].cost, which is the per-seed shape).
+        self.assertAlmostEqual(res["cost"], 0.007, places=6)
 
 
 class GuardrailTests(unittest.TestCase):

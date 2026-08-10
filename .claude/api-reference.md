@@ -1457,6 +1457,22 @@ Strategy: `DataForSEOKeywordsConnector.expand_keywords(seeds, location, limit=10
 back to `lookup_keywords()` on failure, then a second `lookup_keywords()` pass to backfill any
 seed the expansion omitted.
 
+`expand_keywords` runs **four** DataForSEO Labs fetches in parallel and merges them into one
+deduplicated row set:
+
+| Fetch | Endpoint | Seeds per call | `source` |
+|---|---|---|---|
+| ideas | `keyword_ideas/live` | all seeds, one task | `ideas` |
+| related | `related_keywords/live`, `depth: 2` | **one seed per task**, first 3 seeds | `related` |
+| suggestions | `keyword_suggestions/live` | **one task per seed**, first 3 seeds | `suggestions` |
+| questions | `keyword_ideas/live` + 8 question-prefix filters | all seeds, one task | `questions` |
+
+The two per-seed endpoints are capped at `RELATED_SEED_CAP = 3` because they are billed per
+task, so seed count is a direct cost multiplier. `depth: 2` on related is required for `limit`
+to mean anything — DataForSEO's default of depth 1 returns at most 8 keywords. A whole search
+runs roughly $0.02–0.03; the response's `cost` is the figure DataForSEO reported for itself and
+is what the SPA prints, so no estimate is fabricated.
+
 **Response** `{"rows": [...], "cost": <float>, "location": "...", "status": "ok", "error"?: "..."}`
 where each row is
 `{kw, match, source, sources[], volume, kd, cpc, intent, serpFeatures[], monthly[], tracked}`.

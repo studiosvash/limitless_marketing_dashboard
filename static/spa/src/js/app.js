@@ -3333,19 +3333,28 @@
       const tabOn = { padding: '6px 11px', fontSize: '13px', borderRadius: '7px', cursor: 'pointer', border: '1px solid #c7d2fe', background: '#eef2ff', color: '#4338ca', fontWeight: 600 };
       vals.matchTabs = tabDefs.map(d => ({ label: d[1], onClick: () => vals.h.setMatch(d[0]), style: s.matchType === d[0] ? tabOn : tabBase }));
 
-      // DataForSEO Labs expansion algorithm per match tab
+      /* DataForSEO Labs expansion algorithm per match tab. Every claim here must name an
+         endpoint the backend actually calls: keyword_suggestions was advertised on two tabs
+         while nothing in the codebase called it. All four run on every search. */
       const ALGO = {
-        all: { ep: 'keyword_ideas + keyword_suggestions', desc: 'Deduped union of all expansion algorithms off your seed' },
+        all: { ep: 'keyword_ideas + related_keywords + keyword_suggestions', desc: 'Deduped union of all four expansion algorithms off your seeds' },
         broad: { ep: 'dataforseo_labs/google/keyword_ideas', desc: 'Category-relevance search \u2014 widest net, includes terms that don\u2019t contain your seed' },
         phrase: { ep: 'dataforseo_labs/google/keyword_suggestions', desc: 'Full-text long-tail search \u2014 every result contains your seed phrase' },
         exact: { ep: 'keywords_data/google_ads/search_volume', desc: 'Metrics for the literal seed phrase only' },
         questions: { ep: 'keyword_ideas + question filters', desc: 'Questions people ask in this topic (how / what / is / can\u2026), filtered server-side by DataForSEO' },
-        related: { ep: 'dataforseo_labs/google/related_keywords', desc: 'Semantic neighbors from Google\u2019s \u201csearches related to\u201d graph' }
+        related: { ep: 'dataforseo_labs/google/related_keywords', desc: 'Semantic neighbors from Google\u2019s \u201csearches related to\u201d graph, walked two levels out' }
       };
       const algo = ALGO[s.matchType] || ALGO.broad;
       vals.resAlgoEp = algo.ep;
       vals.resAlgoDesc = algo.desc;
-      vals.resAlgoCost = 'pull est. $' + (0.012 + s.research.rows.length * 0.00012).toFixed(3) + ' \u00b7 filters run on the cached set ($0)';
+      /* The real bill, not an estimate. This used to print a formula (0.012 + rows * 0.00012)
+         that no longer matched what the search cost once related ran at depth 2 over three
+         seeds and keyword_suggestions joined it -- and DataForSEO reports its own charge on
+         every response, so there was never a reason to guess. Zero/absent means the API did
+         not report one; say that rather than printing $0.0000. */
+      const paidCost = s.research.cost == null ? null : Number(s.research.cost);
+      vals.resAlgoCost = (paidCost ? 'this pull cost $' + paidCost.toFixed(4) : 'DataForSEO reported no cost for this pull')
+        + ' \u00b7 filters run on the cached set ($0)';
 
       // filter chips
       const chip = on => ({ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '6px 11px', fontSize: '12.5px', border: '1px solid ' + (on ? '#c7d2fe' : '#e2e8f0'), borderRadius: '7px', color: on ? '#4338ca' : '#64748b', cursor: 'pointer', background: 'white' });
