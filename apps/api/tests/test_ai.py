@@ -27,7 +27,17 @@ def _bootstrap_ai_test_env(test_case):
     (not a shared TestCase subclass), matching the established pattern in
     apps/dashboard/services/tests/test_ai_service.py's `_new_analytics_db` and this project's
     test-class hygiene rule (every test class inherits directly from APITestCase; no
-    inheritance-based test-duplication risk from a sibling test class)."""
+    inheritance-based test-duplication risk from a sibling test class).
+
+    It also blocks `requests.get`: `resolve_model` reads the provider's free model list before
+    every check, and these tests were making that call for REAL against api.dataforseo.com --
+    only requests.POST was ever stubbed. Free is not the same as allowed (§8: never call a real
+    external API from a test), and each 401 round-trip added seconds to the suite."""
+    getp = mock.patch("pipeline.services.ai_visibility_service.requests.get",
+                      side_effect=AssertionError("a test must never reach DataForSEO"))
+    getp.start()
+    test_case.addCleanup(getp.stop)
+
     db_connection._SessionFactory = None
     test_case.addCleanup(setattr, db_connection, "_SessionFactory", None)
     tmp = tempfile.mkdtemp()
@@ -46,6 +56,23 @@ def _bootstrap_ai_test_env(test_case):
     client_auth = APIClient()
     client_auth.credentials(HTTP_AUTHORIZATION=f"Bearer {token.key}")
     return client_auth
+
+
+def _run_now(client, body):
+    """Post a run and then execute its worker inline.
+
+    `POST /ai/run` no longer performs the checks: it plans, records a task and spawns
+    `manage.py run_ai_checks`. These tests are about what a run DOES, so they drive the worker
+    body directly — the same call the management command makes — rather than asserting against
+    a response that now only says "started".
+    """
+    from apps.dashboard.services.ai_service import execute_ai_run
+
+    with mock.patch("apps.dashboard.services.ai_service._spawn_run_process", return_value=999):
+        started = client.post("/api/projects/fusehealth/ai/run", body, format="json")
+    if started.status_code != 200 or not started.json().get("task_id"):
+        return started, None
+    return started, execute_ai_run(SITE_URL, started.json()["task_id"])
 
 
 class AIGetEndpointTests(APITestCase):
@@ -410,9 +437,10 @@ class AIRunInspectValidationTests(APITestCase):
     def test_run_with_empty_body_and_no_prompts_runs_nothing(self):
         resp = self.client_auth.post("/api/projects/fusehealth/ai/run", {}, format="json")
         self.assertEqual(resp.status_code, 200)
-        self.assertEqual(resp.json()["ran"], 0)
-        self.assertEqual(resp.json()["checked"], 0)
-        self.assertEqual(resp.json()["cost"], 0.0)
+        # Nothing to run is a normal outcome, not an error: no task is started and no worker
+        # is spawned.
+        self.assertIsNone(resp.json()["task_id"])
+        self.assertEqual(resp.json()["planned"], 0)
 
     def test_run_with_unknown_prompt_id_is_a_clean_404_not_a_false_success(self):
         resp = self.client_auth.post(
@@ -494,13 +522,11 @@ class AIRunPersistenceTests(APITestCase):
     def test_run_persists_a_real_result_visible_on_the_next_get(self, post):
         post.return_value = _dfs_response(ANSWER_CITED)
 
-        resp = self.client_auth.post(
-            "/api/projects/fusehealth/ai/run", {"promptId": self.prompt.id}, format="json"
-        )
+        resp, summary = _run_now(self.client_auth, {"promptId": self.prompt.id})
         self.assertEqual(resp.status_code, 200)
-        self.assertEqual(resp.json()["ran"], 1)
-        self.assertEqual(resp.json()["checked"], 1)
-        self.assertEqual(resp.json()["cost"], EXPECTED_COST)
+        self.assertEqual(resp.json()["planned"], 1)
+        self.assertEqual(summary["checked"], 1)
+        self.assertEqual(summary["cost"], EXPECTED_COST)
 
         body = self.client_auth.get("/api/projects/fusehealth/ai").json()
         pr = body["prompts"][0]
@@ -534,8 +560,7 @@ class AIRunPersistenceTests(APITestCase):
     @mock.patch("pipeline.services.ai_visibility_service.requests.post")
     def test_absent_answer_is_recorded_as_absent_not_dropped(self, post):
         post.return_value = _dfs_response(ANSWER_ABSENT)
-        self.client_auth.post("/api/projects/fusehealth/ai/run",
-                              {"promptId": self.prompt.id}, format="json")
+        _run_now(self.client_auth, {"promptId": self.prompt.id})
         body = self.client_auth.get("/api/projects/fusehealth/ai").json()
         cell = body["prompts"][0]["results"]["chatgpt"]
         self.assertEqual(cell["verdict"], "absent")
@@ -555,11 +580,10 @@ class AIRunPersistenceTests(APITestCase):
         self.prompt.tracked_models = ["chatgpt", "claude", "perplexity"]
         self.prompt.save()
 
-        resp = self.client_auth.post("/api/projects/fusehealth/ai/run",
-                                     {"promptId": self.prompt.id}, format="json")
+        _resp, summary = _run_now(self.client_auth, {"promptId": self.prompt.id})
         self.assertEqual(post.call_count, 3)
-        self.assertEqual(resp.json()["checked"], 3)
-        self.assertEqual(resp.json()["notConnected"], [])
+        self.assertEqual(summary["checked"], 3)
+        self.assertEqual(summary["notConnected"], [])
 
         results = self.client_auth.get("/api/projects/fusehealth/ai").json()["prompts"][0]["results"]
         for pid in ("chatgpt", "claude", "perplexity"):
@@ -572,11 +596,10 @@ class AIRunPersistenceTests(APITestCase):
         self.prompt.tracked_models = ["chatgpt", "claude", "perplexity"]
         self.prompt.save()
 
-        resp = self.client_auth.post("/api/projects/fusehealth/ai/run",
-                                     {"promptId": self.prompt.id}, format="json")
+        _resp, summary = _run_now(self.client_auth, {"promptId": self.prompt.id})
         post.assert_not_called()
-        self.assertEqual(resp.json()["checked"], 0)
-        self.assertEqual(sorted(resp.json()["notConnected"]),
+        self.assertEqual(summary["checked"], 0)
+        self.assertEqual(sorted(summary["notConnected"]),
                          ["chatgpt", "claude", "perplexity"])
 
         results = self.client_auth.get("/api/projects/fusehealth/ai").json()["prompts"][0]["results"]
@@ -589,11 +612,12 @@ class AIRunPersistenceTests(APITestCase):
     @mock.patch("pipeline.services.ai_visibility_service.requests.post")
     def test_run_without_a_brand_spends_nothing(self, post):
         AITarget.objects.filter(site_url=SITE_URL).update(brand="")
-        resp = self.client_auth.post("/api/projects/fusehealth/ai/run",
-                                     {"promptId": self.prompt.id}, format="json")
+        resp, summary = _run_now(self.client_auth, {"promptId": self.prompt.id})
         post.assert_not_called()
-        self.assertEqual(resp.json()["checked"], 0)
-        self.assertEqual(resp.json()["cost"], 0.0)
+        # Refused before anything is spawned: with nothing to look for, every verdict would be
+        # an invented "absent" paid for in real money.
+        self.assertIsNone(resp.json()["task_id"])
+        self.assertIsNone(summary)
         self.assertIn("brand", resp.json()["detail"].lower())
 
     @mock.patch("pipeline.services.ai_visibility_service.requests.post")
@@ -604,8 +628,8 @@ class AIRunPersistenceTests(APITestCase):
         AIPrompt.objects.create(site_url="https://other-project.com", text="not ours",
                                 tracked_models=["chatgpt"])
 
-        resp = self.client_auth.post("/api/projects/fusehealth/ai/run", {}, format="json")
-        self.assertEqual(resp.json()["ran"], 2)
+        resp, _summary = _run_now(self.client_auth, {})
+        self.assertEqual(resp.json()["planned"], 2)
         self.assertEqual(post.call_count, 2)
 
     @mock.patch("pipeline.services.ai_visibility_service.requests.post")
@@ -615,9 +639,8 @@ class AIRunPersistenceTests(APITestCase):
         AIPrompt.objects.create(site_url=SITE_URL, list=plist, text="in the list",
                                 tracked_models=["chatgpt"])
 
-        resp = self.client_auth.post("/api/projects/fusehealth/ai/run",
-                                     {"listId": plist.id}, format="json")
-        self.assertEqual(resp.json()["ran"], 1)
+        resp, _summary = _run_now(self.client_auth, {"listId": plist.id})
+        self.assertEqual(resp.json()["planned"], 1)
         self.assertEqual(post.call_count, 1)
 
     @mock.patch("pipeline.services.ai_visibility_service.requests.post")
@@ -633,11 +656,9 @@ class AIRunPersistenceTests(APITestCase):
         other = AIPrompt.objects.create(site_url="https://other-project.com", text="not ours",
                                         tracked_models=["chatgpt"])
 
-        resp = self.client_auth.post(
-            "/api/projects/fusehealth/ai/run",
-            {"promptIds": [self.prompt.id, second.id, other.id]}, format="json",
-        )
-        self.assertEqual(resp.json()["ran"], 2)
+        resp, _summary = _run_now(
+            self.client_auth, {"promptIds": [self.prompt.id, second.id, other.id]})
+        self.assertEqual(resp.json()["planned"], 2)
         self.assertEqual(post.call_count, 2)
 
     @mock.patch("pipeline.services.ai_visibility_service.requests.post")
@@ -661,13 +682,12 @@ class AIRunWithoutApiKeyTests(APITestCase):
     @mock.patch.dict(os.environ, NO_DFS_ENV, clear=False)
     @mock.patch("pipeline.services.ai_visibility_service.requests.post")
     def test_run_makes_no_call_and_reports_why(self, post):
-        resp = self.client_auth.post("/api/projects/fusehealth/ai/run",
-                                     {"promptId": self.prompt.id}, format="json")
+        resp, summary = _run_now(self.client_auth, {"promptId": self.prompt.id})
         post.assert_not_called()
         self.assertEqual(resp.status_code, 200)
-        self.assertEqual(resp.json()["checked"], 0)
-        self.assertEqual(resp.json()["cost"], 0.0)
-        self.assertIn("DATAFORSEO", resp.json()["detail"])
+        self.assertEqual(summary["checked"], 0)
+        self.assertEqual(summary["cost"], 0.0)
+        self.assertIn("DATAFORSEO", summary["detail"])
 
         body = self.client_auth.get("/api/projects/fusehealth/ai").json()
         self.assertEqual(body["history"], [])

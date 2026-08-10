@@ -22,8 +22,14 @@ those slots is worse than a visible gap.
 """
 import json
 import logging
+import os
+import subprocess
+import sys
+import uuid
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
+from django.conf import settings
 from sqlalchemy import func, select
 
 from apps.dashboard.models import AITarget, AIPromptList, AIPrompt, ProjectSettings
@@ -77,6 +83,35 @@ MAX_HISTORY = 50
 # button for values that were never actually persisted.
 PROMPT_CFG_KEY = "aiPromptCfg"    # {"<prompt_id>": {"cadence": "weekly", "country": "", ...}}
 DEFAULT_PROMPT_CFG = {"cadence": "weekly", "country": "", "city": "", "webSearch": False}
+
+# ── Where a RUN IN FLIGHT is tracked ─────────────────────────────────────────────────────────
+# One task per site, in the same JSON blob. It exists because a run is not a request: a full
+# grid is (prompts x engines) sequential DataForSEO calls at up to REQUEST_TIMEOUT=120s each,
+# i.e. 8-15 minutes for a modest project. That used to run INLINE in `POST /ai/run`, which
+# failed three ways at once:
+#
+#   * nginx/gunicorn/Cloudflare killed the request. The SPA's local `aiRunning` flag was only
+#     ever cleared in .then/.catch, so a killed request left every Run button permanently
+#     disabled and relabelled "Running…" for the rest of the session.
+#   * results were written ONCE after the whole loop, so a worker killed at check 41 of 60
+#     threw away 40 checks DataForSEO had already billed.
+#   * a run that DID finish server-side looked like nothing had happened.
+#
+# The fix is the pattern this codebase already uses for its 20-30 minute syncs
+# (`sync_api_service.start_sync_run` -> `manage.py run_sync` in its own `subprocess.Popen`):
+# the request plans, records this task, spawns `manage.py run_ai_checks` and returns. The
+# worker persists after EVERY PROMPT and writes its progress here; the SPA reads the task off
+# the ordinary AI GET, so "is a run in flight?" survives a reload, a tab switch, and the death
+# of the worker itself (see `_reap_task_if_dead`).
+RUN_TASK_KEY = "aiRunTask"
+
+# Same liveness reasoning as sync_api_service._reap_if_dead: a pid is written a moment AFTER
+# the task row, so a just-started run legitimately has no live pid yet.
+RUN_DEAD_MESSAGE = (
+    "The run process (pid {pid}) is no longer running but never reported a result. It was most "
+    "likely killed by a server restart or deploy. Press Run again to continue — checks that "
+    "already completed are saved and will not be re-billed."
+)
 
 # connector_costs.connector values this page writes and reads back.
 COST_CONNECTOR_RUN = "ai_visibility_run"
@@ -289,60 +324,305 @@ def _target_for_run(site_id: str):
     return brand, aliases, competitors
 
 
-def run_prompt_checks(site_id: str, prompts: list) -> dict:
-    """Ask every tracked answer engine each of `prompts`, for real, and persist what came back.
+# ─────────────────────────────────────────────
+# Runs — planning, the task, and the worker
+# ─────────────────────────────────────────────
 
-    Spends money — only ever reached from the explicit "Run now" user action, never from a GET.
-    Returns `{"ran", "checked", "cost", "skipped", "notConnected", "detail"}`; `ran`/`cost` are
-    the two keys the SPA's notification reads.
+def plan_run(site_id: str, prompts: list, force: bool = False) -> dict:
+    """Which (prompt, platform) CELLS this run should actually pay for.
+
+    The unit of work is a cell, not a prompt: an engine that already answered a prompt has
+    nothing left to observe, and re-asking it is a second charge for the same fact.
     """
-    brand, aliases, competitors = _target_for_run(site_id)
-    if not brand:
-        return {"ran": 0, "checked": 0, "cost": 0.0, "skipped": len(prompts),
-                "notConnected": [], "detail": "Set your brand under Targets before running checks."}
+    cells = []
+    skipped_no_models = 0
+    for prompt in prompts:
+        platforms = list(prompt.tracked_models or [])
+        if not platforms:
+            skipped_no_models += 1
+            continue
+        for platform in platforms:
+            cells.append({"promptId": prompt.id, "platform": platform,
+                          "text": prompt.text})
+    return {"cells": cells, "skippedNoModels": skipped_no_models}
 
+
+def _idle_task() -> dict:
+    return {"state": "idle", "taskId": None, "total": 0, "completed": 0, "current": None,
+            "checked": 0, "cost": 0.0, "costUnknown": 0, "notConnected": [], "planned": 0,
+            "error": None, "detail": None, "startedAt": None, "finishedAt": None}
+
+
+def _parse_iso(value):
+    try:
+        return datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _reap_task_if_dead(site_id: str, task: dict) -> dict:
+    """Resolve a task whose OS process is gone.
+
+    Without this, a worker killed by a deploy leaves the task at `running` forever and every
+    Run button in the SPA stays disabled — the exact failure the old in-request run had, just
+    moved. Biased towards "still alive" on any uncertainty, like `scheduling._process_alive`:
+    wrongly declaring a live paid run dead is worse than showing a spinner a little too long.
+    """
+    if task.get("state") != "running":
+        return task
+    pid = task.get("pid")
+    started = _parse_iso(task.get("startedAt"))
+    if not pid or started is None:
+        return task
+    from apps.sync.scheduling import PID_GRACE, _process_alive
+    if datetime.now(timezone.utc) - started < PID_GRACE:
+        return task
+    try:
+        if _process_alive(pid):
+            return task
+    except Exception:
+        logger.warning("[ai_service] liveness check failed for run task %s", task.get("taskId"),
+                       exc_info=True)
+        return task
+    task = {**task, "state": "error", "finishedAt": _now_iso(), "current": None,
+            "error": RUN_DEAD_MESSAGE.format(pid=pid)}
+    set_state(site_id, RUN_TASK_KEY, task)
+    logger.warning("[ai_service] run task %s reaped — pid %s is gone", task.get("taskId"), pid)
+    return task
+
+
+def get_run_task(site_id: str) -> dict:
+    """The run task as the UI should see it — reaped if its worker died."""
+    task = get_state(site_id, RUN_TASK_KEY, None)
+    if not isinstance(task, dict) or not task.get("taskId"):
+        return _idle_task()
+    return _reap_task_if_dead(site_id, {**_idle_task(), **task})
+
+
+def _save_task(site_id: str, task: dict) -> None:
+    set_state(site_id, RUN_TASK_KEY, task)
+
+
+def _spawn_run_process(site_id: str, task_id: str) -> int | None:
+    """Launch `manage.py run_ai_checks` as a detached child. Returns its pid.
+
+    A near-copy of `sync_api_service._spawn_sync_process`, and deliberately so: same detach
+    flags (so a signal aimed at the web worker cannot reach it), same "write to a file, never a
+    pipe" rule (a pipe whose reader is the web worker fills its OS buffer and BLOCKS the run
+    partway through).
+    """
+    manage_py = Path(settings.BASE_DIR) / "manage.py"
+    log_dir = Path(os.getenv("FUSEHEALTH_LOG_DIR") or (Path(settings.BASE_DIR) / "logs"))
+    try:
+        log_dir.mkdir(parents=True, exist_ok=True)
+        out = open(log_dir / f"ai_run_{task_id}.log", "ab", buffering=0)
+    except Exception:
+        logger.warning("[ai_service] could not open a log file for run %s; discarding its output",
+                       task_id, exc_info=True)
+        out = subprocess.DEVNULL
+
+    kwargs: dict = {}
+    if hasattr(os, "setsid"):                                     # POSIX — production
+        kwargs["start_new_session"] = True
+    elif hasattr(subprocess, "CREATE_NEW_PROCESS_GROUP"):         # Windows — dev
+        kwargs["creationflags"] = (subprocess.CREATE_NEW_PROCESS_GROUP
+                                   | getattr(subprocess, "DETACHED_PROCESS", 0))
+
+    proc = subprocess.Popen(
+        [sys.executable, str(manage_py), "run_ai_checks",
+         "--site-url", site_id, "--task-id", task_id],
+        cwd=str(settings.BASE_DIR),
+        stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT,
+        **kwargs,
+    )
+    logger.info("[ai_service] spawned AI run %s as pid %s", task_id, proc.pid)
+    return proc.pid
+
+
+def start_ai_run(site_id: str, prompts: list, force: bool = False) -> dict:
+    """Plan a run, record it as a task, spawn the worker, and return immediately.
+
+    Returns `{task_id, planned, skipped, estimated_cost, ...}`. `task_id` is None when nothing
+    was started — an empty plan and a missing brand are both normal outcomes, not errors, and
+    `detail` says which.
+
+    A second call while a run is in flight returns the EXISTING task_id rather than forking a
+    parallel run: two runs over the same grid would race on the results blob and double-spend.
+    """
+    existing = get_run_task(site_id)
+    if existing.get("state") == "running":
+        return {"task_id": existing["taskId"], "already_running": True,
+                "planned": existing.get("planned") or existing.get("total") or 0,
+                "skipped": 0, "estimated_cost": None,
+                "detail": "A run is already in progress — showing its progress instead of "
+                          "starting another."}
+
+    brand, _aliases, _competitors = _target_for_run(site_id)
+    if not brand:
+        return {"task_id": None, "planned": 0, "skipped": len(prompts),
+                "estimated_cost": None,
+                "detail": "Set your brand under Targets before running checks."}
+
+    plan = plan_run(site_id, prompts, force=force)
+    cells = plan["cells"]
+    if not cells:
+        return {"task_id": None, "planned": 0, "skipped": plan["skippedNoModels"],
+                "estimated_cost": None,
+                "detail": ("No answer engines are selected on these prompts."
+                           if plan["skippedNoModels"] else "Everything is up to date.")}
+
+    per_check = _spend(site_id)["per_run_check"]
+    task_id = uuid.uuid4().hex[:16]
+    task = {
+        **_idle_task(),
+        "taskId": task_id, "state": "running", "pid": None,
+        "startedAt": _now_iso(), "finishedAt": None,
+        "total": len(cells), "planned": len(cells), "completed": 0, "current": None,
+        "force": bool(force),
+        "plan": [{"promptId": c["promptId"], "platform": c["platform"]} for c in cells],
+    }
+    _save_task(site_id, task)
+
+    try:
+        pid = _spawn_run_process(site_id, task_id)
+    except Exception as exc:
+        # A run we could not start must never be left claiming to be running — that would
+        # disable every Run button until the pid reaper cleared it.
+        logger.error("[ai_service] could not spawn the AI run worker", exc_info=True)
+        _save_task(site_id, {**task, "state": "error", "finishedAt": _now_iso(),
+                             "error": f"Could not start the run process: {exc}"})
+        return {"task_id": None, "planned": len(cells), "skipped": plan["skippedNoModels"],
+                "estimated_cost": None,
+                "detail": f"Could not start the run process: {exc}"}
+
+    task["pid"] = pid
+    _save_task(site_id, task)
+    return {
+        "task_id": task_id,
+        "planned": len(cells),
+        "skipped": plan["skippedNoModels"],
+        # None (not 0.0) until a real check has been billed: the price of a call is not
+        # something to guess at, and "$0.00" on a paid action is the one lie a price may not tell.
+        "estimated_cost": round(per_check * len(cells), 6) if per_check is not None else None,
+    }
+
+
+def _persist_prompt_results(site_id: str, prompt_id, cells: dict, entries: list,
+                            ran_any: bool) -> None:
+    """Write ONE prompt's results and history, re-reading the blob first.
+
+    Called after every prompt rather than once after the loop. The blob is read-modify-write
+    with no partial update, so re-reading here is what keeps the lost-update window to a single
+    prompt instead of a whole run — and it is what makes a worker killed mid-run keep every
+    check DataForSEO has already billed.
+    """
     stored = get_prompt_results(site_id)
-    history = get_run_history(site_id)
+    entry = stored.get(str(prompt_id))
+    if not isinstance(entry, dict):
+        entry = {"results": {}, "lastRun": None}
+    results = entry.get("results")
+    if not isinstance(results, dict):
+        results = {}
+    results.update(cells)
+    entry["results"] = results
+    if ran_any:
+        entry["lastRun"] = _now_iso()
+    stored[str(prompt_id)] = entry
+    set_state(site_id, RESULTS_KEY, stored)
+
+    if entries:
+        history = get_run_history(site_id)
+        set_state(site_id, HISTORY_KEY, (entries[::-1] + history)[:MAX_HISTORY])
+
+
+def execute_ai_run(site_id: str, task_id: str) -> dict:
+    """Run the planned cells. THE WORKER BODY — `manage.py run_ai_checks` calls exactly this.
+
+    Never called from a request: every DataForSEO check here is a real charge and the whole
+    loop is minutes of wall-clock.
+    """
+    task = get_state(site_id, RUN_TASK_KEY, None)
+    if not isinstance(task, dict) or task.get("taskId") != task_id:
+        logger.info("[ai_service] run %s is not the current task for %r — nothing to do",
+                    task_id, site_id)
+        return {"ran": 0, "checked": 0, "cost": 0.0}
+    if task.get("state") != "running":
+        logger.info("[ai_service] run %s is already %s — nothing to do", task_id, task["state"])
+        return {"ran": 0, "checked": 0, "cost": 0.0}
+
+    brand, aliases, competitors = _target_for_run(site_id)
+    plan = task.get("plan") or []
+
+    # Grouped by prompt, preserving plan order: one prompt is the unit of persistence.
+    order: list = []
+    by_prompt: dict = {}
+    for cell in plan:
+        pid = cell.get("promptId")
+        if pid not in by_prompt:
+            by_prompt[pid] = []
+            order.append(pid)
+        by_prompt[pid].append(cell.get("platform"))
+
+    prompts = {p.id: p for p in AIPrompt.objects.filter(site_url=site_id, id__in=order)}
 
     checked = 0
     total_cost = 0.0
     cost_unknown = 0
-    skipped = 0
+    completed = 0
     not_connected: set[str] = set()
-    new_entries: list[dict] = []
+    detail = None
 
-    for prompt in prompts:
-        platforms = list(prompt.tracked_models or [])
-        if not platforms:
-            skipped += 1
+    for prompt_id in order:
+        prompt = prompts.get(prompt_id)
+        platforms = by_prompt[prompt_id]
+        if prompt is None:
+            # Deleted between planning and here. Count the cells so progress still reaches 100%.
+            completed += len(platforms)
             continue
-        entry = stored.get(str(prompt.id))
-        if not isinstance(entry, dict):
-            entry = {"results": {}, "lastRun": None}
-        results = entry.get("results")
-        if not isinstance(results, dict):
-            results = {}
 
-        # The modal's webSearch toggle used to be stored and never consumed; it now really
-        # switches the DataForSEO check to a web-search-enabled answer (with citations), and
-        # `country` geo-scopes those web results. `city` is still stored and NOT sent: the LLM
-        # Responses endpoint has no city parameter, and inventing one would be a setting that
-        # pretends to work.
+        # Re-read: a cancel (or a second run taking over) must stop this loop, and the
+        # DataForSEO budget can be crossed by ANOTHER sync while this run is in flight.
+        current = get_state(site_id, RUN_TASK_KEY, None)
+        if not isinstance(current, dict) or current.get("taskId") != task_id \
+                or current.get("state") != "running":
+            logger.info("[ai_service] run %s was superseded or cancelled — stopping", task_id)
+            return {"ran": completed, "checked": checked, "cost": round(total_cost, 6)}
+        task = current
+
+        from apps.dashboard.services.budget_service import budget_status
+        try:
+            status = budget_status()
+        except Exception:
+            logger.warning("[ai_service] budget check failed; continuing", exc_info=True)
+            status = {"exceeded": False}
+        if status.get("exceeded"):
+            # Stop gracefully and KEEP what has already been paid for. Refusing to record the
+            # partial run would throw away checks that were genuinely billed.
+            detail = (f"Stopped: the monthly DataForSEO budget of ${status.get('cap', 0):.2f} "
+                      f"was reached mid-run. {completed} of {task['total']} checks completed.")
+            break
+
+        task = {**task, "current": prompt.text, "completed": completed}
+        _save_task(site_id, task)
+
         prompt_cfg = get_prompt_cfg(site_id, prompt.id)
         web_search = bool(prompt_cfg.get("webSearch"))
         country = prompt_cfg.get("country")
 
+        cells: dict = {}
+        entries: list = []
         ran_any = False
         for platform in platforms:
             if not is_platform_connected(platform):
-                # Recorded as an explicit not_connected cell, never as a verdict. Nothing is
-                # called and nothing is charged.
-                results[platform] = _cell(not_connected_result(platform))
+                # An explicit not_connected cell, never a verdict. Nothing called, nothing charged.
+                cells[platform] = _cell(not_connected_result(platform))
                 not_connected.add(platform)
+                completed += 1
                 continue
             result = check_prompt(prompt.text, brand, aliases, competitors, platform=platform,
                                   web_search=web_search, country=country)
-            results[platform] = _cell(result)
+            cells[platform] = _cell(result)
+            completed += 1
             if not result.get("ok"):
                 continue
             ran_any = True
@@ -351,36 +631,29 @@ def run_prompt_checks(site_id: str, prompts: list) -> dict:
                 cost_unknown += 1
             else:
                 total_cost += float(result["cost"])
-            new_entries.append(_history_entry(result, prompt.text, prompt.id))
+            entries.append(_history_entry(result, prompt.text, prompt.id))
 
-        entry["results"] = results
-        if ran_any:
-            entry["lastRun"] = _now_iso()
-        stored[str(prompt.id)] = entry
+        _persist_prompt_results(site_id, prompt.id, cells, entries, ran_any)
+        # Spend is recorded per prompt, not once at the end, for the same reason results are:
+        # a killed worker must not lose the record of money that was actually spent.
+        prompt_cost = sum(float(e.get("cost") or 0.0) for e in entries)
+        _record_spend(site_id, COST_CONNECTOR_RUN, round(prompt_cost, 6), len(entries),
+                      f"prompt #{prompt.id} · {len(entries)} check(s)")
+        task = {**task, "completed": completed, "checked": checked,
+                "cost": round(total_cost, 6), "costUnknown": cost_unknown,
+                "notConnected": sorted(not_connected)}
+        _save_task(site_id, task)
 
-    set_state(site_id, RESULTS_KEY, stored)
-    if new_entries:
-        set_state(site_id, HISTORY_KEY, (new_entries[::-1] + history)[:MAX_HISTORY])
-
-    notes = f"{checked} check(s) across {len(prompts)} prompt(s)"
-    if cost_unknown:
-        notes += f"; {cost_unknown} with no usage block (cost unknown)"
-    _record_spend(site_id, COST_CONNECTOR_RUN, round(total_cost, 6), checked, notes)
-
-    detail = None
-    if not checked:
+    if detail is None and not checked:
         if not_connected:
             detail = "; ".join(sorted(not_connected_reason(p) for p in not_connected))
-        elif skipped:
-            detail = "No answer engines are selected on these prompts."
-    return {
-        "ran": len(prompts),
-        "checked": checked,
-        "cost": round(total_cost, 6),
-        "skipped": skipped,
-        "notConnected": sorted(not_connected),
-        "detail": detail,
-    }
+
+    _save_task(site_id, {**task, "state": "done", "current": None, "finishedAt": _now_iso(),
+                         "completed": completed, "checked": checked,
+                         "cost": round(total_cost, 6), "costUnknown": cost_unknown,
+                         "notConnected": sorted(not_connected), "detail": detail})
+    return {"ran": len(order), "checked": checked, "cost": round(total_cost, 6),
+            "notConnected": sorted(not_connected), "detail": detail}
 
 
 def inspect_question(site_id: str, question: str, prompt_id=None) -> dict:
@@ -598,6 +871,11 @@ def build_ai_response(site_id: str) -> dict:
         "costs": {"model": spend["per_run_check"], "inspect": spend["per_inspect"]},
         # No scheduler runs these prompts (they are manual-only), so there is no next run.
         "next_run": None,
+        # The run in flight (or the last one), read straight off the task the worker updates.
+        # The SPA drives its Run buttons from THIS, not from a client-side flag: a flag set in
+        # a request that was later killed can never be cleared, which is how every Run button
+        # in a session became a silent no-op.
+        "run": get_run_task(site_id),
         "mentionPlatforms": vis["mentionPlatforms"],
         # llmPlatforms stays the four answer engines the Prompts tab checks with this
         # deployment's own API keys. DataForSEO's LLM Mentions covers only two platforms, so
