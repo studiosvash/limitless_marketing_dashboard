@@ -74,8 +74,16 @@ class PredictionSchemaTests(unittest.TestCase):
         self.assertNotIn("risk_signals", self.tables)
 
     def test_keyword_opportunity_unique_key(self):
+        """Keyed on the PROJECT, not the domain.
+
+        Was `(site_id, keyword)`. Because `persist_keyword_opportunities` runs on every
+        `GET /positions` and deleted stale rows by `site_id`, two projects on one domain
+        deleted each other's scored rows on every page render, and this upsert key let one
+        project's score overwrite its sibling's for any keyword both track.
+        """
         keys = [set(uc["column_names"]) for uc in self.insp.get_unique_constraints("keyword_opportunities")]
-        self.assertIn({"site_id", "keyword"}, keys)
+        self.assertIn({"site_pk", "keyword"}, keys)
+        self.assertNotIn({"site_id", "keyword"}, keys)
 
 
 if __name__ == "__main__":

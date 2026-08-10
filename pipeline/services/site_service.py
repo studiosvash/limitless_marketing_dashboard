@@ -111,14 +111,34 @@ def list_sites(active_only: bool = True) -> list[Site]:
 
 
 def get_site(session, site_id: Optional[str] = None) -> Optional[Site]:
+    """The `sites` row for `site_id`, or None when it names no site.
+
+    An UNKNOWN site_id returns None. It used to fall back to "the first active site", which is
+    the same shape as the `.env` GA4_PROPERTY_ID fallback that once wrote 6 654 rows of one
+    site's data under another site's id: a connector handed an id it could not resolve was
+    given a STRANGER'S row and went on to use that row's site_url as its write key and its
+    credentials as its target. Every caller already guards for a missing row and has its own
+    explicit default, so failing to resolve now degrades to that caller's own fallback instead
+    of silently borrowing another project's identity.
+
+    Called with NO site_id at all, it still returns the first active site — that is a different
+    question ("the default site"), and `get_default_site_id` depends on it.
+
+    Note this can only ever answer "a site on this domain": when several projects share one
+    `site_url` it returns the first. Anything needing one specific project must use
+    `get_site_by_pk`.
+    """
     _ensure_columns(session)
     if site_id:
         site = session.execute(
             select(Site).where(Site.site_url == site_id)
         ).scalars().first()
-        if site:
-            return site
-        logger.warning(f"[site_service] site_id={site_id!r} not found, falling back to first active")
+        if not site:
+            logger.warning(
+                "[site_service] site_id=%r matches no site — returning None rather than "
+                "another site's row", site_id,
+            )
+        return site
     return session.execute(
         select(Site).where(Site.is_active == 1).order_by(Site.id)
     ).scalars().first()

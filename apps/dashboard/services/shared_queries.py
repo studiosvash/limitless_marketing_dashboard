@@ -19,8 +19,23 @@ from pipeline.db.schema import (
     SEODaily, KeywordRanking, AdMetricDaily, CompetitorKeywordRanking,
 )
 from pipeline.utils.db_connection import get_session
+from pipeline.utils.site_ids import resolve_site_ids
 
 logger = logging.getLogger(__name__)
+
+
+def _site_clause(model, site_id: str):
+    """Match every spelling of `site_id` on `model`, not just the exact string.
+
+    The join key between the two databases is a string and four spellings of one site
+    legitimately exist -- `example.com`, `sc-domain:example.com`, `https://example.com/`,
+    `https://example.com` (skills.md 3). These reads used `site_id ==` while
+    `views.latest_ranking_anchor`, which decides WHICH WINDOW this page renders, already
+    matched all of them: rows written under an alternate spelling moved the anchor forward
+    while staying invisible to the queries that fill the page, so Positioning rendered empty
+    *because* the data existed.
+    """
+    return model.site_id.in_(resolve_site_ids(site_id))
 
 
 def _diff_label(latest, prev):
@@ -46,7 +61,7 @@ def _get_ads_overview(site_id: str, curr_start: date, curr_end: date, prev_start
                         func.sum(AdMetricDaily.impressions).label("total_impressions"),
                         func.sum(AdMetricDaily.conversions).label("total_conversions"),
                     )
-                    .where(AdMetricDaily.site_id == site_id, AdMetricDaily.date >= start, AdMetricDaily.date <= end)
+                    .where(_site_clause(AdMetricDaily, site_id), AdMetricDaily.date >= start, AdMetricDaily.date <= end)
                 ).first()
                 return {
                     "total_spend": float(row.total_cost or 0),
@@ -126,7 +141,7 @@ def _get_keywords_overview(site_id: str, limit: int = 5) -> list[dict]:
                     func.sum(KeywordRanking.impressions).label("total_impressions"),
                     func.max(KeywordRanking.search_volume).label("search_volume"),
                 )
-                .where(KeywordRanking.site_id == site_id)
+                .where(_site_clause(KeywordRanking, site_id))
                 .group_by(KeywordRanking.keyword)
                 .order_by(func.sum(KeywordRanking.clicks).desc())
                 .limit(limit)
@@ -224,7 +239,7 @@ def _get_ranking_distribution(site_id: str, curr_start: date, curr_end: date,
                     func.sum(KeywordRanking.impressions).label("impressions"),
                 )
                 .where(
-                    KeywordRanking.site_id == site_id,
+                    _site_clause(KeywordRanking, site_id),
                     KeywordRanking.date >= curr_start,
                     KeywordRanking.date <= curr_end,
                     func.lower(KeywordRanking.keyword).in_(tracked_lower),
@@ -310,7 +325,7 @@ def _get_position_changes(site_id: str, curr_start: date, curr_end: date, prev_s
                     func.max(KeywordRanking.url).label("url"),
                 )
                 .where(
-                    KeywordRanking.site_id == site_id,
+                    _site_clause(KeywordRanking, site_id),
                     KeywordRanking.date >= curr_start,
                     KeywordRanking.date <= curr_end,
                     func.lower(KeywordRanking.keyword).in_(tracked_lower),
@@ -323,7 +338,7 @@ def _get_position_changes(site_id: str, curr_start: date, curr_end: date, prev_s
             prev_rows = session.execute(
                 select(KeywordRanking.keyword, func.avg(KeywordRanking.position).label("pos"))
                 .where(
-                    KeywordRanking.site_id == site_id,
+                    _site_clause(KeywordRanking, site_id),
                     KeywordRanking.date >= prev_start,
                     KeywordRanking.date <= prev_end,
                     func.lower(KeywordRanking.keyword).in_(tracked_lower),
@@ -450,7 +465,7 @@ def _get_competitor_map(site_id: str, limit: int = 12, location: str | None = No
 
             captured_date = session.execute(
                 select(func.max(CompetitorKeywordRanking.date))
-                .where(CompetitorKeywordRanking.site_id == site_id,
+                .where(_site_clause(CompetitorKeywordRanking, site_id),
                        *_location_clause(CompetitorKeywordRanking, location))
             ).scalar()
             if captured_date is None:
@@ -460,7 +475,7 @@ def _get_competitor_map(site_id: str, limit: int = 12, location: str | None = No
                 select(CompetitorKeywordRanking.keyword,
                        CompetitorKeywordRanking.competitor_domain,
                        CompetitorKeywordRanking.position)
-                .where(CompetitorKeywordRanking.site_id == site_id,
+                .where(_site_clause(CompetitorKeywordRanking, site_id),
                        CompetitorKeywordRanking.date == captured_date,
                        func.lower(CompetitorKeywordRanking.keyword).in_(tracked_lower),
                        *_location_clause(CompetitorKeywordRanking, location))
@@ -470,7 +485,7 @@ def _get_competitor_map(site_id: str, limit: int = 12, location: str | None = No
             # so the comparison never reads your future position against their past one.
             your_date = session.execute(
                 select(func.max(KeywordRanking.date))
-                .where(KeywordRanking.site_id == site_id, KeywordRanking.date <= captured_date,
+                .where(_site_clause(KeywordRanking, site_id), KeywordRanking.date <= captured_date,
                        *_location_clause(KeywordRanking, location))
             ).scalar()
             your_rows = []
@@ -478,7 +493,7 @@ def _get_competitor_map(site_id: str, limit: int = 12, location: str | None = No
                 your_rows = session.execute(
                     select(KeywordRanking.keyword,
                            func.avg(KeywordRanking.position).label("pos"))
-                    .where(KeywordRanking.site_id == site_id,
+                    .where(_site_clause(KeywordRanking, site_id),
                            KeywordRanking.date == your_date,
                            func.lower(KeywordRanking.keyword).in_(tracked_lower),
                            *_location_clause(KeywordRanking, location))
@@ -491,7 +506,7 @@ def _get_competitor_map(site_id: str, limit: int = 12, location: str | None = No
             vol_rows = session.execute(
                 select(KeywordRanking.keyword,
                        func.max(KeywordRanking.search_volume).label("vol"))
-                .where(KeywordRanking.site_id == site_id,
+                .where(_site_clause(KeywordRanking, site_id),
                        func.lower(KeywordRanking.keyword).in_(tracked_lower),
                        *_location_clause(KeywordRanking, location))
                 .group_by(KeywordRanking.keyword)
@@ -626,7 +641,7 @@ def _get_competitor_grid(site_id: str, limit: int = 100, location: str | None = 
             ensure_tables(session, CompetitorKeywordRanking)  # idempotent; clean empty state pre-first-refresh
             dates = session.execute(
                 select(CompetitorKeywordRanking.date)
-                .where(CompetitorKeywordRanking.site_id == site_id,
+                .where(_site_clause(CompetitorKeywordRanking, site_id),
                        *_location_clause(CompetitorKeywordRanking, location))
                 .group_by(CompetitorKeywordRanking.date)
                 .order_by(CompetitorKeywordRanking.date.desc())
@@ -635,7 +650,7 @@ def _get_competitor_grid(site_id: str, limit: int = 100, location: str | None = 
             if not dates:
                 dates = session.execute(
                     select(KeywordRanking.date)
-                    .where(KeywordRanking.site_id == site_id,
+                    .where(_site_clause(KeywordRanking, site_id),
                            *_location_clause(KeywordRanking, location))
                     .group_by(KeywordRanking.date)
                     .order_by(KeywordRanking.date.desc())
@@ -659,7 +674,7 @@ def _get_competitor_grid(site_id: str, limit: int = 100, location: str | None = 
                     # competitor cell showed one of YOUR pages.
                     CompetitorKeywordRanking.url,
                 )
-                .where(CompetitorKeywordRanking.site_id == site_id,
+                .where(_site_clause(CompetitorKeywordRanking, site_id),
                        CompetitorKeywordRanking.date.in_(both),
                        func.lower(CompetitorKeywordRanking.keyword).in_(tracked_lower),
                        *_location_clause(CompetitorKeywordRanking, location))
@@ -675,7 +690,7 @@ def _get_competitor_grid(site_id: str, limit: int = 100, location: str | None = 
             # calendar.
             your_dates = session.execute(
                 select(KeywordRanking.date)
-                .where(KeywordRanking.site_id == site_id,
+                .where(_site_clause(KeywordRanking, site_id),
                        KeywordRanking.position.isnot(None),
                        func.lower(KeywordRanking.keyword).in_(tracked_lower),
                        *_location_clause(KeywordRanking, location))
@@ -692,7 +707,7 @@ def _get_competitor_grid(site_id: str, limit: int = 100, location: str | None = 
                        func.avg(KeywordRanking.position).label("pos"),
                        # max() only to satisfy the GROUP BY; one keyword/date has one URL.
                        func.max(KeywordRanking.url).label("url"))
-                .where(KeywordRanking.site_id == site_id, KeywordRanking.date.in_(your_both),
+                .where(_site_clause(KeywordRanking, site_id), KeywordRanking.date.in_(your_both),
                        func.lower(KeywordRanking.keyword).in_(tracked_lower),
                        *_location_clause(KeywordRanking, location))
                 .group_by(KeywordRanking.keyword, KeywordRanking.date)

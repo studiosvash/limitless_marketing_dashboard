@@ -9,7 +9,7 @@ from datetime import date
 import pandas as pd
 from sqlalchemy import func, select
 
-from apps.dashboard.services.shared_queries import _location_clause
+from apps.dashboard.services.shared_queries import _location_clause, _site_clause
 from pipeline.db.schema import KeywordRanking
 from pipeline.utils.db_connection import get_session
 
@@ -123,7 +123,12 @@ def get_keyword_intelligence_raw(site_id: str, curr_start: date, curr_end: date,
                         # unranked one. See KeywordRanking.rank_checked_at.
                         func.max(KeywordRanking.rank_checked_at).label("rank_checked_at"),
                     )
-                    .where(KeywordRanking.site_id == site_id, KeywordRanking.date >= start, KeywordRanking.date <= end,
+                    # Every spelling of the site, not just the exact string: rows a connector
+                    # filed under `https://x.com/` belong to the project registered as `x.com`
+                    # (skills.md 3), and matching exactly made them invisible here while
+                    # `latest_ranking_anchor` — which sets this window — could see them.
+                    .where(_site_clause(KeywordRanking, site_id),
+                           KeywordRanking.date >= start, KeywordRanking.date <= end,
                            # Measurements must be scoped to this project's market, not just its
                            # tracked-keyword TEXT: two city projects sharing "event staffing"
                            # are two captures, and averaging them reported a position neither
