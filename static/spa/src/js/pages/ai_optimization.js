@@ -6,7 +6,22 @@
       /* 4 decimals under half a cent: a real $0.0008 check rendered "$0.000", which reads as
          free — the one thing a price label must never do here. */
       const money3 = c => '$' + Number(c || 0).toFixed(c > 0 && c < 0.005 ? 4 : c > 0 && c < 0.1 ? 3 : 2);
-      const runCostOf = pr => pr.cfg.models.length * d.costs.model;
+      /* d.costs.model is the REAL mean cost of one check, and it is null until a check has
+         actually been billed. Multiplying null gave NaN, which money3 swallowed via
+         Number(c || 0) and printed as "$0.00" — a paid action advertising itself as free on
+         exactly the projects that have never paid for one. Unknown is now said out loud. */
+      const perCheck = (d.costs && d.costs.model != null) ? d.costs.model : null;
+      const costOf = n => perCheck == null ? 'cost unknown' : '~' + money3(perCheck * n);
+      /* cfg.models is null on a prompt whose tracked_models was wiped; an unguarded read here
+         blanked the ENTIRE SPA render (§10). One accessor, guarded once. */
+      const modelsOf = pr => (pr.cfg && pr.cfg.models) || [];
+      const unrunOf = pr => pr.unrun || [];
+      /* The label must state the plan the server would actually execute — not the price of
+         the whole grid, which is what every Run button used to quote while the run itself
+         re-billed every cell. */
+      const planLabel = (verb, n) => n === 0
+        ? 'Everything is up to date'
+        : verb + ' ' + n + ' unrun check' + (n === 1 ? '' : 's') + ' · ' + costOf(n);
       const inputStyle = { padding: '9px 12px', fontSize: '13px', border: '1px solid #cbd5e1', borderRadius: '8px', background: 'white', color: '#0f172a', width: '100%' };
       const redBtn = { display: 'inline-flex', alignItems: 'center', gap: '6px', cursor: 'pointer', padding: '7px 14px', fontSize: '12.5px', fontWeight: 600, color: '#dc2626', border: '1px solid #fecaca', borderRadius: '8px', background: '#fff5f5', whiteSpace: 'nowrap' };
       const priBtn = { display: 'inline-flex', alignItems: 'center', gap: '8px', cursor: 'pointer', padding: '9px 18px', fontSize: '13px', fontWeight: 600, color: 'white', background: '#4f46e5', borderRadius: '8px' };
@@ -76,7 +91,9 @@
         aiv.wizBackShown = step > 1;
         aiv.wizFinish = () => this.aiFinishSetup(d);
         aiv.wizFinishLabel = s.aiWizBusy ? 'Setting up…' : 'Finish setup — track ' + totalN + ' prompt' + (totalN === 1 ? '' : 's');
-        aiv.wizWeekly = 'Weekly schedule ≈ ' + money3(totalN * 4 * d.costs.model * 4.3) + '/mo across 4 LLMs';
+        aiv.wizWeekly = perCheck == null
+          ? 'Weekly schedule across 4 LLMs — per-check cost unknown until the first run'
+          : 'Weekly schedule ≈ ' + money3(totalN * 4 * perCheck * 4.3) + '/mo across 4 LLMs';
         aiv.inputStyle = inputStyle;
         vals.aiv = aiv;
       }
@@ -92,25 +109,58 @@
         aiv.budgetLabel = 'AI spend ' + this.money(d.budget.spent) + ' of ' + this.money(d.budget.cap) + ' cap';
         aiv.budgetStyle = { fontSize: '12px', fontWeight: 600, padding: '4px 10px', borderRadius: '6px', background: overCap >= 0.8 ? '#fee2e2' : '#f1f5f9', color: overCap >= 0.8 ? '#b91c1c' : '#475569' };
         aiv.nextRunLabel = d.next_run ? ('Runs weekly · next ' + d.next_run) : 'Runs weekly · not yet scheduled';
-        const allCost = prompts.reduce((a2, pr) => a2 + runCostOf(pr), 0);
-        /* While a run is in flight every Run control says so and does nothing — a run is a
-           long synchronous paid request, and the page used to give no sign it had started
-           (see App#aiRun). The banner below carries the same state for the whole tab, so the
-           user is not left reading a still screen wondering whether the click registered. */
-        const running = !!s.aiRunning;
+        /* THE RUN IS SERVER STATE. `d.run` is the task the worker process updates, so a run
+           in flight survives switching tabs, reloading the page and the death of the worker
+           itself. The old `s.aiRunning` was a client-side flag cleared only when the (8-15
+           minute) POST resolved — when the proxy killed that request the flag was stuck true
+           and EVERY Run button silently stopped working for the rest of the session. */
+        const runState = d.run || { state: 'idle' };
+        const running = runState.state === 'running';
         aiv.running = running;
-        const engines = prompts.reduce((n, pr) => n + ((pr.cfg && pr.cfg.models) || []).length, 0);
+        const allUnrun = prompts.reduce((n, pr) => n + unrunOf(pr).length, 0);
+        const allCells = prompts.reduce((n, pr) => n + modelsOf(pr).length, 0);
+        const doneOf = runState.completed || 0;
+        const totalOf = runState.total || 0;
         aiv.runBanner = running
-          ? 'Asking ' + engines + ' answer engine' + (engines === 1 ? '' : 's')
-            + ' across ' + prompts.length + ' prompt' + (prompts.length === 1 ? '' : 's')
-            + ' — this takes a few minutes and keeps going if you switch tabs.'
+          ? 'Running checks — ' + doneOf + ' of ' + totalOf + ' done'
+            + (runState.current ? ' · now asking about “' + runState.current + '”' : '')
+            + '. This keeps going if you switch tabs or reload.'
           : '';
-        aiv.runAllLabel = running ? 'Running…' : 'Run all now · ' + money3(allCost);
-        aiv.runAllStyle = running
-          ? Object.assign({}, redBtn, { background: '#fca5a5', cursor: 'default' })
+        aiv.runProgressStyle = {
+          height: '4px', borderRadius: '999px', background: '#1d4ed8',
+          width: (totalOf ? Math.round((doneOf / totalOf) * 100) : 0) + '%'
+        };
+        /* A finished or dead run must say so once, rather than leaving the page looking as
+           though the click never registered — the third of the three failures this replaced. */
+        aiv.runFailed = runState.state === 'error';
+        aiv.runFailedMsg = runState.error || '';
+        aiv.runNote = (!running && runState.state === 'done' && runState.detail) ? runState.detail : '';
+
+        aiv.runAllLabel = running ? 'Running…' : planLabel('Run', allUnrun);
+        aiv.runAllStyle = (running || allUnrun === 0)
+          ? Object.assign({}, redBtn, { background: '#fef2f2', color: '#fca5a5', borderColor: '#fee2e2', cursor: 'default' })
           : redBtn;
-        aiv.runAll = () => { if (prompts.length && !running) this.aiRun({}); };
+        aiv.runAll = () => { if (allUnrun && !running) this.aiRun({}); };
+        /* The separate, explicitly-labelled paid action: everything else skips what has
+           already been answered, and this is the only way to ask for fresh answers. */
+        aiv.rerunLabel = running ? 'Running…'
+          : 'Re-run (fresh answers) · ' + costOf(allCells);
+        aiv.rerunStyle = running
+          ? Object.assign({}, ghostBtn, { color: '#cbd5e1', cursor: 'default' })
+          : ghostBtn;
+        aiv.rerunAll = () => { if (allCells && !running) this.aiRun({ force: true }); };
         aiv.hasPrompts = prompts.length > 0;
+
+        /* Poll while the run is in flight. A self-terminating chain, not an interval: each
+           render schedules exactly one deferred reload, and once `running` goes false nothing
+           schedules another. This is also what restores live progress after a page reload —
+           the state comes from the server, so there is nothing client-side to restore. */
+        if (running && !this._aiPoll) {
+          this._aiPoll = setTimeout(() => {
+            this._aiPoll = null;
+            if (this._alive) this.aiReload();
+          }, 2000);
+        }
 
         const sub2 = s.aiSub;
         const goSub = v => { this.setState({ aiSub: v }); this.pushNav({ aiSub: v }); };
@@ -333,10 +383,15 @@
           aiv.promptSelCount = visPromptSel.length + ' selected';
           aiv.promptClearSel = () => this.setState({ aiPromptSel: [] });
           aiv.promptRemoveSel = () => this.aiRemovePrompts(visPromptSel.map(pr => pr.id));
-          const selCost = visPromptSel.reduce((a2, pr) => a2 + runCostOf(pr), 0);
-          aiv.promptRunSelLabel = running ? 'Running…' : 'Run selected · ' + money3(selCost);
-          aiv.promptRunSelStyle = running ? Object.assign({}, redBtn, { background: '#fca5a5', cursor: 'default' }) : redBtn;
-          aiv.promptRunSel = () => { if (!running && visPromptSel.length) this.aiRun({ promptIds: visPromptSel.map(pr => pr.id) }); };
+          const selUnrun = visPromptSel.reduce((n, pr) => n + unrunOf(pr).length, 0);
+          aiv.promptRunSelLabel = running ? 'Running…' : planLabel('Run', selUnrun);
+          aiv.promptRunSelStyle = (running || selUnrun === 0)
+            ? Object.assign({}, redBtn, { background: '#fef2f2', color: '#fca5a5', borderColor: '#fee2e2', cursor: 'default' })
+            : redBtn;
+          aiv.promptRunSel = () => { if (!running && selUnrun) this.aiRun({ promptIds: visPromptSel.map(pr => pr.id) }); };
+          aiv.promptRerunSelLabel = running ? 'Running…'
+            : 'Re-run · ' + costOf(visPromptSel.reduce((n, pr) => n + modelsOf(pr).length, 0));
+          aiv.promptRerunSel = () => { if (!running && visPromptSel.length) this.aiRun({ promptIds: visPromptSel.map(pr => pr.id), force: true }); };
 
           /* Row click opens the prompt in the Answer Inspector — showing the answer that was
              ALREADY paid for when one exists. The old "Inspect answer" button fired a fresh
@@ -376,20 +431,28 @@
               checkStyle: { width: '15px', height: '15px', borderRadius: '4px', border: '1.5px solid ' + (prSelOn ? '#4f46e5' : '#cbd5e1'), background: prSelOn ? '#4f46e5' : 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, color: 'white', fontSize: '10px', fontWeight: 700, cursor: 'pointer' },
               toggleSel: e => { e.stopPropagation(); this.setState(st => ({ aiPromptSel: prSelOn ? (st.aiPromptSel || []).filter(x => x !== pr.id) : (st.aiPromptSel || []).concat([pr.id]) })); },
               openIns: () => openInspector(pr),
-              runLabel: running ? 'Running…' : 'Run · ' + money3(runCostOf(pr)),
-              runStyle: running ? Object.assign({}, redBtn, { background: '#fca5a5', cursor: 'default', padding: '6px 10px' }) : Object.assign({}, redBtn, { padding: '6px 10px' }),
-              run: e => { e.stopPropagation(); if (!running) this.aiRun({ promptId: pr.id }); },
+              runLabel: running ? 'Running…'
+                : (unrunOf(pr).length === 0 ? 'Up to date'
+                  : 'Run ' + unrunOf(pr).length + ' · ' + costOf(unrunOf(pr).length)),
+              runStyle: (running || unrunOf(pr).length === 0)
+                ? Object.assign({}, redBtn, { background: '#fef2f2', color: '#fca5a5', borderColor: '#fee2e2', cursor: 'default', padding: '6px 10px' })
+                : Object.assign({}, redBtn, { padding: '6px 10px' }),
+              run: e => { e.stopPropagation(); if (!running && unrunOf(pr).length) this.aiRun({ promptId: pr.id }); },
+              rerunTitle: 'Re-run this prompt on every tracked engine · ' + costOf(modelsOf(pr).length),
+              rerun: e => { e.stopPropagation(); if (!running) this.aiRun({ promptId: pr.id, force: true }); },
               cfgOpen: e => { e.stopPropagation(); this.setState({ aiCfgOpen: pr.id, aiCfgDraft: Object.assign({}, pr.cfg, { models: pr.cfg.models.slice(), listId: pr.listId, text: pr.text }) }); },
               remove: e => { e.stopPropagation(); this.aiRemovePrompts([pr.id]); }
             };
           });
           const flt = d.lists.find(l => l.id === s.aiListFilter);
           if (flt) {
-            const listCost = visPrompts.reduce((a2, pr) => a2 + runCostOf(pr), 0);
+            const listUnrun = visPrompts.reduce((n, pr) => n + unrunOf(pr).length, 0);
             aiv.runListShown = visPrompts.length > 0;
-            aiv.runListLabel = running ? 'Running…' : 'Run "' + flt.name + '" now · ' + money3(listCost);
-            aiv.runListStyle = running ? Object.assign({}, redBtn, { background: '#fca5a5', cursor: 'default' }) : redBtn;
-            aiv.runList = () => { if (!running) this.aiRun({ listId: flt.id }); };
+            aiv.runListLabel = running ? 'Running…' : planLabel('Run "' + flt.name + '" —', listUnrun);
+            aiv.runListStyle = (running || listUnrun === 0)
+              ? Object.assign({}, redBtn, { background: '#fef2f2', color: '#fca5a5', borderColor: '#fee2e2', cursor: 'default' })
+              : redBtn;
+            aiv.runList = () => { if (!running && listUnrun) this.aiRun({ listId: flt.id }); };
           } else { aiv.runListShown = false; }
 
           /* --- config modal --- */

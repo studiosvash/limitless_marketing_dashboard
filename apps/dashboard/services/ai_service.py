@@ -20,6 +20,7 @@ LLM Mentions snapshots are now being collected weekly, the chart itself is not w
 release; a real prompt-suggestion engine does not exist. A plausible-looking number in either of
 those slots is worse than a visible gap.
 """
+import hashlib
 import json
 import logging
 import os
@@ -107,6 +108,11 @@ RUN_TASK_KEY = "aiRunTask"
 
 # Same liveness reasoning as sync_api_service._reap_if_dead: a pid is written a moment AFTER
 # the task row, so a just-started run legitimately has no live pid yet.
+# How many consecutive HTTP failures retire a cell from automatic plans. Chosen so a transient
+# provider blip still retries, while a permanently broken prompt (a 500-character question that
+# the API rejects, say) stops adding a doomed call to every future "Run all".
+FAIL_LIMIT = 3
+
 RUN_DEAD_MESSAGE = (
     "The run process (pid {pid}) is no longer running but never reported a result. It was most "
     "likely killed by a server restart or deploy. Press Run again to continue — checks that "
@@ -251,13 +257,64 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def _cell(result: dict) -> dict:
+def prompt_text_hash(text: str) -> str:
+    """Stable fingerprint of the question a stored result was measured against.
+
+    Kept ON the cell so that editing a prompt makes its cells unrun (the stored answer answers
+    a different question now) while everything else stays put. Text, not id: an id survives an
+    edit, which is exactly the case this has to catch.
+    """
+    return hashlib.sha1((text or "").strip().encode("utf-8")).hexdigest()[:12]
+
+
+def cell_status(cell, current_hash: str) -> str:
+    """`"unrun"` | `"done"` | `"failing"` for one (prompt, platform) cell.
+
+    The whole "don't re-bill what we already know" rule lives here:
+
+    * no cell, or a cell with no state -> never asked -> **unrun**.
+    * a stored hash that DIFFERS from the prompt's current text -> the answer measures a
+      different question -> **unrun**. An ABSENT hash is not evidence of a change (results
+      predating this field simply never recorded one), so those count as run — otherwise
+      shipping this would have re-billed every existing grid exactly once.
+    * `state == "checked"` -> a real answer was observed and paid for -> **done**, with NO
+      time-based staleness window. That is the approved decision, not an oversight.
+    * an error or a not_connected cell -> nothing was billed and nothing was observed ->
+      **unrun**, so it retries... except that a cell which has errored `FAIL_LIMIT` times in a
+      row is **failing** and drops out of automatic plans, so one broken prompt cannot tax
+      every "Run all". An explicit force re-runs it.
+    """
+    if not isinstance(cell, dict) or not cell.get("state"):
+        return "unrun"
+    stored_hash = cell.get("promptHash")
+    if stored_hash is not None and stored_hash != current_hash:
+        return "unrun"
+    if cell.get("state") == "checked":
+        return "done"
+    if int(cell.get("failCount") or 0) >= FAIL_LIMIT:
+        return "failing"
+    return "unrun"
+
+
+def _cell(result: dict, prompt_hash: str | None = None, previous: dict | None = None) -> dict:
     """The part of a check the Prompts table needs, stored per (prompt, platform).
 
     The answer text and its paragraph split are deliberately NOT kept here — they are large and
     they live once, in the history entry, which is what the Answer Inspector opens.
     """
+    state = result.get("state")
+    prev_fails = int((previous or {}).get("failCount") or 0)
+    if state == "checked":
+        fail_count = 0                      # a real answer clears the strike count
+    elif state == "error":
+        fail_count = prev_fails + 1
+    else:
+        fail_count = prev_fails             # not_connected is a missing key, not a failure
     return {
+        # Which question this result measured, and how many times in a row this cell has
+        # errored — the two facts the planner needs to answer "must we pay for this again?".
+        "promptHash": prompt_hash,
+        "failCount": fail_count,
         "state": result.get("state"),
         "platform": result.get("platform"),
         "platformName": result.get("platformName"),
@@ -332,19 +389,35 @@ def plan_run(site_id: str, prompts: list, force: bool = False) -> dict:
     """Which (prompt, platform) CELLS this run should actually pay for.
 
     The unit of work is a cell, not a prompt: an engine that already answered a prompt has
-    nothing left to observe, and re-asking it is a second charge for the same fact.
+    nothing left to observe, and re-asking it is a second charge for the same fact. Before
+    this existed, every "Run all" re-billed the whole grid — seconds after a successful run
+    included.
+
+    `force=True` is the separate, explicitly-labelled "Re-run (fresh answers)" action: it
+    plans every cell including the ones retired for repeated failure.
     """
+    stored = get_prompt_results(site_id)
     cells = []
     skipped_no_models = 0
+    skipped_done = 0
+    failing = 0
     for prompt in prompts:
         platforms = list(prompt.tracked_models or [])
         if not platforms:
             skipped_no_models += 1
             continue
+        current_hash = prompt_text_hash(prompt.text)
+        results = (stored.get(str(prompt.id)) or {}).get("results") or {}
         for platform in platforms:
-            cells.append({"promptId": prompt.id, "platform": platform,
-                          "text": prompt.text})
-    return {"cells": cells, "skippedNoModels": skipped_no_models}
+            status = cell_status(results.get(platform), current_hash)
+            if force or status == "unrun":
+                cells.append({"promptId": prompt.id, "platform": platform})
+            elif status == "failing":
+                failing += 1
+            else:
+                skipped_done += 1
+    return {"cells": cells, "skippedNoModels": skipped_no_models,
+            "skippedDone": skipped_done, "failing": failing}
 
 
 def _idle_task() -> dict:
@@ -466,10 +539,18 @@ def start_ai_run(site_id: str, prompts: list, force: bool = False) -> dict:
     plan = plan_run(site_id, prompts, force=force)
     cells = plan["cells"]
     if not cells:
+        if plan["failing"]:
+            detail = (f"{plan['failing']} check(s) failed {FAIL_LIMIT} times in a row and are "
+                      "excluded — edit the prompt or use Re-run to force them.")
+        elif plan["skippedDone"]:
+            detail = "Everything is up to date."
+        elif plan["skippedNoModels"]:
+            detail = "No answer engines are selected on these prompts."
+        else:
+            detail = "Nothing to run."
         return {"task_id": None, "planned": 0, "skipped": plan["skippedNoModels"],
-                "estimated_cost": None,
-                "detail": ("No answer engines are selected on these prompts."
-                           if plan["skippedNoModels"] else "Everything is up to date.")}
+                "skipped_done": plan["skippedDone"], "failing": plan["failing"],
+                "estimated_cost": None, "detail": detail}
 
     per_check = _spend(site_id)["per_run_check"]
     task_id = uuid.uuid4().hex[:16]
@@ -501,6 +582,9 @@ def start_ai_run(site_id: str, prompts: list, force: bool = False) -> dict:
         "task_id": task_id,
         "planned": len(cells),
         "skipped": plan["skippedNoModels"],
+        "skipped_done": plan["skippedDone"],
+        "failing": plan["failing"],
+        "force": bool(force),
         # None (not 0.0) until a real check has been billed: the price of a call is not
         # something to guess at, and "$0.00" on a paid action is the one lie a price may not tell.
         "estimated_cost": round(per_check * len(cells), 6) if per_check is not None else None,
@@ -609,19 +693,25 @@ def execute_ai_run(site_id: str, task_id: str) -> dict:
         web_search = bool(prompt_cfg.get("webSearch"))
         country = prompt_cfg.get("country")
 
+        # The cell as it stands right now, so a repeated failure keeps counting up and a
+        # recovery clears it. Re-read per prompt rather than cached: the blob may have moved.
+        prev = (get_prompt_results(site_id).get(str(prompt.id)) or {}).get("results") or {}
+        current_hash = prompt_text_hash(prompt.text)
+
         cells: dict = {}
         entries: list = []
         ran_any = False
         for platform in platforms:
             if not is_platform_connected(platform):
                 # An explicit not_connected cell, never a verdict. Nothing called, nothing charged.
-                cells[platform] = _cell(not_connected_result(platform))
+                cells[platform] = _cell(not_connected_result(platform), current_hash,
+                                        prev.get(platform))
                 not_connected.add(platform)
                 completed += 1
                 continue
             result = check_prompt(prompt.text, brand, aliases, competitors, platform=platform,
                                   web_search=web_search, country=country)
-            cells[platform] = _cell(result)
+            cells[platform] = _cell(result, current_hash, prev.get(platform))
             completed += 1
             if not result.get("ok"):
                 continue
@@ -695,7 +785,7 @@ def inspect_question(site_id: str, question: str, prompt_id=None) -> dict:
         results = pentry.get("results")
         if not isinstance(results, dict):
             results = {}
-        results[platform] = _cell(result)
+        results[platform] = _cell(result, prompt_text_hash(question), results.get(platform))
         pentry["results"] = results
         pentry["lastRun"] = _now_iso()
         stored[str(prompt_id)] = pentry
@@ -814,7 +904,16 @@ def build_ai_response(site_id: str) -> dict:
         entry = stored.get(str(p.id)) or {}
         results = entry.get("results") or {}
         prompt_cfg = get_prompt_cfg(site_id, p.id)
+        # Which of this prompt's tracked cells a run would actually pay for, so the button can
+        # state the real plan ("Run 6 unrun checks") instead of pricing the whole grid every
+        # time. Computed by the SAME predicate the planner uses — one source of truth for
+        # "has this been run?", or the label and the run would disagree.
+        current_hash = prompt_text_hash(p.text)
+        statuses = {plat: cell_status(results.get(plat), current_hash)
+                    for plat in (p.tracked_models or [])}
         prompts.append({
+            "unrun": [plat for plat, st in statuses.items() if st == "unrun"],
+            "failing": [plat for plat, st in statuses.items() if st == "failing"],
             "id": p.id,
             "text": p.text,
             "listId": p.list_id,

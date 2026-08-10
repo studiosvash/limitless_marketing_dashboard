@@ -2594,33 +2594,37 @@
       });
   }
   aiRun(body) {
-    /* A run is a SYNCHRONOUS request that asks every tracked engine every selected prompt —
-       minutes of wall-clock for a handful of prompts. It used to fire with no busy state at
-       all: nothing on screen changed until the response landed, so the page looked dead, the
-       user pressed Run again (seven POSTs in one session in the reported case), each press
-       started ANOTHER full paid run, and the browser eventually abandoned the earliest
-       requests ("Broken pipe" server-side) while their charges had already been incurred.
+    /* The POST no longer performs the run: it plans the work, records a task and spawns
+       `manage.py run_ai_checks`, then returns {task_id, planned, estimated_cost, detail}
+       immediately. So this handler only has to report what was STARTED.
 
-       `aiRunning` is therefore both the progress indicator and the double-submit guard. */
-    if (this.state.aiRunning) return;
-    this.setState({ aiRunning: true });
+       The busy state is deliberately NOT a local flag any more. `aiRunning` was set here and
+       cleared only in .then/.catch, so when the proxy killed the (8-15 minute) request the
+       flag could never be cleared: every Run button on the tab became a silent no-op
+       relabelled "Running…" for the rest of the session. The AI payload's `run` block is the
+       authority now — it is server state, so it survives a reload, and a dead worker resolves
+       it to an error instead of hanging forever. `_aiRunPending` guards only the moment
+       between this click and its own response. */
+    if (this._aiRunPending) return;
+    this._aiRunPending = true;
     this.aiPost('run', body)
       .then(r => {
+        this._aiRunPending = false;
         if (!this._alive) return;
-        this.setState({ aiRunning: false });
         this.aiReload();
-        /* `checked` counts the engine calls that really returned an answer; `ran` counts the
-           prompts attempted. They differ whenever an engine failed, and reporting only `ran`
-           made a run where every check errored read as a complete success. */
-        const detail = (r.checked != null && r.checked !== r.ran)
-          ? ' · ' + r.checked + ' check' + (r.checked === 1 ? '' : 's') + ' answered'
-          : '';
-        this.notify('Ran ' + r.ran + ' prompt' + (r.ran === 1 ? '' : 's') + ' across LLMs'
-          + detail + ' · ' + this.money(r.cost)
-          + (r.detail ? ' — ' + r.detail : ''));
+        if (!r.task_id) {
+          /* Nothing to run is a normal outcome (everything already answered, no engines
+             selected, no brand set) — say which, rather than looking like a dead button. */
+          this.notify(r.detail || 'Nothing to run');
+          return;
+        }
+        if (r.already_running) { this.notify(r.detail || 'A run is already in progress'); return; }
+        const cost = r.estimated_cost == null ? 'cost unknown' : '≈ ' + this.money(r.estimated_cost);
+        this.notify('Running ' + r.planned + ' check' + (r.planned === 1 ? '' : 's')
+          + ' · ' + cost + ' — this keeps going if you switch tabs or reload');
       }).catch(err => {
+        this._aiRunPending = false;
         if (!this._alive) return;
-        this.setState({ aiRunning: false });
         /* a run costs money and takes time — silence here reads as "nothing happened yet",
            and the user presses it again */
         this.notify(this.errText(err, 'Could not run the prompts'));
