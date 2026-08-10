@@ -197,9 +197,16 @@ def score_keyword_opportunities(rows: list[dict], limit: int = 25) -> list[dict]
     return scored[:limit]
 
 
-def persist_keyword_opportunities(site_id: str, opportunities: list[dict]) -> int:
+def persist_keyword_opportunities(site_id: str, opportunities: list[dict],
+                                  site_pk: int | None = None) -> int:
     """Upsert the scored rows into keyword_opportunities and drop the ones that no longer
     score, so the table is a snapshot of the current answer rather than an ever-growing log.
+
+    SCOPED BY PROJECT. The stale-row delete used to match on `site_id` alone, and this runs on
+    every `GET /positions` — so with two projects on one domain, each one's page render deleted
+    every opportunity row of the other whose keyword it does not itself track, and the upsert
+    overwrote a sibling's score for any keyword both track. Two siblings rendering alternately
+    thrashed the table permanently: a destructive cross-project write triggered by a read.
 
     WHY THE UPSERT LIVES HERE AND NOT IN pipeline/db/writer.py: writer.py's own contract is
     "only from connectors and pipeline tasks" — it is the persistence layer for FETCHED data.
@@ -215,18 +222,28 @@ def persist_keyword_opportunities(site_id: str, opportunities: list[dict]) -> in
     from datetime import datetime
 
     from pipeline.db.dialect import max_batch_size, upsert_insert
-    from pipeline.db.schema import KeywordOpportunity
+    from pipeline.db.schema import (
+        KeywordOpportunity, UNOWNED_SITE_PK, ensure_keyword_opportunity_project,
+    )
     from pipeline.db.writer import ensure_tables
     from pipeline.utils.db_connection import get_session
     from sqlalchemy import delete, select
 
+    def _scope():
+        """This project's rows, or the domain's when no project was given."""
+        if site_pk:
+            return [KeywordOpportunity.site_pk == site_pk]
+        from pipeline.utils.site_ids import resolve_site_ids
+        return [KeywordOpportunity.site_id.in_(resolve_site_ids(site_id))]
+
     try:
         with get_session() as session:
             ensure_tables(session, KeywordOpportunity)  # never written before: may not exist yet
+            ensure_keyword_opportunity_project(session)  # self-provisions site_pk on an old DB
 
             kept = {o["keyword"] for o in opportunities}
             existing = session.execute(
-                select(KeywordOpportunity.keyword).where(KeywordOpportunity.site_id == site_id)
+                select(KeywordOpportunity.keyword).where(*_scope())
             ).scalars().all()
             stale = [k for k in existing if k not in kept]
             # Deleted in bounded batches rather than one NOT IN (...): a tracked list can be
@@ -234,8 +251,20 @@ def persist_keyword_opportunities(site_id: str, opportunities: list[dict]) -> in
             for i in range(0, len(stale), 200):
                 session.execute(
                     delete(KeywordOpportunity).where(
-                        KeywordOpportunity.site_id == site_id,
+                        *_scope(),
                         KeywordOpportunity.keyword.in_(stale[i:i + 200]),
+                    )
+                )
+
+            # Legacy rows written before the column existed belong to nobody and are invisible
+            # to every project. They are a recomputed cache, so this project's fresh answer
+            # simply replaces the domain's unowned leftovers rather than guessing an owner.
+            if site_pk:
+                from pipeline.utils.site_ids import resolve_site_ids
+                session.execute(
+                    delete(KeywordOpportunity).where(
+                        KeywordOpportunity.site_id.in_(resolve_site_ids(site_id)),
+                        KeywordOpportunity.site_pk == UNOWNED_SITE_PK,
                     )
                 )
 
@@ -245,6 +274,7 @@ def persist_keyword_opportunities(site_id: str, opportunities: list[dict]) -> in
             now = datetime.now()
             records = [{
                 "site_id": site_id,
+                "site_pk": site_pk or UNOWNED_SITE_PK,
                 "keyword": o["keyword"],
                 "current_position": o["position"],
                 "search_volume": o["volume"],
@@ -259,7 +289,7 @@ def persist_keyword_opportunities(site_id: str, opportunities: list[dict]) -> in
 
             insert = upsert_insert(session)
             batch_size = max_batch_size(session, 60)
-            keys = ("site_id", "keyword")
+            keys = ("site_pk", "keyword")
             update_cols = [k for k in records[0] if k not in keys]
             written = 0
             for i in range(0, len(records), batch_size):
@@ -500,7 +530,7 @@ def build_positions_response(site_id: str, curr_start: date, curr_end: date,
     # an external call, so the DB-first contract is intact — because keyword_opportunities is
     # the documented home for this answer and nothing had ever filled it.
     opportunities = score_keyword_opportunities(merged_kws_raw)
-    persist_keyword_opportunities(site_id, opportunities)
+    persist_keyword_opportunities(site_id, opportunities, site_pk=site_pk)
 
     # The project's own tracking preferences, so the workspace header can print what the user
     # actually chose in the wizard instead of a hardcoded "Desktop".

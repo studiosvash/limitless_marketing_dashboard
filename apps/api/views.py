@@ -285,20 +285,21 @@ class ProjectDataCleanView(APIView):
         tables_to_clean = [
             SEODaily, KeywordRanking, Page, AdMetricDaily, Backlink,
             TechnicalIssue, PageSpeed, IndexingStatus, SEOAggregate, AISummary,
-            Anomaly, ComparativeMetrics, CompetitorKeywordRanking, TrackedCompetitor,
-            AIKeywordData, KeywordOpportunity
+            Anomaly, ComparativeMetrics, CompetitorKeywordRanking,
+            AIKeywordData,
         ]
+        # Per-PROJECT tables, cleared by `site_pk` instead. Several projects share one
+        # `site_id`, so deleting these by domain destroyed every sibling project's tracked
+        # keyword list, competitor columns and scored opportunities as a side effect of one
+        # project clearing its own data.
+        project_scoped = [SavedKeyword, TrackedCompetitor, KeywordOpportunity]
 
         try:
             with get_session() as session:
                 for table in tables_to_clean:
                     session.execute(delete(table).where(table.site_id == site_id))
-                # `saved_keywords` is handled separately because it is the one table here that
-                # is per-PROJECT rather than per-domain: several projects share this `site_id`,
-                # so clearing one project's data by site_id alone also destroyed every sibling
-                # project's tracked keyword list.
-                session.execute(delete(SavedKeyword).where(
-                    SavedKeyword.site_id == site_id, SavedKeyword.site_pk == site.id))
+                for table in project_scoped:
+                    session.execute(delete(table).where(table.site_pk == site.id))
                 session.commit()
             return Response(status=status.HTTP_204_NO_CONTENT)
         except Exception as e:

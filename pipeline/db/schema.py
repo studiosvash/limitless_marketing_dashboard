@@ -843,6 +843,12 @@ class KeywordOpportunity(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     site_id = Column(String(255), nullable=False, index=True)
+    # The owning PROJECT — same reason as SavedKeyword and TrackedCompetitor. Scored from THIS
+    # project's tracked list, so keying on the domain meant two projects sharing one domain
+    # deleted each other's rows on every page render (persist runs on a GET) and the upsert
+    # silently overwrote a sibling's score for any keyword both track.
+    site_pk = Column(Integer, nullable=False, index=True, default=UNOWNED_SITE_PK,
+                     server_default=str(UNOWNED_SITE_PK))
     keyword = Column(Text, nullable=False)
     current_position = Column(Integer, nullable=True)
     search_volume = Column(Integer, nullable=True)
@@ -855,7 +861,9 @@ class KeywordOpportunity(Base):
     computed_at = Column(DateTime, server_default=func.now())
 
     __table_args__ = (
-        UniqueConstraint("site_id", "keyword", name="uq_opportunity_site_keyword"),
+        # RENAMED from uq_opportunity_site_keyword: the name is how `_swap_unique_constraint`
+        # detects a database already moved onto the per-project key.
+        UniqueConstraint("site_pk", "keyword", name="uq_opportunity_project_keyword"),
         Index("ix_opportunity_site_score", "site_id", "opportunity_score"),
     )
 
@@ -1103,6 +1111,19 @@ _TRACKED_COMPETITORS_ADDED_COLUMNS = (
 _TRACKED_COMPETITOR_PROJECT_KEY = (
     "tracked_competitors", "uq_tracked_competitor_site", "uq_tracked_competitor_project",
     ("site_pk", "competitor_domain"),
+)
+
+# `keyword_opportunities.site_pk` — same shape again. NO backfill counterpart: unlike
+# saved_keywords (a list a user chose) these rows are a recomputed cache of the current answer,
+# so legacy unowned rows are simply dropped by the next persist for their domain rather than
+# guessed into an owner.
+_KEYWORD_OPPORTUNITIES_ADDED_COLUMNS = (
+    ("site_pk", "INTEGER", UNOWNED_SITE_PK),
+)
+
+_KEYWORD_OPPORTUNITY_PROJECT_KEY = (
+    "keyword_opportunities", "uq_opportunity_site_keyword", "uq_opportunity_project_keyword",
+    ("site_pk", "keyword"),
 )
 
 
@@ -1462,6 +1483,36 @@ def ensure_tracked_competitor_project(session_or_engine) -> bool:
         return _do(conn)
 
 
+def ensure_keyword_opportunity_project(session_or_engine) -> bool:
+    """Move `keyword_opportunities` onto its per-PROJECT key: add `site_pk`, key on it.
+
+    Idempotent, never raises, safe on every read path — same contract as
+    `ensure_saved_keyword_project` / `ensure_tracked_competitor_project`.
+
+    Deliberately has NO backfill step. These rows are a recomputed snapshot of "what to target
+    next", not a list anyone chose, so an unowned legacy row is worth nothing to guess at: the
+    next `persist_keyword_opportunities` for that domain drops it and writes the project's own
+    scored answer in its place.
+    """
+    def _do(conn) -> bool:
+        changed = False
+        try:
+            changed = bool(_alter_missing_columns(conn, "keyword_opportunities",
+                                                  _KEYWORD_OPPORTUNITIES_ADDED_COLUMNS))
+            table, old_name, new_name, cols = _KEYWORD_OPPORTUNITY_PROJECT_KEY
+            if _swap_unique_constraint(conn, table, old_name, new_name, cols):
+                changed = True
+        except Exception:
+            logger.error("[schema] could not move keyword_opportunities onto its project key",
+                         exc_info=True)
+        return changed
+
+    if isinstance(session_or_engine, Session):
+        return _do(session_or_engine.connection())
+    with session_or_engine.begin() as conn:
+        return _do(conn)
+
+
 def ensure_site_url_not_unique(session_or_engine) -> bool:
     """Drop the UNIQUE index on `sites.site_url` if a pre-existing database still has one.
 
@@ -1512,3 +1563,4 @@ def init_db(engine: Engine) -> None:
     # Same shape, one step each: add site_pk, backfill it, then key on it.
     ensure_saved_keyword_project(engine)
     ensure_tracked_competitor_project(engine)
+    ensure_keyword_opportunity_project(engine)
