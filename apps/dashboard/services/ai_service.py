@@ -851,11 +851,14 @@ def rescan_stored_answers(site_id: str) -> dict:
             # answer we no longer hold would invent a verdict.
             new_history.append(entry)
             continue
-        # The stored citations are re-scored too, so a re-scan can promote an answer that
-        # cited us without naming us — which is the whole class of answer the verdict used to
-        # miss. They are echoed straight back out, never re-derived from the prose.
+        # Citations live at entry["scrape"]["citations"], one level down — the same place
+        # `_answer_of` reads the paragraphs from, and the shape `_history_entry` writes.
+        # Reading a top-level entry["citations"] (which never exists) passed an empty list, so
+        # the re-scan not only failed to PROMOTE an answer that cited us without naming us, it
+        # actively DEMOTED one the live check had scored correctly — overwriting a real "cited"
+        # with "absent" and re-reporting the exact bug it was built to fix.
         analysis = analyze_answer(answer, brand, aliases, competitors,
-                                  citations=entry.get("citations") or [])
+                                  citations=(entry.get("scrape") or {}).get("citations") or [])
         rescanned += 1
         before = (entry.get("verdict"), bool(entry.get("mentioned")), bool(entry.get("cited")),
                   entry.get("position"), [c.get("name") for c in (entry.get("competitors") or [])])

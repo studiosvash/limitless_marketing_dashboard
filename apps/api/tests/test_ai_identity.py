@@ -42,7 +42,25 @@ ANSWER_BY_DOMAIN = """Providers worth a look:
 Check licensing before booking."""
 
 
-def _dfs_response(text, cost=0.0055):
+# The reported Perplexity answer: helpful, sourced, and it never writes the brand ANYWHERE.
+# Visibility here exists only in the citation list.
+ANSWER_NO_BRAND = """For 50 guests, a good starting point is 1 bartender.
+
+If the bar is cocktail-heavy some event guides recommend 2 bartenders for smoother service."""
+
+
+def _dfs_response(text, cost=0.0055, citations=None):
+    """One DataForSEO llm_responses payload.
+
+    `citations` become `annotations` on the section, which is where the provider really puts
+    its verified web sources -- the only place this codebase will read a citation from.
+    """
+    section = {"type": "text", "text": text}
+    if citations:
+        # Flat {title, url} -- the shape `_extract_answer` really reads. Matching the parser's
+        # contract rather than inventing a nesting level is the whole point of skills.md's
+        # "build a fixture from a captured response" trap.
+        section["annotations"] = [{"title": c["title"], "url": c["url"]} for c in citations]
     resp = mock.Mock()
     resp.raise_for_status.return_value = None
     resp.json.return_value = {
@@ -51,7 +69,7 @@ def _dfs_response(text, cost=0.0055):
             "status_code": 20000, "status_message": "Ok.", "cost": cost,
             "result": [{
                 "model_name": "gpt-4o-mini", "input_tokens": 12, "output_tokens": 8,
-                "items": [{"type": "message", "sections": [{"type": "text", "text": text}]}],
+                "items": [{"type": "message", "sections": [section]}],
             }],
         }],
     }
@@ -107,6 +125,26 @@ class AIOwnDomainIsDetectedTests(APITestCase):
         self.assertEqual(cell["position"], 1)
         self.assertTrue(cell["mentioned"])
 
+    @mock.patch("pipeline.services.ai_visibility_service.requests.post")
+    def test_a_live_run_scores_a_cited_source_without_needing_a_rescan(self, post, spawn):
+        """The reported answer, straight off the wire: sourced, and it never writes the brand.
+
+        The re-scan exists to correct answers already stored; a fresh run must not depend on
+        it. This pins the check_prompt path on its own -- citations go INTO the analysis rather
+        than being assigned onto the result after the verdict is already decided.
+        """
+        post.return_value = _dfs_response(ANSWER_NO_BRAND, citations=[
+            {"title": "Staffing guide", "url": "https://makeitadoublellc.com/guide"},
+            {"title": "How Many Bartenders Do You Need For An Event?",
+             "url": "https://www.limitlesshold.com/blog/bartenders"},
+        ])
+        self._run()
+
+        cell = self.client_auth.get("/api/projects/limitless/ai").json()[
+            "prompts"][0]["results"]["chatgpt"]
+        self.assertEqual(cell["verdict"], "cited")
+        self.assertEqual(cell["position"], 2)
+
     def test_targets_expose_the_needles_the_verdict_actually_uses(self, spawn):
         targets = self.client_auth.get("/api/projects/limitless/ai").json()["targets"]
         self.assertIn("limitlesshold.com", targets["identity"])
@@ -161,6 +199,46 @@ class AIRescanTests(APITestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.json(), {"rescanned": 0, "changed": 0})
         post.assert_not_called()
+
+    @mock.patch("pipeline.services.ai_visibility_service.requests.post")
+    def test_rescan_promotes_an_answer_that_cited_us_without_naming_us(self, post, spawn):
+        """The whole point of the re-scan for the reported case.
+
+        Perplexity answered a bartender-staffing question citing premierstaff.com twice while
+        never writing the brand in the prose. Those answers are already stored and already
+        paid for, so the correction has to reach them without a re-run.
+
+        This test drives the REAL storage shape: a history entry keeps its citations at
+        `entry["scrape"]["citations"]`, one level down. The first version of this fix read
+        `entry["citations"]` -- which is always absent -- so the re-scan passed an empty list
+        and silently changed nothing, exactly as reported.
+        """
+        post.return_value = _dfs_response(ANSWER_NO_BRAND, citations=[
+            {"title": "Staffing guide", "url": "https://makeitadoublellc.com/guide"},
+            {"title": "How Many Bartenders Do You Need For An Event?",
+             "url": "https://www.limitlesshold.com/blog/bartenders"},
+        ])
+        self._run()
+
+        stored = self.client_auth.get("/api/projects/limitless/ai").json()
+        entry = stored["history"][0]
+        self.assertEqual(entry["scrape"]["citations"][1]["url"],
+                         "https://www.limitlesshold.com/blog/bartenders",
+                         "the citations must actually be stored under scrape")
+
+        calls_before = post.call_count
+        resp = self.client_auth.post("/api/projects/limitless/ai/rescan", {}, format="json")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(post.call_count, calls_before, "a re-scan must never call an engine")
+
+        after = self.client_auth.get("/api/projects/limitless/ai").json()
+        cell = after["prompts"][0]["results"]["chatgpt"]
+        self.assertEqual(cell["verdict"], "cited",
+                         "a stored answer citing our domain must stop reading 'Not mentioned'")
+        self.assertTrue(cell["mentioned"])
+        self.assertEqual(cell["position"], 2, "the real source number in the provider's list")
+        self.assertEqual(after["history"][0]["verdict"], "cited",
+                         "and the Inspector must agree with the grid")
 
 
 @mock.patch.dict(os.environ, DFS_ENV, clear=False)
