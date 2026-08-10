@@ -550,8 +550,6 @@ Each of these is a real bug that was found and fixed. Do not re-introduce them.
 
 **Still broken**
 
-- `apps/dashboard/views_export.py` — references `role_required`, `get_active_period`,
-  `_get_top_pages` and friends, none of which are imported or exist. Not routed. **Dead file.**
 - `apps/dashboard/context_processors.py` — still lists the removed template pages; harmless but
   meaningless now that no Django template renders a dashboard.
 

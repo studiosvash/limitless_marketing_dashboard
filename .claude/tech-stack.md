@@ -286,6 +286,30 @@ From `requirements.txt`:
 | `google-auth`, `google-auth-oauthlib`, `google-auth-httplib2`, `google-api-python-client` | | Yes |
 | `google-analytics-data` | `>=0.18` | Yes |
 | `google-ads` | `>=24.0` | Only when Google Ads credentials exist |
+| `weasyprint` | `>=62.0` | Yes — `POST /api/domain-overview/report`. **Needs system libraries; see below.** |
+
+### WeasyPrint needs system libraries (deploy step)
+
+WeasyPrint binds to **cairo, pango and libgobject at import time** through ctypes, so
+`pip install -r requirements.txt` on a bare VPS installs the Python package and the import
+still fails — with `OSError`, not `ImportError`. On Debian/Ubuntu:
+
+```
+apt-get install -y libpango-1.0-0 libpangoft2-1.0-0 libcairo2 libgdk-pixbuf-2.0-0 \
+                   libffi-dev shared-mime-info
+```
+
+`apps/dashboard/services/domain_overview_report_service.load_pdf_engine()` imports it
+lazily and catches both failure shapes, so a server without these libraries runs the whole
+API normally and only the report endpoint answers **501 "PDF engine not installed"**. Never
+move that import to module scope: it would take the entire API down to serve one endpoint.
+
+**Fonts are a second, separate deploy concern.** A PDF is rendered on the server with the
+server's fonts, and a headless box has almost none — a unicode domain or an RTL anchor comes
+out as empty boxes with nothing in the logs. Either install a broad font
+(`apt-get install fonts-dejavu-core fonts-noto-core`) or drop a `.ttf`/`.otf` into
+`static/fonts/report/` (or point `REPORT_FONT_PATH` at one), which the report embeds via
+`@font-face`.
 
 Python 3.11+ (the code uses PEP 604 `str | None` unions and `str.removeprefix`). README notes
 development on 3.13.
@@ -409,8 +433,7 @@ Limitless_marketing_dashboard/
 │   ├── dashboard/                 # SPA host + the service layer
 │   │   ├── spa_views.py           # serves the SPA, expands #includes, injects the auth bootstrap
 │   │   ├── models.py              # Insight, AITarget, AIPromptList, AIPrompt, ProjectSettings
-│   │   ├── services/              # one module per page + shared_queries, decision_engine, mutation_state
-│   │   └── views_export.py        # DEAD CODE — undefined names, not routed
+│   │   └── services/              # one module per page + shared_queries, decision_engine, mutation_state
 │   └── sync/                      # SyncLog, RefreshRun, admin, management commands
 ├── pipeline/                      # the data layer (no Django imports except lazy SyncLog writes)
 │   ├── connectors/                # one class per external API, all extending BaseConnector
@@ -422,7 +445,8 @@ Limitless_marketing_dashboard/
 │   ├── spa/vendor/support.js      # dc-runtime (generated; do not edit)
 │   ├── spa/app/{api.js,fixtures.js}   # transport + legacy fixture backend
 │   └── spa/us_cities.json
-├── templates/registration/login.html  # the only server-rendered page left
+├── templates/registration/login.html  # the only server-rendered PAGE
+├── templates/reports/domain_overview.html  # print-CSS source for the Domain Overview PDF
 ├── data/fusehealth.db             # analytics DB (git-ignored)
 ├── django_internal.db             # app DB (git-ignored)
 ├── docs/superpowers/              # historical design specs & plans (not authoritative)

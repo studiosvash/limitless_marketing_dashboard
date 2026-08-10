@@ -390,10 +390,50 @@ cached server-side for 24 hours per (target, location).
 (estimated), **Traffic value**, **Ranked keywords** — and a **Top Organic Keywords** table:
 Keyword · Intent badge · Position badge · Volume · CPC · Estimated traffic · Ranking URL.
 
-**Edge cases.** A path in the input (`example.com/blog`) filters results to that page. Empty
-input does nothing. Failures render an inline error message and the previous results are cleared.
+### Backlinks, anchors & spam score (a second, deliberate press)
 
-**Permissions.** All roles. **Related pages.** Keywords, Position Tracking.
+Behind its own **Load backlinks** button, never loaded automatically. The Analyze press buys one
+DataForSEO Labs call (50 keywords); this buys three Backlinks API calls — summary, **100**
+backlinks, **60** anchors — so it is priced separately and the button says what the next press
+costs (`Load backlinks` → `Loading backlinks…` → `Loaded · refresh`).
+
+- **Profile strip** — backlinks, referring domains, dofollow %, authority score.
+- **Spam Score card** — the profile-wide target score, plus how many of the sampled links are
+  high- and medium-spam. Bands: green ≤30 · amber 31–60 · red >60 · grey **not scored**. Grey is
+  never green — an unscored link has not been found clean — and an unreported target score prints
+  an em dash, not 0. **This costs zero extra API calls:** the per-link and target spam scores
+  ride along on calls already being made (and `Backlink.spam_score` has existed in the schema all
+  along, read by nothing).
+- **Anchor text** — Branded / URL / Generic / Keyword, from the same classifier the Backlinks
+  page refresh uses.
+- **Backlinks table** — referring domain and page, anchor, follow/nofollow, domain rank, and the
+  colour-coded spam column. The dofollow-only filter the sync uses is **off** here: a spam review
+  that drops every nofollow link reviews the half of the profile least likely to be spam.
+
+**The market dropdown does not apply to this card.** The Backlinks API has no location concept
+at all, so the block is cached per DOMAIN (not per domain+market) and the card says "worldwide"
+out loud rather than letting the dropdown imply a scope it does not have.
+
+### Download PDF
+
+A report of everything currently on screen, generated server-side (WeasyPrint). **It reads the
+same 24-hour caches and never buys backlinks** — a section that was not loaded prints "Backlinks
+not loaded for this report". Straight after a lookup it costs $0. If the keyword cache has
+expired it makes the one Labs call Analyze would have made and says so in the document. It also
+includes free **Suggested prompts** (deterministic expansion of the top keywords; AI volume is
+printed as *not measured*, never as a number), plus the project's real tracked prompts when the
+target is a registered project. Long tables cap with "showing top N of M".
+
+On a server without WeasyPrint's cairo/pango libraries the button reports **"PDF engine not
+installed"** rather than failing silently; nothing else on the page is affected.
+
+**Edge cases.** A path in the input (`example.com/blog`) scopes results to that page, for both
+the keyword and the backlink sections. Empty input does nothing. Failures render an inline error
+message and the previous results are cleared. Past the configured monthly DataForSEO budget, a
+lookup is **refused** with "Monthly DataForSEO budget reached — raise it in Settings to
+continue" instead of billing; a target already cached still answers.
+
+**Permissions.** All roles. **Related pages.** Keywords, Position Tracking, Backlinks.
 
 ---
 

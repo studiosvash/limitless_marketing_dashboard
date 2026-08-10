@@ -1575,7 +1575,21 @@ Prompt Explorer. Body `{"project": "<slug>", "seeds": ["term", …]}`.
 
 ### `POST /api/domain-overview`
 
-Body `{"target": "example.com/path", "location": "United States"}`. Missing target → **400**.
+Body `{"target": "example.com/path", "location": "United States", "project": "<slug>",
+"include": ["backlinks"]}`. Missing target → **400**; a non-list `include` → **400**.
+
+The view is a passthrough. All of the logic — the caches, the spend gate, the tracked-keyword
+join, the backlink sections — lives in `apps/dashboard/services/domain_overview_service.py`.
+
+**Spend gate.** Every metered live lookup now calls
+`pipeline.connectors.dataforseo_cost.ensure_budget()` before constructing a connector. When
+the monthly cap is configured (`DATAFORSEO_MONTHLY_BUDGET` > 0, the default is 100) and
+month-to-date spend has reached it, the response is a **200** with
+`{"status": "error", "error": "Monthly DataForSEO budget reached — raise it in Settings to
+continue", "budget_exceeded": true, "spent", "cap"}`. A cap of 0 means *no cap configured* and
+the gate does nothing. The cache is read first, so a target already looked up this session
+still answers past the cap. `record_cost` only ever *notified* on a crossing; nothing refused
+a call outside `start_sync_run`'s sync paywall.
 
 Calls DataForSEO Labs `ranked_keywords/live`. When a path is supplied it is applied as a
 `ranked_serp_element.serp_item.relative_url` filter. Results are cached in Django's cache under
@@ -1600,6 +1614,63 @@ around; per-city measurement lives in Position Tracking, which uses the SERP API
 ```
 
 or `{"status": "error", "error": "..."}` — note this is a **200 with an error body**, not a 4xx.
+
+**`include: ["backlinks"]` — opt-in, a deliberate second press.** Adds a `backlinks` key to the
+same response. Three billed calls: `backlinks/summary/live`, `backlinks/backlinks/live`
+(**limit 100**, dofollow filter OFF — a spam review must see nofollow links) and
+`backlinks/anchors/live` (**limit 60**). The default Analyze press is unchanged: one Labs call,
+50 keywords.
+
+```json
+"backlinks": {
+  "state": "ok|empty|setup|budget|error", "note", "cached", "target",
+  "limit": 100, "anchorsLimit": 60, "locationApplies": false,
+  "summary": {"backlinks","refDomains","refPages","dofollowPct","broken","authorityScore","spamScore"},
+  "spam": {"targetScore","highSpamLinks","mediumSpamLinks","scoredLinks","unknownLinks"},
+  "links": [{"urlFrom","referringDomain","targetUrl","anchor","dofollow","domainRank",
+             "pageRank","spamScore","spamBand","firstSeen","status"}],
+  "anchors": [{"anchor","type","backlinks","refDomains","dofollowPct"}]
+}
+```
+
+- **Cached 24h under `domain_overview_backlinks_<domain>` — DOMAIN ONLY.** The Backlinks API
+  has no location parameter at all, so the market dropdown does not apply to this block and
+  `locationApplies: false` says so. Keying it by location would buy the same profile twice.
+- `spamBand` is `low` (≤30) / `medium` (31–60) / `high` (>60) / **`unknown`**. Unknown is its
+  own band, never green: a link DataForSEO has not scored has not been found clean.
+  `spam.targetScore` is `null` (not 0) when the summary reports none. **The spam data costs
+  zero extra calls** — `backlink_spam_score` rides on every backlink row and
+  `backlinks_spam_score` on the summary; both were already being paid for by the Backlinks
+  sync and never read.
+- `state: "setup"` when the credentials are missing — `DataForSEOBacklinksConnector.__init__`
+  **raises** (unlike the domain-overview connector, which returns an error dict), so it is
+  constructed inside a try. `state: "empty"` when DataForSEO indexes no backlinks for the
+  target; the section is never silently hidden.
+- A URL target fetches for the exact page: host lowercased, `www.` stripped, path preserved
+  case-sensitively.
+
+### `POST /api/domain-overview/report`
+
+Body `{"target", "location", "project"}` → **`application/pdf`** as an attachment. The **first
+non-JSON endpoint in `apps/api`**: it returns a plain `django.http.HttpResponse`, not a DRF
+`Response`, so renderer negotiation is bypassed (JSONRenderer would otherwise be handed PDF
+bytes). Template: `templates/reports/domain_overview.html`.
+
+**It reads the 24-hour caches and NEVER triggers a backlink fetch.** Generated straight after
+a lookup it costs $0. A section that was never loaded prints "Backlinks not loaded for this
+report". The one exception: an expired *keywords* cache lets it make the single Labs call the
+Analyze button would have made — reported in the PDF and in the **`X-Report-Fetched`** header
+(`keywords`, or empty when nothing was bought).
+
+Prompts are free: `run_prompt_research` template-expands the top 5 keywords with no external
+call, labelled "Suggested prompts" with volume printed as *not measured*. A project's stored
+`AIPrompt` rows are added only when the target resolves via `normalize_domain` to a registered
+project. Tables cap at 25 keywords / 25 backlinks / 15 anchors with a caption naming the true
+total.
+
+**501** `{"detail": "PDF engine not installed — …"}` when WeasyPrint or its cairo/pango system
+libraries are missing (imported lazily; see `.claude/tech-stack.md` §7). **400** on a missing
+target.
 
 ### `POST /api/live-serp`
 
@@ -1681,6 +1752,20 @@ Behaviours worth knowing:
 | `dataforseo_live_serp` | `serp/google/organic/live/advanced` | *(none — request-scoped, 24 h cache)* |
 | `pipeline/services/backlinks_service` | `backlinks/summary`, `backlinks/referring_domains`, `backlinks/anchors`, `backlinks/history` | `BacklinksSnapshot` JSON blob |
 
+`pipeline/services/backlinks_service._post` books every one of those four calls to
+`connector_costs` under the name **`dataforseo_backlinks_live`** with `units: None`. It recorded
+nothing at all until 2026-08, so the Backlinks page's Refresh spent real money that Settings →
+Usage & Budget never showed and that never counted towards the monthly cap. The name is
+deliberately *not* `dataforseo_backlinks` (the per-backlink connector, which records real
+`units`): one name for both would divide two connectors' cost by one connector's unit count.
+`units` is None because the four endpoints meter four different things.
+
+`dataforseo_backlinks.fetch(site_id, limit, dofollow_only)` — `limit` defaults to
+`sync_limit_for(site_id)`, i.e. `ProjectSettings.data["backlinksSyncLimit"]` (250/500/1000,
+default **1000**, out-of-range values ignored), read through `mutation_state` rather than a
+Settings group so an unrelated Settings save cannot wipe it. Domain Overview passes
+`limit=100, dofollow_only=False`.
+
 Every DataForSEO response wraps results as `tasks[0].result[0]`; a `task.status_code != 20000`
 is treated as an error. Costs are read from `task.cost` where the caller surfaces them.
 
@@ -1746,5 +1831,6 @@ entirely Django's.
 | `/sync`, `/tasks/<id>` | Topbar Refresh buttons, per-page fetch buttons, Settings run-now buttons |
 | `/research` | Keywords → Keyword Explorer |
 | `/prompt-research` | AI Optimization → Prompts → Prompt Explorer |
-| `/domain-overview` | Domain Overview |
+| `/domain-overview` | Domain Overview (`include: ["backlinks"]` behind its own Load backlinks button) |
+| `/domain-overview/report` | Domain Overview → Download PDF (returns `application/pdf`) |
 | `/live-serp` | Position Tracking → workspace → SERP drawer |
