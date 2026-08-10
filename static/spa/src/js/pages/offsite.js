@@ -59,17 +59,85 @@
         kpiCard('Referring domains', String(t.referringDomains), chip(null), 'domains linking to you (all-time)')
       ];
 
-      /* trend */
-      const tr = data.trend, W = 600, H = 220, P = 8;
-      const maxV = Math.max.apply(null, tr.map(d => d.sessions).concat([1]));
-      const xs = i => (tr.length > 1 ? P + i * ((W - 2 * P) / (tr.length - 1)) : W / 2);
-      const yOf = v => H - P - (v / maxV) * (H - 2 * P);
-      const pts = k => tr.map((d, i) => xs(i).toFixed(1) + ',' + yOf(d[k]).toFixed(1)).join(' ');
-      off.sessPts = pts('sessions');
-      off.engPts = pts('engagedSessions');
-      off.area = tr.length ? 'M' + xs(0).toFixed(1) + ',' + (H - P) + ' L' + off.sessPts.split(' ').join(' L') + ' L' + xs(tr.length - 1).toFixed(1) + ',' + (H - P) + ' Z' : '';
-      off.trendStart = tr.length ? tr[0].date : '';
-      off.trendEnd = tr.length ? tr[tr.length - 1].date : '';
+      /* trend — stacked area by channel.
+         query_offsite_trend_raw has always grouped by (date, channel) and then summed the
+         channel away, so the chart drew one undifferentiated line over data that already knew
+         whether a spike was a link, a LinkedIn post or a YouTube video. Each point now carries
+         `channels`, zero-filled with the same keys on every day so a band cannot appear and
+         vanish mid-series. The bands always sum to `sessions` — the service guarantees it —
+         so the stack and the KPI above it cannot disagree.
+
+         Chart furniture (a y-axis, gridlines, hover values) follows the Overview trend's
+         pattern: labels live in HTML outside the SVG, because the SVG uses
+         preserveAspectRatio="none" and would stretch any text inside it. */
+      const tr = data.trend || [], W = 600, H = 220;
+      const chColorsTrend = { 'Referral': '#4f46e5', 'Organic Social': '#0a66c2', 'Social': '#0a66c2', 'Organic Video': '#dc2626', 'Video': '#dc2626' };
+      const chOrder = tr.length ? Object.keys(tr[0].channels || {}) : [];
+      /* A band that is zero across the whole window is a legend entry for something that did
+         not happen. Drop it from the chart; the channel-mix panel below still lists it. */
+      const bands = chOrder.filter(ch => tr.some(d => ((d.channels || {})[ch] || 0) > 0));
+      off.trendEmpty = !tr.length || !bands.length;
+      const dayTotal = d => bands.reduce((a, ch) => a + ((d.channels || {})[ch] || 0), 0);
+      const rawMax = Math.max.apply(null, tr.map(dayTotal).concat([0]));
+      /* Round the axis up to a readable number so the gridlines land on values a human would
+         write down, rather than on 1/4 of whatever the tallest day happened to be. */
+      const niceMax = v => {
+        if (!(v > 0)) return 4;
+        const p = Math.pow(10, Math.floor(Math.log10(v)));
+        const n = v / p;
+        return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10) * p;
+      };
+      const yMax = niceMax(rawMax);
+      const xs = i => (tr.length > 1 ? i * (W / (tr.length - 1)) : W / 2);
+      const yOf = v => H - (v / yMax) * H;
+      off.gridLines = [0, 0.25, 0.5, 0.75, 1].map(f => ({ y: (H * (1 - f)).toFixed(1) }));
+      off.yTicks = [1, 0.75, 0.5, 0.25, 0].map(f => this.fmt(Math.round(yMax * f)));
+      /* Lower edge of each band = the sum of every band below it. Drawn bottom-up so the
+         earlier bands sit at the base of the stack, in the service's channel order. */
+      const lower = tr.map(() => 0);
+      off.bands = bands.map(ch => {
+        const upper = tr.map((d, i) => lower[i] + ((d.channels || {})[ch] || 0));
+        const top = tr.map((d, i) => xs(i).toFixed(1) + ',' + yOf(upper[i]).toFixed(1));
+        const bottom = tr.map((d, i) => xs(i).toFixed(1) + ',' + yOf(lower[i]).toFixed(1)).reverse();
+        const path = tr.length ? 'M' + top.join(' L') + ' L' + bottom.join(' L') + ' Z' : '';
+        const col = chColorsTrend[ch] || '#64748b';
+        for (let i = 0; i < tr.length; i++) lower[i] = upper[i];
+        return { channel: ch, path, fill: col, line: top.join(' '), stroke: col };
+      });
+      off.legend = off.bands.map(b => ({
+        channel: b.channel,
+        swatchStyle: { width: '10px', height: '10px', borderRadius: '2px', background: b.fill, flexShrink: 0 }
+      }));
+      off.xTicks = (() => {
+        if (!tr.length) return [];
+        const n = Math.min(6, tr.length);
+        const out = [];
+        for (let i = 0; i < n; i++) {
+          const idx = n === 1 ? 0 : Math.round(i * (tr.length - 1) / (n - 1));
+          const d = new Date(tr[idx].date);
+          out.push({ label: (d.getMonth() + 1) + '/' + d.getDate(), pct: (n === 1 ? 50 : i * (100 / (n - 1))).toFixed(3) });
+        }
+        return out;
+      })();
+      /* Hover lives on its own state key rather than the shared `chartHoverIndex` the
+         Overview trend uses, so two charts can never read each other's hovered index. */
+      const hIdx = (s.offHoverIdx == null || !tr[s.offHoverIdx]) ? null : s.offHoverIdx;
+      off.hoverZones = tr.map((d, i) => {
+        const w = W / Math.max(1, tr.length);
+        return { x: (xs(i) - w / 2).toFixed(1), w: w.toFixed(1), onEnter: () => this.setState({ offHoverIdx: i }) };
+      });
+      off.hoverOut = () => this.setState({ offHoverIdx: null });
+      off.hasHover = hIdx !== null;
+      off.hoverX = hIdx === null ? 0 : xs(hIdx).toFixed(1);
+      off.ttX = hIdx === null ? 0 : (xs(hIdx) < 300 ? xs(hIdx) + 14 : xs(hIdx) - 174);
+      off.ttDate = hIdx === null ? '' : tr[hIdx].date;
+      off.ttRows = hIdx === null ? [] : bands.map(ch => ({
+        label: ch, value: this.fmt((tr[hIdx].channels || {})[ch] || 0),
+        dotStyle: { width: '8px', height: '8px', borderRadius: '2px', background: chColorsTrend[ch] || '#64748b', flexShrink: 0 }
+      }));
+      off.ttTotal = hIdx === null ? '' : this.fmt(tr[hIdx].sessions);
+      off.ttEngaged = hIdx === null ? '' : this.fmt(tr[hIdx].engagedSessions);
+      off.ttH = 64 + (bands.length + 1) * 18;
 
       /* channel mix — off-site channels only. This page reports on referral/social/video
          traffic, not organic search; Organic Search (and Direct/Paid/Unassigned) used to be
@@ -122,8 +190,14 @@
         imprCaption: liImpr == null ? 'connector needed' : 'from LinkedIn API'
       };
 
-      /* social table */
-      const socColors = { 'LinkedIn': '#0a66c2', 'Reddit': '#ff4500', 'YouTube': '#dc2626', 'X (Twitter)': '#0f172a', 'Facebook': '#1877f2', 'Instagram': '#c13584' };
+      /* Social & video table — the sources GA4 actually measured, LinkedIn pinned first.
+         It used to be a fixed LinkedIn/Reddit/YouTube/X roster that printed whether or not
+         GA4 had ever seen those platforms and discarded every other source, so a project whose
+         off-site traffic came from Hacker News and a Substack saw four rows of zeroes and none
+         of its real traffic.
+         Keys must match offsite_service.PLATFORM_LABELS exactly — 'X (Twitter)' never matched
+         the 'X / Twitter' the service emits, so that row silently fell back to grey. */
+      const socColors = { 'LinkedIn': '#0a66c2', 'Reddit': '#ff4500', 'YouTube': '#dc2626', 'X / Twitter': '#0f172a', 'Facebook': '#1877f2', 'Instagram': '#c13584' };
       off.social = data.social.map(r => ({
         platform: r.platform, source: r.source, channel: r.channel,
         connected: r.connected, notConnected: !r.connected,
@@ -136,7 +210,7 @@
         // without this guard an unmeasured platform printed a confident "0%".
         engFmt: r.engagedRate == null ? '—' : Math.round(r.engagedRate * 100) + '%',
         keyFmt: this.fmt(Math.round(r.keyEvents)), revFmt: this.money(r.revenue),
-        badge: r.platform.slice(0, 1),
+        badge: (r.platform || '?').slice(0, 1).toUpperCase(),
         badgeStyle: { width: '26px', height: '26px', borderRadius: '6px', background: socColors[r.platform] || '#64748b', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '13px', fontWeight: 700, flexShrink: 0 }
       }));
 
@@ -166,8 +240,22 @@
 
          If a real need appears later it is a watchlist feeding a lost-link alert, which is
          an alerts_service feature, not a button on this table. */
+      /* "Links driving traffic" vs "links only". Both facts were already in every row — the
+         distinction was just a 0 in the sessions column, which reads as a rounding artefact
+         rather than as the two different things a backlink can be. The counts are over EVERY
+         linking domain, not the 20 rows shown, so they answer the same question as the
+         "Referring domains" KPI directly above. */
+      const split = data.referrerSplit || { total: 0, driving: 0, linkOnly: 0 };
+      off.splitLabel = split.total
+        ? (this.fmt(split.driving) + ' driving traffic · ' + this.fmt(split.linkOnly) + ' links only')
+        : '';
+      off.hasSplit = !!split.total;
+      const drivingBadge = { fontSize: '10px', fontWeight: 600, color: '#047857', background: '#ecfdf5', padding: '2px 7px', borderRadius: '9999px', whiteSpace: 'nowrap' };
+      const linkOnlyBadge = { fontSize: '10px', fontWeight: 600, color: '#64748b', background: '#f1f5f9', padding: '2px 7px', borderRadius: '9999px', whiteSpace: 'nowrap' };
       off.referrers = refRows.map(r => ({
         domain: r.domain, rank: r.authorityScore,
+        kindLabel: r.drivesTraffic ? 'driving traffic' : 'link only',
+        kindStyle: r.drivesTraffic ? drivingBadge : linkOnlyBadge,
         rankStyle: { fontWeight: 600, color: r.authorityScore >= 70 ? '#059669' : r.authorityScore >= 40 ? '#2563eb' : '#64748b' },
         sessFmt: this.fmt(r.sessions),
         // Most referring domains drive no measured sessions — they are listed because they

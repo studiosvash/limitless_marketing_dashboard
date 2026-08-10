@@ -686,12 +686,14 @@ raw `Backlink` rows (also 0-1000, pre-scaling) — it does NOT come from the sna
 {
   "totals":  {"sessions","users","engagementRate","engagedSessions","keyEvents","revenue","referringDomains"},
   "prev":    {…same shape…},
-  "trend":   [{"date","sessions","engagedSessions","keyEvents","revenue"}],
+  "trend":   [{"date","sessions","engagedSessions","keyEvents","revenue",
+               "channels": {"Referral","Organic Social","Organic Video"}}],
   "channels":[{"channel","sessions","pct","engagementRate","keyEvents","offsite"}],
-  "referrers":[{"domain","authorityScore","sessions","users","engagementRate","keyEvents"}],
+  "referrers":[{"domain","authorityScore","sessions","drivesTraffic","users","engagementRate","keyEvents"}],
+  "referrerSplit": {"total","driving","linkOnly"},
   "social":  [{"platform","source","channel","connected","impressions","sessions",
                "engagedRate","engagementRate","keyEvents","revenue"}],
-  "landingPages":[{"url","topSource","sessions","engagedRate","keyEvents"}],
+  "landingPages":[{"url","topSource","pageviews","sessions","engagedRate","bounceRate","newUsers","keyEvents"}],
   "connectors": {"linkedin","reddit","youtube","x","facebook","instagram"},
   "syncMeta": {"state": "ready", "lastUpdated": …}
 }
@@ -701,9 +703,23 @@ raw `Backlink` rows (also 0-1000, pre-scaling) — it does NOT come from the sna
 metric. A property with no ecommerce/revenue events reports a genuine `0.0`, which is stored as
 such — it is never back-filled with the old `conversions × $45` estimate.
 
-`social[]` is a **fixed roster** of four platforms (LinkedIn, Reddit, YouTube, X / Twitter), each
-a rollup of the GA4 traffic-source rows matching that platform's domain, so it is present even
-when every figure is zero. `social[].impressions` is **always `null`**, connector toggle or not:
+`trend[].channels` is per-channel sessions for the stacked area chart, zero-filled with the **same
+keys on every point** (`offsite_service.OFFSITE_CHANNELS`, in stack order) so a band cannot appear
+and vanish mid-series. It always sums to that point's `sessions`.
+
+`referrerSplit` counts **every** linking domain (not the 20 in `referrers[]`) as
+links-that-drove-traffic vs links-only; `referrers[].drivesTraffic` is the same fact per row.
+
+`social[]` is the off-site sources GA4 actually measured, ordered by sessions, capped at
+`SOCIAL_TABLE_LIMIT` (8) — with **LinkedIn pinned into the first slot** even at zero sessions,
+because the LinkedIn spotlight card reads that row by name. It used to be a fixed
+LinkedIn/Reddit/YouTube/X roster that printed whether or not GA4 had seen them and discarded every
+other source. A platform's hosts are merged into one row and matched **host-wise with a dot
+boundary** against `offsite_service.PLATFORM_DOMAINS` (`linkedin.com`+`lnkd.in`, `t.co`+
+`twitter.com`+`x.com`, `youtube.com`+`youtu.be`, `reddit.com`+`redd.it`); a source matching no
+platform appears under its own host. Only off-site channels are read, so a Paid Social campaign on
+a platform domain never appears here. `social[].impressions` is **always `null`**, connector toggle
+or not:
 GA4 can only see sessions that *arrived* from a source, never how many times a post was shown on
 the platform, and that number lives in each platform's own API — none of which is wired. It was
 formerly invented as `sessions × a per-platform multiplier`.
@@ -719,7 +735,17 @@ which is a measurement nobody took. A rate of `0.0` over real sessions is a genu
 returned as `0.0`. The SPA renders `null` as an em dash. This matters most on `referrers[]`, where
 a domain is listed because it *links* to us — most drive no measured GA4 sessions at all.
 
-`channels[].offsite` flags Organic/Referral/Social/Video. **`connectors` (and every
+`channels[].offsite` flags membership of `offsite_service.OFFSITE_CHANNELS` — an explicit
+allow-list of `Referral`, `Organic Social`, `Organic Video`. It was a substring test that also
+admitted `Organic Shopping`.
+
+`landingPages[]` is **not channel-scoped and is not entrances.** It reads `seo_daily`, which has
+no channel column, so it includes Organic Search and Direct; and its `landing_page` column is
+filled from GA4's `pagePath` dimension, so `pageviews` (`screenPageViews`) is the metric that is
+additive at this grain — `sessions` counts once per page a visit touched. A real off-site
+landing-page table needs a new GA4 report on `landingPage` × `sessionDefaultChannelGroup`.
+
+**`connectors` (and every
 `social[].connected`) is hard-`False` for all six platforms.** It used to mirror the
 `platformConnectors` booleans from Settings, which a "Connect" button set without authenticating
 anything — so a `true` made the page announce "Connector live · impressions + click-throughs"

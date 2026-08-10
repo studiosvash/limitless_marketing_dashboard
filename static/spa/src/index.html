@@ -276,20 +276,56 @@
           <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;">
             <div>
               <h2 style="font-size: 15px; font-weight: 600; margin: 0;">Off-site organic sessions</h2><sc-if value="{{ off.srcGa4.show }}" hint-placeholder-val="{{ true }}"><div style="margin-top: 6px;"><span style="{{ off.srcGa4.style }}" title="{{ off.srcGa4.title }}" aria-label="{{ off.srcGa4.aria }}">{{ off.srcGa4.text }}</span></div></sc-if>
-              <p style="font-size: 12px; color: #94a3b8; margin: 3px 0 0;">Referral + organic social/video · {{ off.rangeLabel }}</p>
+              <p style="font-size: 12px; color: #94a3b8; margin: 3px 0 0;">Stacked by channel · {{ off.rangeLabel }}</p>
             </div>
             <div style="display: flex; align-items: center; gap: 16px; font-size: 12px; color: #64748b;">
-              <span style="display:inline-flex;align-items:center;gap:6px;"><span style="width:10px;height:3px;border-radius:2px;background:#4f46e5;"></span> Sessions</span>
-              <span style="display:inline-flex;align-items:center;gap:6px;"><span style="width:10px;height:3px;border-radius:2px;background:#10b981;"></span> Engaged</span>
+              <sc-for list="{{ off.legend }}" as="lg" hint-placeholder-count="3">
+                <span style="display:inline-flex;align-items:center;gap:6px;"><span style="{{ lg.swatchStyle }}"></span> {{ lg.channel }}</span>
+              </sc-for>
             </div>
           </div>
-          <svg viewBox="0 0 600 220" preserveAspectRatio="none" style="width: 100%; height: 200px; margin-top: 10px; display: block;">
-            <defs><linearGradient id="offGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#4f46e5" stop-opacity="0.16"/><stop offset="100%" stop-color="#4f46e5" stop-opacity="0"/></linearGradient></defs>
-            <path d="{{ off.area }}" fill="url(#offGrad)"></path>
-            <polyline points="{{ off.sessPts }}" fill="none" stroke="#4f46e5" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"></polyline>
-            <polyline points="{{ off.engPts }}" fill="none" stroke="#10b981" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"></polyline>
-          </svg>
-          <div style="display: flex; justify-content: space-between; font-size: 11px; color: #cbd5e1; margin-top: 2px;"><span>{{ off.trendStart }}</span><span>{{ off.trendEnd }}</span></div>
+
+          <sc-if value="{{ off.trendEmpty }}" hint-placeholder-val="{{ false }}">
+            <div style="height: 200px; display: flex; align-items: center; justify-content: center; text-align: center; font-size: 13px; color: #94a3b8; padding: 0 40px;">No off-site sessions in this period. The chart appears once GA4 reports referral, organic social or organic video traffic for this window.</div>
+          </sc-if>
+          <sc-if value="{{ !off.trendEmpty }}" hint-placeholder-val="{{ true }}">
+          <div style="position: relative; width: 100%; height: 240px; padding: 10px 0 20px 46px; box-sizing: border-box;">
+            <div style="position: absolute; left: 0; top: 10px; height: 200px; width: 46px; display: flex; flex-direction: column; justify-content: space-between; text-align: right; font-size: 11px; color: #94a3b8; padding-right: 8px; box-sizing: border-box;">
+              <sc-for list="{{ off.yTicks }}" as="yt" hint-placeholder-count="5"><span>{{ yt }}</span></sc-for>
+            </div>
+            <div style="position: relative; width: 100%; height: 200px;">
+              <svg viewBox="0 0 600 220" preserveAspectRatio="none" style="width: 100%; height: 100%; display: block; overflow: visible;" onMouseLeave="{{ off.hoverOut }}">
+                <sc-for list="{{ off.gridLines }}" as="gl" hint-placeholder-count="5">
+                  <line x1="0" y1="{{ gl.y }}" x2="600" y2="{{ gl.y }}" stroke="#f1f5f9" stroke-width="1"></line>
+                </sc-for>
+                <sc-for list="{{ off.bands }}" as="bd" hint-placeholder-count="3">
+                  <path d="{{ bd.path }}" fill="{{ bd.fill }}" fill-opacity="0.85"></path>
+                </sc-for>
+                <sc-for list="{{ off.hoverZones }}" as="hz" hint-placeholder-count="30">
+                  <rect x="{{ hz.x }}" y="0" width="{{ hz.w }}" height="220" fill="transparent" onMouseEnter="{{ hz.onEnter }}" style="cursor:crosshair; outline:none;"></rect>
+                </sc-for>
+                <sc-if value="{{ off.hasHover }}" hint-placeholder-val="{{ false }}">
+                  <line x1="{{ off.hoverX }}" y1="0" x2="{{ off.hoverX }}" y2="220" stroke="#94a3b8" stroke-width="1" stroke-dasharray="4"></line>
+                  <foreignObject x="{{ off.ttX }}" y="10" width="160" height="{{ off.ttH }}">
+                    <div xmlns="http://www.w3.org/1999/xhtml" style="background: #0f172a; color: white; border-radius: 8px; padding: 8px 10px; font-size: 11px; line-height: 1.6; box-shadow: 0 4px 12px rgba(0,0,0,0.18); pointer-events: none;">
+                      <div style="font-weight: 600; margin-bottom: 4px; color: #e2e8f0;">{{ off.ttDate }}</div>
+                      <sc-for list="{{ off.ttRows }}" as="tt" hint-placeholder-count="3">
+                        <div style="display: flex; justify-content: space-between; gap: 10px; align-items: center;"><span style="display:inline-flex;align-items:center;gap:6px;color:#cbd5e1;"><span style="{{ tt.dotStyle }}"></span>{{ tt.label }}</span><span style="font-weight: 600;">{{ tt.value }}</span></div>
+                      </sc-for>
+                      <div style="display: flex; justify-content: space-between; gap: 10px; margin-top: 4px; padding-top: 4px; border-top: 1px solid #334155;"><span style="color: #94a3b8;">Total</span><span style="font-weight: 600;">{{ off.ttTotal }}</span></div>
+                      <div style="display: flex; justify-content: space-between; gap: 10px;"><span style="color: #94a3b8;">Engaged</span><span style="font-weight: 600;">{{ off.ttEngaged }}</span></div>
+                    </div>
+                  </foreignObject>
+                </sc-if>
+              </svg>
+            </div>
+            <div style="position: absolute; left: 46px; right: 0; bottom: 0; height: 16px;">
+              <sc-for list="{{ off.xTicks }}" as="xt" hint-placeholder-count="6">
+                <span style="position: absolute; left: {{ xt.pct }}%; transform: translateX(-50%); font-size: 11px; color: #94a3b8;">{{ xt.label }}</span>
+              </sc-for>
+            </div>
+          </div>
+          </sc-if>
         </div>
 
         <!-- channel mix + LinkedIn spotlight -->
@@ -375,7 +411,7 @@
         <!-- top referring domains -->
         <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
           <div style="padding: 16px 20px; border-bottom: 1px solid #f1f5f9; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;">
-            <div><h2 style="font-size: 15px; font-weight: 600; margin: 0;">Top referring domains</h2><p style="font-size: 12px; color: #94a3b8; margin: 3px 0 0;">Domains linking to you, from the all-time backlink profile. Sessions are the GA4 off-site traffic each one drove in this period — most drive none.</p><sc-if value="{{ off.srcRefDomains.show }}" hint-placeholder-val="{{ true }}"><div style="margin-top: 6px;"><span style="{{ off.srcRefDomains.style }}" title="{{ off.srcRefDomains.title }}" aria-label="{{ off.srcRefDomains.aria }}">{{ off.srcRefDomains.text }}</span></div></sc-if></div>
+            <div><h2 style="font-size: 15px; font-weight: 600; margin: 0;">Top referring domains</h2><p style="font-size: 12px; color: #94a3b8; margin: 3px 0 0;">Domains linking to you, from the all-time backlink profile. Sessions are the GA4 off-site traffic each one drove in this period — most drive none.</p><sc-if value="{{ off.hasSplit }}" hint-placeholder-val="{{ true }}"><p style="font-size: 12px; color: #475569; margin: 4px 0 0; font-weight: 500;">{{ off.splitLabel }}</p></sc-if><sc-if value="{{ off.srcRefDomains.show }}" hint-placeholder-val="{{ true }}"><div style="margin-top: 6px;"><span style="{{ off.srcRefDomains.style }}" title="{{ off.srcRefDomains.title }}" aria-label="{{ off.srcRefDomains.aria }}">{{ off.srcRefDomains.text }}</span></div></sc-if></div>
             <span onClick="{{ h.exportReferrers }}" style="font-size: 12px; color: #4f46e5; font-weight: 500; cursor: pointer;" style-hover="opacity:0.7">Export CSV</span>
           </div>
           <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
@@ -394,6 +430,7 @@
                   <td style="padding: 12px 20px;">
                     <div style="display: flex; align-items: center; gap: 8px;">
                       <span style="font-weight: 500; color: #334155;">{{ r.domain }}</span>
+                      <span style="{{ r.kindStyle }}" title="A link that drove measured GA4 off-site sessions in this period, vs a link that exists but drove none.">{{ r.kindLabel }}</span>
                     </div>
                   </td>
                   <td style="padding: 12px 10px; text-align: right;"><span style="{{ r.rankStyle }}">{{ r.rank }}</span></td>

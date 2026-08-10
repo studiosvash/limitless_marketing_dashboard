@@ -271,18 +271,18 @@ class BuildOffsiteResponseTests(TestCase):
         self.assertIsNone(body["syncMeta"]["lastUpdated"])
         self.assertEqual(body["syncMeta"]["lastStatus"], "never")
 
-        # `social` is a FIXED roster of the four platforms the page reports on — it is not
-        # empty even with no data, because each row is a real GA4 traffic-source rollup
-        # (sessions/keyEvents/revenue summed from ga4_traffic_source_daily) and "GA4 recorded
-        # no sessions from linkedin.com" is a measurement, not a gap.
+        # `social` is built from the sources GA4 actually measured, with LinkedIn pinned. No
+        # traffic-source rows are seeded here, so LinkedIn's pinned row is all there is — the
+        # table no longer manufactures Reddit/YouTube/X rows for platforms this project has
+        # never been seen on. LinkedIn's 0 is a measurement (GA4 reported no sessions from it),
+        # not a gap, and the spotlight card beside the table reads this row by name.
         #
         # What this test exists to guard is `impressions`. GA4 can only see sessions that
         # ARRIVED from a source; it cannot see how many times a post was shown on the
         # platform. That number lives in each platform's own API and no platform connector is
         # wired, so it is None for every row, connected or not. It used to be invented as
         # `sessions * 12 / 8 / 5 / 4` — that is the fabrication that must never come back.
-        self.assertEqual([r["platform"] for r in body["social"]],
-                         ["LinkedIn", "Reddit", "YouTube", "X / Twitter"])
+        self.assertEqual([r["platform"] for r in body["social"]], ["LinkedIn"])
         for row in body["social"]:
             self.assertIsNone(row["impressions"], f"{row['platform']} impressions must stay None")
             self.assertFalse(row["connected"])

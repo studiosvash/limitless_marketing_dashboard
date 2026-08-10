@@ -831,9 +831,18 @@ exist, because a comparison and a trend both need at least two points; that is a
 **Sections**
 
 - A source banner explaining the definition: off-site = Referral + Organic Social/Video sessions.
+  That is an explicit allow-list (`offsite_service.OFFSITE_CHANNELS`), not a substring match —
+  it used to be `"Organic" in channel`, which admitted GA4's `Organic Shopping`. Adding a channel
+  is one entry there and moves every figure on the page together.
 - **Five KPIs** — off-site sessions, engagement rate, key events, attributed revenue, referring
-  domains — each with a period-over-period chip.
-- **Trend chart** — sessions vs engaged sessions over the range, with an area fill.
+  domains — each with a period-over-period chip. Engagement rate reads "—" when there were no
+  off-site sessions to divide by. "Referring domains" is labelled *"domains linking to you
+  (all-time)"*: it is a backlink-profile count, not a count of sites that sent traffic.
+- **Trend chart** — off-site sessions per day as a **stacked area by channel** (Referral /
+  Organic Social / Organic Video), with a y-axis, gridlines, x-axis dates and a hover tooltip
+  giving each band, the total and engaged sessions. Bands always sum to the `sessions` total,
+  and a channel with no sessions across the whole window is dropped rather than drawn as an
+  empty band.
 - **Channel mix** — every GA4 default channel group as a labelled bar, with off-site channels
   emphasised, plus two rollups: the off-site share of all sessions and off-site key events.
 - **LinkedIn spotlight** — impressions, click-throughs, CTR and key events. No LinkedIn
@@ -841,15 +850,33 @@ exist, because a comparison and a trend both need at least two points; that is a
   not styled as a link — it still opens Settings → Connections, where the explanation lives,
   but nothing there can be pressed), and the subtitle says sessions come from GA4 while
   impressions & CTR need the LinkedIn API. Sessions, key events and revenue are real GA4 numbers.
-- **Social & video platforms** table — LinkedIn, Reddit, YouTube, X/Twitter: impressions,
-  sessions, engagement, key events, revenue. Impressions read *"connector needed"* (grey text,
-  not a link) for every platform — no platform connector exists, so that is the permanent state
-  until one is built. Exportable to CSV.
-- **Top referring domains** — domain, DR, sessions, engagement, key events, revenue and an
-  open-in-new-tab link. Sortable on sessions, key events and revenue. Exportable.
-- **Where off-site traffic lands** — landing page, top source, sessions, engagement, key events.
+- **Social & video platforms** table — the off-site sources GA4 actually measured, biggest
+  first, with LinkedIn pinned into the first row (the spotlight card reads it by name). It was a
+  fixed LinkedIn/Reddit/YouTube/X roster that printed those four whether or not GA4 had seen
+  them and discarded every other source. A platform's hosts are merged into one row
+  (`linkedin.com` + `lnkd.in`), matched host-wise against
+  `offsite_service.PLATFORM_DOMAINS` — never by substring, which used to file Reddit's traffic
+  under X. Sources belonging to no platform appear under their own host. Impressions read
+  *"connector needed"* (grey text, not a link) for every row — no platform connector exists, so
+  that is the permanent state until one is built. Exportable to CSV.
+- **Top referring domains** — domain, a *driving traffic* / *link only* badge, DR, sessions,
+  engagement, key events, revenue and an open-in-new-tab link, with a "N driving traffic · M
+  links only" count over **every** linking domain above the table. Sortable on sessions, key
+  events and revenue. Exportable.
+- **Most-viewed pages, all traffic** — page, top source, page views, sessions, engagement,
+  bounce, new users, key events. This section was headed *"Where off-site traffic lands / Pages
+  that referral & social visitors enter on"* and was neither: it reads `seo_daily`, which has no
+  channel column, so it has always included Organic Search and Direct, and its `landing_page`
+  column is filled from GA4's `pagePath` dimension, so the rows are page **views**, not
+  entrances. A genuinely off-site landing-page table needs a new GA4 report on
+  `landingPage` × `sessionDefaultChannelGroup` — a new dimension pair and a new table, not a
+  filter over this one.
 
-**Edge cases.** Empty state with a *"Fetch Off-site Data Now"* button when nothing is synced.
+**Edge cases.** Empty state with a *"Fetch Off-site Data Now"* button when nothing is synced —
+that button was a **silent no-op** until 2026-08-10, because `tabToScope` in `app.js` had no
+`offsite` key and `startSync` was handed an undefined scope. It now runs the `overview` scope,
+which is the one that runs GA4; there is no off-site-specific connector to give it a scope of
+its own.
 Revenue and platform impressions are no longer fabricated (fixed 2026-07 — revenue used to be
 imputed at a flat **$45 per conversion** with GA4 revenue never fetched, and platform impressions
 were session-count multiples rather than platform-API figures). Where the number is not measured,

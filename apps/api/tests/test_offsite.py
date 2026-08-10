@@ -87,14 +87,16 @@ class OffsiteEndpointTests(APITestCase):
         }])
         # honest setup/empty field: no backlinks table rows were seeded.
         self.assertEqual(body["referrers"], [])
-        # `social` is a fixed four-platform roster, not an empty list — see the fuller
+        # `social` is the real GA4 sources with LinkedIn pinned first — see the fuller
         # explanation in test_offsite_service.test_unbuilt_fields_report_setup_not_fake_data.
-        # The invariant that matters here: platform impressions are never invented.
-        self.assertEqual([r["platform"] for r in body["social"]],
-                         ["LinkedIn", "Reddit", "YouTube", "X / Twitter"])
+        # a.com is the seeded Referral source and appears under its own host; LinkedIn's
+        # pinned row is a measured zero. The invariant that matters here: platform
+        # impressions are never invented.
+        self.assertEqual([r["platform"] for r in body["social"]], ["LinkedIn", "a.com"])
+        self.assertEqual(body["social"][0]["sessions"], 0)
+        self.assertEqual(body["social"][1]["sessions"], 100)
         for row in body["social"]:
             self.assertIsNone(row["impressions"])
-            self.assertEqual(row["sessions"], 0)
         self.assertEqual(body["connectors"], {
             "linkedin": False, "reddit": False, "youtube": False,
             "x": False, "facebook": False, "instagram": False,

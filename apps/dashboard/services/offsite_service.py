@@ -95,11 +95,15 @@ def platform_for_source(source: str | None) -> str | None:
 # exact string here. That is the whole extension mechanism, and it changes every figure on the
 # page at once — KPI totals, the trend, the channel mix, the social table, the referrer map —
 # which is the point of there being one list.
-OFFSITE_CHANNELS: frozenset[str] = frozenset({
+#
+# Ordered, not a set: the trend chart stacks its bands in this order, so "which channel is the
+# base of the stack" is decided here alongside "which channels count" rather than in the SPA.
+OFFSITE_CHANNELS: tuple[str, ...] = (
     "Referral",
     "Organic Social",
     "Organic Video",
-})
+)
+_OFFSITE_CHANNEL_SET = frozenset(OFFSITE_CHANNELS)
 
 
 def _is_offsite_channel(channel: str) -> bool:
@@ -118,7 +122,7 @@ def _is_offsite_channel(channel: str) -> bool:
 
     An allow-list can only ever count what someone deliberately put in it.
     """
-    return (channel or "").strip() in OFFSITE_CHANNELS
+    return (channel or "").strip() in _OFFSITE_CHANNEL_SET
 
 
 # --- revenue --------------------------------------------------------------
@@ -302,12 +306,23 @@ def query_offsite_trend_raw(site_id: str, start, end) -> list[dict]:
 
     by_date: dict = {}
     for r in rows:
-        d = by_date.setdefault(str(r.date), {"sessions": 0, "engaged": 0, "conversions": 0})
+        d = by_date.setdefault(str(r.date), {
+            "sessions": 0, "engaged": 0, "conversions": 0,
+            # Zero-filled for EVERY off-site channel, on every day, so the stacked chart has
+            # one stable band set across the whole x-axis. A per-day key set would make a band
+            # appear and vanish mid-series, which reads as data changing shape rather than a
+            # channel going quiet.
+            "channels": {ch: 0 for ch in OFFSITE_CHANNELS},
+        })
         if not _is_offsite_channel(r.channel):
             continue
-        d["sessions"] += int(r.sessions or 0)
+        sessions = int(r.sessions or 0)
+        d["sessions"] += sessions
         d["engaged"] += int(r.engaged_sessions or 0)
         d["conversions"] += int(r.conversions or 0)
+        # The query has always grouped by (date, channel); the channel was summed away one
+        # line later and thrown out. Keeping it costs nothing and is the whole stacked chart.
+        d["channels"][r.channel.strip()] += sessions
 
     # Real GA4 totalRevenue per day, off-site channels only; days GA4 reported none stay 0.0.
     revenue_by_date = _revenue_by_date_raw(site_ids, start, end)
@@ -321,6 +336,9 @@ def query_offsite_trend_raw(site_id: str, start, end) -> list[dict]:
             "engagedSessions": d["engaged"],
             "keyEvents": d["conversions"],
             "revenue": revenue_by_date.get(date_str, 0.0),
+            # Per-channel sessions for the stacked area. Always sums to `sessions` above --
+            # the bands and the total are the same measurement drawn twice.
+            "channels": d["channels"],
         })
     return out
 
@@ -474,6 +492,85 @@ def _last_ga4_sync(site_id: str) -> tuple:
         return (None, "never")
 
 
+# How many rows the social table shows. LinkedIn is pinned into the first slot, so this is
+# 1 pinned + (SOCIAL_TABLE_LIMIT - 1) real sources by session volume.
+SOCIAL_TABLE_LIMIT = 8
+
+
+def build_social_rows(offsite_sources: list[dict], limit: int = SOCIAL_TABLE_LIMIT) -> list[dict]:
+    """The social & video table: the sources GA4 actually measured, biggest first.
+
+    This was a FIXED four-row roster — LinkedIn, Reddit, YouTube, X / Twitter — rendered
+    whether or not GA4 had ever seen them, and it discarded every other source. Both halves of
+    that were wrong at once: a project whose off-site traffic came from Hacker News, a Substack
+    and a forum saw four rows of zeroes and none of its real traffic, while four platforms it
+    has no presence on were listed as though they were the ones being reported on.
+
+    Sources belonging to one platform are merged (linkedin.com + lnkd.in are one LinkedIn row);
+    everything else appears under its own host, which is also where the sources that match no
+    platform finally become visible.
+
+    LinkedIn stays pinned in the first slot even at zero sessions. It is not a fabrication —
+    the number is a real measured zero — and the LinkedIn spotlight card beside this table
+    reads its row by name, so the two would otherwise disagree about whether LinkedIn exists.
+
+    `impressions` is None on every row, always. GA4 sees sessions that ARRIVED from a source;
+    it cannot see how many times a post was shown on the platform. That count exists only in
+    each platform's own API and no platform connector is wired, so there is no impression data
+    for any row. The `sessions * 12 / 8 / 5 / 4` multipliers this replaced were invented.
+    Likewise `connected`: no platform connector is registered in the sync engine, so it is
+    False everywhere — see the block above its use in build_offsite_response.
+    """
+    groups: dict[str, dict] = {}
+    for r in offsite_sources:
+        host = normalise_source(r["source"])
+        if not host:
+            continue
+        platform = platform_for_source(host)
+        key = platform or host
+        g = groups.setdefault(key, {
+            "label": PLATFORM_LABELS.get(platform, host) if platform else host,
+            "hosts": set(), "channels": {},
+            "sessions": 0, "engaged": 0, "conversions": 0, "revenue": 0.0,
+        })
+        g["hosts"].add(host)
+        g["channels"][r["channel"]] = g["channels"].get(r["channel"], 0) + r["sessions"]
+        g["sessions"] += r["sessions"]
+        g["engaged"] += r["engaged_sessions"]
+        g["conversions"] += r["conversions"]
+        g["revenue"] = round(g["revenue"] + r["revenue"], 2)
+
+    # An empty LinkedIn group so the pin has something to pin. Its zeroes are measured: GA4
+    # reported no LinkedIn sessions in this window.
+    groups.setdefault("linkedin", {
+        "label": PLATFORM_LABELS["linkedin"], "hosts": set(), "channels": {},
+        "sessions": 0, "engaged": 0, "conversions": 0, "revenue": 0.0,
+    })
+
+    def to_row(g: dict) -> dict:
+        # Channels listed biggest-first rather than reduced to one: a source genuinely can
+        # arrive under two, and picking a winner would hide the other.
+        channels = sorted(g["channels"], key=lambda c: -g["channels"][c])
+        return {
+            "platform": g["label"],
+            "source": ", ".join(sorted(g["hosts"])),
+            "channel": " · ".join(channels),
+            "connected": False,
+            "impressions": None,
+            "sessions": g["sessions"],
+            **_engagement(g["engaged"], g["sessions"]),
+            "keyEvents": g["conversions"],
+            "revenue": g["revenue"],
+        }
+
+    pinned = to_row(groups.pop("linkedin"))
+    if not pinned["source"]:
+        # No LinkedIn host was measured at all; still name the platform the row is about.
+        pinned["source"] = "linkedin.com"
+    rest = sorted(groups.values(), key=lambda g: (-g["sessions"], g["label"]))
+    return [pinned] + [to_row(g) for g in rest[: max(0, limit - 1)]]
+
+
 def build_offsite_response(site_id: str, curr_start, curr_end, prev_start, prev_end) -> dict:
     """API-shaped Off-site SEO response across all tabs and charts."""
     totals = query_offsite_totals_raw(site_id, curr_start, curr_end)
@@ -544,10 +641,22 @@ def build_offsite_response(site_id: str, curr_start, curr_end, prev_start, prev_
         agg["conversions"] += r["conversions"]
         agg["revenue"] = round(agg["revenue"] + r["revenue"], 2)
 
+    # Two kinds of link, both real, told apart instead of left as a 0 in a column: a link that
+    # drove measured GA4 sessions this period, and a link that exists but drove none. Counted
+    # over EVERY linking domain, not just the 20 rows below, because the "Referring domains"
+    # KPI counts them all too and these two numbers sit next to each other.
+    driving = sum(1 for rd in ref_domains
+                  if (source_map.get(normalise_source(rd["domain"])) or {}).get("sessions", 0) > 0)
+    referrer_split = {
+        "total": len(ref_domains),
+        "driving": driving,
+        "linkOnly": len(ref_domains) - driving,
+    }
+
     for rd in ref_domains[:20]:
         domain = normalise_source(rd["domain"])
         match = source_map.get(domain)
-        
+
         # If no match in real GA4 data, it's 0 (since it didn't drive traffic)
         # But we still list it because it's a backlink
         share = match["sessions"] if match else 0
@@ -559,6 +668,9 @@ def build_offsite_response(site_id: str, curr_start, curr_end, prev_start, prev_
             "domain": rd["domain"],
             "authorityScore": rd["rank"],
             "sessions": share,
+            # "This link sent us people" vs "this link exists". Both are facts the row already
+            # held; only one of them was legible.
+            "drivesTraffic": share > 0,
             # ga4_traffic_source_daily has no user count, so per-referrer users is
             # unknown. It used to be set to `sessions` and commented "# estimate" —
             # a fabricated number. null says "not measured".
@@ -596,32 +708,7 @@ def build_offsite_response(site_id: str, curr_start, curr_end, prev_start, prev_
     # directly above it — the same page disagreeing with itself about what off-site means.
     offsite_sources = [r for r in traffic_sources if _is_offsite_channel(r["channel"])]
 
-    def get_social_metrics(platform_key: str):
-        matches = [r for r in offsite_sources if platform_for_source(r["source"]) == platform_key]
-        sess = sum(r["sessions"] for r in matches)
-        eng = sum(r["engaged_sessions"] for r in matches)
-        conv = sum(r["conversions"] for r in matches)
-        rev = round(sum(r["revenue"] for r in matches), 2)
-        return sess, eng, conv, rev
-
-    li_sess, li_eng, li_conv, li_rev = get_social_metrics("linkedin")
-    rd_sess, rd_eng, rd_conv, rd_rev = get_social_metrics("reddit")
-    yt_sess, yt_eng, yt_conv, yt_rev = get_social_metrics("youtube")
-    tw_sess, tw_eng, tw_conv, tw_rev = get_social_metrics("x")
-
-    # Platform impressions are ALWAYS None. GA4 measures sessions that arrived from
-    # a source; it cannot see how many times a post was shown on LinkedIn, Reddit,
-    # YouTube or X. Those counts only exist in each platform's own API, and no
-    # platform connector is wired yet — so there is no impression data for any
-    # platform, connected toggle or not. The previous `sessions * 12 / 8 / 5 / 4`
-    # multipliers were invented out of thin air. None makes the SPA render "—" with
-    # a "connector needed" caption, which is the truth.
-    social = [
-        {"platform": "LinkedIn", "source": "linkedin.com", "channel": "Social", "connected": li_conn, "impressions": None, "sessions": li_sess, **_engagement(li_eng, li_sess), "keyEvents": li_conv, "revenue": li_rev},
-        {"platform": "Reddit", "source": "reddit.com", "channel": "Social", "connected": reddit_conn, "impressions": None, "sessions": rd_sess, **_engagement(rd_eng, rd_sess), "keyEvents": rd_conv, "revenue": rd_rev},
-        {"platform": "YouTube", "source": "youtube.com", "channel": "Video", "connected": yt_conn, "impressions": None, "sessions": yt_sess, **_engagement(yt_eng, yt_sess), "keyEvents": yt_conv, "revenue": yt_rev},
-        {"platform": "X / Twitter", "source": "t.co", "channel": "Social", "connected": x_conn, "impressions": None, "sessions": tw_sess, **_engagement(tw_eng, tw_sess), "keyEvents": tw_conv, "revenue": tw_rev},
-    ]
+    social = build_social_rows(offsite_sources)
 
     _ga4_at, _ga4_status = _last_ga4_sync(site_id)
 
@@ -631,6 +718,9 @@ def build_offsite_response(site_id: str, curr_start, curr_end, prev_start, prev_
         "trend": trend,
         "channels": channels,
         "referrers": referrers,
+        # "Links driving traffic" vs "links only", counted over every linking domain — the
+        # difference used to be expressed as a 0 in the sessions column and nothing else.
+        "referrerSplit": referrer_split,
         "social": social,
         "landingPages": landing_pages,
         # All False, for the reason given above the li_conn/reddit_conn block.
