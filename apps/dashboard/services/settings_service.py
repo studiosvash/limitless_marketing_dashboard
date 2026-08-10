@@ -39,6 +39,7 @@ DEFAULT_SETTINGS_BLOB's merge-with-saved-blob logic below.
 import calendar
 import logging
 from datetime import date, datetime, timezone
+from typing import Optional
 
 from sqlalchemy import select
 
@@ -50,7 +51,7 @@ from pipeline.services.competitor_service import get_tracked_competitors, set_tr
 from apps.dashboard.services.ads_credentials import (
     SECRET_FIELD, PLATFORM_FIELDS, PLATFORM_REQUIRED_FIELDS, decrypt_fields, encrypt_fields, mask,
 )
-from pipeline.services.site_service import update_site
+from pipeline.services.site_service import get_site_by_pk, update_site
 from pipeline.utils.db_connection import get_session
 
 logger = logging.getLogger(__name__)
@@ -683,9 +684,50 @@ def build_settings_response(site_id: str, site_pk: int | None = None) -> dict:
     }
 
 
-def apply_settings_update(site_id: str, body: dict) -> dict:
+def _resolve_write_target(session, site_id: str, site_pk: Optional[int]):
+    """The `sites` row a settings write may touch. Returns (site, error_dict|None).
+
+    By primary key when the caller knows which project it is, and a pk that does not match the
+    caller's `site_id` REFUSES rather than falling through to a domain lookup -- that fallthrough
+    is the bug this exists to close. `apply_settings_update` used to resolve every project write
+    with `select(Site).where(site_url == site_id).first()`, while the read path
+    (`build_settings_response`) resolved by pk. One domain can be registered as several projects
+    (`add_site(allow_duplicate=True)`), so the modal showed the opened project's values and the
+    save rewrote the OLDEST sibling's row: its location changed under it, every positioning read
+    (which filters on the project's current location) then matched zero rows, and its entire
+    tracked keyword list rendered as "not tracked yet" -- reported as "editing a project's
+    location removed my keywords", on a project the user never opened.
+
+    The pk-less branch remains for callers that genuinely have no project in hand (management
+    commands, older internal callers). It logs, because on a duplicated domain it cannot tell
+    which project the caller meant.
+    """
+    if site_pk:
+        site = get_site_by_pk(session, site_pk)
+        if site is None:
+            return None, {"error": "That project no longer exists. Reload and try again."}
+        if site.site_url != site_id:
+            logger.error(
+                "[settings] refused write: site_pk=%s is %r but the caller passed %r",
+                site_pk, site.site_url, site_id,
+            )
+            return None, {"error": "Project mismatch. Reload and try again."}
+        return site, None
+
+    logger.warning(
+        "[settings] pk-less write for %r -- cannot distinguish sibling projects on this domain",
+        site_id,
+    )
+    site = session.execute(select(Site).where(Site.site_url == site_id)).scalars().first()
+    return site, None
+
+
+def apply_settings_update(site_id: str, body: dict, site_pk: Optional[int] = None) -> dict:
     """Routes a PUT body's top-level key(s) to the right backing store. Returns
     {"ok": True} on success, or {"error": "..."} for keys explicitly not persisted.
+
+    `site_pk` identifies WHICH project on the domain is being written. Every API caller has it
+    (the view resolved the project by slug) and must pass it -- see `_resolve_write_target`.
 
     `security` is partially supported, per-field (see _SECURITY_PERSISTABLE /
     _SECURITY_UNSUPPORTED above): `session_timeout` is saved like any other preference, while an
@@ -717,7 +759,9 @@ def apply_settings_update(site_id: str, body: dict) -> dict:
     if "credentials" in body:
         creds = body["credentials"]
         with get_session() as session:
-            site = session.execute(select(Site).where(Site.site_url == site_id)).scalars().first()
+            site, err = _resolve_write_target(session, site_id, site_pk)
+        if err:
+            return err
         if site:
             # Only touch the keys the caller actually sent. This used to unconditionally pass
             # all three, so saving just GSC + GA4 (the only two fields Settings has ever shown
@@ -744,7 +788,9 @@ def apply_settings_update(site_id: str, body: dict) -> dict:
     if "project" in body and isinstance(body["project"], dict):
         proj = body["project"]
         if "competitors" in proj:
-            set_tracked_competitors(site_id, proj["competitors"])
+            # site_pk-scoped: the override set belongs to this project, and the unscoped call
+            # deleted every sibling's rows before inserting this one's.
+            set_tracked_competitors(site_id, proj["competitors"], site_pk=site_pk)
         
         update_kwargs = {}
         if "name" in proj:
@@ -765,7 +811,9 @@ def apply_settings_update(site_id: str, body: dict) -> dict:
 
         if update_kwargs:
             with get_session() as session:
-                site = session.execute(select(Site).where(Site.site_url == site_id)).scalars().first()
+                site, err = _resolve_write_target(session, site_id, site_pk)
+            if err:
+                return err
             if site:
                 update_site(site.id, **update_kwargs)
 

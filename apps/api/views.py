@@ -822,7 +822,10 @@ class ProjectSettingsView(APIView):
         if not check_owner_admin(request.user):
             return Response({"detail": "Settings modifications require Owner or Admin access."}, status=403)
         site = resolve_project_or_404(slug)
-        result = apply_settings_update(site.site_url, request.data)
+        # site_pk, not just the domain: several projects can share one site_url, and a write
+        # resolved by domain alone landed on whichever was created first (see
+        # settings_service._resolve_write_target).
+        result = apply_settings_update(site.site_url, request.data, site_pk=site.id)
         if "error" in result:
             return Response({"detail": result["error"]}, status=400)
         return Response(build_settings_response(site.site_url, site_pk=site.id))

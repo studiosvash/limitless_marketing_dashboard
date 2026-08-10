@@ -247,3 +247,109 @@ class SettingsPutAuthAndSlugTests(APITestCase):
             "/api/projects/does-not-exist/settings", {"budgetCap": 10}, format="json"
         )
         self.assertEqual(resp.status_code, 404)
+
+
+class SiblingProjectSettingsWriteTests(APITestCase):
+    """A settings write must land on the project the caller opened, not on whichever project
+    happens to be first on the domain.
+
+    The read path resolved by primary key while the write path resolved by
+    `select(Site).where(site_url == ...).first()`. One domain can be registered as several
+    projects (`add_site(allow_duplicate=True)`), so editing the newer sibling's location, name,
+    device, engine or language silently rewrote the OLDEST sibling's row -- and because every
+    positioning read filters on the project's current location, that sibling's rankings then
+    resolved to zero rows and its whole tracked list rendered as "not tracked yet". The user's
+    report was "editing a project's location removed my keywords", on a project they never
+    opened. Report bug C3a.
+    """
+
+    def setUp(self):
+        db_connection._SessionFactory = None
+        self.addCleanup(setattr, db_connection, "_SessionFactory", None)
+        tmp = tempfile.mkdtemp()
+        db_path = str(Path(tmp) / "fusehealth.db")
+        init_db(get_engine(db_path))
+        ctx = override_settings(ANALYTICS_DB_PATH=db_path)
+        ctx.enable()
+        self.addCleanup(ctx.disable)
+
+        with get_session() as session:
+            older = Site(site_url="dup.com", site_name="Dup Older", slug="dup",
+                         location="United States", is_active=1)
+            newer = Site(site_url="dup.com", site_name="Dup Newer", slug="dup-2",
+                         location="United States", is_active=1)
+            session.add_all([older, newer])
+            session.commit()
+            self.older_pk, self.newer_pk = older.id, newer.id
+
+        user = get_user_model().objects.create_user("founder2", password="x")
+        token = Token.objects.get(user=user)
+        self.client_auth = APIClient()
+        self.client_auth.credentials(HTTP_AUTHORIZATION=f"Bearer {token.key}")
+
+    def _locations(self):
+        from sqlalchemy import select as sa_select
+        with get_session() as session:
+            rows = session.execute(
+                sa_select(Site.id, Site.location, Site.site_name).order_by(Site.id)
+            ).all()
+        return {r[0]: (r[1], r[2]) for r in rows}
+
+    def test_editing_the_newer_sibling_does_not_move_the_older_one(self):
+        resp = self.client_auth.put(
+            "/api/projects/dup-2/settings",
+            {"project": {"location": "United States - Las Vegas, NV", "name": "Dup Newer"}},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 200)
+
+        rows = self._locations()
+        self.assertEqual(rows[self.newer_pk][0], "United States - Las Vegas, NV")
+        self.assertEqual(rows[self.older_pk][0], "United States")
+
+    def test_editing_the_older_sibling_still_works(self):
+        resp = self.client_auth.put(
+            "/api/projects/dup/settings",
+            {"project": {"location": "United States - Austin, TX"}},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 200)
+
+        rows = self._locations()
+        self.assertEqual(rows[self.older_pk][0], "United States - Austin, TX")
+        self.assertEqual(rows[self.newer_pk][0], "United States")
+
+    def test_competitor_edit_is_also_per_project(self):
+        from pipeline.services.competitor_service import get_tracked_competitors
+
+        self.client_auth.put(
+            "/api/projects/dup/settings",
+            {"project": {"competitors": ["older-comp.com"]}}, format="json",
+        )
+        self.client_auth.put(
+            "/api/projects/dup-2/settings",
+            {"project": {"competitors": ["newer-comp.com"]}}, format="json",
+        )
+
+        self.assertEqual(get_tracked_competitors("dup.com", site_pk=self.older_pk),
+                         ["older-comp.com"])
+        self.assertEqual(get_tracked_competitors("dup.com", site_pk=self.newer_pk),
+                         ["newer-comp.com"])
+
+    def test_credentials_write_also_targets_the_opened_project(self):
+        from sqlalchemy import select as sa_select
+
+        resp = self.client_auth.put(
+            "/api/projects/dup-2/settings",
+            {"credentials": {"gsc_property": "sc-domain:dup.com"}},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 200)
+
+        with get_session() as session:
+            rows = session.execute(
+                sa_select(Site.id, Site.gsc_property).order_by(Site.id)
+            ).all()
+        by_pk = {r[0]: r[1] for r in rows}
+        self.assertEqual(by_pk[self.newer_pk], "sc-domain:dup.com")
+        self.assertIsNone(by_pk[self.older_pk])
