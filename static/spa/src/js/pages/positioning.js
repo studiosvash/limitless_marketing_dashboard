@@ -26,8 +26,54 @@
       vals.ptEditLoc = s.ptEditLoc || '';
       vals.ptEditLocFn = e => this.setState({ ptEditLoc: e.target.value });
       vals.ptEditClose = () => this.setState({ ptEditOpen: false, ptEditBusy: false });
+      /* CHANGING THE LOCATION STARTS A NEW MEASUREMENT SERIES.
+         `sites.location` is a filter, not a label: every positioning read narrows to the
+         project's CURRENT location and every ranking row carries the location it was measured
+         in, because two projects on one domain may track two different cities. So editing this
+         one field makes 100% of the project's measured history unreadable in a single click —
+         Rankings Overview blanks, the whole tracked list falls into "Newly Added Keywords —
+         Not Tracked Yet", and the next sync re-buys every keyword from DataForSEO. It was
+         reported as "editing a project's location removed my tracked keywords".
+
+         The approved design is isolate-and-warn, not auto-migrate: the rows stay exactly where
+         they are, so setting the location back restores the old series intact, and
+         `manage.py migrate_ranking_location` is the deliberate way to carry it across.
+
+         COST IS "unknown", NEVER "$0.00". Per-keyword DataForSEO pricing is not exposed to the
+         SPA, and a fabricated zero on a spend warning is the worst number available to invent.
+         Self-contained so tests/location_change_warning.test.js can brace-match it. */
+      const ptLocationChangeWarning = (oldLoc, newLoc, kwCount) => {
+        const lines = [
+          'Changing this project\'s location starts a new measurement series.',
+          '',
+          'From: ' + (oldLoc || '(not set)'),
+          'To:   ' + (newLoc || '(not set)'),
+          '',
+          'Existing rankings stay recorded under the old location and won\'t show on this '
+            + 'page any more.'
+        ];
+        if (kwCount > 0) {
+          lines.push(
+            'All ' + kwCount + ' tracked keyword' + (kwCount === 1 ? '' : 's')
+            + ' will be re-measured from scratch on the next sync (per-keyword cost unknown '
+            + '— this page cannot see DataForSEO pricing).'
+          );
+        }
+        lines.push('');
+        lines.push('Setting the location back restores the old series — the rows are not '
+                   + 'deleted. To carry the history across instead, run '
+                   + 'manage.py migrate_ranking_location.');
+        return lines.join('\n');
+      };
       vals.ptEditSave = () => {
         if (s.ptEditBusy) return;
+        const locBefore = (s.ptEditLocInitial || '').trim();
+        const locAfter = (s.ptEditLoc || '').trim();
+        if (locBefore && locAfter && locBefore !== locAfter) {
+          const trackedNow = ((s.ptEditKwsInitial || '').split(/\r?\n/)
+            .filter(l => l.trim())).length;
+          if (!window.confirm(ptLocationChangeWarning(locBefore, locAfter, trackedNow))) return;
+        }
         this.setState({ ptEditBusy: true });
         const kwLines = (s.ptEditKws || '').split(/\r?\n/).map(l => l.trim()).filter(Boolean);
         /* NAMES ONLY. This used to send `{volume: 0, kd: null, cpc: null, intent:
@@ -364,7 +410,11 @@
               ptEditEngine: wsEngine,
               ptEditDevice: wsDevice,
               ptEditLang: wsLang,
-              ptEditLoc: ptPrefs.location || proj.location || ''
+              ptEditLoc: ptPrefs.location || proj.location || '',
+              /* What the modal opened with, so Save can tell a real location CHANGE from the
+                 field simply being repainted. Overwritten below by the settings response,
+                 which is the authoritative read of the stored row. */
+              ptEditLocInitial: ptPrefs.location || proj.location || ''
             });
             window.FuseAPI.get('/api/projects/' + proj.id + '/settings').then(res => {
               if (this.state.ptEditOpen && res && res.project) {
@@ -380,7 +430,8 @@
                   ptEditEngine: res.project.search_engine || wsEngine,
                   ptEditDevice: res.project.device || wsDevice,
                   ptEditLang: res.project.language || wsLang,
-                  ptEditLoc: res.project.location || ''
+                  ptEditLoc: res.project.location || '',
+                  ptEditLocInitial: res.project.location || ''
                 });
               }
             }).catch(err => {

@@ -280,8 +280,17 @@ plus `POST /api/research` on demand.
 **Search** button runs the research; the button label becomes *"Searching…"* while in flight.
 
 **Match-type tabs:** All · Broad Match · Phrase Match · Exact Match · Questions · Related.
-Each tab states which DataForSEO Labs algorithm produced it and an estimated pull cost — filters
-run over the already-fetched set and cost nothing.
+Each tab states which DataForSEO Labs algorithm produced it and **what the pull actually cost**
+(the figure DataForSEO reports on its own response, not an estimate) — filters run over the
+already-fetched set and cost nothing.
+
+One search fires four Labs fetches in parallel: `keyword_ideas`, `related_keywords` (depth 2,
+first 3 seeds), `keyword_suggestions` (first 3 seeds) and a question-filtered `keyword_ideas`.
+Broad / Phrase / Exact / Questions filter on the **word shape** of a result relative to the seed;
+**Related filters on which fetch returned it**, because "searches related to" results almost
+always contain the seed and are indistinguishable from Phrase results by shape alone. An empty
+Related tab says so explicitly ("DataForSEO returned no related searches for this seed") rather
+than showing the generic filter message.
 
 **Filter chips** (each opens a small popover):
 
@@ -398,12 +407,19 @@ This page has **two views**.
 ### 7a. Project list (default)
 
 A search box, an "All projects" filter, and a row per project: name/domain, location, device,
-tracked-keyword count, visibility bar (the backend's Semrush-style CTR-weighted `visibility`
-field — see `GET /api/projects` in `api-reference.md`; `null` renders `—`, a real 0 renders
-`0%`), improved/declined counts, and last-updated. Clicking a row opens that project's
+tracked-keyword count, a visibility **percentage** (the backend's Semrush-style CTR-weighted
+`visibility` field — see `GET /api/projects` in `api-reference.md`; `null` renders `—`, a real 0
+renders `0%`), improved/declined counts, and last-updated. Clicking a row opens that project's
 workspace. The cell must never derive a score from `avg_position` — that formula ignored
 unranked keywords and once showed 82% for a project ranking on 1 of 48 tracked keywords
 (`static/spa/tests/project_list_visibility.test.js` pins this).
+
+There is **no bar** beside the percentage (removed 2026-08-10). There used to be a track and a
+fill, but both were inline `<span>`s and a non-replaced inline box ignores width and height, so
+the fill never drew on any project — every row showed an empty grey track. The percentage is the
+whole cell. The same window that feeds this number now feeds the workspace: both anchor on
+`latest_ranking_anchor`, so a project last synced 40 days ago no longer reports `—` in the list
+beside a real score in its own workspace.
 
 **+ New project** opens the **Create SEO Project wizard** — four steps with a progress rail:
 
@@ -445,8 +461,25 @@ the stored row — plus **Edit**, **Delete** and **Refresh**.
 
 **Edit Project Settings** modal — display name, engine, device, language, location, competitor
 chips, and a full-text keyword list (one per line). The three selects are seeded from the stored
-row and saved back to it. Saving replaces the tracked keyword list wholesale, saves competitors,
+row and saved back to it. Saving reconciles the tracked keyword list by name, saves competitors,
 location and the tracking-area choices, then automatically starts a `positions` sync.
+
+**Changing the location confirms first** (added 2026-08-10). `sites.location` is a filter, not a
+label — every positioning read narrows to the project's current location — so changing it makes
+100% of the project's measured history unreadable in one click: Rankings Overview blanks, the
+whole tracked list drops into "Newly Added Keywords — Not Tracked Yet", and the next sync re-buys
+every keyword from DataForSEO. It was reported as *"editing a project's location removed my
+tracked keywords"*. The confirm names both locations, gives the tracked-keyword count that will
+be re-measured, says the per-keyword **cost is unknown** (never `$0.00` — the SPA cannot see
+DataForSEO pricing), and states that setting the location back restores the old series, because
+the rows are never deleted. The design is deliberately isolate-and-warn rather than
+auto-migrate: `python manage.py migrate_ranking_location <slug> --from "<loc>" --to "<loc>"`
+(dry-run unless `--apply`) is the reviewable way to carry the history across. It moves
+`keyword_rankings` **and** `competitor_keyword_rankings` together, skips and reports rows that
+would collide on an existing measurement in the new market rather than overwriting one, and
+refuses outright if a sibling project on the same domain still tracks the old location.
+`static/spa/tests/location_change_warning.test.js` and
+`apps/sync/tests_migrate_ranking_location.py` pin both halves.
 
 Three workspace tabs:
 
