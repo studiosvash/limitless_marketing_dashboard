@@ -60,7 +60,9 @@
     auCmpA: null, auCmpB: null, auCmpFilter: 'all', auProg: { score: true, errors: true, warnings: true, notices: false, pages: false },
     aiSub: 'visibility', /* keys must track mentionPlatforms' ids (llm_mentions_service.MENTION_PLATFORMS), not llmPlatforms' four-engine ids -- the two lists are deliberately separate */ aiPlat: { google: true, chat_gpt: true },
     aiWiz: 1, aiWizBrand: null, aiWizAliases: null, aiWizComps: null, aiWizCompInput: '', aiWizSel: null, aiWizCustom: '', aiWizBusy: false,
-    aiTgOpen: false, aiListFilter: 'all', aiListsOpen: false, aiNewPlName: '',
+    // aiDomainFilter: null = "Any domain". Holds a competitor domain, or the '__you' sentinel
+    // for our own. Deliberately separate from aiListFilter -- the two compose by AND.
+    aiTgOpen: false, aiListFilter: 'all', aiDomainFilter: null, aiListsOpen: false, aiNewPlName: '',
     aiComposerOpen: false, aiComposerText: '', aiComposerList: null,
     aiCfgOpen: null, aiCfgDraft: null, aiPromptSel: [],
     aiExpQ: '', aiExploring: false, aiExp: null, aiExpSel: [], aiExpAddOpen: false,
@@ -693,7 +695,10 @@
     const hist = this.kwHistLoad(pid);
     const research = hist[0] ? hist[0].research : null;
     this.pushNav({ projectId: pid, research, kwSeg: null, blFilter: 'all', alFilter: 'all' });
-    this.setState({ projectId: pid, research, kwSeg: null, blFilter: 'all', alFilter: 'all', crawlCfg: null, crawlSaved: false, auPage: null, rules: null, termCampaign: null, cmpSearch: '', cmpOpenId: null, editBudgetId: null });
+    // aiDomainFilter/aiListFilter name things that belong to the OLD project — a competitor
+    // domain or a list id the new one has never heard of — and either would filter its prompt
+    // table down to nothing that the chips could explain.
+    this.setState({ projectId: pid, research, kwSeg: null, blFilter: 'all', alFilter: 'all', aiDomainFilter: null, aiListFilter: 'all', aiPromptSel: [], crawlCfg: null, crawlSaved: false, auPage: null, rules: null, termCampaign: null, cmpSearch: '', cmpOpenId: null, editBudgetId: null });
     this.fetchTab(this.state.tab, pid, this.state.range, false);
     if (this.state.tab !== 'alerts') this.fetchTab('alerts', pid, this.state.range, false);
     /* Freshness is per-project, so it has to be re-read here — otherwise every Data source

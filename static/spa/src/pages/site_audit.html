@@ -339,6 +339,16 @@
                 </sc-for>
                 <div onClick="{{ aiv.listsToggle }}" style="padding: 5px 12px; font-size: 12px; font-weight: 500; border-radius: 999px; cursor: pointer; color: #64748b; border: 1px dashed #cbd5e1;" style-hover="color:#0f172a">Manage lists</div>
               </div>
+            </div>
+
+            <!-- Filter by which domain an answer mentioned. Separate row from the list chips
+                 on purpose: they answer different questions, and stacking them in one row is
+                 what made the list chips read as a broken domain filter. -->
+            <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+              <span style="font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: #94a3b8;">Mentions</span>
+              <sc-for list="{{ aiv.domainChips }}" as="dc" hint-placeholder-count="3">
+                <div onClick="{{ dc.click }}" title="{{ dc.title }}" style="{{ dc.style }}">{{ dc.label }}</div>
+              </sc-for>
               <div style="display: flex; gap: 10px; align-items: center;">
                 <sc-if value="{{ aiv.runListShown }}" hint-placeholder-val="{{ false }}">
                   <div onClick="{{ aiv.runList }}" style="{{ aiv.runListStyle }}" style-hover="background:#fee2e2">{{ aiv.runListLabel }}</div>
@@ -375,7 +385,7 @@
             </sc-if>
             <sc-if value="{{ aiv.promptEmptyFiltered }}" hint-placeholder-val="{{ false }}">
               <div style="border-radius: 12px; background: white; border: 1px dashed #cbd5e1; padding: 28px 20px; text-align: center;">
-                <p style="font-size: 13px; color: #94a3b8; margin: 0;">This list is empty — add prompts to it with “+ Add prompts”.</p>
+                <p style="font-size: 13px; color: #94a3b8; margin: 0;">{{ aiv.promptEmptyMsg }}</p>
               </div>
             </sc-if>
             <sc-if value="{{ aiv.hasPrompts }}" hint-placeholder-val="{{ true }}">

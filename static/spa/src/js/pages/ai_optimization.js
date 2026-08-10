@@ -112,9 +112,17 @@
         const kpi = d.kpis;
         const prompts = d.prompts;
         const listName = lid => (d.lists.find(l => l.id === lid) || { name: '—' }).name;
-        const overCap = d.budget.spent / d.budget.cap;
-        aiv.budgetLabel = 'AI spend ' + this.money(d.budget.spent) + ' of ' + this.money(d.budget.cap) + ' cap';
-        aiv.budgetStyle = { fontSize: '12px', fontWeight: 600, padding: '4px 10px', borderRadius: '6px', background: overCap >= 0.8 ? '#fee2e2' : '#f1f5f9', color: overCap >= 0.8 ? '#b91c1c' : '#475569' };
+        /* A cap of 0 means NO CAP IS CONFIGURED, which is most projects. Dividing by it gives
+           Infinity, and `Infinity >= 0.8` is true — so every project that had never set a cap
+           wore the alarm-red "AI spend $0.00 of $0.00 cap" chip, which is both a false alarm
+           and a nonsense sentence. Unconfigured now reports spend alone, in the neutral style. */
+        const hasCap = d.budget.cap > 0;
+        const overCap = hasCap ? (d.budget.spent / d.budget.cap) : 0;
+        const nearCap = hasCap && overCap >= 0.8;
+        aiv.budgetLabel = hasCap
+          ? 'AI spend ' + this.money(d.budget.spent) + ' of ' + this.money(d.budget.cap) + ' cap'
+          : 'AI spend ' + this.money(d.budget.spent) + ' · no cap set';
+        aiv.budgetStyle = { fontSize: '12px', fontWeight: 600, padding: '4px 10px', borderRadius: '6px', background: nearCap ? '#fee2e2' : '#f1f5f9', color: nearCap ? '#b91c1c' : '#475569' };
         aiv.nextRunLabel = d.next_run ? ('Runs weekly · next ' + d.next_run) : 'Runs weekly · not yet scheduled';
         /* THE RUN IS SERVER STATE. `d.run` is the task the worker process updates, so a run
            in flight survives switching tabs, reloading the page and the death of the worker
@@ -205,7 +213,9 @@
           aiv.visSetupMsg = 'No AI visibility data yet — press Refresh to take the first weekly snapshot.';
           aiv.visNoCompsMsg = 'Add competitors under Targets to see share of voice.';
           aiv.visNoPagesMsg = 'AI has not cited any of your pages yet.';
-          const maxSov = Math.max.apply(null, sov.rows.map(r => r.sov)) || 1;
+          /* `Math.max.apply(null, [])` is -Infinity, which is TRUTHY — so `|| 1` never fired
+             and every bar width became NaN%. Guard the empty array, not the falsy result. */
+          const maxSov = sov.rows.length ? (Math.max.apply(null, sov.rows.map(r => r.sov)) || 1) : 1;
           aiv.sovPct = sov.you + '%';
           // delta is null until a second weekly snapshot exists. Printing "+0 pts vs. last
           // week" would assert we measured last week when we did not.
@@ -258,7 +268,8 @@
             url: pg2.url, mentions: pg2.mentions, imprFmt: this.fmt(pg2.impressions),
             platforms: pg2.platforms.join(' · ') || '—'
           }));
-          const maxShare = Math.max.apply(null, d.topDomains.map(dm => dm.share)) || 1;
+          // Same -Infinity-is-truthy trap as maxSov above.
+          const maxShare = d.topDomains.length ? (Math.max.apply(null, d.topDomains.map(dm => dm.share)) || 1) : 1;
           aiv.topDomains = d.topDomains.map((dm, i2) => ({
             rank: i2 + 1, domain: dm.domain, shareFmt: dm.share + '%', mentionsFmt: this.fmt(dm.mentions),
             nameStyle: { fontSize: '13px', fontWeight: dm.isYou ? 700 : 500, color: dm.isYou ? '#4338ca' : '#334155', flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
@@ -381,8 +392,81 @@
             if (r.mentioned) return { label: 'Mentioned', style: pill('#dbeafe', '#1d4ed8') };
             return { label: 'Not mentioned', style: pill('#fee2e2', '#b91c1c') };
           };
-          const visPrompts = prompts.filter(pr => s.aiListFilter === 'all' || pr.listId === s.aiListFilter);
+          /* --- domain filter (You + each competitor) ---
+             This did not exist before, and its absence is why the list chips above read as a
+             broken domain filter: they sit exactly where a domain tab-bar would, so clicking
+             one and getting unrelated prompts looked like the domain filter was ignoring the
+             domain. Two rules, both pinned by static/spa/tests/ai_domain_filter.test.js:
+               - the predicate tests membership of the SELECTED domain in THIS prompt's mention
+                 set. "Has any mention" is the reported bug -- it returns every prompt that
+                 mentions anybody the moment you click one competitor.
+               - it ANDs with the list filter rather than replacing it.
+             A prompt that has never been run mentions nothing and belongs to no chip: an unrun
+             prompt is an absence of evidence, not evidence of absence. */
+          const YOU_KEY = '__you';
+          const mentionSetOf = (pr) => {
+            const set = {};
+            const results = (pr && pr.results) || {};
+            Object.keys(results).forEach(k => {
+              const r2 = results[k];
+              if (!r2 || r2.state !== 'checked') return;   // error / not_connected observed nothing
+              if (r2.mentioned || r2.cited) set[YOU_KEY] = 1;
+              ((r2 && r2.competitors) || []).forEach(c2 => { if (c2 && c2.name) set[c2.name] = 1; });
+            });
+            return set;
+          };
+          const matchesDomain = (pr, domain) => {
+            if (!domain) return true;
+            return !!mentionSetOf(pr)[domain];
+          };
+
+          const listOf = pr => (s.aiListFilter === 'all' || pr.listId === s.aiListFilter);
+          const domFilter = s.aiDomainFilter || null;
+          const listPrompts = prompts.filter(listOf);
+          const visPrompts = listPrompts.filter(pr => matchesDomain(pr, domFilter));
+
+          /* Chips are built over the LIST-filtered set, so each count answers "how many of the
+             prompts I can currently see mention this domain" rather than a number that does not
+             match the table under it. Competitors no longer in Targets still get a chip while
+             stored answers reference them -- greyed, because removing a competitor should not
+             make the history that mentions it unreachable. */
+          const trackedComps = ((d.targets && d.targets.competitors) || []).slice();
+          const domCounts = {};
+          listPrompts.forEach(pr => {
+            const set = mentionSetOf(pr);
+            Object.keys(set).forEach(k => { domCounts[k] = (domCounts[k] || 0) + 1; });
+          });
+          const seenComps = Object.keys(domCounts).filter(k => k !== YOU_KEY);
+          const compOrder = trackedComps.concat(seenComps.filter(c2 => trackedComps.indexOf(c2) === -1));
+          const dBase = { padding: '5px 12px', fontSize: '12px', fontWeight: 500, borderRadius: '999px', cursor: 'pointer', color: '#64748b', border: '1px solid #e2e8f0', background: 'white' };
+          const dActive = Object.assign({}, dBase, { borderColor: '#4f46e5', color: '#4f46e5', background: '#eef2ff', fontWeight: 600 });
+          const dStale = Object.assign({}, dBase, { color: '#94a3b8', borderStyle: 'dashed' });
+          const pickDomain = (val) => this.setState({
+            /* Reset the selection too: a prompt selected under one domain then filtered out of
+               view would otherwise stay in aiPromptSel and be silently included by a bulk run. */
+            aiDomainFilter: val, aiPromptSel: []
+          });
+          aiv.domainChips = [{ key: null, label: 'Any domain', n: listPrompts.length, stale: false }]
+            .concat([{ key: YOU_KEY, label: (project && project.domain) || 'You', n: domCounts[YOU_KEY] || 0, stale: false }])
+            .concat(compOrder.map(c2 => ({
+              key: c2, label: c2, n: domCounts[c2] || 0,
+              stale: trackedComps.indexOf(c2) === -1,
+            })))
+            .map(c2 => ({
+              label: c2.key === null ? c2.label : c2.label + ' (' + c2.n + ')',
+              title: c2.stale ? c2.label + ' is no longer a tracked competitor, but stored answers still mention it' : '',
+              style: domFilter === c2.key ? dActive : (c2.stale ? dStale : dBase),
+              click: () => pickDomain(c2.key),
+            }));
+
           aiv.promptEmptyFiltered = prompts.length > 0 && visPrompts.length === 0;
+          /* Empty-because-nobody-mentions-it and empty-because-nothing-has-run are different
+             facts, and the second one is actionable. */
+          const unrunInList = listPrompts.filter(pr => Object.keys(mentionSetOf(pr)).length === 0).length;
+          aiv.promptEmptyMsg = !domFilter
+            ? 'No prompts in this list yet.'
+            : ('No run prompts mention ' + (domFilter === YOU_KEY ? ((project && project.domain) || 'your domain') : domFilter)
+               + (unrunInList ? ' — ' + unrunInList + ' prompt' + (unrunInList === 1 ? ' has' : 's have') + ' not been run yet.' : '.'));
 
           /* --- select + bulk remove --- */
           const promptSel = s.aiPromptSel || [];
@@ -433,7 +517,12 @@
             const metaParts = [];
             const flt2 = d.lists.find(l => l.id === pr.listId);
             if (flt2) metaParts.push(flt2.name);
-            metaParts.push(pr.cfg.models.length + ' model' + (pr.cfg.models.length === 1 ? '' : 's'));
+            /* Guarded like every other read of this field. `tracked_models` is genuinely null
+               on a prompt whose config has never been saved, and an unguarded read here does
+               not blank one cell — it throws inside renderVals() and takes the whole SPA down
+               (skills.md §10 records that exact outage). */
+            const nModels = modelsOf(pr).length;
+            metaParts.push(nModels + ' model' + (nModels === 1 ? '' : 's'));
             metaParts.push(pr.cfg.cadence);
             if (pr.cfg.city || pr.cfg.country) metaParts.push(pr.cfg.city || pr.cfg.country);
             metaParts.push(pr.lastRun ? 'last run ' + String(pr.lastRun).replace('T', ' ').slice(0, 16) : 'not run yet');
@@ -463,7 +552,7 @@
               run: e => { e.stopPropagation(); if (!running && unrunOf(pr).length) this.aiRun({ promptId: pr.id }); },
               rerunTitle: 'Re-run this prompt on every tracked engine · ' + costOf(modelsOf(pr).length),
               rerun: e => { e.stopPropagation(); if (!running) this.aiRun({ promptId: pr.id, force: true }); },
-              cfgOpen: e => { e.stopPropagation(); this.setState({ aiCfgOpen: pr.id, aiCfgDraft: Object.assign({}, pr.cfg, { models: pr.cfg.models.slice(), listId: pr.listId, text: pr.text }) }); },
+              cfgOpen: e => { e.stopPropagation(); this.setState({ aiCfgOpen: pr.id, aiCfgDraft: Object.assign({}, pr.cfg, { models: modelsOf(pr).slice(), listId: pr.listId, text: pr.text }) }); },
               remove: e => { e.stopPropagation(); this.aiRemovePrompts([pr.id]); }
             };
           });
