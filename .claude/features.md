@@ -960,7 +960,8 @@ Perplexity) and manage the prompts you want to monitor.
    mentions trend chart — the chart itself has no series to plot yet, see Edge cases; your
    most-cited pages; and the domains dominating AI answers, tagged *You* / *Competitor*.
 2. **Prompts** — a **Prompt Explorer** (seed terms → template-expanded prompt ideas, selectable
-   and addable to a list), list-filter chips, a list manager (create / rename / delete), a
+   and addable to a list), list-filter chips, a **domain-filter chip row** (see below), a
+   list manager (create / rename / delete), a
    **composer** for adding prompts in bulk with suggestion shortcuts, and the main
    **Tracked Prompts × LLMs** grid — one row per prompt, one column per model. Each cell states
    its real observed state: `off` (model untracked), `Not run` (tracked, never checked),
@@ -982,6 +983,18 @@ Perplexity) and manage the prompts you want to monitor.
    prompt — the composer, the AI Keywords bulk-add, `_handle_setup`'s wizard seeding — sets
    `tracked_models` to `connectable_platforms()`, so a newly added prompt is runnable
    immediately rather than showing "0 models" and being silently skipped by `run_prompt_checks`.
+   **Filter by mentioned domain** (added 2026-08-10, `aiDomainFilter`): a second chip row —
+   *Any domain* / your own domain / one chip per competitor, each with a count — filters the
+   grid to prompts whose **stored answers mention that specific domain**. It is a separate row
+   from the list chips on purpose: the two answer different questions, and the list chips
+   sitting where a domain bar would sit is exactly why their behaviour was reported as a broken
+   domain filter. Two invariants, pinned by `static/spa/tests/ai_domain_filter.test.js`: the
+   predicate matches the **selected** domain only (never "mentions anybody"), and it **ANDs**
+   with the list filter rather than replacing it. A prompt that has never been run belongs to
+   no chip, and the empty state distinguishes "nothing mentions this domain" from "N prompts
+   have not been run yet". A competitor removed from Targets keeps a greyed chip while stored
+   answers still name it. Selecting a domain clears the row selection, so a row selected under
+   one domain cannot be silently swept into a bulk run it is no longer visible for.
 3. **AI Keywords** — how people ask AI about your topics: keyword, AI volume, Google volume, an
    AI-share ratio, a 12-month sparkline, intent, and your mention count. Segment chips
    (All / AI-heavy / Gaps / Mentioned), a search box, multi-select with bulk *add as prompts to a

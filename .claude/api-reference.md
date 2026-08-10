@@ -1581,8 +1581,14 @@ Body `{"target": "example.com/path", "location": "United States", "project": "<s
 The view is a passthrough. All of the logic — the caches, the spend gate, the tracked-keyword
 join, the backlink sections — lives in `apps/dashboard/services/domain_overview_service.py`.
 
-**Spend gate.** Every metered live lookup now calls
-`pipeline.connectors.dataforseo_cost.ensure_budget()` before constructing a connector. When
+**Spend gate.** Three of the four live lookups call
+`pipeline.connectors.dataforseo_cost.ensure_budget()` before constructing a connector:
+`/api/domain-overview`, `/api/research` and `/api/live-serp`. `/api/connection-check` is
+deliberately **not** gated — its DataForSEO probe is the free `appendix/user_data` balance call,
+so refusing it would block credential setup to save nothing, and a user who cannot verify
+credentials cannot fix their spend either. (`/api/research` is the most expensive of the four:
+one press fans out to `keyword_ideas`, `related_keywords`, `keyword_suggestions` and question
+ideas, several of them one metered task *per seed*.) When
 the monthly cap is configured (`DATAFORSEO_MONTHLY_BUDGET` > 0, the default is 100) and
 month-to-date spend has reached it, the response is a **200** with
 `{"status": "error", "error": "Monthly DataForSEO budget reached — raise it in Settings to
