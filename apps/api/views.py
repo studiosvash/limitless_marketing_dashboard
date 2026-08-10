@@ -742,16 +742,27 @@ class ProjectAIActionView(APIView):
         # so clearing the box by accident can never wipe out the tracked question.
         cfg = request.data.get("cfg", {})
         prompt_id = request.data.get("id")
-        update_fields = {"tracked_models": cfg.get("models", [])}
+        # Only touch tracked_models when the caller actually sent it. `cfg.get("models", [])`
+        # made every partial save a WIPE: a body that changed only the cadence, or only the
+        # list, cleared the model list to [] -- which renders every grid cell "off" and makes
+        # the run planner skip the prompt entirely, so a prompt silently stopped being checked
+        # after an unrelated settings edit. Same shape as the credentials-branch bug in
+        # settings_service (skills.md §9): forward the keys present, never a default.
+        update_fields = {}
+        if "models" in cfg:
+            update_fields["tracked_models"] = cfg.get("models") or []
         list_id = request.data.get("listId")
         if list_id is not None:
             update_fields["list_id"] = list_id
         text = request.data.get("text")
         if isinstance(text, str) and text.strip():
             update_fields["text"] = text.strip()
-        updated = AIPrompt.objects.filter(site_url=site_id, id=prompt_id).update(
-            **update_fields
-        )
+        # A body carrying only cadence/country/city/webSearch leaves update_fields empty, and
+        # `.update()` with no kwargs is a SQL statement with an empty SET clause. Those keys are
+        # still a real save -- they round-trip through set_prompt_cfg below -- so existence is
+        # checked directly rather than inferred from an update count that would always be 0.
+        rows = AIPrompt.objects.filter(site_url=site_id, id=prompt_id)
+        updated = rows.update(**update_fields) if update_fields else rows.exists()
         if not updated:
             return Response({"detail": "Prompt not found"}, status=404)
 

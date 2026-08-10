@@ -298,6 +298,48 @@ class AIPromptsConfigActionTests(APITestCase):
         prompt.refresh_from_db()
         self.assertEqual(prompt.tracked_models, ["chatgpt"])
 
+    def test_a_cfg_without_a_models_key_leaves_tracked_models_alone(self):
+        """The second half of the same bug: `cfg.get("models", [])` supplied a DEFAULT.
+
+        The earlier fix stopped reading a top-level key, but still defaulted a MISSING
+        cfg.models to []. So any partial save -- changing only the cadence, only the city, only
+        the list -- cleared the model list. An empty tracked_models renders every grid cell
+        "off" and makes the run planner skip the prompt, so the prompt silently stopped being
+        checked after an edit that had nothing to do with models.
+        """
+        prompt = AIPrompt.objects.create(site_url=SITE_URL, text="best iv therapy",
+                                          tracked_models=["chatgpt", "claude"])
+        resp = self.client_auth.post(
+            "/api/projects/fusehealth/ai/prompts-config",
+            {"id": prompt.id, "cfg": {"cadence": "daily", "country": "US"}, "listId": None},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 200)
+        prompt.refresh_from_db()
+        self.assertEqual(prompt.tracked_models, ["chatgpt", "claude"])
+
+    def test_an_explicitly_empty_models_list_is_still_honoured(self):
+        """Untracking every model is a real thing to want; only ABSENCE means "don't touch"."""
+        prompt = AIPrompt.objects.create(site_url=SITE_URL, text="best iv therapy",
+                                          tracked_models=["chatgpt"])
+        resp = self.client_auth.post(
+            "/api/projects/fusehealth/ai/prompts-config",
+            {"id": prompt.id, "cfg": {"models": []}, "listId": None},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 200)
+        prompt.refresh_from_db()
+        self.assertEqual(prompt.tracked_models, [])
+
+    def test_an_unknown_prompt_still_404s_on_a_cfg_only_save(self):
+        """The existence check replaced an update count that would now always be 0."""
+        resp = self.client_auth.post(
+            "/api/projects/fusehealth/ai/prompts-config",
+            {"id": 999999, "cfg": {"cadence": "daily"}, "listId": None},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 404)
+
     def test_config_save_can_edit_the_prompt_text(self):
         prompt = AIPrompt.objects.create(site_url=SITE_URL, text="best iv therapy")
         resp = self.client_auth.post(
