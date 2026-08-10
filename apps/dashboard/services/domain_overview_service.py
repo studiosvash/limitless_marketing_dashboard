@@ -94,6 +94,13 @@ def fetch_keywords_block(target: str, location: str, site_id: str = "",
     if not allow_fetch:
         return None
 
+    # The spend gate. Refuse BEFORE constructing the connector, so a refusal cannot be
+    # confused with a call that went out and failed.
+    from pipeline.connectors.dataforseo_cost import ensure_budget
+    refusal = ensure_budget()
+    if refusal is not None:
+        return refusal
+
     from pipeline.connectors.dataforseo_domain_overview import DataForSEODomainOverviewConnector
     connector = DataForSEODomainOverviewConnector()
     result = connector.get_domain_overview(target, location, limit=KEYWORDS_LIMIT, site_id=site_id)

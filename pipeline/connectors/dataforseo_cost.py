@@ -102,3 +102,64 @@ def record_cost(connector: str, site_id: Optional[str], cost: float,
         logger.warning(f"[{connector}] budget notification check failed: {exc}")
 
     return amount
+
+
+# ---------------------------------------------------------------------------------------
+# The spend gate.
+#
+# check_and_notify_budget() above only NOTIFIES. Until this existed, nothing anywhere
+# refused a call once the cap was crossed except start_sync_run()'s paywall -- which covers
+# background syncs and nothing else. The four sanctioned live-lookup endpoints
+# (/api/research, /api/domain-overview, /api/live-serp, /api/connection-check) are
+# user-pressed buttons with no such guard, so a repeatedly-pressed lookup was an uncapped
+# spend vector: every press billed, every press fired one more notification, and the money
+# kept going out.
+#
+# `ensure_budget()` is the shared check. It deliberately answers with a value rather than
+# raising, because a service function in this codebase does not raise (skills.md 2.6) and
+# because the live-lookup endpoints already speak {"status": "error", "error": ...} at 200.
+# ---------------------------------------------------------------------------------------
+
+BUDGET_REACHED_MESSAGE = (
+    "Monthly DataForSEO budget reached — raise it in Settings to continue"
+)
+
+
+def ensure_budget() -> Optional[dict]:
+    """Return None when a metered live lookup may proceed, or a refusal dict when it may not.
+
+    A cap of 0 or less means NO CAP IS CONFIGURED, and nothing changes for that deployment:
+    the lookup runs exactly as it did before this function existed. That is the same reading
+    `budget_status()` gives the value (`pct` is 0 when `cap` is 0) and it is the only way to
+    opt out, since DATAFORSEO_MONTHLY_BUDGET otherwise defaults to $100.
+
+    Never raises. If the budget cannot be read at all -- no database, a migration mid-flight
+    -- the answer is "proceed": failing a lookup the user asked for because the BOOKKEEPING
+    broke would be strictly worse than not knowing the balance, which is the same rule
+    record_cost() above already follows.
+    """
+    try:
+        from apps.dashboard.services.budget_service import budget_status
+        status = budget_status()
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning(f"budget gate skipped (status unreadable): {exc}")
+        return None
+
+    try:
+        cap = float(status.get("cap") or 0)
+    except (TypeError, ValueError):
+        return None
+    if cap <= 0:
+        return None
+    if not status.get("exceeded"):
+        return None
+
+    return {
+        "status": "error",
+        "error": BUDGET_REACHED_MESSAGE,
+        # A distinct flag, not just prose: the SPA needs to tell "we refused to spend" apart
+        # from "DataForSEO returned an error", and only the first one is fixable in Settings.
+        "budget_exceeded": True,
+        "spent": status.get("spent"),
+        "cap": cap,
+    }
