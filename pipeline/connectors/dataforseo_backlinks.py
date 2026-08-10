@@ -76,7 +76,7 @@ class DataForSEOBacklinksConnector(BaseConnector):
 
     @with_retry(max_retries=3, base_delay=5.0)
     def fetch(self, site_id: Optional[str] = None, limit: Optional[int] = None,
-              dofollow_only: bool = True) -> list[dict]:
+              dofollow_only: bool = False) -> list[dict]:
         """Fetch live backlinks using DataForSEO Backlinks Live endpoint.
 
         `limit` is the row count DataForSEO BILLS for, not a display cap -- the Backlinks API
@@ -85,10 +85,27 @@ class DataForSEOBacklinksConnector(BaseConnector):
         Domain Overview lookup, which buys an arbitrary domain's profile the moment somebody
         types one in. The sync path keeps 1000 by default; Domain Overview passes 100.
 
-        `dofollow_only` keeps the sync's long-standing filter. Domain Overview turns it off:
-        that lookup exists partly to show a spam-score breakdown, and a spam review that
-        silently drops every nofollow link is a review of the half of the profile least
-        likely to be spam.
+        `dofollow_only` now defaults to FALSE, which reverses the sync's long-standing
+        behaviour. The filter used to be hardcoded, so every stored profile was dofollow-only
+        -- and the Backlinks page has a "Nofollow" filter chip and a Follow column on the
+        referring-domain rollup, both of which could therefore only ever render the dofollow
+        half of reality. The chip's empty state was structural: no site's link profile could
+        have made it show a row. Nothing in the UI has to change to fix that; the rows already
+        carry a `dofollow` flag and the filter already reads it. Same argument Domain Overview
+        already made when it turned the filter off for its spam breakdown -- a review that
+        silently drops every nofollow link is a review of the half of the profile least likely
+        to be spam. A caller that genuinely wants dofollow-only can still pass True.
+
+        `mode` is now sent explicitly. It was unset, and DataForSEO's documented default is
+        `as_is` (all backlinks), so nothing was actually wrong -- but the other two values are
+        `one_per_domain` and `one_per_anchor`, and `one_per_domain` returns exactly one row per
+        referring domain. That would defeat the per-source-page unique key completely while
+        looking like a perfectly healthy sync, so the answer should not depend on a remote
+        default nobody in this codebase controls.
+
+        There is deliberately NO offset/pagination loop here. The Backlinks API meters per
+        RETURNED row, so paging past `limit` multiplies the price of a sync linearly with no
+        cap; if one is ever added it belongs behind a setting that defaults to off.
         """
         target = site_id.replace("sc-domain:", "").replace("https://", "").replace("http://", "").rstrip("/") if site_id else self.clean_target
         if limit is None:
@@ -98,6 +115,11 @@ class DataForSEOBacklinksConnector(BaseConnector):
         payload = [{
             "target": target,
             "limit": limit,
+            # Verified against DataForSEO's own docs for backlinks/backlinks/live: allowed
+            # values are as_is | one_per_domain | one_per_anchor, default as_is. Stated here
+            # rather than inherited, because one_per_domain is one word away and would silently
+            # undo the per-source-page key.
+            "mode": "as_is",
             "include_subdomains": True,
             "order_by": ["rank,desc"]
         }]
