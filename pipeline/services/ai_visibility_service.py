@@ -17,14 +17,30 @@ Design notes, so nothing here is mistaken for a simulation:
   connector uses). It already includes the underlying model spend — no price table to keep
   current. An envelope with no charge reads as `None` (unknown), never a guess.
 
-* **What "cited" means.** Without web search the model returns prose, not sources — so
-  "cited" means the strictly weaker, fully determinable thing: *the brand appears as an item
-  of an enumerated/bulleted recommendation list in the answer*, and `position` is that item's
-  real ordinal. `mentioned` means it appears in the answer prose but not as a ranked item.
-  `absent` means it does not appear at all. `analyze_answer` itself is pure text analysis and
-  always returns `citations: []`; `check_prompt` then overwrites that with the *real* source
-  annotations DataForSEO returns when the prompt's `webSearch` option is on — verified
-  `{title, url}` pairs from the provider, never URLs scraped out of the prose.
+* **What "cited" means.** Two things earn it, and `position` means something slightly
+  different for each:
+
+  1. *A provider-verified source points at our host.* This is the real thing the word means,
+     and it is available only on a web-search-enabled check — `{title, url}` pairs DataForSEO
+     returns as `annotations`, never URLs scraped out of the prose (a URL a model writes in
+     prose is unverified and frequently hallucinated). `position` is the source's 1-based
+     number in the provider's list, i.e. the `[n]` the user sees.
+  2. *The brand appears as an item of an enumerated/bulleted recommendation list.* The
+     strictly weaker, fully determinable fallback for answers with no sources at all.
+     `position` is that item's real ordinal — its rank within the recommendation.
+
+  `mentioned` means it appears in the answer prose but neither of the above. `absent` means it
+  does not appear at all.
+
+  **Both are checked (changed 2026-08-10).** `analyze_answer` used to be pure *text* analysis
+  that always returned `citations: []`, with `check_prompt` assigning the real citations onto
+  the result *after* the verdict had already been decided — so an answer that cited
+  premierstaff.com while never writing the word "Premierstaff" scored `absent`, and the
+  strongest available form of AI visibility was the one form the page could not see. Citations
+  are now an input to the analysis; they are still only ever echoed back, never derived from
+  the answer text. Host matching is exact-or-subdomain, because a substring test finds
+  `premierstaff.com` inside `notpremierstaff.com` and inside a competitor's `/vs-premierstaff`
+  page.
 """
 from __future__ import annotations
 
@@ -285,15 +301,85 @@ def _paragraphs(text: str, needles: list[str]) -> list[dict]:
     return out
 
 
-def analyze_answer(answer: str, brand: str, aliases=(), competitors=()) -> dict:
-    """Pure text analysis of a real LLM answer — no network, no state. Split out from
-    `check_prompt` so the detection logic is testable without ever touching the OpenAI API."""
+def _citation_hit(citations, needles: list[str]) -> dict:
+    """Where (if anywhere) this entity appears in the answer's PROVIDER-VERIFIED sources.
+
+    Being a source an answer engine actually drew on is the strongest form of AI visibility
+    there is — stronger than being named in a sentence — and it was invisible to this module
+    until 2026-08-10: `analyze_answer` scored the text and `check_prompt` stapled the citations
+    on afterwards without revisiting the verdict, so an answer that cited premierstaff.com
+    while never writing the word "Premierstaff" scored `absent`.
+
+    Matching is on the URL's HOST, never a substring of the URL: a substring test finds
+    `premierstaff.com` inside `notpremierstaff.com`, and would also match a competitor's page
+    whose path happens to mention us (`.../vs-premierstaff`). A real subdomain does count.
+    Only hostname-shaped needles are used — a brand needle like "acme" must not match the host
+    `acme-lookalike.io`, and the domain needle covers the honest case anyway.
+
+    `position` is the source's 1-based number in the provider's own list, i.e. the [n] the user
+    sees next to it. A real property of the answer, not an estimate.
+    """
+    miss = {"mentioned": False, "cited": False, "position": None, "snippet": ""}
+    hosts = [n for n in (needles or []) if _HOSTNAME_RE.match(n)]
+    if not hosts or not citations:
+        return miss
+
+    for index, citation in enumerate(citations or [], start=1):
+        if not isinstance(citation, dict):
+            continue
+        url = str(citation.get("url") or "").strip().lower()
+        if not url:
+            continue
+        host = re.sub(r"^https?://", "", url).split("/")[0].split("?")[0].split("#")[0]
+        host = host.split("@")[-1].split(":")[0].strip().rstrip(".")
+        if not host:
+            continue
+        if host.startswith("www."):
+            host = host[4:]
+        for needle in hosts:
+            if host == needle or host.endswith("." + needle):
+                title = str(citation.get("title") or "").strip()
+                return {"mentioned": True, "cited": True, "position": index,
+                        "snippet": title or str(citation.get("url") or "")}
+    return miss
+
+
+def _merge_hits(text_hit: dict, citation_hit: dict) -> dict:
+    """One verdict from the two places an entity can appear.
+
+    The text hit wins its snippet when it has one — it carries the sentence the brand appeared
+    in, which a citation cannot — but a citation still upgrades a prose-only mention to
+    `cited`, and stands alone when the prose never names us at all.
+    """
+    if not citation_hit["cited"]:
+        return text_hit
+    if not text_hit["mentioned"]:
+        return citation_hit
+    return {
+        "mentioned": True,
+        "cited": True,
+        # An enumerated-list ordinal is about rank WITHIN the recommendation, which is the more
+        # useful reading when we have it; fall back to the source number.
+        "position": text_hit["position"] if text_hit["cited"] else citation_hit["position"],
+        "snippet": text_hit["snippet"] or citation_hit["snippet"],
+    }
+
+
+def analyze_answer(answer: str, brand: str, aliases=(), competitors=(), citations=()) -> dict:
+    """Pure analysis of a real LLM answer — no network, no state. Split out from `check_prompt`
+    so the detection logic is testable without ever touching the provider API.
+
+    `citations` are the provider-verified `{title, url}` sources of a web-search-enabled check.
+    They are optional and default to nothing, so every pure-text caller is unaffected.
+    """
     needles = target_needles(brand, aliases)
-    hit = _first_hit(answer, needles)
+    hit = _merge_hits(_first_hit(answer, needles), _citation_hit(citations, needles))
 
     competitor_hits = []
     for comp in competitors or ():
-        comp_hit = _first_hit(answer, _needles(comp))
+        comp_needles = _needles(comp)
+        comp_hit = _merge_hits(_first_hit(answer, comp_needles),
+                               _citation_hit(citations, comp_needles))
         if comp_hit["mentioned"]:
             competitor_hits.append({
                 "name": comp if isinstance(comp, str) else str(
@@ -319,11 +405,11 @@ def analyze_answer(answer: str, brand: str, aliases=(), competitors=()) -> dict:
         "snippet": hit["snippet"],
         "competitors": competitor_hits,
         "paragraphs": _paragraphs(answer, needles),
-        # Empty here, deliberately: this function is pure text analysis, and any URL the model
-        # happens to write in prose is unverified and frequently hallucinated. Real citations
-        # exist only as the source annotations DataForSEO returns on a web-search-enabled
-        # check — `check_prompt` fills them in from there, never from the answer text.
-        "citations": [],
+        # Echoed back, never invented: only the provider-verified sources the caller passed in.
+        # A URL the model writes in PROSE is unverified and frequently hallucinated, and is
+        # still never promoted to a citation here — `_extract_answer` reads these from
+        # DataForSEO's `annotations`, and nothing else may fill this list.
+        "citations": list(citations or []),
     }
 
 
@@ -568,9 +654,11 @@ def check_prompt(question: str, brand: str, aliases=(), competitors=(),
         # "your brand is absent" from an answer that does not exist would be a fabricated result.
         return _error_result(platform, model_used, "Provider returned an empty answer.")
 
-    analysis = analyze_answer(answer, brand, aliases, competitors)
-    # Real provider-verified sources (web-search checks only) — see _extract_answer.
-    analysis["citations"] = citations
+    # Citations go IN, rather than being stapled on afterwards. They used to be assigned to
+    # the result after the verdict had already been decided from the text alone, so an answer
+    # that cited our domain without ever writing the brand scored "absent" — the strongest
+    # kind of AI visibility read as the weakest.
+    analysis = analyze_answer(answer, brand, aliases, competitors, citations=citations)
     return {
         "ok": True,
         "state": "checked",

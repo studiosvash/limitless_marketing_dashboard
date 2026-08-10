@@ -851,7 +851,11 @@ def rescan_stored_answers(site_id: str) -> dict:
             # answer we no longer hold would invent a verdict.
             new_history.append(entry)
             continue
-        analysis = analyze_answer(answer, brand, aliases, competitors)
+        # The stored citations are re-scored too, so a re-scan can promote an answer that
+        # cited us without naming us — which is the whole class of answer the verdict used to
+        # miss. They are echoed straight back out, never re-derived from the prose.
+        analysis = analyze_answer(answer, brand, aliases, competitors,
+                                  citations=entry.get("citations") or [])
         rescanned += 1
         before = (entry.get("verdict"), bool(entry.get("mentioned")), bool(entry.get("cited")),
                   entry.get("position"), [c.get("name") for c in (entry.get("competitors") or [])])
