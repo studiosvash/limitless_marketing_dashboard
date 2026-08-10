@@ -116,10 +116,15 @@ def score_keyword_opportunities(rows: list[dict], limit: int = 25) -> list[dict]
             continue
         position = row.get("position")
         position = round(float(position)) if position is not None else None
-        volume = int(row.get("search_volume") or 0)
+        # None, not 0. `int(row.get("search_volume") or 0)` turned "we have never looked this
+        # keyword up" into "this keyword gets zero searches a month", and the rationale below
+        # then asserted the invention as fact ("volume 0/mo is 0% of your highest-volume
+        # tracked keyword"). A stored 0 is a real DataForSEO answer and survives as 0.
+        volume = row.get("search_volume")
+        volume = int(volume) if volume is not None else None
         if position is not None and position <= 3:
             continue                      # already top 3 — not "what to target next"
-        if position is None and volume <= 0:
+        if position is None and not volume:
             continue                      # no position and no volume = no evidence at all
         kd = row.get("keyword_difficulty")
         kd = float(kd) if kd is not None and kd != "" else None
@@ -138,7 +143,8 @@ def score_keyword_opportunities(rows: list[dict], limit: int = 25) -> list[dict]
     if not candidates:
         return []
 
-    max_volume = max(c["volume"] for c in candidates)
+    known_volumes = [c["volume"] for c in candidates if c["volume"] is not None]
+    max_volume = max(known_volumes) if known_volumes else 0
 
     scored = []
     for c in candidates:
@@ -150,7 +156,14 @@ def score_keyword_opportunities(rows: list[dict], limit: int = 25) -> list[dict]
             else f"No captured position ({proximity_phrase}) scores {proximity:.2f} on proximity"
         ]
 
-        if max_volume > 0:
+        if c["volume"] is None:
+            # Same rule the unknown-KD branch already follows: drop the component and
+            # renormalise the remaining weights. Scoring an unknown as 0 would rank a keyword
+            # nobody has priced below one measured at genuinely zero demand, which is backwards.
+            reasons.append("search volume unknown for this keyword — it has not been priced "
+                           "yet, so the volume component was dropped and its weight "
+                           "redistributed")
+        elif max_volume > 0:
             volume_component = c["volume"] / max_volume
             parts.append((_W_VOLUME, volume_component))
             reasons.append(
@@ -195,6 +208,27 @@ def score_keyword_opportunities(rows: list[dict], limit: int = 25) -> list[dict]
 
     scored.sort(key=lambda o: (-o["score"], o["position"] if o["position"] is not None else 999))
     return scored[:limit]
+
+
+def count_opportunities_awaiting_data(rows: list[dict]) -> int:
+    """How many keywords `score_keyword_opportunities` dropped for having no evidence at all.
+
+    Exactly the rows its `position is None and not volume` guard skips: no captured position
+    and no search volume, so there is nothing to score and an evidence-free row with a number
+    beside it is the failure mode skills.md rule 3 exists to prevent.
+
+    Dropping them is still right. Dropping them SILENTLY was not: a brand-new project consists
+    of nothing else, so the Opportunities card sat empty with no account of where the twelve
+    keywords the user had just tracked had gone. This is the count that lets the card say
+    "12 keywords awaiting first measurement" instead. Pure function of `rows`.
+    """
+    n = 0
+    for row in rows:
+        if not (row.get("keyword") or "").strip():
+            continue
+        if row.get("position") is None and not row.get("search_volume"):
+            n += 1
+    return n
 
 
 def persist_keyword_opportunities(site_id: str, opportunities: list[dict],
@@ -362,7 +396,7 @@ def build_positions_response(site_id: str, curr_start: date, curr_end: date,
     Both None means domain-wide — correct only for a caller that has no specific project.
     """
     from apps.dashboard.services.shared_queries import (
-        _get_ranking_distribution, _get_position_changes, _get_competitor_grid,
+        _diff_label, _get_ranking_distribution, _get_position_changes, _get_competitor_grid,
         _get_competitor_map,
     )
     from pipeline.services.saved_keyword_service import list_saved_keywords
@@ -493,7 +527,19 @@ def build_positions_response(site_id: str, curr_start: date, curr_end: date,
                 comps.append(c)
             comp_rows.append({"kw": kw, "you": row["you"], "comps": comps})
         else:
-            comp_rows.append({"kw": kw, "you": {"pos": r.get("position"), "prev": r.get("prev_position"), "diff": r.get("pos_change"), "direction": "up" if r.get("pos_change") and r.get("pos_change") > 0 else ("down" if r.get("pos_change") and r.get("pos_change") < 0 else "flat")}, "comps": [None] * len(domains)})
+            # `diff` is UNSIGNED and the direction carries the sign — `_diff_label` is the one
+            # place that decides both, and `_get_competitor_grid`'s own cells already come
+            # from it. This branch used to build `"diff": r["pos_change"]` straight from the
+            # signed change, while the renderer prints '▼' + diff verbatim: a keyword that had
+            # dropped three places rendered "▼-3", an arrow and a minus sign disagreeing about
+            # which way it had gone.
+            diff, direction = _diff_label(r.get("position"), r.get("prev_position"))
+            comp_rows.append({
+                "kw": kw,
+                "you": {"pos": r.get("position"), "prev": r.get("prev_position"),
+                        "diff": diff, "direction": direction},
+                "comps": [None] * len(domains),
+            })
 
     # Whether a rank connector has looked at each keyword, so the grid can hide only the
     # genuinely unmeasured ones. It used to hide every row whose own position was null, which
@@ -527,7 +573,16 @@ def build_positions_response(site_id: str, curr_start: date, curr_end: date,
         "top3": dist["top3"],
         "p4_10": dist["top10"] - dist["top3"],
         "p11_20": dist["top20"] - dist["top10"],
-        "p21_100": dist["total"] - dist["top20"],
+        # MEASURED ROWS ONLY. This was `dist["total"] - dist["top20"]`, where `total` is the
+        # size of the TRACKED LIST — so every keyword nobody had measured yet was asserted as a
+        # measured position somewhere between 21 and 100. A project tracking 40 keywords with 3
+        # measured, all top-10, rendered "21–100: 37": 37 positions that were never measured,
+        # while the very same rows appeared as never-measured in the "Newly Added" card on the
+        # same screen.
+        "p21_100": dist["p21_100"],
+        # Its own segment now, rather than being folded into a bucket it does not belong to.
+        # Tracked keywords with no captured position in this window.
+        "unmeasured": dist["unmeasured"],
     }
     movement = {
         "improved": changes["improved_count"],
@@ -541,6 +596,9 @@ def build_positions_response(site_id: str, curr_start: date, curr_end: date,
     # an external call, so the DB-first contract is intact — because keyword_opportunities is
     # the documented home for this answer and nothing had ever filled it.
     opportunities = score_keyword_opportunities(merged_kws_raw)
+    # Keywords the scorer had nothing to score (no position AND no volume). They used to
+    # vanish without trace, which on a brand-new project is the entire list.
+    opportunities_awaiting_data = count_opportunities_awaiting_data(merged_kws_raw)
     persist_keyword_opportunities(site_id, opportunities, site_pk=site_pk)
 
     # The project's own tracking preferences, so the workspace header can print what the user
@@ -557,6 +615,9 @@ def build_positions_response(site_id: str, curr_start: date, curr_end: date,
         # behind a live paid lookup (removed 2026-07-27) or a fabricated 0.
         "volume_coverage": volume_coverage,
         "opportunities": opportunities,
+        # How many tracked keywords the scorer could say nothing about, so the card can read
+        # "12 keywords awaiting first measurement" rather than just being mysteriously short.
+        "opportunities_awaiting_data": opportunities_awaiting_data,
         "project": project,
         "movers": movers,
         "rankings": rankings,

@@ -223,6 +223,7 @@ def _get_ranking_distribution(site_id: str, curr_start: date, curr_end: date,
         tracked_kws = load_tracked_keywords(site_id, location=location, site_pk=site_pk)
         if not tracked_kws:
             return {"total": 0, "top3": 0, "top10": 0, "top20": 0, "top50": 0, "top100": 0,
+                    "p21_100": 0, "unmeasured": 0,
                     "avg_position": 0, "total_clicks": 0, "total_impressions": 0, "visibility": None,
                     "top3_pct": 0, "top4_10_pct": 0, "top11_20_pct": 0, "rest_pct": 0}
 
@@ -252,17 +253,32 @@ def _get_ranking_distribution(site_id: str, curr_start: date, curr_end: date,
                 # No capture in the window at all: visibility is unknown (None → the UI's "—"),
                 # NOT 0 — 0 is reserved for "measured and ranks nowhere", which is information.
                 return {"total": len(tracked_kws), "top3": 0, "top10": 0, "top20": 0, "top50": 0, "top100": 0,
+                        "p21_100": 0, "unmeasured": len(tracked_kws),
                         "avg_position": 0, "total_clicks": 0, "total_impressions": 0, "visibility": None,
                         "top3_pct": 0, "top4_10_pct": 0, "top11_20_pct": 0, "rest_pct": 0}
 
             total = len(tracked_kws)
-            top3 = sum(1 for r in rows if r.avg_pos and r.avg_pos <= 3)
-            top10 = sum(1 for r in rows if r.avg_pos and r.avg_pos <= 10)
-            top20 = sum(1 for r in rows if r.avg_pos and r.avg_pos <= 20)
-            top50 = sum(1 for r in rows if r.avg_pos and r.avg_pos <= 50)
-            top100 = sum(1 for r in rows if r.avg_pos and r.avg_pos <= 100)
+            # `is not None`, not truthiness: 0 and 0.0 are falsy, so `if r.avg_pos and …`
+            # dropped a stored position of 0 out of every bucket while `positioned_rows` two
+            # lines below already used the correct idiom — the two disagreed about one row.
+            top3 = sum(1 for r in rows if r.avg_pos is not None and r.avg_pos <= 3)
+            top10 = sum(1 for r in rows if r.avg_pos is not None and r.avg_pos <= 10)
+            top20 = sum(1 for r in rows if r.avg_pos is not None and r.avg_pos <= 20)
+            top50 = sum(1 for r in rows if r.avg_pos is not None and r.avg_pos <= 50)
+            top100 = sum(1 for r in rows if r.avg_pos is not None and r.avg_pos <= 100)
 
             positioned_rows = [r for r in rows if r.avg_pos is not None]
+            # MEASURED POSITIONS ONLY. The caller used to derive its "21–100" bucket as
+            # `total - top20`, where `total` is the size of the TRACKED LIST — so every
+            # keyword nobody has measured yet was asserted on screen as a measured position
+            # somewhere between 21 and 100. A project tracking 40 keywords with 3 measured, all
+            # top-10, rendered "21–100: 37" while the same 37 rows sat in the "Newly Added"
+            # card as never measured, on the same screen.
+            p21_100 = sum(1 for r in positioned_rows if r.avg_pos > 20)
+            # Tracked keywords with no captured position in this window — either never
+            # rank-checked or checked and outside the captured depth. (The "Newly Added" card
+            # splits those two on `rank_checked_at`; here they are one honest "no position".)
+            unmeasured = max(total - len(positioned_rows), 0)
             avg_pos = sum(r.avg_pos for r in positioned_rows) / len(positioned_rows) if positioned_rows else 0
             total_clicks = sum(int(r.clicks or 0) for r in rows)
             total_impressions = sum(int(r.impressions or 0) for r in rows)
@@ -283,6 +299,8 @@ def _get_ranking_distribution(site_id: str, curr_start: date, curr_end: date,
             return {
                 "total": total,
                 "top3": top3, "top10": top10, "top20": top20, "top50": top50, "top100": top100,
+                "p21_100": p21_100,
+                "unmeasured": unmeasured,
                 "avg_position": round(avg_pos, 1),
                 "total_clicks": total_clicks,
                 "total_impressions": total_impressions,
@@ -295,6 +313,7 @@ def _get_ranking_distribution(site_id: str, curr_start: date, curr_end: date,
     except Exception as e:
         import logging; logging.getLogger(__name__).error(f"_get_ranking_distribution error: {e}", exc_info=True)
         return {"total": 0, "top3": 0, "top10": 0, "top20": 0, "top50": 0, "top100": 0,
+                "p21_100": 0, "unmeasured": 0,
                 "avg_position": 0, "total_clicks": 0, "total_impressions": 0, "visibility": None,
                 "top3_pct": 0, "top4_10_pct": 0, "top11_20_pct": 0, "rest_pct": 0}
 

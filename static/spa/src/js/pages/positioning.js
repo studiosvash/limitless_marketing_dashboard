@@ -553,7 +553,9 @@
           posStyle: this.posBadge(o.position != null ? o.position : null),
           typeLabel: o.type_label || '—',
           typeStyle: { display: 'inline-flex', alignItems: 'center', padding: '2px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: 600, background: tint[0], color: tint[1] },
-          volume: this.fmt(o.volume),
+          /* An unknown volume is an em dash, not a 0. The server used to fabricate the 0 (see
+             score_keyword_opportunities); now it sends null and this must not put the 0 back. */
+          volume: o.volume != null ? this.fmt(o.volume) : '—',
           kd: o.kd != null ? Math.round(o.kd) : '—',
           kdStyle: { fontSize: '13px', color: o.kd != null ? (o.kd < 30 ? '#10b981' : (o.kd < 60 ? '#f59e0b' : '#ef4444')) : '#cbd5e1' },
           gain: o.estimated_traffic_gain != null ? this.fmt(o.estimated_traffic_gain) : '—',
@@ -634,22 +636,45 @@
           srcKpis: this.srcBadge(null), srcDist: this.srcBadge(null), srcMovers: this.srcBadge(null),
           srcRankings: this.srcBadge(null), srcOpps: this.srcBadge(null), srcVisibility: this.srcBadge(null),
           volCoverage: { show: false, text: '', title: '' } };
-        vals.ptOpp = { rows: [], isEmpty: true, gridCols: '' };
+        vals.ptOpp = { rows: [], isEmpty: true, hasAwaiting: false, awaitingNote: '',
+                       gridCols: '' };
         vals.ptMap = buildMap(null);
         return vals;
       }
       const oppRows = buildOpps(data.opportunities);
+      /* Keywords the scorer had nothing to score: no captured position AND no search volume,
+         so there is no evidence to rank them on. They are still excluded — an evidence-free
+         row with a number beside it is exactly what this codebase forbids — but they are no
+         longer excluded SILENTLY. On a brand-new project they are the entire list, and the
+         card used to sit empty with no account of where the keywords had gone. */
+      const oppAwaiting = data.opportunities_awaiting_data || 0;
       vals.ptOpp = {
         rows: oppRows,
         isEmpty: oppRows.length === 0,
+        hasAwaiting: oppAwaiting > 0,
+        awaitingNote: oppAwaiting === 1
+          ? '1 keyword is awaiting its first measurement and has no search volume on record '
+            + 'yet, so it cannot be scored. Run a Positioning refresh to bring it in.'
+          : oppAwaiting + ' keywords are awaiting their first measurement and have no search '
+            + 'volume on record yet, so they cannot be scored. Run a Positioning refresh to '
+            + 'bring them in.',
         gridCols: 'minmax(200px, 2fr) 90px 150px 100px 80px 100px 80px'
       };
       vals.ptMap = buildMap(data.competitor_map);
       const dist = data.distribution;
-      const total = Math.max(1, dist.top3 + dist.p4_10 + dist.p11_20 + dist.p21_100);
+      /* "No position" is its OWN segment. p21_100 used to be `total - top20` on the server,
+         where total is the size of the tracked list — so every keyword nobody had measured was
+         drawn inside the 21–100 band, asserting a measured position for it. A project tracking
+         40 keywords with 3 measured, all top-10, showed "21–100: 37" beside a "Newly Added"
+         card listing those same 37 as never measured. The server now sends both numbers
+         separately and the bar draws both. `|| 0` covers a cached SPA against an older API. */
+      const distUnmeasured = dist.unmeasured || 0;
+      const total = Math.max(1, dist.top3 + dist.p4_10 + dist.p11_20 + dist.p21_100
+                                + distUnmeasured);
       const distDefs = [
         ['Top 3', dist.top3, '#10b981'], ['4–10', dist.p4_10, '#3b82f6'],
-        ['11–20', dist.p11_20, '#f59e0b'], ['21–100', dist.p21_100, '#cbd5e1']
+        ['11–20', dist.p11_20, '#f59e0b'], ['21–100', dist.p21_100, '#94a3b8'],
+        ['No position', distUnmeasured, '#e2e8f0']
       ];
       /* Provenance. This page's positions come from dataforseo_serp — the connector its own
          Refresh button actually runs. gsc_keywords used to be named here too (it also writes
@@ -685,9 +710,13 @@
            srcRankings names both lineages and reports whichever ran longest ago. */
         tracked: data.kpis.tracked, avgPos: data.kpis.avg_pos != null ? Math.round(data.kpis.avg_pos) : 0,
         traffic: this.fmt(data.kpis.est_traffic), impressions: this.fmt(data.kpis.impressions),
-        distSegs: distDefs.map(d => ({
-          count: d[1] > 0 ? d[1] : '',
-          style: { background: d[2], width: Math.max(4, Math.round((d[1] / total) * 100)) + '%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontSize: '12px', fontWeight: 700 }
+        /* Empty buckets are LEFT OUT of the bar (they stay in the legend, at 0). Every segment
+           got a 4% minimum width, which was tolerable with four buckets and misleading with
+           five: an empty band drew a coloured sliver carrying no label, which reads as a small
+           real value rather than as nothing. */
+        distSegs: distDefs.filter(d => d[1] > 0).map(d => ({
+          count: d[1],
+          style: { background: d[2], width: Math.max(4, Math.round((d[1] / total) * 100)) + '%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: d[2] === '#e2e8f0' ? '#475569' : 'white', fontSize: '12px', fontWeight: 700 }
         })),
         distLegend: distDefs.map(d => ({
           label: d[0], count: d[1],

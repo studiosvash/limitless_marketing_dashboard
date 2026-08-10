@@ -408,7 +408,7 @@ yet); `source` is always `"sync"` here.
 ```json
 {
   "kpis":            {"tracked", "avg_pos", "est_traffic", "impressions", "visibility"},
-  "distribution":    {"top3", "p4_10", "p11_20", "p21_100"},
+  "distribution":    {"top3", "p4_10", "p11_20", "p21_100", "unmeasured"},
   "movement":        {"improved", "declined", "added", "lost"},
   "competitors":     {"domains": ["a.com"], "rows": [{"kw", "you": cell, "comps": [cell|null]}]},
   "competitor_map":  {"status", "captured_date", "your_date", "keywords_captured",
@@ -416,6 +416,7 @@ yet); `source` is always `"sync"` here.
   "volume_coverage": {"tracked", "with_volume", "missing_volume",
                       "missing_keywords": ["kw"], "note": ""},
   "opportunities":   [opportunity],
+  "opportunities_awaiting_data": 12,
   "project":         {"search_engine", "device", "language", "location"},
   "movers":          [keyword],
   "rankings":        [keyword],
@@ -440,6 +441,28 @@ The window is anchored on `views.latest_ranking_anchor` whenever the project has
 only (the pre-2026-08-10 rule) left a stale project's workspace blank while its share-of-voice
 cards, which read the latest capture whenever it happened, showed real positions on the same
 screen.
+
+**`distribution` counts measured positions only** (changed 2026-08-10). `p21_100` was
+`total − top20`, where `total` is the size of the *tracked list* — so every keyword nobody had
+measured yet was asserted as a measured position between 21 and 100. A project tracking 40
+keywords with 3 measured, all top-10, rendered "21–100: 37" while those same 37 rows sat in the
+"Newly Added" card as never measured, on the same screen. `unmeasured` is now its own segment:
+tracked keywords with no captured position in the window, whether never rank-checked or checked
+and outside the captured depth (the "Newly Added" card splits those two on `rank_checked_at`).
+The five keys sum to `kpis.tracked`.
+
+**`opportunities_awaiting_data`** is how many tracked keywords the scorer had nothing to score —
+no captured position *and* no search volume. They are still excluded from `opportunities` (an
+evidence-free row with a number beside it is what rule 3 forbids), but they used to be excluded
+*silently*, which on a brand-new project is the entire list. `opportunity.volume` is `null` when
+unknown and `0` only when DataForSEO really reported 0; the scorer used to coerce the first into
+the second and then print "volume 0/mo is 0% of your highest-volume tracked keyword" as fact.
+
+A *cell*'s `diff` is **unsigned** and `direction` carries the sign, in every row including the
+fallback built for keywords the competitor grid has no cell for. That branch used to pass the
+signed `pos_change` straight through, and the renderer prints `▼` + `diff` verbatim — so a
+keyword that had dropped three places rendered `▼-3`. All cells now go through
+`shared_queries._diff_label`.
 
 Each keyword's `source` is `"new"` when it was tracked since the last positioning sync and has no
 `keyword_rankings` row in the current window at all — `"sync"` otherwise. `source` alone is NOT

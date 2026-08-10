@@ -272,6 +272,9 @@
                   </tbody>
                 </table>
               </div>
+              <sc-if value="{{ ptOpp.hasAwaiting }}" hint-placeholder-val="{{ false }}">
+                <div style="padding: 12px 20px; border-top: 1px solid #f1f5f9; background: #fffbeb; font-size: 12px; color: #92400e; line-height: 1.5;">{{ ptOpp.awaitingNote }}</div>
+              </sc-if>
               <div style="padding: 12px 20px; border-top: 1px solid #f1f5f9; background: #f8fafc; font-size: 12px; color: #94a3b8; line-height: 1.5;">Est. gain is "—" for every row on purpose: converting a position change into a click count needs a position-to-CTR curve, and there is no real one here. Search Console reports the clicks each keyword earned at the position it actually held, which says nothing about the position it has not held yet.</div>
             </div>
 
