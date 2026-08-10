@@ -1,5 +1,18 @@
 # Phase 1 — Project Identity & Data Integrity Implementation Plan
 
+> **STATUS: COMPLETE (2026-08-10).** All six tasks shipped — commits `88801d0`, `2ff6d73`,
+> `e95ebc5`, `88fc6ac`, `c817d78`. Kept as the record of what was changed and why.
+>
+> Deviations from the plan as written, all deliberate:
+> - **Task 4** ships without a backfill (the plan hedged): `keyword_opportunities` is a
+>   recomputed cache, so unowned legacy rows are dropped by the next persist rather than
+>   guessed into an owner. A backfill is for data someone would miss.
+> - **Task 4** also had to fix `ProjectClearDataView`, which deleted `tracked_competitors` and
+>   `keyword_opportunities` by `site_id` — not in the plan, found while tracing the new keys.
+> - **Task 5** widened `AdMetricDaily` too (16 read sites, not the 14 estimated).
+> - `pipeline/db/tests/test_schema.py::test_keyword_opportunity_unique_key` pinned the old key
+>   and was updated to assert the new one.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make every write path resolve a project by its primary key (`site_pk`), so edits can never land on a sibling project sharing the same domain, and make the Edit-modal keyword save stop destroying stored keyword metrics.

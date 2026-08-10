@@ -490,10 +490,19 @@ nobody had sent it, above a button offering to buy DataForSEO lookups for all of
 `location` cannot substitute: two projects on a domain may track the same market, and the wizard
 defaults every project to "United States".
 
-`POST`/`PUT /api/projects/<slug>/keywords` are scoped the same way. The `PUT` (bulk replace) now
-clears through `saved_keyword_service.clear_saved_keywords(site_id, site_pk)`; its own
+`POST`/`PUT /api/projects/<slug>/keywords` are scoped the same way. The `PUT` reconciles through
+`saved_keyword_service.reconcile_saved_keywords(site_id, rows, location, site_pk)`; an earlier
 `delete(SavedKeyword).where(site_id == …)` used to destroy every sibling project's tracked list
 and report only the rows it wrote back.
+
+**The same project-scoping applies to writes, not just reads.**
+`PUT /api/projects/<slug>/settings` passes `site_pk` into `apply_settings_update`, which resolves
+the target row by primary key and **refuses** on a pk/domain mismatch. It previously resolved
+with `select(Site).where(site_url == …).first()`, so on a duplicated domain the modal showed one
+project's values and the save rewrote the oldest sibling's row — reported as "editing a
+project's location removed my tracked keywords", on a project the user never opened.
+`tracked_competitors` and `keyword_opportunities` are now per-PROJECT tables too (keyed
+`site_pk`), as is the delete in `POST /api/projects/<slug>/clear-data`.
 
 Two behaviours worth knowing:
 
@@ -943,9 +952,22 @@ positions sync picks it up.
 
 ### `PUT /api/projects/<slug>/keywords`
 
-**Bulk replace.** Deletes every `SavedKeyword` for the site, then inserts the supplied list.
+**Reconcile by name** (changed 2026-08-10 — it used to clear and rewrite).
 Body: `{"keywords": [...], "location": "..."}`. A non-list `keywords` → **400**.
-Returns `{"ok": true, "count": <int>}`. An empty list is valid and clears all tracking.
+Returns `{"ok": true, "count": <int>, "added": <int>, "removed": <int>, "kept": <int>}`.
+An empty list is valid and clears all tracking (the SPA confirms before sending one).
+
+Identity is the cleaned, case-folded keyword. Keywords missing from the payload are deleted,
+new ones are inserted, and **surviving rows are never touched** — metrics on an incoming row
+apply only to keywords that are genuinely new, so the Keyword Explorer's send-to-project flow
+still stores real volume/KD/CPC/intent while a caller that has none cannot blank them.
+
+> Why it stopped being a bulk replace: the Edit Project modal has no metrics to send, so it
+> filled every row with `{volume: 0, kd: null, cpc: null, intent: "Informational"}`. Each
+> "Save Settings" press therefore overwrote every tracked keyword's real, DataForSEO-billed
+> search volume with a fabricated `0` and wiped its difficulty, CPC and intent. The `0` was
+> worse than a null — `_volume_coverage` counts only nulls, so `/positions` then reported
+> **full volume coverage over invented numbers**.
 
 > The incoming batch is logged at `DEBUG` through the module logger (it used to be a bare
 > `print`, which wrote user keyword data to stdout on every save and bypassed logging config).
