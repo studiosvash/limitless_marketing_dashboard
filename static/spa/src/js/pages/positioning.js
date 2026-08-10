@@ -65,8 +65,57 @@
                    + 'manage.py migrate_ranking_location.');
         return lines.join('\n');
       };
+      /* DUPLICATE PROJECT NAMES — a soft warning, mirroring
+         apps/dashboard/services/project_naming.find_project_name_conflicts (its docstring
+         carries the full reasoning). One domain registered as several projects, one per city,
+         is a supported setup, so this must never block a save. What it flags is the two shapes
+         that cost the user something:
+           * two projects on one domain with the SAME NAME — the switcher, the workspace header
+             and every export identify a project by its name, so the two rows are
+             indistinguishable exactly when the user most needs to tell them apart;
+           * two on one domain in the SAME LOCATION — they share site_id AND the location filter
+             every ranking read applies, so they read the same keyword_rankings rows and report
+             identical numbers under two names forever. Six Premierstaff projects did this.
+         Self-contained so tests/duplicate_name_warning.test.js can brace-match it. */
+      const ptDuplicateNameWarning = (projects, selfId, name, domain, location) => {
+        const fold = v => (v || '').trim().toLowerCase();
+        const host = d => fold(d).replace(/^https?:\/\//, '').replace(/^www\./, '')
+                             .replace(/\/.*$/, '');
+        const nameKey = fold(name);
+        const locKey = fold(location);
+        if (!nameKey && !locKey) return '';
+        const mine = host(domain);
+        if (!mine) return '';
+        const siblings = (projects || []).filter(p =>
+          p && p.id !== selfId && host(p.domain) === mine);
+        const sameName = siblings.filter(p => nameKey && fold(p.name) === nameKey);
+        const sameLoc = siblings.filter(p => locKey && fold(p.location) === locKey);
+        if (!sameName.length && !sameLoc.length) return '';
+        const lines = [];
+        if (sameName.length) {
+          lines.push('Another project on ' + mine + ' is already called "'
+            + (name || '').trim() + '" — '
+            + sameName.map(p => (p.location || 'no location')).join(', ') + '.');
+          lines.push('The project switcher, the workspace header and every export identify a '
+            + 'project by its name, so they will be indistinguishable.');
+        }
+        if (sameLoc.length) {
+          lines.push(sameName.length ? '' : null);
+          lines.push(sameLoc.map(p => '"' + p.name + '"').join(', ')
+            + ' already tracks ' + mine + ' in "' + (location || '').trim()
+            + '", so both projects read the same rankings and will report the same numbers '
+            + 'under two names.');
+        }
+        lines.push('');
+        lines.push('This is allowed — several projects per domain is a supported setup. '
+          + 'Save anyway?');
+        return lines.filter(l => l !== null).join('\n');
+      };
       vals.ptEditSave = () => {
         if (s.ptEditBusy) return;
+        const dupWarning = ptDuplicateNameWarning(
+          s.projects, s.projectId, s.ptEditName, s.ptEditDomain, s.ptEditLoc);
+        if (dupWarning && !window.confirm(dupWarning)) return;
         const locBefore = (s.ptEditLocInitial || '').trim();
         const locAfter = (s.ptEditLoc || '').trim();
         if (locBefore && locAfter && locBefore !== locAfter) {

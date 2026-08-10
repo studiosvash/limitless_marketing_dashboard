@@ -464,6 +464,18 @@ chips, and a full-text keyword list (one per line). The three selects are seeded
 row and saved back to it. Saving reconciles the tracked keyword list by name, saves competitors,
 location and the tracking-area choices, then automatically starts a `positions` sync.
 
+**Duplicate project names are warned about, never blocked** (added 2026-08-10). Registering one
+domain as several projects is a supported setup, so a name clash cannot be a hard rule. But two
+projects on one domain sharing a **name** are indistinguishable in the switcher, the workspace
+header and every export, and two sharing a **(domain, location)** pair read the same
+`keyword_rankings` rows and report identical numbers under two names — the shape that produced
+six Premierstaff projects with byte-identical figures. The Edit modal confirms through either.
+The authority is `apps/dashboard/services/project_naming.find_project_name_conflicts` (returns
+findings and a sentence, never a verdict, and degrades to "no warning" on any error — a naming
+hint must not stop a save); the modal mirrors its rules client-side against the already-loaded
+project list. **The project-creation and Settings save paths do not call it yet** — wiring them
+needs `settings_service.apply_settings_update` / `add_site`.
+
 **Changing the location confirms first** (added 2026-08-10). `sites.location` is a filter, not a
 label — every positioning read narrows to the project's current location — so changing it makes
 100% of the project's measured history unreadable in one click: Rankings Overview blanks, the
