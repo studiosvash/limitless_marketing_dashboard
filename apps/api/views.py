@@ -22,6 +22,8 @@ from pipeline.db.schema import (
     AIKeywordData, SavedKeyword, KeywordOpportunity
 )
 from pipeline.db.writer import ensure_tables
+# The spend gate every metered live lookup consults. A no-op when no cap is configured.
+from pipeline.connectors.dataforseo_cost import ensure_budget
 
 from apps.dashboard.services.overview_service import (
     get_kpi_raw, build_kpis_api, build_top_pages_api, query_daily_traffic_raw,
@@ -1369,10 +1371,23 @@ class ConnectionCheckView(APIView):
 # ---------------------------------------------------------------------------
 @method_decorator(login_not_required, name="dispatch")
 class KeywordResearchView(APIView):
+    """The most expensive of the four live lookups: one press fans out to keyword_ideas,
+    related_keywords, keyword_suggestions and question ideas, several of them one metered task
+    PER SEED. It is gated on the configured monthly cap for exactly that reason -- see
+    `ensure_budget`, which is a no-op for any deployment that has not set one.
+    """
     def post(self, request):
         site_id = resolve_project_or_404(request.data.get("project", "")).site_url
         keywords = request.data.get("keywords") or []
         location = request.data.get("location") or "United States"
+
+        refusal = ensure_budget()
+        if refusal:
+            # 200 with an error envelope, not a 4xx: this is the shape `run_keyword_research`
+            # itself returns for a failed lookup, and the Explorer already renders it. A refusal
+            # to SPEND is not a malformed request.
+            return Response({**refusal, "rows": [], "cost": 0.0, "location": location})
+
         return Response(run_keyword_research(site_id, keywords, location))
 
 
@@ -1449,6 +1464,14 @@ class LiveSERPView(APIView):
 
         if not keyword:
             return Response({"detail": "Keyword is required"}, status=400)
+
+        # Checked AFTER the cache-key inputs are validated but BEFORE the cache is read, so a
+        # refusal never depends on whether this particular keyword happens to be cached -- the
+        # answer to "may we spend?" must not vary with an unrelated cache hit. A cached result
+        # still costs nothing, but letting it through here would make the gate look flaky.
+        refusal = ensure_budget()
+        if refusal:
+            return Response({**refusal, "results": [], "keyword": keyword, "location": location})
 
         # Cache key deliberately excludes site_id: a SERP for a keyword+location is the same
         # result whoever asked, so sharing it across projects avoids paying twice. Note this
