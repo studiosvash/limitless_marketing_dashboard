@@ -615,7 +615,11 @@ def build_settings_response(site_id: str, site_pk: int | None = None) -> dict:
         "search_engine": (site.search_engine or "Google") if site else "Google",
         "device": (site.device or "Desktop") if site else "Desktop",
         "language": (site.language or "English") if site else "English",
-        "competitors": get_tracked_competitors(site_id),
+        # This project's override set, not the domain's — same site_pk reasoning as
+        # tracked_keywords below. Falls back to the resolved row's own id so a caller that
+        # passed only a site_id still reads one project's columns.
+        "competitors": get_tracked_competitors(
+            site_id, site_pk=site_pk or (site.id if site else None)),
         # This project's tracked list, not the domain's — see the site_pk comment on
         # SavedKeyword. Falls back to the resolved row's own id so a caller that passed only a
         # site_id still gets one project's list rather than every sibling's merged together.

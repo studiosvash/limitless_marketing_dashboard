@@ -44,9 +44,14 @@ class ProjectSerializer(serializers.Serializer):
             from apps.dashboard.services.shared_queries import _get_ranking_distribution, _get_position_changes
 
             curr_end = date.today()
-            curr_start = curr_end - timedelta(days=30)
+            # 28d, not 30d: the SPA's default range is '28d' (matching Search Console's
+            # own windows — see OverviewQuerySerializer). The project list's visibility
+            # must use the SAME window so the number here matches the workspace Overview.
+            # The old 30-day window silently disagreed with the workspace's 28-day default,
+            # which is what caused the team-lead-reported mismatch.
+            curr_start = curr_end - timedelta(days=28)
             prev_end = curr_start - timedelta(days=1)
-            prev_start = prev_end - timedelta(days=30)
+            prev_start = prev_end - timedelta(days=28)
 
             # Scope to THIS project's tracking location. These three numbers are the project
             # list's "keywords / up / down" columns, and several projects can share one

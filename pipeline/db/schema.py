@@ -634,11 +634,21 @@ class TrackedCompetitor(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     site_id = Column(String(255), nullable=False, index=True)
+    # The owning PROJECT, exactly as on SavedKeyword and for the same reason: one domain can be
+    # registered as several projects (`add_site(allow_duplicate=True)`), so `site_id` cannot
+    # identify whose override this is. Keyed on `site_id` alone, one project's competitor edit
+    # DELETED every sibling's list and the grid read back whichever set happened to be stored.
+    # `UNOWNED_SITE_PK` (0) is the pre-migration value `_backfill_tracked_competitor_projects`
+    # replaces; a DEFAULT is required because the column is part of a unique key.
+    site_pk = Column(Integer, nullable=False, index=True, default=UNOWNED_SITE_PK,
+                     server_default=str(UNOWNED_SITE_PK))
     competitor_domain = Column(String(255), nullable=False, index=True)
     added_at = Column(DateTime, server_default=func.now())
 
     __table_args__ = (
-        UniqueConstraint("site_id", "competitor_domain", name="uq_tracked_competitor_site"),
+        # RENAMED from uq_tracked_competitor_site: `_swap_unique_constraint` uses the name to
+        # decide whether a database has been reconciled onto the per-project key.
+        UniqueConstraint("site_pk", "competitor_domain", name="uq_tracked_competitor_project"),
     )
 
 
@@ -1083,6 +1093,18 @@ _SAVED_KEYWORD_PROJECT_KEY = (
     ("site_pk", "site_id", "keyword", "location"),
 )
 
+# `tracked_competitors.site_pk` — same migration shape as saved_keywords above, same reason: the
+# competitor override set belongs to a PROJECT, and keying it on the domain let one project's
+# edit replace its siblings'. See the column comment on TrackedCompetitor.
+_TRACKED_COMPETITORS_ADDED_COLUMNS = (
+    ("site_pk", "INTEGER", UNOWNED_SITE_PK),
+)
+
+_TRACKED_COMPETITOR_PROJECT_KEY = (
+    "tracked_competitors", "uq_tracked_competitor_site", "uq_tracked_competitor_project",
+    ("site_pk", "competitor_domain"),
+)
+
 
 def _alter_missing_columns(conn, table: str, specs) -> list[str]:
     """Add each missing column of `table` on the given Connection. Returns the names added.
@@ -1357,6 +1379,89 @@ def ensure_saved_keyword_project(session_or_engine) -> bool:
         return _do(conn)
 
 
+def _backfill_tracked_competitor_projects(conn) -> int:
+    """Give every unowned `tracked_competitors` row its owning project id. Returns the count.
+
+    Runs once per database, between the ALTER that adds `site_pk` and the constraint swap that
+    puts it in the unique key — the same sequence `_backfill_saved_keyword_projects` documents.
+
+    THE OWNERSHIP RULE: the OLDEST project on the row's domain takes it, with the domain matched
+    through `resolve_site_ids` so a row filed under `https://x.com/` still reaches the project
+    registered as `x.com` (skills.md §3). There is no location tiebreak here because this table
+    has no location column — and unlike saved_keywords there is nothing else to disambiguate
+    with, so the oldest project (the one that existed when the row was written, and whose edits
+    were landing on it under the old key anyway) is the only defensible owner.
+
+    A row whose `site_id` matches no project keeps `UNOWNED_SITE_PK`: inventing an owner could
+    hand one site's competitor set to another.
+    """
+    from collections import defaultdict
+
+    from pipeline.utils.site_ids import resolve_site_ids
+
+    inspector = inspect(conn)
+    if not inspector.has_table("tracked_competitors") or not inspector.has_table("sites"):
+        return 0
+
+    sites = conn.execute(text("SELECT id, site_url FROM sites ORDER BY id")).fetchall()
+    if not sites:
+        return 0
+
+    owners: dict[str, int] = {}                   # spelling -> oldest project id
+    for site_pk, site_url in sites:
+        for spelling in resolve_site_ids(site_url or ""):
+            owners.setdefault(spelling, site_pk)  # ORDER BY id, so the first seen is the oldest
+
+    rows = conn.execute(text(
+        "SELECT id, site_id FROM tracked_competitors "
+        "WHERE site_pk IS NULL OR site_pk = :unowned"
+    ), {"unowned": UNOWNED_SITE_PK}).fetchall()
+
+    updated = 0
+    for row_id, site_id in rows:
+        target = owners.get(site_id or "")
+        if target is None:
+            continue                              # orphaned spelling — left alone deliberately
+        conn.execute(text("UPDATE tracked_competitors SET site_pk = :pk WHERE id = :id"),
+                     {"pk": target, "id": row_id})
+        updated += 1
+    return updated
+
+
+def ensure_tracked_competitor_project(session_or_engine) -> bool:
+    """Move `tracked_competitors` onto its per-PROJECT key: add `site_pk`, fill it, key on it.
+
+    Idempotent and safe on every read path — it inspects first and issues nothing once the
+    database is reconciled. Called lazily from `competitor_service` for the same reason
+    `ensure_saved_keyword_project` is: `init_db()` is a management-command entry point, so a
+    deployed database would otherwise never acquire the column and every `select(...)` naming
+    it would fail with "no such column".
+
+    Returns True if this call changed anything. Never raises: a database left on the old key
+    still reads and writes, it just cannot separate two projects on one domain — the
+    pre-existing behaviour rather than a new failure.
+    """
+    def _do(conn) -> bool:
+        changed = False
+        try:
+            changed = bool(_alter_missing_columns(conn, "tracked_competitors",
+                                                  _TRACKED_COMPETITORS_ADDED_COLUMNS))
+            if _backfill_tracked_competitor_projects(conn):
+                changed = True
+            table, old_name, new_name, cols = _TRACKED_COMPETITOR_PROJECT_KEY
+            if _swap_unique_constraint(conn, table, old_name, new_name, cols):
+                changed = True
+        except Exception:
+            logger.error("[schema] could not move tracked_competitors onto its per-project key",
+                         exc_info=True)
+        return changed
+
+    if isinstance(session_or_engine, Session):
+        return _do(session_or_engine.connection())
+    with session_or_engine.begin() as conn:
+        return _do(conn)
+
+
 def ensure_site_url_not_unique(session_or_engine) -> bool:
     """Drop the UNIQUE index on `sites.site_url` if a pre-existing database still has one.
 
@@ -1404,5 +1509,6 @@ def init_db(engine: Engine) -> None:
     # Order matters: the column has to exist before a unique key can be built over it.
     ensure_ranking_location_columns(engine)
     ensure_ranking_location_keys(engine)
-    # Same shape, one step: add site_pk, backfill it, then key on it.
+    # Same shape, one step each: add site_pk, backfill it, then key on it.
     ensure_saved_keyword_project(engine)
+    ensure_tracked_competitor_project(engine)

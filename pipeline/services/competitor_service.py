@@ -9,6 +9,13 @@ Resolution rule:
 
 The auto-discovery table (competitor_domains) and its connector are never modified
 here — this module only reads it and manages the separate override table.
+
+THE OVERRIDE SET BELONGS TO A PROJECT, NOT A DOMAIN. Every function here takes `site_pk` and
+every caller holding a project must pass it: one domain can be registered as several projects
+(`add_site(allow_duplicate=True)`), so a call scoped by `site_id` alone reads — and, worse,
+DELETES — every sibling project's list. `site_pk=None` means domain-wide and is still correct
+for a caller with genuinely no project in hand (a maintenance command, an auto-seed audit); it
+is not a shortcut for "I didn't have it handy". Same contract as saved_keyword_service.
 """
 from typing import Optional
 
@@ -16,12 +23,35 @@ from sqlalchemy import select, delete
 
 from pipeline.utils.db_connection import get_session
 from pipeline.utils.logger import get_logger
-from pipeline.db.schema import CompetitorDomain, TrackedCompetitor
+from pipeline.db.schema import (
+    CompetitorDomain, TrackedCompetitor, UNOWNED_SITE_PK, ensure_tracked_competitor_project,
+)
 from pipeline.db.writer import ensure_tables
 
 logger = get_logger("competitor_service")
 
 DEFAULT_COLUMN_COUNT = 5
+
+
+def _prepare(session) -> None:
+    """Table exists and carries `site_pk`. Idempotent; issues nothing once reconciled."""
+    ensure_tables(session, TrackedCompetitor)      # clean empty state pre-first-save
+    ensure_tracked_competitor_project(session)     # self-provisions site_pk on an existing DB
+
+
+def _scope(site_id: str, site_pk: Optional[int]) -> list:
+    """WHERE clauses selecting one project's rows, or the whole domain when site_pk is None.
+
+    `site_pk` alone when given, deliberately NOT `site_pk AND site_id` — the project id already
+    implies the domain, while the reverse is not true because one site is stored under several
+    `site_id` spellings (skills.md §3), and ANDing them hides rows filed under a spelling this
+    project's own `site_url` doesn't happen to match. Mirrors
+    `saved_keyword_service.project_scope`.
+    """
+    if site_pk:
+        return [TrackedCompetitor.site_pk == site_pk]
+    from pipeline.utils.site_ids import resolve_site_ids
+    return [TrackedCompetitor.site_id.in_(resolve_site_ids(site_id))]
 
 
 def _bare(domain: str) -> str:
@@ -38,20 +68,21 @@ def _bare(domain: str) -> str:
     )
 
 
-def get_tracked_competitors(site_id: str, limit: int = DEFAULT_COLUMN_COUNT) -> list[str]:
+def get_tracked_competitors(site_id: str, limit: int = DEFAULT_COLUMN_COUNT,
+                            site_pk: Optional[int] = None) -> list[str]:
     """
-    Return the bare competitor domains to show as grid columns for this site.
+    Return the bare competitor domains to show as grid columns for THIS PROJECT.
 
     Override set wins when present; otherwise auto-seed from competitor_domains.
     Returns an empty list when neither source has data (grid shows its empty state).
     """
     bare_site = _bare(site_id)
     with get_session() as session:
-        ensure_tables(session, TrackedCompetitor)
+        _prepare(session)
 
         override = session.execute(
             select(TrackedCompetitor.competitor_domain)
-            .where(TrackedCompetitor.site_id == site_id)
+            .where(*_scope(site_id, site_pk))
             .order_by(TrackedCompetitor.added_at.asc())
         ).scalars().all()
         if override:
@@ -78,22 +109,27 @@ def get_tracked_competitors(site_id: str, limit: int = DEFAULT_COLUMN_COUNT) -> 
         return results
 
 
-def is_overridden(site_id: str) -> bool:
-    """True when the site has an explicit (user-edited) competitor set."""
+def is_overridden(site_id: str, site_pk: Optional[int] = None) -> bool:
+    """True when THIS PROJECT has an explicit (user-edited) competitor set."""
     with get_session() as session:
-        ensure_tables(session, TrackedCompetitor)
+        _prepare(session)
         row = session.execute(
-            select(TrackedCompetitor.id).where(TrackedCompetitor.site_id == site_id).limit(1)
+            select(TrackedCompetitor.id).where(*_scope(site_id, site_pk)).limit(1)
         ).first()
         return row is not None
 
 
-def set_tracked_competitors(site_id: str, domains: list[str]) -> int:
+def set_tracked_competitors(site_id: str, domains: list[str],
+                            site_pk: Optional[int] = None) -> int:
     """
-    Replace the site's override competitor set with `domains` (deduped, normalized).
+    Replace THIS PROJECT's override competitor set with `domains` (deduped, normalized).
 
     Passing an empty list clears the override, so the grid reverts to auto-seed.
     Returns the number of domains stored.
+
+    The delete is scoped by `_scope`, not by `site_id`. It used to wipe every row on the domain,
+    so a sibling project saving its own settings silently replaced this project's competitor
+    list — the write half of report bug C3a.
     """
     cleaned: list[str] = []
     seen = set()
@@ -104,17 +140,19 @@ def set_tracked_competitors(site_id: str, domains: list[str]) -> int:
             cleaned.append(bare)
 
     with get_session() as session:
-        ensure_tables(session, TrackedCompetitor)
+        _prepare(session)
         session.execute(
-            delete(TrackedCompetitor).where(TrackedCompetitor.site_id == site_id)
+            delete(TrackedCompetitor).where(*_scope(site_id, site_pk))
         )
         if cleaned:
             session.execute(
                 TrackedCompetitor.__table__.insert(),
-                [{"site_id": site_id, "competitor_domain": d} for d in cleaned],
+                [{"site_id": site_id, "site_pk": site_pk or UNOWNED_SITE_PK,
+                  "competitor_domain": d} for d in cleaned],
             )
         session.commit()
-    logger.info(f"[competitor_service] set {len(cleaned)} tracked competitors for {site_id!r}")
+    logger.info("[competitor_service] set %d tracked competitors for %r (site_pk=%s)",
+                len(cleaned), site_id, site_pk)
     return len(cleaned)
 
 
