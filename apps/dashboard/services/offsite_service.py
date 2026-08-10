@@ -17,6 +17,72 @@ def _resolve_site_ids(site_id: str) -> list[str]:
     return resolve_site_ids(site_id)
 
 
+# --- platform attribution -------------------------------------------------
+# GA4's `sessionSource` is a HOST ("m.reddit.com", "lnkd.in", "t.co"), so which platform sent a
+# session is a host question and must be answered host-wise. It used to be answered with a naked
+# substring test, `if domain_keyword in row["source"]`, and every consequence of that was wrong
+# in a way that looked plausible on screen:
+#
+#   "t.co" in "reddit.com"    -> True   Reddit's entire referral volume was added to X / Twitter
+#   "t.co" in "hubspot.com"   -> True   ... as was HubSpot's, and blogspot.com's, and any *t.com
+#   "t.co" in "twitter.com"   -> False  ... while X's own domain matched nothing
+#   "linkedin" in "lnkd.in"   -> False  LinkedIn's own shortener, which carries most of the
+#                                       click-throughs from a LinkedIn post, went nowhere
+#   "youtube" in "youtu.be"   -> False  same gap for YouTube
+#
+# One map, matched with a dot boundary. `source == d or source.endswith("." + d)` accepts
+# `m.reddit.com` and refuses `hubspot.com`, and first-match-wins means a source can never be
+# counted under two platforms.
+#
+# Extending this is the supported way to add a platform: add its hosts here and every surface
+# that attributes traffic (social table, LinkedIn spotlight) picks it up.
+PLATFORM_DOMAINS: dict[str, set[str]] = {
+    "linkedin": {"linkedin.com", "lnkd.in"},
+    "x": {"t.co", "twitter.com", "x.com"},
+    "youtube": {"youtube.com", "youtu.be"},
+    "reddit": {"reddit.com", "redd.it"},
+}
+
+# Display name per platform key, so the table, the spotlight and the connector flags cannot
+# drift apart on what a platform is called.
+PLATFORM_LABELS: dict[str, str] = {
+    "linkedin": "LinkedIn",
+    "reddit": "Reddit",
+    "youtube": "YouTube",
+    "x": "X / Twitter",
+}
+
+
+def normalise_source(source: str | None) -> str:
+    """GA4's source string reduced to a comparable host: lowercased, `www.` stripped.
+
+    `.replace("www.", "")` (what the referrer map used) removes the substring ANYWHERE, so
+    `wwww.example.com` and `myww.wwww` mangle. Only a leading label is a `www` prefix.
+    """
+    s = (source or "").strip().lower().rstrip(".")
+    if s.startswith("www."):
+        s = s[4:]
+    return s
+
+
+def platform_for_source(source: str | None) -> str | None:
+    """The platform key a GA4 `sessionSource` belongs to, or None when it is not one of ours.
+
+    Host-wise with a dot boundary — see PLATFORM_DOMAINS. Returns at most one platform for any
+    input, so no session can be double-counted. A bare non-host source (`google`, `(direct)`,
+    `newsletter`, or the literal word `linkedin`) is NOT a platform host and matches nothing;
+    it is a real off-site source and shows up in the social table under its own name.
+    """
+    src = normalise_source(source)
+    if not src:
+        return None
+    for platform, domains in PLATFORM_DOMAINS.items():
+        for d in domains:
+            if src == d or src.endswith("." + d):
+                return platform
+    return None
+
+
 def _is_offsite_channel(channel: str) -> bool:
     """This page's own definition of "off-site": referral, social and video traffic GA4
     attributes to another site or platform sending you visitors -- not search-engine, direct
@@ -403,11 +469,34 @@ def build_offsite_response(site_id: str, curr_start, curr_end, prev_start, prev_
     ref_domains = query_referring_domains_raw(site_id)
     referrers = []
     
-    # Map sources to referring domains if possible
-    source_map = {r["source"].replace("www.", ""): r for r in traffic_sources if "Referral" in r["channel"] or "Social" in r["channel"]}
-    
+    # Every off-site session GA4 attributed to a source, summed PER SOURCE across channels.
+    #
+    # This was a dict comprehension, `{r["source"]...: r for r in traffic_sources if "Referral"
+    # in r["channel"] or "Social" in r["channel"]}`, and it lost data two ways at once:
+    #
+    #   - Organic Video was not in the filter, so a youtube.com referring domain reported 0
+    #     sessions on a page that measured them one section further up.
+    #   - A dict comprehension keeps the LAST value for a repeated key. One source under two
+    #     channels is normal in GA4 (linkedin.com appears under Referral AND Organic Social),
+    #     so whichever row the comprehension saw last silently DISCARDED the other channel's
+    #     sessions, key events and revenue.
+    #
+    # Summing across channels fixes both, and the filter is now the page's single off-site
+    # definition rather than a second, differently-worded copy of it.
+    source_map: dict[str, dict] = {}
+    for r in traffic_sources:
+        if not _is_offsite_channel(r["channel"]):
+            continue
+        agg = source_map.setdefault(normalise_source(r["source"]), {
+            "sessions": 0, "engaged_sessions": 0, "conversions": 0, "revenue": 0.0,
+        })
+        agg["sessions"] += r["sessions"]
+        agg["engaged_sessions"] += r["engaged_sessions"]
+        agg["conversions"] += r["conversions"]
+        agg["revenue"] = round(agg["revenue"] + r["revenue"], 2)
+
     for rd in ref_domains[:20]:
-        domain = rd["domain"].replace("www.", "")
+        domain = normalise_source(rd["domain"])
         match = source_map.get(domain)
         
         # If no match in real GA4 data, it's 0 (since it didn't drive traffic)
@@ -449,19 +538,27 @@ def build_offsite_response(site_id: str, curr_start, curr_end, prev_start, prev_
     # time as the connector is registered — not before.
     li_conn = reddit_conn = yt_conn = x_conn = False
 
-    # Social mapping
-    def get_social_metrics(domain_keyword: str):
-        matches = [r for r in traffic_sources if domain_keyword in r["source"]]
+    # Social mapping — off-site channels only.
+    #
+    # The social table and the LinkedIn spotlight used to scan EVERY traffic-source row with no
+    # channel filter, while the KPIs, the trend and the channel mix all exclude paid traffic via
+    # _is_offsite_channel. So a Paid Social campaign on linkedin.com was counted here and nowhere
+    # else, and the table could report more sessions than the "Off-site sessions" KPI printed
+    # directly above it — the same page disagreeing with itself about what off-site means.
+    offsite_sources = [r for r in traffic_sources if _is_offsite_channel(r["channel"])]
+
+    def get_social_metrics(platform_key: str):
+        matches = [r for r in offsite_sources if platform_for_source(r["source"]) == platform_key]
         sess = sum(r["sessions"] for r in matches)
         eng = sum(r["engaged_sessions"] for r in matches)
         conv = sum(r["conversions"] for r in matches)
-        rev = sum(r["revenue"] for r in matches)
+        rev = round(sum(r["revenue"] for r in matches), 2)
         return sess, eng, conv, rev
 
     li_sess, li_eng, li_conv, li_rev = get_social_metrics("linkedin")
     rd_sess, rd_eng, rd_conv, rd_rev = get_social_metrics("reddit")
     yt_sess, yt_eng, yt_conv, yt_rev = get_social_metrics("youtube")
-    tw_sess, tw_eng, tw_conv, tw_rev = get_social_metrics("t.co")
+    tw_sess, tw_eng, tw_conv, tw_rev = get_social_metrics("x")
 
     # Platform impressions are ALWAYS None. GA4 measures sessions that arrived from
     # a source; it cannot see how many times a post was shown on LinkedIn, Reddit,
