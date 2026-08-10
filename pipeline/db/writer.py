@@ -357,8 +357,38 @@ def _ensure_ranking_location(session: Session) -> None:
     _RANKING_LOCATION_READY.add(key)
 
 
-def upsert_keyword_rankings(session: Session, records: list[dict], site_id: Optional[str] = None) -> int:
-    """Upsert keyword rankings. Unique on (date, site_id, keyword, location)."""
+# The columns a SERP rank capture OWNS. Pass these as `overwrite_columns` from a connector that
+# actually inspected the SERP (`dataforseo_serp`), so that a measured ABSENCE can be recorded.
+#
+# `serp_features` is deliberately not here: `keyword_rankings` has no such column (it lives on
+# `saved_keywords`). `overwrite_columns` ignores names the record set does not carry, so naming
+# it would be harmless — but listing a column that does not exist in the one place a reader
+# looks for the contract is how a fiction gets copied forward.
+SERP_MEASUREMENT_COLUMNS = ("position", "url", "rank_checked_at")
+
+
+def upsert_keyword_rankings(session: Session, records: list[dict], site_id: Optional[str] = None,
+                            overwrite_columns: Optional[tuple] = None) -> int:
+    """Upsert keyword rankings. Unique on (date, site_id, keyword, location).
+
+    Every column is COALESCEd by default — `coalesce(excluded[k], stored[k])` — because THREE
+    connectors write this one row and each must be unable to blank the others' work:
+    `dataforseo_serp` owns the position, `dataforseo_keywords` owns volume/KD/CPC and knows
+    nothing about ranks, `gsc_keywords` owns clicks/impressions. That default stays.
+
+    `overwrite_columns` names the columns THIS caller owns, which are then set from the incoming
+    record unconditionally. It exists because COALESCE made a measured DROP unrecordable:
+    `dataforseo_serp` captures to depth 30 and writes `position: None` when the domain is not in
+    it, which is a MEASUREMENT, not a gap. COALESCE discarded it and kept whatever rank the row
+    already held — while stamping a fresh `rank_checked_at` on top, so a site that fell off page
+    one on a date it had previously been recorded at #4 kept showing #4, marked freshly checked,
+    permanently. `SERP_MEASUREMENT_COLUMNS` is the set for that caller.
+
+    Names not present in the records are ignored, so a caller can pass one list for a batch that
+    does not carry every column, and a caller that never sends `position` still cannot clear one.
+
+    Defaults to None — today's behaviour exactly — so every existing call site is unaffected.
+    """
     if not records:
         return 0
 
@@ -382,6 +412,7 @@ def upsert_keyword_rankings(session: Session, records: list[dict], site_id: Opti
     _upsert_keys = ("date", "site_id", "keyword", "location")
     records = _dedupe_by_keys(records, _upsert_keys)
     update_cols = [k for k in records[0] if k not in _upsert_keys]
+    overwrite = {c for c in (overwrite_columns or ()) if c in update_cols}
     total = 0
     for i in range(0, len(records), BATCH_SIZE):
         batch = records[i:i + BATCH_SIZE]
@@ -389,7 +420,10 @@ def upsert_keyword_rankings(session: Session, records: list[dict], site_id: Opti
         stmt = stmt.on_conflict_do_update(
             index_elements=list(_upsert_keys),
             set_={
-                k: func.coalesce(stmt.excluded[k], getattr(KeywordRanking, k))
+                # An owned column takes the incoming value even when it is NULL: a measured
+                # absence is a measurement. Everything else keeps COALESCE.
+                k: (stmt.excluded[k] if k in overwrite
+                    else func.coalesce(stmt.excluded[k], getattr(KeywordRanking, k)))
                 for k in update_cols
             },
         )
