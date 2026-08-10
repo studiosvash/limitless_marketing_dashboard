@@ -200,13 +200,12 @@
                 <span onClick="{{ f.click }}" style="{{ f.style }}">{{ f.label }}</span>
               </sc-for>
             </div>
-            <span style="margin-left: auto; font-size: 13px; color: #64748b;">Showing <b style="color:#0f172a;">{{ bl.rowCount }}</b> of {{ bl.backlinksFmt }} backlinks</span>
           </div>
           <div style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
             <div style="display: grid; grid-template-columns: 1.5fr 1fr 70px 64px 96px 100px; padding: 10px 18px; background: #f8fafc; border-bottom: 1px solid #f1f5f9; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8; font-weight: 600;">
-              <span>Referring domain</span><span>Anchor &amp; target</span><span style="text-align:right;">Domain AS</span><span style="text-align:right;">Spam</span><span style="text-align:center;">Follow</span><span style="text-align:right;">First seen</span>
+              <span>Referring domain &amp; source page</span><span>Anchor &amp; target</span><span onClick="{{ bl.sort.rank }}" role="button" style="text-align:right;cursor:pointer;">Domain AS{{ bl.arrow.rank }}</span><span onClick="{{ bl.sort.spam }}" role="button" style="text-align:right;cursor:pointer;">Spam{{ bl.arrow.spam }}</span><span style="text-align:center;">Follow</span><span onClick="{{ bl.sort.firstSeen }}" role="button" style="text-align:right;cursor:pointer;">First seen{{ bl.arrow.firstSeen }}</span>
             </div>
-            <div style="max-height: 620px; overflow-y: auto;">
+            <div>
               <sc-if value="{{ bl.rows.length === 0 }}" hint-placeholder-val="{{ false }}">
                 <div style="padding: 44px 20px; text-align: center;">
                   <div style="font-size: 15px; font-weight: 600; color: #334155;">Nothing here</div>
@@ -218,9 +217,15 @@
                   <div style="min-width: 0;">
                     <div style="display:flex;align-items:center;gap:8px;">
                       <span style="font-size:13px;">{{ r.flag }}</span>
-                      <a href="{{ r.urlFrom }}" target="_blank" rel="noopener" title="Open the page that links to you" style="font-size:13px;color:#0f172a;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-decoration:none;" style-hover="color:#4f46e5;text-decoration:underline">{{ r.pageTitle }}</a>
+                      <a href="{{ r.domainHref }}" target="_blank" rel="noopener" title="Open the referring domain" style="font-size:13px;color:#0f172a;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-decoration:none;" style-hover="color:#4f46e5;text-decoration:underline">{{ r.pageTitle }}</a>
                       <sc-for list="{{ r.badges }}" as="bd" hint-placeholder-count="1"><span style="font-size:10px;font-weight:600;padding:1px 6px;border-radius:4px;color:{{ bd.color }};background:{{ bd.bg }};flex-shrink:0;">{{ bd.label }}</span></sc-for>
                     </div>
+                    <sc-if value="{{ r.hasSource }}" hint-placeholder-val="{{ true }}">
+                      <a href="{{ r.urlFrom }}" target="_blank" rel="noopener" title="{{ r.urlFrom }}" style="display:block;font-size:12px;color:#64748b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px;text-decoration:none;" style-hover="color:#4f46e5;text-decoration:underline">↳ {{ r.sourcePath }}</a>
+                    </sc-if>
+                    <sc-if value="{{ r.noSource }}" hint-placeholder-val="{{ false }}">
+                      <div style="font-size:12px;color:#cbd5e1;font-style:italic;margin-top:2px;">↳ {{ r.sourcePath }}</div>
+                    </sc-if>
                   </div>
                   <div style="min-width: 0;">
                     <div style="font-size:13px;color:#4f46e5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ r.anchor }}</div>
@@ -233,6 +238,16 @@
                 </div>
               </sc-for>
             </div>
+            <sc-if value="{{ bl.hasPageNav }}" hint-placeholder-val="{{ true }}">
+              <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 10px 18px; border-top: 1px solid #f1f5f9;">
+                <span onClick="{{ bl.pagePrev.click }}" role="button" aria-label="Previous page" style="{{ bl.pagePrev.style }}">‹ Prev</span>
+                <sc-for list="{{ bl.pageNums }}" as="p" hint-placeholder-count="5">
+                  <span onClick="{{ p.click }}" role="button" aria-label="Go to page {{ p.label }}" style="{{ p.style }}">{{ p.label }}</span>
+                </sc-for>
+                <span onClick="{{ bl.pageNext.click }}" role="button" aria-label="Next page" style="{{ bl.pageNext.style }}">Next ›</span>
+              </div>
+            </sc-if>
+            <div style="padding: 10px 18px; border-top: 1px solid #f1f5f9; font-size: 12px; color: #94a3b8;">{{ bl.rowCount }}</div>
           </div>
         </div>
         </sc-if>
@@ -244,7 +259,7 @@
           <div style="display: grid; grid-template-columns: 1.4fr 70px 64px 100px 110px 90px 110px; padding: 10px 18px; background: #f8fafc; border-bottom: 1px solid #f1f5f9; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8; font-weight: 600;">
             <span>Domain</span><span style="text-align:right;">AS</span><span style="text-align:right;">Spam</span><span style="text-align:right;">Backlinks</span><span style="text-align:right;">Links to us</span><span style="text-align:center;">Follow</span><span style="text-align:right;">First seen</span>
           </div>
-          <div style="max-height: 640px; overflow-y: auto;">
+          <div>
             <sc-if value="{{ bl.allRefDomains.length === 0 }}" hint-placeholder-val="{{ false }}">
               <div style="padding: 44px 20px; text-align: center;"><div style="font-size: 15px; font-weight: 600; color: #334155;">Nothing here</div><div style="font-size: 13px; color: #94a3b8; margin-top: 4px;">No referring domains have been synced for this site yet.</div></div>
             </sc-if>
@@ -260,6 +275,16 @@
               </div>
             </sc-for>
           </div>
+          <sc-if value="{{ bl.rdHasPageNav }}" hint-placeholder-val="{{ true }}">
+            <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 10px 18px; border-top: 1px solid #f1f5f9;">
+              <span onClick="{{ bl.rdPagePrev.click }}" role="button" aria-label="Previous page" style="{{ bl.rdPagePrev.style }}">‹ Prev</span>
+              <sc-for list="{{ bl.rdPageNums }}" as="p" hint-placeholder-count="5">
+                <span onClick="{{ p.click }}" role="button" aria-label="Go to page {{ p.label }}" style="{{ p.style }}">{{ p.label }}</span>
+              </sc-for>
+              <span onClick="{{ bl.rdPageNext.click }}" role="button" aria-label="Next page" style="{{ bl.rdPageNext.style }}">Next ›</span>
+            </div>
+          </sc-if>
+          <div style="padding: 10px 18px; border-top: 1px solid #f1f5f9; font-size: 12px; color: #94a3b8;">{{ bl.rdCount }}</div>
         </div>
         </sc-if>
 
@@ -270,7 +295,7 @@
           <div style="display: grid; grid-template-columns: 1.8fr 110px 120px 120px 200px; padding: 10px 18px; background: #f8fafc; border-bottom: 1px solid #f1f5f9; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8; font-weight: 600;">
             <span>Anchor</span><span>Type</span><span style="text-align:right;">Backlinks</span><span style="text-align:right;padding-right:16px;">Ref. domains</span><span>Dofollow share</span>
           </div>
-          <div style="max-height: 640px; overflow-y: auto;">
+          <div>
             <sc-if value="{{ bl.allAnchors.length === 0 }}" hint-placeholder-val="{{ false }}">
               <div style="padding: 44px 20px; text-align: center;"><div style="font-size: 15px; font-weight: 600; color: #334155;">Nothing here</div><div style="font-size: 13px; color: #94a3b8; margin-top: 4px;">Anchor distribution comes from the DataForSEO backlinks snapshot — run a Backlinks refresh to populate it.</div></div>
             </sc-if>
@@ -284,6 +309,16 @@
               </div>
             </sc-for>
           </div>
+          <sc-if value="{{ bl.anHasPageNav }}" hint-placeholder-val="{{ true }}">
+            <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 10px 18px; border-top: 1px solid #f1f5f9;">
+              <span onClick="{{ bl.anPagePrev.click }}" role="button" aria-label="Previous page" style="{{ bl.anPagePrev.style }}">‹ Prev</span>
+              <sc-for list="{{ bl.anPageNums }}" as="p" hint-placeholder-count="5">
+                <span onClick="{{ p.click }}" role="button" aria-label="Go to page {{ p.label }}" style="{{ p.style }}">{{ p.label }}</span>
+              </sc-for>
+              <span onClick="{{ bl.anPageNext.click }}" role="button" aria-label="Next page" style="{{ bl.anPageNext.style }}">Next ›</span>
+            </div>
+          </sc-if>
+          <div style="padding: 10px 18px; border-top: 1px solid #f1f5f9; font-size: 12px; color: #94a3b8;">{{ bl.anCount }}</div>
         </div>
         </sc-if>
 

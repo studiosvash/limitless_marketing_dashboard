@@ -28,6 +28,19 @@ from pipeline.utils.site_ids import resolve_site_ids
 from pipeline.services.competitor_service import get_tracked_competitors
 
 
+# How many stored link rows one Backlinks response carries. Paging happens in the BROWSER, over
+# this whole list, which is why the number is here and not a request parameter:
+#
+#   * 1000 rows is a few hundred KB and this dashboard has 2-3 users, so shipping them all once
+#     is cheaper than a round trip per page;
+#   * `query_referring_domains_raw` rolls the SAME in-memory list up by domain. Paging the
+#     backend would silently truncate that rollup — page 2 of the links would produce a
+#     different, smaller set of referring domains — with nothing in the response to say so.
+#
+# If this cap is ever lifted, the rollup has to move to a GROUP BY over the table FIRST.
+LINKS_LIMIT = 1000
+
+
 def _resolve_site_ids(site_id: str) -> list[str]:
     """Every spelling this site's analytics rows may be keyed under — see
     `pipeline/utils/site_ids.py` for why the `sc-domain:` prefix alone was not enough."""
@@ -247,7 +260,7 @@ def build_backlinks_response(site_id: str) -> dict:
     """Backlinks view. Listings come from the `backlinks` table, distributions from the stored
     DataForSEO snapshot; anything with no source behind it is empty, never filled in."""
     summary_raw = query_backlinks_summary_raw(site_id)
-    links = query_backlinks_table_raw(site_id, limit=1000)
+    links = query_backlinks_table_raw(site_id, limit=LINKS_LIMIT)
     ref_domains = query_referring_domains_raw(site_id, links=links)
 
     fetched_at, snap = _load_snapshot(site_id)
@@ -314,6 +327,13 @@ def build_backlinks_response(site_id: str) -> dict:
     return {
         "kpis": kpis,
         "links": links,
+        # Whether `links` is the whole stored set or was cut off at the cap. The page pages
+        # over this list and prints a "showing X-Y of Z" counter; without this flag a reader
+        # would take Z for the number of links we hold, which is only true below the cap.
+        # A real 1000-row profile reports capped=True — that is honest: we cannot tell from
+        # here whether the 1001st row exists, and "possibly more" is the truthful reading.
+        "linksLimit": LINKS_LIMIT,
+        "linksCapped": len(links) >= LINKS_LIMIT,
         "summary": {
             "authorityScore": authority,
             "asDelta": snap_summary.get("asDelta"),   # None unless the snapshot recorded one
