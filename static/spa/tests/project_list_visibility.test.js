@@ -44,11 +44,10 @@ test('renders the backend score, not anything derived from avg_position', () => 
   assert.strictEqual(out.hasVis, true);
 });
 
-test('null visibility renders an em dash and an empty bar', () => {
+test('null visibility renders an em dash', () => {
   const out = listVisibility({ visibility: null, avg_position: 2.2 });
   assert.strictEqual(out.label, '—');
   assert.strictEqual(out.hasVis, false);
-  assert.strictEqual(out.barWidth, 0);
 });
 
 test('a payload without the field (cached SPA against an old API) degrades to em dash', () => {
@@ -61,7 +60,6 @@ test('a real zero is shown as 0%, not hidden as missing', () => {
   const out = listVisibility({ visibility: 0 });
   assert.strictEqual(out.label, '0%');
   assert.strictEqual(out.hasVis, true);
-  assert.strictEqual(out.barWidth, 0);
 });
 
 test('whole numbers drop the decimal, fractional keep one', () => {
@@ -70,9 +68,15 @@ test('whole numbers drop the decimal, fractional keep one', () => {
   assert.strictEqual(listVisibility({ visibility: 5.7 }).label, '5.7%');
 });
 
-test('a tiny nonzero score keeps a visible sliver of bar', () => {
-  const out = listVisibility({ visibility: 0.4 });
-  assert.ok(out.barWidth >= 1.5, 'sliver expected, got ' + out.barWidth);
-  const big = listVisibility({ visibility: 62.3 });
-  assert.strictEqual(big.barWidth, 62.3);
+/* THE BAR NEVER EXISTED ON SCREEN. positioning.html rendered the fill as an inline
+   <span>, and CSS gives a non-replaced inline box no width and no height — so every
+   barWidth this function computed was applied to a box that could not use it, from the
+   day the column shipped. The track and fill are gone and so is barWidth; the coloured
+   percentage is the whole cell. Pinned here so nobody reinstates the arithmetic for a
+   bar that isn't there. */
+test('no bar geometry is computed — the cell is the percentage', () => {
+  ['barWidth', 'visBarStyle'].forEach(k => {
+    assert.strictEqual(listVisibility({ visibility: 0.4 })[k], undefined,
+      k + ' is back; the fill span it fed was an inline box and never rendered');
+  });
 });

@@ -24,7 +24,11 @@
             <sc-for list="{{ ptProjects }}" as="p" hint-placeholder-count="3">
               <div style="{{ p.rowStyle }}" onClick="{{ p.onOpen }}" style-hover="background:#f8fafc">
                 <span style="display:flex;flex-direction:column;gap:2px;min-width:0;"><span style="font-size:14px;font-weight:600;color:#0f172a;display:flex;align-items:center;gap:8px;">{{ p.name }}<sc-if value="{{ p.isCurrent }}" hint-placeholder-val="{{ false }}"><span style="font-size:10px;font-weight:600;color:#4338ca;background:#eef2ff;padding:1px 7px;border-radius:4px;">CURRENT</span></sc-if></span><span style="font-size:12px;color:#94a3b8;">{{ p.sub }}</span></span>
-                <span style="display:flex;align-items:center;gap:10px;"><span style="flex:1;max-width:80px;height:8px;background:#f1f5f9;border-radius:4px;overflow:hidden;"><span style="{{ p.visBarStyle }}"></span></span><span style="font-size:13px;font-weight:600;color:{{ p.visColor }};">{{ p.visLabel }}</span></span>
+                <!-- No progress bar here. The track and its fill were both inline <span>s, and
+                     a non-replaced inline box ignores width and height, so the fill never had
+                     a size to render — every project showed an empty grey track. The coloured
+                     percentage is the cell. -->
+                <span style="font-size:13px;font-weight:600;color:{{ p.visColor }};">{{ p.visLabel }}</span>
                 <span style="text-align:right;font-size:14px;color:#334155;">{{ p.tracked }}</span>
                 <span style="text-align:right;font-size:14px;color:#059669;font-weight:500;">{{ p.improved }}</span>
                 <span style="text-align:right;font-size:14px;color:#dc2626;font-weight:500;">{{ p.declined }}</span>

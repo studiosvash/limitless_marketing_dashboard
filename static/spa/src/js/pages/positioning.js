@@ -233,18 +233,23 @@
          rank nowhere still counted in the denominator. The previous (100 - avg_position)/1.2
          mapping averaged RANKED keywords only, so one branded keyword at #2 out of 48
          tracked read 82% when the honest CTR-weighted reading was ~1%. null means "never
-         captured" → "—" and an empty bar; 0 means "captured, ranks nowhere" — a real 0%.
+         captured" → "—"; 0 means "captured, ranks nowhere" — a real 0%.
+
+         NO BAR, deliberately. The cell used to pair this percentage with a track and a fill,
+         and the fill was an inline <span>: CSS gives a non-replaced inline box no width and no
+         height, so every width this function computed was applied to a box that could not use
+         it. The bar has never rendered for any project since the column shipped — just an
+         empty grey track beside the number. Removed rather than repaired: the coloured
+         percentage already carries the whole reading, and the 1.5% minimum "sliver" this used
+         to compute would not have been legible even if the box had accepted a width.
          Self-contained so tests/project_list_visibility.test.js can brace-match it. */
       const listVisibility = p => {
         const v = typeof p.visibility === 'number' ? p.visibility : null;
-        if (v == null) return { hasVis: false, vis: 0, label: '—', color: '#cbd5e1', barWidth: 0 };
+        if (v == null) return { hasVis: false, vis: 0, label: '—', color: '#cbd5e1' };
         return {
           hasVis: true, vis: v,
           label: parseFloat(v.toFixed(1)) + '%',
-          color: v >= 30 ? '#059669' : v >= 10 ? '#0891b2' : '#d97706',
-          /* A 0.4% project still deserves a visible sliver — width 0 is reserved for
-             a true 0, so "barely ranks" and "ranks nowhere" stay distinguishable. */
-          barWidth: v > 0 ? Math.max(v, 1.5) : 0
+          color: v >= 30 ? '#059669' : v >= 10 ? '#0891b2' : '#d97706'
         };
       };
       vals.ptProjects = projList.map(p => {
@@ -265,7 +270,6 @@
           sub: subParts.join(' · '),
           tracked: this.fmt(tracked), improved, declined,
           visLabel: lv.label, visColor: lv.color,
-          visBarStyle: { width: lv.barWidth + '%', height: '100%', background: lv.color, borderRadius: '4px' },
           updated: p.last_updated || 'No sync yet',
           isCurrent: isCur,
           rowStyle: { display: 'grid', gridTemplateColumns: listCols, alignItems: 'center', padding: '14px 20px', borderTop: '1px solid #f1f5f9', cursor: 'pointer', background: isCur ? '#fafaff' : 'white' },
