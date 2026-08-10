@@ -83,24 +83,42 @@ def platform_for_source(source: str | None) -> str | None:
     return None
 
 
+# The channels this page is about, named explicitly.
+#
+# These are GA4's own `sessionDefaultChannelGroup` values for earned off-site traffic: another
+# site linked to you (Referral), or someone posted about you on a social/video platform
+# (Organic Social, Organic Video). Everything else GA4 can report is deliberately absent —
+# Organic Search is on-site SEO, Direct is not attributable to anyone, and every Paid * channel
+# is bought rather than earned.
+#
+# To add a channel (a custom channel grouping that emits bare "Social"/"Video", say), add the
+# exact string here. That is the whole extension mechanism, and it changes every figure on the
+# page at once — KPI totals, the trend, the channel mix, the social table, the referrer map —
+# which is the point of there being one list.
+OFFSITE_CHANNELS: frozenset[str] = frozenset({
+    "Referral",
+    "Organic Social",
+    "Organic Video",
+})
+
+
 def _is_offsite_channel(channel: str) -> bool:
-    """This page's own definition of "off-site": referral, social and video traffic GA4
-    attributes to another site or platform sending you visitors -- not search-engine, direct
-    or paid traffic. Matched on GA4's `sessionDefaultChannelGroup` name (a substring check,
-    because custom channel groupings vary the exact string -- "Social"/"Organic Social" and
-    "Video"/"Organic Video" both occur in practice).
+    """Is this GA4 channel group off-site traffic? Membership of OFFSITE_CHANNELS, nothing else.
 
-    Excludes "Organic Search" specifically even though it also contains "Organic" -- that is
-    on-site SEO (driven by your own ranking), and the one thing this page explicitly is not.
-    Excludes any "Paid *" channel for the same reason a paid campaign isn't earned/off-site
-    just because its name also contains "Social" or "Video".
+    This was a substring test -- `("Organic" in ch or "Referral" in ch or "Social" in ch or
+    "Video" in ch) and ch != "Organic Search" and "Paid" not in ch` -- which is a guess at a
+    definition rather than a definition, and it was wrong in both directions:
 
-    Single source of truth for every off-site figure on this page (channel-mix flags, KPI
-    totals, the trend chart, revenue) so none of them can drift apart on what counts.
+      * It ADMITTED `Organic Shopping`, a standard GA4 channel for shopping-surface listings,
+        purely because the name contains "Organic". Those sessions were counted in the
+        "off-site sessions" KPI and in the channel mix as earned off-site traffic.
+      * A channel is off-site or not on its own merits; extending the substring list to cover
+        Affiliates or Email would have meant more substrings that could match the next channel
+        Google names.
+
+    An allow-list can only ever count what someone deliberately put in it.
     """
-    ch = channel or ""
-    is_offsite_name = ("Organic" in ch or "Referral" in ch or "Social" in ch or "Video" in ch)
-    return is_offsite_name and ch != "Organic Search" and "Paid" not in ch
+    return (channel or "").strip() in OFFSITE_CHANNELS
 
 
 # --- revenue --------------------------------------------------------------
@@ -234,7 +252,11 @@ def query_offsite_totals_raw(site_id: str, start, end) -> dict:
     return {
         "sessions": sessions,
         "users": None,
-        "engagementRate": eng["engagementRate"] if eng["engagementRate"] is not None else 0.0,
+        # None when there were no sessions to divide by, NOT 0.0. This one key used to
+        # re-coerce _engagement's honest None back to zero on the way out, so the headline
+        # "Engagement rate" card printed a confident 0% for a project GA4 has never measured
+        # -- next to four other cards on the same row that show a dash for the same state.
+        "engagementRate": eng["engagementRate"],
         "engagedSessions": engaged,
         "keyEvents": conversions,
         # Real GA4 totalRevenue attributed to off-site channels, not conversions x an
@@ -304,6 +326,29 @@ def query_offsite_trend_raw(site_id: str, start, end) -> list[dict]:
 
 
 def query_offsite_landing_pages_raw(site_id: str, start, end) -> list[dict]:
+    """The site's most-visited pages over the period — ALL traffic, not off-site traffic.
+
+    Two things this cannot be, despite what its name and the heading above it used to claim:
+
+      1. **It is not channel-scoped.** `seo_daily` has no channel column; GA4 writes it from a
+         date x country x device x pagePath report that carries no channel dimension at all.
+         So this list includes Organic Search and Direct visits, and there is no filter that
+         could remove them. It sat under the heading "Where off-site traffic lands / Pages that
+         referral & social visitors enter on", which described a measurement nobody took. A
+         genuinely off-site landing-page table needs a NEW GA4 report on
+         `landingPage` x `sessionDefaultChannelGroup` — a new dimension pair and a new table,
+         not a filter over this one.
+
+      2. **These are not entrances.** The column is called `landing_page`, but `ga4.py` fills
+         it from the `pagePath` dimension, i.e. every page a session VIEWED, not the page it
+         entered on. `pageviews` (GA4 `screenPageViews`) is therefore the metric that is
+         actually additive at this grain and is returned alongside `sessions` — one visit that
+         viewed three pages contributes a session to three rows here, which is the same
+         non-additivity that made `ga4_daily_totals` a separate report.
+
+    Ordered by sessions so the ranking is unchanged; both numbers ship so the UI can label
+    what it shows.
+    """
     site_ids = _resolve_site_ids(site_id)
     try:
         with get_session() as session:
@@ -311,6 +356,9 @@ def query_offsite_landing_pages_raw(site_id: str, start, end) -> list[dict]:
                 select(
                     SEODaily.landing_page.label("url"),
                     func.sum(SEODaily.sessions).label("sessions"),
+                    # Stored by every GA4 sync since the connector was written, read by
+                    # nothing until now.
+                    func.sum(SEODaily.pageviews).label("pageviews"),
                     # Session-weighted: engagement rate is a ratio, and AVG() over this
                     # page's (date, country, device) rows let a 2-session cell count as much
                     # as a 900-session one — measured at 77.6% shown vs 72.3% real across a
@@ -348,6 +396,7 @@ def query_offsite_landing_pages_raw(site_id: str, start, end) -> list[dict]:
             # renders it as a dash.
             "topSource": "",
             "sessions": int(r.sessions or 0),
+            "pageviews": int(r.pageviews or 0),
             "engagedRate": round(float(r.weighted_engagement or 0.0) / r.sessions, 4)
                            if r.sessions else 0.0,
             "bounceRate": round(float(r.weighted_bounce or 0.0) / r.sessions, 4)

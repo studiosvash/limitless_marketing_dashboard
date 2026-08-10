@@ -168,7 +168,10 @@ class OffsiteEmptyDbTests(TestCase):
         self.assertEqual(totals, {
             "sessions": 0,
             "users": None,
-            "engagementRate": 0.0,
+            # None, not 0.0 — an engagement rate over zero sessions is undefined. This key
+            # used to re-coerce _engagement's None back to zero on the way out, so the KPI
+            # card claimed "0% engaged" for a project GA4 has never measured.
+            "engagementRate": None,
             "engagedSessions": 0,
             "keyEvents": 0,
             "revenue": 0,

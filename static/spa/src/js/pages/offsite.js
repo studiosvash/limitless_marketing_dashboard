@@ -46,10 +46,17 @@
       off.rangeLabel = s.range === '7d' ? 'last 7 days' : s.range === '90d' ? 'last 90 days' : 'last 30 days';
       off.kpis = [
         kpiCard('Off-site sessions', this.fmt(t.sessions), chip(pctD(t.sessions, pv.sessions)), 'vs. previous period'),
-        kpiCard('Engagement rate', t.engagementRate + '%', chip(null), this.fmt(t.engagedSessions) + ' engaged'),
+        /* null is "no sessions to divide by", not 0%. `null + '%'` printed the literal
+           "null%"; the service's older `... else 0.0` printed a confident "0%" for a
+           measurement nobody took. Same em-dash convention as every other unknown here. */
+        kpiCard('Engagement rate', t.engagementRate == null ? '—' : t.engagementRate + '%', chip(null),
+                t.engagementRate == null ? 'no off-site sessions in this period' : this.fmt(t.engagedSessions) + ' engaged'),
         kpiCard('Key events', this.fmt(Math.round(t.keyEvents)), chip(pctD(t.keyEvents, pv.keyEvents)), 'attributed conversions'),
         kpiCard('Attributed revenue', this.money(t.revenue), chip(pctD(t.revenue, pv.revenue)), 'GA4 totalRevenue'),
-        kpiCard('Referring domains', String(t.referringDomains), chip(null), 'sites sending traffic')
+        /* Not "sites sending traffic". This count comes from the BACKLINKS table, is
+           all-time rather than range-scoped, and most of the domains in it drove no measured
+           GA4 session at all — the table below shows exactly how many did. */
+        kpiCard('Referring domains', String(t.referringDomains), chip(null), 'domains linking to you (all-time)')
       ];
 
       /* trend */
@@ -171,11 +178,20 @@
         href: 'https://' + r.domain
       }));
 
-      /* landing pages */
+      /* Most-viewed pages — ALL traffic, not off-site traffic.
+         seo_daily has no channel column (GA4 writes it from a date x country x device x
+         pagePath report), so this list cannot be scoped to referral & social and never was:
+         it included Organic Search and Direct the whole time it was headed "Where off-site
+         traffic lands / Pages that referral & social visitors enter on". And `landing_page`
+         is filled from `pagePath`, so these are page VIEWS, not entrances — `pageviews` is
+         the additive metric at this grain. Both facts are now in the heading and the column
+         labels. A real off-site landing-page table needs a new GA4 report on landingPage x
+         sessionDefaultChannelGroup; there is no filter over this data that produces one. */
       off.landing = data.landingPages.map(r => ({
         // topSource is '' when the driving channel was never measured — show a dash,
         // not a guessed channel name.
         url: r.url, topSource: r.topSource || '—',
+        viewsFmt: r.pageviews == null ? '—' : this.fmt(r.pageviews),
         sessFmt: this.fmt(r.sessions), engFmt: Math.round(r.engagedRate * 100) + '%',
         bounceFmt: r.bounceRate == null ? '—' : Math.round(r.bounceRate * 100) + '%',
         newUsersFmt: r.newUsers == null ? '—' : this.fmt(r.newUsers),

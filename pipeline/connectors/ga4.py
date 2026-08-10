@@ -336,9 +336,16 @@ class GA4Connector(BaseConnector):
             channel = row.dimension_values[1].value
             source = row.dimension_values[2].value.lower()
             
-            sessions = int(row.metric_values[0].value)
-            conversions = int(row.metric_values[1].value)
-            engagement_rate = float(row.metric_values[2].value)
+            sessions = int(row.metric_values[0].value or 0)
+            # int(float(...)), like _normalize_campaigns and _normalize_totals already do.
+            # `conversions` is a FLOATING-POINT metric in the GA4 Data API -- partial conversion
+            # credit is real -- so the same property that answers "3" one day answers "3.0" the
+            # next, and int("3.0") raises ValueError. Nothing here catches it: the exception
+            # escapes _normalize_offsite into fetch(), past the retry decorator, and kills the
+            # ENTIRE GA4 sync -- including the seo_daily and campaign reports that were already
+            # fetched and paid for in the same run.
+            conversions = int(float(row.metric_values[1].value or 0))
+            engagement_rate = float(row.metric_values[2].value or 0.0)
             # GA4 `totalRevenue` = purchase + subscription + ad revenue the
             # property actually recorded. A property with no ecommerce or
             # revenue events configured returns 0 for every row: that is a
@@ -373,13 +380,15 @@ class GA4Connector(BaseConnector):
             # Reconstruct full absolute URL to align with GSC's landing_page values
             landing_page = site_url.rstrip("/") + page_path
 
-            sessions = int(row.metric_values[0].value)
-            pageviews = int(row.metric_values[1].value)
-            conversions = int(row.metric_values[2].value)
-            bounce_rate = float(row.metric_values[3].value)
-            users = int(row.metric_values[4].value)
-            new_users = int(row.metric_values[5].value)
-            engagement_rate = float(row.metric_values[6].value)
+            sessions = int(row.metric_values[0].value or 0)
+            pageviews = int(row.metric_values[1].value or 0)
+            # Same float-shaped-count trap as _normalize_offsite above, in the report that
+            # feeds seo_daily -- the largest of the four.
+            conversions = int(float(row.metric_values[2].value or 0))
+            bounce_rate = float(row.metric_values[3].value or 0.0)
+            users = int(row.metric_values[4].value or 0)
+            new_users = int(row.metric_values[5].value or 0)
+            engagement_rate = float(row.metric_values[6].value or 0.0)
 
             records.append({
                 "date": row_date,

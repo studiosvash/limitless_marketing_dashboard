@@ -375,7 +375,7 @@
         <!-- top referring domains -->
         <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
           <div style="padding: 16px 20px; border-bottom: 1px solid #f1f5f9; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;">
-            <div><h2 style="font-size: 15px; font-weight: 600; margin: 0;">Top referring domains</h2><p style="font-size: 12px; color: #94a3b8; margin: 3px 0 0;">Sites sending you referral traffic — your off-site links paying off</p><sc-if value="{{ off.srcRefDomains.show }}" hint-placeholder-val="{{ true }}"><div style="margin-top: 6px;"><span style="{{ off.srcRefDomains.style }}" title="{{ off.srcRefDomains.title }}" aria-label="{{ off.srcRefDomains.aria }}">{{ off.srcRefDomains.text }}</span></div></sc-if></div>
+            <div><h2 style="font-size: 15px; font-weight: 600; margin: 0;">Top referring domains</h2><p style="font-size: 12px; color: #94a3b8; margin: 3px 0 0;">Domains linking to you, from the all-time backlink profile. Sessions are the GA4 off-site traffic each one drove in this period — most drive none.</p><sc-if value="{{ off.srcRefDomains.show }}" hint-placeholder-val="{{ true }}"><div style="margin-top: 6px;"><span style="{{ off.srcRefDomains.style }}" title="{{ off.srcRefDomains.title }}" aria-label="{{ off.srcRefDomains.aria }}">{{ off.srcRefDomains.text }}</span></div></sc-if></div>
             <span onClick="{{ h.exportReferrers }}" style="font-size: 12px; color: #4f46e5; font-weight: 500; cursor: pointer;" style-hover="opacity:0.7">Export CSV</span>
           </div>
           <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
@@ -412,15 +412,16 @@
 
         <!-- landing pages -->
         <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
-          <div style="padding: 16px 20px; border-bottom: 1px solid #f1f5f9;"><h2 style="font-size: 15px; font-weight: 600; margin: 0;">Where off-site traffic lands</h2><sc-if value="{{ off.srcGa4.show }}" hint-placeholder-val="{{ true }}"><div style="margin-top: 6px;"><span style="{{ off.srcGa4.style }}" title="{{ off.srcGa4.title }}" aria-label="{{ off.srcGa4.aria }}">{{ off.srcGa4.text }}</span></div></sc-if><p style="font-size: 12px; color: #94a3b8; margin: 3px 0 0;">Pages that referral &amp; social visitors enter on</p></div>
+          <div style="padding: 16px 20px; border-bottom: 1px solid #f1f5f9;"><h2 style="font-size: 15px; font-weight: 600; margin: 0;">Most-viewed pages, all traffic</h2><sc-if value="{{ off.srcGa4.show }}" hint-placeholder-val="{{ true }}"><div style="margin-top: 6px;"><span style="{{ off.srcGa4.style }}" title="{{ off.srcGa4.title }}" aria-label="{{ off.srcGa4.aria }}">{{ off.srcGa4.text }}</span></div></sc-if><p style="font-size: 12px; color: #94a3b8; margin: 3px 0 0;">GA4 page views by path — every channel, including Organic Search and Direct. This table cannot be scoped to referral &amp; social: the underlying data carries no channel dimension.</p></div>
           <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
             <thead><tr style="text-align: left; color: #94a3b8; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; background: #f8fafc; border-bottom: 1px solid #f1f5f9;">
-              <th style="font-weight: 500; padding: 10px 20px;">Landing page</th>
-              <th style="font-weight: 500; padding: 10px;">Top source</th>
-              <th style="font-weight: 500; padding: 10px; text-align: right;">Sessions</th>
+              <th style="font-weight: 500; padding: 10px 20px;">Page</th>
+              <th style="font-weight: 500; padding: 10px;" title="GA4 reports no channel for a page path, so the driving channel is genuinely unknown here.">Top source</th>
+              <th style="font-weight: 500; padding: 10px; text-align: right;" title="GA4 screenPageViews for this path (all channels)">Page views</th>
+              <th style="font-weight: 500; padding: 10px; text-align: right;" title="Sessions that viewed this page. Not additive across pages — one visit that viewed three pages counts once in each row.">Sessions</th>
               <th style="font-weight: 500; padding: 10px; text-align: right;">Engagement</th>
               <th style="font-weight: 500; padding: 10px; text-align: right;" title="Session-weighted bounce rate (GA4)">Bounce</th>
-              <th style="font-weight: 500; padding: 10px; text-align: right;" title="First-time visitors who entered on this page (GA4 newUsers)">New users</th>
+              <th style="font-weight: 500; padding: 10px; text-align: right;" title="GA4 newUsers on this page path. GA4 attributes a new user to the row where their first session started, which is not necessarily the page they entered on.">New users</th>
               <th style="font-weight: 500; padding: 10px 20px; text-align: right;">Key events</th>
             </tr></thead>
             <tbody>
@@ -428,7 +429,8 @@
                 <tr style="border-bottom: 1px solid #f8fafc;" style-hover="background:#fcfcfd">
                   <td style="padding: 12px 20px; font-weight: 500;"><a href="https://{{ projectDomain }}{{ r.url }}" target="_blank" rel="noopener" title="Open live page" style="color: #334155; text-decoration: none;" style-hover="color:#4f46e5;text-decoration:underline">{{ r.url }}</a></td>
                   <td style="padding: 12px 10px; color: #64748b;">{{ r.topSource }}</td>
-                  <td style="padding: 12px 10px; text-align: right; font-weight: 600; color: #0f172a;">{{ r.sessFmt }}</td>
+                  <td style="padding: 12px 10px; text-align: right; font-weight: 600; color: #0f172a;">{{ r.viewsFmt }}</td>
+                  <td style="padding: 12px 10px; text-align: right; color: #475569;">{{ r.sessFmt }}</td>
                   <td style="padding: 12px 10px; text-align: right; color: #475569;">{{ r.engFmt }}</td>
                   <td style="padding: 12px 10px; text-align: right; color: #475569;">{{ r.bounceFmt }}</td>
                   <td style="padding: 12px 10px; text-align: right; color: #475569;">{{ r.newUsersFmt }}</td>
