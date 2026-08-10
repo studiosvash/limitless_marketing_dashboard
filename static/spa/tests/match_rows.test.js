@@ -94,6 +94,27 @@ test('shape tabs still read `match`, unaffected by provenance', () => {
   assert.deepStrictEqual(run(rows, { matchType: 'broad' }).length, 3);
 });
 
+/* ---------- 2. Unknown volume is not zero volume ---------- */
+
+test('volume-min excludes only rows with a KNOWN volume below the threshold', () => {
+  const rows = [
+    row('big', { volume: 5000 }),
+    row('small', { volume: 20 }),
+    row('unknown', { volume: null })
+  ];
+  assert.deepStrictEqual(run(rows, { resVolMin: 101 }), ['big', 'unknown']);
+});
+
+test('volume-min at Any keeps everything, unknowns included', () => {
+  const rows = [row('a', { volume: null }), row('b', { volume: 0 })];
+  assert.deepStrictEqual(run(rows, { resVolMin: 0 }), ['a', 'b']);
+});
+
+test('a genuine zero volume is still filtered out — zero is a measurement', () => {
+  const rows = [row('zero', { volume: 0 }), row('unknown', { volume: null })];
+  assert.deepStrictEqual(run(rows, { resVolMin: 101 }), ['unknown']);
+});
+
 test('a cached response from before `sources` existed still populates Related', () => {
   // localStorage holds past searches; a response saved under the old contract carries
   // match === 'related' and no provenance at all.

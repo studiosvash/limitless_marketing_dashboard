@@ -361,6 +361,10 @@ badge (colour-banded: top-3 green, 4–10 blue, 11–20 amber, beyond grey) · C
 - Sparklines are always flat/empty — no monthly-volume history is stored for tracked keywords.
 - If DataForSEO is unreachable the Explorer returns **zero rows with an error message**, never
   invented data.
+- A keyword DataForSEO has no volume figure for shows an **em dash**, not `0` — and it stays
+  visible under the Volume filter, which excludes only rows whose *known* volume is below the
+  threshold. A real `0` is a measurement and is filtered normally. Unknown-volume rows sort to
+  the bottom of the table.
 
 **Permissions.** All roles.
 **Related pages.** Position Tracking (tracking destination), Domain Overview, Overview.

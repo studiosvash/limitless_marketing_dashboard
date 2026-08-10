@@ -118,6 +118,18 @@ class ParseIdeaItemTests(unittest.TestCase):
     def test_missing_keyword_returns_none(self):
         self.assertIsNone(C._parse_idea_item({"keyword_info": {"search_volume": 10}}))
 
+    def test_unknown_volume_stays_none(self):
+        """Zero and unknown are different facts. DataForSEO omits search_volume for keywords
+        Google Ads has no data on; `or 0` turned that into an assertion that the keyword is
+        searched exactly zero times a month, which the table then printed as a real `0`."""
+        row = C._parse_idea_item({"keyword": "brand new phrase", "keyword_info": {}})
+        self.assertIsNone(row["volume"])
+
+    def test_a_real_zero_volume_is_preserved_as_zero(self):
+        row = C._parse_idea_item({"keyword": "nobody searches this",
+                                  "keyword_info": {"search_volume": 0}})
+        self.assertEqual(row["volume"], 0)
+
 
 class RelatedRequestTests(unittest.TestCase):
     """The request `related_keywords/live` actually receives."""
@@ -288,6 +300,22 @@ class CostTests(_NoNetwork):
         # two seeds -> two related tasks at 0.001 each, plus ideas 0.002, questions 0.001 and
         # suggestions 0.002 (extract_cost sums tasks[].cost, which is the per-seed shape).
         self.assertAlmostEqual(res["cost"], 0.007, places=6)
+
+
+class RowOrderTests(_NoNetwork):
+    def test_rows_are_volume_desc_with_unknowns_last(self):
+        """Unknown volume must not float to the top of the table just because the fetch that
+        produced it ran first. Same rule the shared sortRows applies on every other table:
+        an unmeasured value sorts last whichever direction the reader picked."""
+        c = self._connector()
+        c._fetch_keyword_ideas = lambda s, loc, lim: _task(
+            [{"keyword": "unknown vol", "keyword_info": {}}, _item("mid", 500)], 0.002)
+        c._fetch_related_keywords = lambda s, loc, lim: _task([_item("big", 9000)], 0.001)
+        c._fetch_question_ideas = lambda s, loc, lim: _task([_item("tiny", 10)], 0.001)
+        c._fetch_keyword_suggestions = lambda s, loc, lim: _task([], 0.0)
+        res = c.expand_keywords(["seed"], "United States")
+        self.assertEqual([r["kw"] for r in res["rows"]],
+                         ["big", "mid", "tiny", "unknown vol"])
 
 
 class GuardrailTests(unittest.TestCase):

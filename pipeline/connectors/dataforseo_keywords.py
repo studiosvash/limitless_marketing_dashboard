@@ -457,7 +457,12 @@ class DataForSEOKeywordsConnector(BaseConnector):
 
         return {
             "kw": kw,
-            "volume": info.get("search_volume") or 0,
+            # NOT `or 0`. DataForSEO omits search_volume for keywords Google Ads has no data
+            # on, and coercing that to 0 asserts on screen that nobody searches the keyword —
+            # a fabricated measurement, and one the volume-min filter then acted on as if it
+            # were real. None means unknown and the SPA renders it as an em dash; a genuine
+            # `search_volume: 0` still arrives as 0, which is a different and real fact.
+            "volume": info.get("search_volume"),
             "kd": props.get("keyword_difficulty") if props.get("keyword_difficulty") is not None else 0,
             "cpc": round(info.get("cpc"), 2) if info.get("cpc") is not None else 0,
             "intent": (main_intent or "informational").lower(),
@@ -632,6 +637,14 @@ class DataForSEOKeywordsConnector(BaseConnector):
             _absorb(item, "suggestions")
         for item in _items_of(questions_payload):
             _absorb(item, "questions")
+
+        # Volume desc across the whole merged set, unknowns LAST. Each fetch already asks for
+        # its own volume ordering, but concatenating four of them interleaves four descending
+        # runs, and a keyword with no volume data would otherwise sit wherever the fetch that
+        # found it happened to land — routinely at the top of the table. Sorting on
+        # `(volume is None, -volume)` matches the rule sortRows applies to every other table
+        # in the SPA: an unmeasured value goes last whichever direction the reader picked.
+        rows.sort(key=lambda r: (r["volume"] is None, -(r["volume"] or 0)))
 
         # `units` = keyword rows returned. Labs ideas/related/suggestions all meter per
         # returned keyword, so this is the honest denominator for cost-per-keyword.

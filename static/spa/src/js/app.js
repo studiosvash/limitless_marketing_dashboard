@@ -1213,7 +1213,11 @@
       const allow = sets[s.matchType];
       rows = allow ? s.research.rows.filter(r => allow.includes(r.match)) : s.research.rows.slice();
     }
-    if (s.resVolMin > 0) rows = rows.filter(r => r.volume >= s.resVolMin);
+    /* Exclude only rows with a KNOWN volume below the threshold. `r.volume >= s.resVolMin`
+       reads null as 0 (JS coerces it), so every keyword DataForSEO has no volume data for
+       disappeared from "101+" as though it had been measured and found empty. An unknown
+       value cannot fail a numeric test — it has not been tested. */
+    if (s.resVolMin > 0) rows = rows.filter(r => r.volume == null || r.volume >= s.resVolMin);
     if (s.resKdMin > 0 || s.resKdMax < 100) rows = rows.filter(r => r.kd >= s.resKdMin && r.kd <= s.resKdMax);
     if (s.resIntents.length) rows = rows.filter(r => s.resIntents.includes(r.intent));
     if (s.resIncl.trim()) { const t = s.resIncl.toLowerCase().split(',').map(x => x.trim()).filter(Boolean); rows = rows.filter(r => t.every(x => (r.kw || '').toLowerCase().indexOf(x) >= 0)); }
@@ -1239,7 +1243,10 @@
         if (seedTokens.has(w) || stop.has(w) || w.length < 3 || seen.has(w)) return;
         seen.add(w);
         const g = gm.get(w) || { word: w, count: 0, volume: 0 };
-        g.count++; g.volume += r.volume; gm.set(w, g);
+        // `|| 0` only here, and only because this is a SUM: an unknown volume contributes
+        // nothing to a group total. `g.volume += null` would make the whole group NaN and
+        // print "NaN" in the sidebar. The row itself keeps its null.
+        g.count++; g.volume += (r.volume || 0); gm.set(w, g);
       });
     });
     const arr = Array.from(gm.values()).filter(g => g.count >= 2);
@@ -2930,7 +2937,7 @@
       exportTopPages: () => { const d = s.cache[this.key('overview')]; if (d) this.downloadCsv(project.domain + '-top-pages.csv', [['page', 'url'], ['clicks', 'clicks'], ['impressions', 'impressions'], ['ctr', 'ctr']], d.topPages); },
       exportKeywords: () => { const d = s.cache[this.key('keywords')]; if (d) this.downloadCsv(project.domain + '-keywords.csv', [['keyword', 'kw'], ['intent', 'intent'], ['position', 'pos'], ['volume', 'volume'], ['kd', 'kd'], ['cpc', 'cpc'], ['clicks', 'clicks'], ['url', 'url']], d.keywords); },
       exportBacklinks: () => { const d = s.cache[this.key('backlinks')]; if (d) this.downloadCsv(project.domain + '-backlinks.csv', [['domain', 'domain'], ['url_from', 'url_from'], ['anchor', 'anchor'], ['status', 'status'], ['dofollow', 'dofollow'], ['domain_rank', 'rank'], ['page_rank', 'page_rank'], ['spam_score', 'spam_score'], ['first_seen', 'firstSeen'], ['target', 'target']], d.links); },
-      exportReferrers: () => { const d = s.cache[this.key('offsite')]; if (d) this.downloadCsv(project.domain + '-referring-domains.csv', [['domain', 'domain'], ['domain_rank', 'authorityScore'], ['sessions', 'sessions'], ['engagement_rate', 'engagementRate'], ['key_events', 'keyEvents'], ['revenue', 'revenue']], d.referrers); },
+      exportReferrers: () => { const d = s.cache[this.key('offsite')]; if (d) this.downloadCsv(project.domain + '-referring-domains.csv', [['domain', 'domain'], ['domain_rank', 'authorityScore'], ['sessions', 'sessions'], ['engagement_rate', 'engagementRate'], ['key_events', 'keyEvents'], ['revenue', 'revenue'], ['drives_traffic', 'drivesTraffic']], d.referrers); },
       exportSocial: () => { const d = s.cache[this.key('offsite')]; if (d) this.downloadCsv(project.domain + '-off-site-social.csv', [['platform', 'platform'], ['source', 'source'], ['channel', 'channel'], ['impressions', 'impressions'], ['sessions', 'sessions'], ['engagement_rate', 'engagedRate'], ['key_events', 'keyEvents'], ['revenue', 'revenue']], d.social); },
       exportPages: () => { const d = s.cache[this.key('pages')]; if (d) this.downloadCsv(project.domain + '-crawled-pages.csv', [['url', 'url'], ['score', 'score'], ['status', 'statusCode'], ['errors', 'errors'], ['warnings', 'warnings'], ['notices', 'notices'], ['depth', 'depth'], ['in_links', 'inLinks'], ['load_ms', 'loadTimeMs']], d.crawledPages); },
       auGoIssues: () => { this.setState({ auSub: 'issues', auSev: 'all', auCat: 'all' }); this.pushNav({ auSub: 'issues' }); },

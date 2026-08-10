@@ -61,7 +61,8 @@ def _to_spa_row(old_row: dict, tracked: set[str]) -> dict:
         # belong to no expansion tab but All/Exact.
         "source": "lookup",
         "sources": ["lookup"],
-        "volume": old_row.get("search_volume") or 0,
+        # Unknown volume stays null — see _enrich_expanded_row.
+        "volume": old_row.get("search_volume"),
         "kd": old_row.get("keyword_difficulty") or 0,
         "cpc": old_row.get("cpc") or 0,
         "intent": intent.lower(),
@@ -85,7 +86,12 @@ def _enrich_expanded_row(row: dict, tracked: set[str]) -> dict:
         # would empty that tab again no matter what the connector tags.
         "source": row.get("source") or (sources[0] if sources else "ideas"),
         "sources": sources or ["ideas"],
-        "volume": row.get("volume") or 0,
+        # NOT `or 0`. The tracked-keywords path (keywords_service.to_api_keyword) has always
+        # passed an unknown volume through as null and the SPA renders null as an em dash;
+        # the Explorer path coerced it to 0 and so put a fabricated measurement next to real
+        # ones in the same column. It also changed what the reader could see: the volume-min
+        # filter dropped every unknown-volume row as though it had been measured at zero.
+        "volume": row.get("volume"),
         "kd": row.get("kd") or 0,
         "cpc": row.get("cpc") or 0,
         "intent": intent.lower(),

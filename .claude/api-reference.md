@@ -1478,6 +1478,10 @@ where each row is
 `{kw, match, source, sources[], volume, kd, cpc, intent, serpFeatures[], monthly[], tracked}`.
 `tracked` reflects whether the site already has `KeywordRanking` rows for that keyword.
 
+**`volume` is `null` when DataForSEO reported no figure** — the same contract the tracked-keyword
+endpoints use, and the SPA renders it as an em dash. A literal `0` means "measured at zero" and
+is a different fact. Rows are ordered volume-descending with `null` volumes last.
+
 **`match` and `source` are two different axes and the SPA reads both:**
 
 | Field | Question it answers | Values | Drives |
