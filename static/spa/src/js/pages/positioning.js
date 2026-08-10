@@ -629,6 +629,43 @@
         };
       };
 
+      /* UNTRACK ONE KEYWORD. Until now the only way to remove a keyword was the bulk PUT —
+         re-send the whole list minus one, through the Edit Project modal, which rewrites the
+         project's name, engine, device, language and location on the same save. Removing one
+         keyword should not require touching five unrelated fields, least of all on
+         saved_keywords, the table that decides DataForSEO spend.
+         Confirmed, because it drops that keyword's measurement history from every view; the
+         DELETE is idempotent, so a double click is harmless. Both cached tabs are invalidated
+         because the Keywords page reads the same tracked list. A rejection is reported, never
+         swallowed: a failed untrack that toasts success is how a user pays for a keyword they
+         believe they removed. */
+      const ptUntrackKeyword = (kw) => () => {
+        const pid = s.projectId;
+        if (!pid || !kw) return;
+        if (!window.confirm('Stop tracking "' + kw + '"?\n\nIt is removed from this project\'s '
+            + 'tracked list and will no longer be measured or re-measured. Its recorded '
+            + 'rankings are not deleted — tracking it again brings them back.')) return;
+        window.FuseAPI.del('/api/projects/' + pid + '/keywords', { keyword: kw })
+          .then(() => {
+            if (!this._alive) return;
+            this.setState(st => {
+              const cache = {};
+              Object.keys(st.cache).forEach(k2 => {
+                if (k2.indexOf(pid + ':positioning') !== 0 && k2.indexOf(pid + ':keywords') !== 0) {
+                  cache[k2] = st.cache[k2];
+                }
+              });
+              return { cache };
+            });
+            this.fetchTab(this.state.tab, pid, this.state.range, true);
+            if (this.notify) this.notify('Stopped tracking "' + kw + '"');
+          })
+          .catch(err => {
+            if (!this._alive) return;
+            if (this.notify) this.notify(this.errText(err, 'Could not untrack "' + kw + '"'));
+          });
+      };
+
       const ptSetup = !data || !data.kpis || data.kpis.state === 'setup' || (data.kpis.tracked === 0 && (!data.movers || !data.movers.length) && (!data.competitors || !data.competitors.rows || !data.competitors.rows.length) && (!data.rankings || !data.rankings.length));
       if (ptSetup) {
         /* Setup state: nothing measured on screen, so nothing to attribute. */
@@ -850,7 +887,8 @@
             intent: k.intent || '—',
             intentStyle: { padding: '2px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', background: iLower.includes('comm') ? '#d1fae5' : (iLower.includes('info') ? '#dbeafe' : (iLower.includes('trans') ? '#ffedd5' : '#f1f5f9')), color: iLower.includes('comm') ? '#047857' : (iLower.includes('info') ? '#1d4ed8' : (iLower.includes('trans') ? '#c2410c' : '#475569')) },
             urlShort: (k.url || '').replace(/^https?:\/\/[^\/]+/, '') || (k.url || '—'),
-            url: k.url || ''
+            url: k.url || '',
+            onUntrack: ptUntrackKeyword(k.kw)
           };
         })
       };

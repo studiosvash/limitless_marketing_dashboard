@@ -307,6 +307,7 @@
                       <th style="font-weight: 600; padding: 12px; text-align: right;">CPC</th>
                       <th style="font-weight: 600; padding: 12px;">Intent</th>
                       <th style="font-weight: 600; padding: 12px 20px;">Ranking URL</th>
+                      <th style="font-weight: 600; padding: 12px 20px; text-align: right;"><span aria-hidden="true">&nbsp;</span></th>
                     </tr>
                   </thead>
                   <tbody>
@@ -328,11 +329,12 @@
                         <td style="padding: 12px; text-align: right; color: #64748b;">{{ r.cpc }}</td>
                         <td style="padding: 12px;"><span style="{{ r.intentStyle }}">{{ r.intent }}</span></td>
                         <td style="padding: 12px 20px; color: #64748b; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="{{ r.url }}">{{ r.urlShort }}</td>
+                        <td style="padding: 12px 20px; text-align: right;"><span onClick="{{ r.onUntrack }}" role="button" aria-label="Stop tracking this keyword" title="Stop tracking this keyword" style="display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 6px; color: #cbd5e1; cursor: pointer; font-size: 14px; line-height: 1;" style-hover="background:#fee2e2;color:#b91c1c">✕</span></td>
                       </tr>
                     </sc-for>
                     <sc-if value="{{ pt.filteredRankings.length === 0 }}" hint-placeholder-val="{{ false }}">
                       <tr>
-                        <td colspan="9" style="padding: 40px 20px; text-align: center; color: #94a3b8; font-size: 13px;">No tracked keywords match this tab or filter yet. Click 'Sync Positions' to update SERP data.</td>
+                        <td colspan="10" style="padding: 40px 20px; text-align: center; color: #94a3b8; font-size: 13px;">No tracked keywords match this tab or filter yet. Click 'Sync Positions' to update SERP data.</td>
                       </tr>
                     </sc-if>
                   </tbody>

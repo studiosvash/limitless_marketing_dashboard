@@ -39,7 +39,7 @@ from apps.dashboard.services.site_audit_service import build_site_audit_response
 from apps.dashboard.services.offsite_service import build_offsite_response
 from apps.dashboard.services.ads_service import build_ads_response
 from apps.dashboard.services.ai_service import (
-    build_ai_response, inspect_question, run_prompt_checks,
+    build_ai_response, inspect_question, start_ai_run,
 )
 from pipeline.services.ai_visibility_service import connectable_platforms
 from apps.dashboard.services.settings_service import build_settings_response, apply_settings_update
@@ -504,6 +504,31 @@ class ProjectKeywordsView(APIView):
         result = reconcile_saved_keywords(site_id, rows, location, site_pk=site.id)
         return Response({"ok": True, "count": len(rows), **result})
 
+    def delete(self, request, slug):
+        """Untrack ONE keyword for this project. Body: `{"keyword": "..."}`.
+
+        `saved_keyword_service.delete_saved_keyword` existed, correct and documented, with no
+        callers and no route — so the only way to untrack a keyword was the bulk PUT: re-send
+        the entire list minus one, through the Edit Project modal, which also rewrites the
+        project's name, engine, device, language and location on the same save. Removing one
+        keyword should not require touching five unrelated fields, least of all on the table
+        that decides DataForSEO spend.
+
+        Idempotent, because the SPA fires row actions in parallel: deleting a keyword that is
+        not tracked is a 200 with `deleted: false`, not a 404. Scoped by `site.id`, so a
+        sibling project tracking the same phrase in its own market keeps its row.
+        """
+        from pipeline.services.saved_keyword_service import delete_saved_keyword
+
+        site = resolve_project_or_404(slug)
+        keyword = (request.data.get("keyword") or request.data.get("kw") or "").strip()
+        if not keyword:
+            return Response({"detail": "keyword is required"}, status=400)
+
+        deleted = delete_saved_keyword(site.site_url, keyword,
+                                       (site.location or "").strip(), site_pk=site.id)
+        return Response({"ok": True, "keyword": keyword, "deleted": deleted})
+
 
 @method_decorator(login_not_required, name="dispatch")
 class ProjectKeywordListsView(APIView):
@@ -757,12 +782,18 @@ class ProjectAIActionView(APIView):
         return Response({"detail": f"Unknown list op: {op}"}, status=400)
 
     def _handle_run(self, request, site_id):
-        """Run tracked prompts against their tracked answer engines, for real.
+        """Plan a run, spawn the worker that executes it, and return immediately.
 
         Scope comes from the body, matching what the SPA sends: `{promptId}` for one row's
         "Run now", `{promptIds}` for the checkbox toolbar's "Run selected", `{listId}` for
-        "Run <list> now", `{}` for "Run all now". Costs real money, which is why it is a POST
-        the user pressed and never part of the page GET."""
+        "Run <list> now", `{}` for "Run all now". `{force: true}` is the separate
+        "Re-run (fresh answers)" action.
+
+        The checks themselves do NOT happen here. A full grid is minutes of sequential
+        DataForSEO calls; running that inside the request meant the proxy killed it, the SPA's
+        busy flag could never be cleared, and results written only at the end were discarded
+        wholesale when the worker died. `start_ai_run` records a task and spawns
+        `manage.py run_ai_checks`; the SPA reads the task's progress off the AI GET."""
         prompt_id = request.data.get("promptId")
         prompt_ids = request.data.get("promptIds")
         list_id = request.data.get("listId")
@@ -779,7 +810,7 @@ class ProjectAIActionView(APIView):
                 return Response({"detail": "Prompts not found"}, status=404)
         elif list_id is not None:
             qs = qs.filter(list_id=list_id)
-        return Response(run_prompt_checks(site_id, list(qs)))
+        return Response(start_ai_run(site_id, list(qs), force=bool(request.data.get("force"))))
 
     def _handle_inspect(self, request, site_id):
         """One ad-hoc answer-engine check for the Answer Inspector. Returns the stored history

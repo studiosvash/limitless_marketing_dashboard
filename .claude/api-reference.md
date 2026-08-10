@@ -1043,6 +1043,22 @@ still stores real volume/KD/CPC/intent while a caller that has none cannot blank
 > The incoming batch is logged at `DEBUG` through the module logger (it used to be a bare
 > `print`, which wrote user keyword data to stdout on every save and bypassed logging config).
 
+### `DELETE /api/projects/<slug>/keywords`
+
+Untrack **one** keyword for this project. Body: `{"keyword": "..."}` (`kw` also accepted).
+Missing or blank → **400**. Unknown slug → **404**.
+Returns `{"ok": true, "keyword": "...", "deleted": <bool>}`.
+
+**Idempotent**: deleting a keyword that is not tracked is a `200` with `deleted: false`, not a
+404 — the SPA fires row actions in parallel. Scoped by `site.id`, so a sibling project tracking
+the same phrase in its own market keeps its row.
+
+> Added 2026-08-10. `saved_keyword_service.delete_saved_keyword` existed, correct and
+> documented, with **zero callers and no route**, so the only way to untrack a keyword was the
+> bulk `PUT` — re-sending the whole list minus one, through the Edit Project modal, which
+> rewrites the project's name, engine, device, language and location on the same save. The
+> Rankings Overview table now carries a per-row ✕ with a confirm.
+
 ### `POST /api/alerts/<alert_id>/ack`
 
 Idempotent acknowledgement. Persists the id into `ProjectSettings.data["alertAcks"]`, and for
