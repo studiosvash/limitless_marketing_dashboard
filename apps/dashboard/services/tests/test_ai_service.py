@@ -164,7 +164,12 @@ class BuildAiResponseNoTargetTests(TestCase):
         body = build_ai_response(SITE_ID)
 
         self.assertIs(body["setupDone"], False)
-        self.assertEqual(body["targets"], {"brand": "", "aliases": [], "competitors": []})
+        # `identity` is the needle list the verdict is really computed from. It carries this
+        # project's own domain even with no target row, because that is a real fact about the
+        # project -- and its absence is why an answer naming the site by domain used to be
+        # scored "absent".
+        self.assertEqual(body["targets"], {"brand": "", "aliases": [], "competitors": [],
+                                           "identity": ["example.com", "example"]})
         self.assertEqual(body["lists"], [])
         self.assertEqual(body["prompts"], [])
         self.assertEqual(body["aiKeywords"], [])
@@ -185,6 +190,7 @@ class BuildAiResponseWithTargetTests(TestCase):
         self.assertIs(body["setupDone"], True)
         self.assertEqual(body["targets"], {
             "brand": "Acme", "aliases": ["Acme Co"], "competitors": ["Widgets Inc"],
+            "identity": ["example.com", "acme co", "example", "acme"],
         })
 
 

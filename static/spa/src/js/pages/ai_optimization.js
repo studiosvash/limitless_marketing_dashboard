@@ -35,6 +35,13 @@
         knob: { position: 'absolute', top: '2px', left: on ? '20px' : '2px', width: '18px', height: '18px', borderRadius: '9999px', background: 'white', transition: 'left 0.15s ease' }
       });
       const aiv = { domain: project.domain, showWizard: false, showMain: false };
+      /* THE identity list — the exact needles the backend computed the verdict from
+         (brand + aliases + this project's own normalised domain). The Inspector used to test
+         "is this citation ours?" a THIRD way, hostname-matching project.domain, so it could
+         paint a "You" chip on a citation sitting directly under a verdict saying you are not
+         mentioned. Verdict, grid and chips now read one list. */
+      const identity = (d.targets && d.targets.identity) || [];
+      const isOurs = host => !!host && identity.some(n => host === n || host.endsWith('.' + n));
 
       /* shared target-editor drafts (wizard step 1-2 + edit-targets modal) */
       const wizBrand = s.aiWizBrand != null ? s.aiWizBrand : d.targets.brand;
@@ -181,6 +188,12 @@
         aiv.tgOpen = s.aiTgOpen;
         aiv.tgClose = () => this.setState({ aiTgOpen: false, aiWizBrand: null, aiWizAliases: null, aiWizComps: null, aiWizCompInput: '' });
         aiv.tgSave = () => this.aiSaveTargets(d);
+        /* Free corrective action — see App#aiRescan. Offered next to Edit targets because
+           that is where a detection mistake gets fixed, and re-scanning is what makes the fix
+           take effect on answers already bought. */
+        aiv.rescanLabel = s.aiRescanning ? 'Re-scanning…' : '↻ Re-scan answers (free)';
+        aiv.rescanStyle = { cursor: s.aiRescanning ? 'default' : 'pointer', padding: '7px 14px', fontSize: '12.5px', fontWeight: 600, color: s.aiRescanning ? '#94a3b8' : '#334155', border: '1px solid #cbd5e1', borderRadius: '8px', background: 'white', whiteSpace: 'nowrap' };
+        aiv.rescan = () => this.aiRescan();
 
         if (sub2 === 'visibility') {
           const sov = d.sov;
@@ -399,9 +412,16 @@
              `aiInspEntry: false` (not null) is the explicit "this prompt has never been run"
              sentinel — null/undefined mean "no selection" and fall back to the latest history
              entry, which would show some OTHER prompt's answer here. */
-          const openInspector = pr => {
-            const stored2 = d.history.find(e => e.promptId === pr.id) || null;
-            this.setState({ aiInspEntry: stored2 || false, aiInspQ: pr.text, aiInspPromptId: pr.id, aiSub: 'inspector' });
+          /* `find(e => e.promptId === pr.id)` alone returns the FIRST match, which after a run
+             is whichever engine happened to be checked LAST — not the cell the user clicked.
+             Clicking a cell now opens that cell's platform; clicking the row's "Open answer"
+             falls back to the newest answer for the prompt, whichever engine it came from. */
+          const openInspector = (pr, platformId) => {
+            const forCell = platformId
+              ? d.history.find(e => e.promptId === pr.id && e.platform === platformId)
+              : null;
+            const stored2 = forCell || (platformId ? null : d.history.find(e => e.promptId === pr.id)) || null;
+            this.setState({ aiInspEntry: stored2 || false, aiInspQ: pr.text, aiInspPromptId: pr.id, aiInspPlat: platformId || null, aiSub: 'inspector' });
             this.pushNav({ aiSub: 'inspector' });
           };
           aiv.promptRows = visPrompts.map(pr => {
@@ -426,7 +446,10 @@
             return {
               text: pr.text,
               meta: metaParts.join(' · '),
-              cells: llm.map(pl2 => cell(pr.cfg.models.includes(pl2.id), res(pl2))),
+              cells: llm.map(pl2 => Object.assign(
+                cell(modelsOf(pr).includes(pl2.id), res(pl2)),
+                { open: e => { e.stopPropagation(); openInspector(pr, pl2.id); },
+                  title: 'Open ' + pl2.name + '’s answer to this prompt' })),
               checked: prSelOn,
               checkStyle: { width: '15px', height: '15px', borderRadius: '4px', border: '1.5px solid ' + (prSelOn ? '#4f46e5' : '#cbd5e1'), background: prSelOn ? '#4f46e5' : 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, color: 'white', fontSize: '10px', fontWeight: 700, cursor: 'pointer' },
               toggleSel: e => { e.stopPropagation(); this.setState(st => ({ aiPromptSel: prSelOn ? (st.aiPromptSel || []).filter(x => x !== pr.id) : (st.aiPromptSel || []).concat([pr.id]) })); },
@@ -597,6 +620,24 @@
              yet" panel instead of silently falling back to some other question's answer. */
           const entry = s.aiInspEntry === false ? null : (s.aiInspEntry || d.history[0] || null);
           aiv.inspHasEntry = !!entry;
+          /* One answer belongs to ONE engine, and the panel never said which. When a prompt
+             has been answered by several engines the user needs to move between them without
+             going back to the grid — and without paying for a fresh check to do it. */
+          const inspPid = s.aiInspPromptId;
+          const inspSeen = {};
+          const inspAlts = inspPid == null ? [] : d.history.filter(e => {
+            if (e.promptId !== inspPid || inspSeen[e.platform]) return false;
+            inspSeen[e.platform] = 1; return true;
+          });
+          const inspChipBase = { display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '4px 11px', fontSize: '12px', fontWeight: 500, borderRadius: '999px', cursor: 'pointer', color: '#64748b', border: '1px solid #e2e8f0', background: 'white' };
+          aiv.inspHasAlts = inspAlts.length > 1;
+          aiv.inspAlts = inspAlts.map(e => ({
+            label: e.platformName || e.platform || 'Unknown engine',
+            style: (entry && e.id === entry.id)
+              ? Object.assign({}, inspChipBase, { borderColor: '#4f46e5', color: '#4f46e5', background: '#eef2ff', fontWeight: 600 })
+              : inspChipBase,
+            click: () => this.setState({ aiInspEntry: e, aiInspPlat: e.platform })
+          }));
           aiv.inspNotRun = s.aiInspEntry === false && !s.aiInspecting;
           aiv.inspNotRunQ = '“' + (s.aiInspQ || '') + '”';
           aiv.inspecting = s.aiInspecting;
@@ -604,7 +645,11 @@
             const sc2 = entry.scrape;
             const vc = verdictChip(entry.verdict);
             aiv.inspPrompt = entry.question;
-            aiv.inspMeta = sc2.model + ' · ' + sc2.location + ' · captured ' + entry.ts;
+            /* The engine's NAME leads: an answer is one engine's answer, and the panel used to
+               show only the model id, so it was impossible to tell which of four columns you
+               were reading. `platformName` has always been stored on the entry. */
+            aiv.inspMeta = (entry.platformName || entry.platform || 'Unknown engine')
+              + ' · ' + sc2.model + ' · ' + sc2.location + ' · captured ' + entry.ts;
             aiv.inspVerdict = entry.verdict === 'cited' ? 'You are cited at position #' + entry.position : entry.verdict === 'mentioned' ? 'You are mentioned but not cited' : 'You are not mentioned in this answer';
             aiv.inspVerdictStyle = Object.assign({}, vc.style, { fontSize: '12px', padding: '4px 10px', borderRadius: '999px' });
             /* Tracked competitors the answer really named — analyze_answer has always detected
@@ -632,8 +677,7 @@
                hostname match against this project's domain. */
             aiv.inspCites = sc2.citations.map((c2, i2) => {
               const host = c2.domain || ((String(c2.url || '').match(/^https?:\/\/(?:www\.)?([^\/]+)/) || [])[1] || '');
-              const isYou = c2.isYou != null ? c2.isYou
-                : !!host && (host === project.domain || host.endsWith('.' + project.domain));
+              const isYou = c2.isYou != null ? c2.isYou : isOurs(host);
               return {
                 n: '[' + (c2.n != null ? c2.n : i2 + 1) + ']',
                 title: c2.title || host || c2.url || '', domain: host,

@@ -96,6 +96,9 @@ class AIGetEndpointTests(APITestCase):
         self.assertTrue(body["setupDone"])
         self.assertEqual(body["targets"], {
             "brand": "FuseHealth", "aliases": ["Fuse"], "competitors": ["Acme"],
+            # `identity` is additive and derived: the needles the verdict is really computed
+            # from, including this project's own domain. The user's typed aliases are untouched.
+            "identity": ["fusehealth.com", "fusehealth", "fuse"],
         })
         self.assertEqual(len(body["lists"]), 1)
         self.assertEqual(body["lists"][0]["name"], "Branded")
@@ -115,7 +118,10 @@ class AIGetEndpointTests(APITestCase):
         self.assertEqual(resp.status_code, 200)
         body = resp.json()
         self.assertFalse(body["setupDone"])
-        self.assertEqual(body["targets"], {"brand": "", "aliases": [], "competitors": []})
+        # No target row at all, yet the site still knows its own domain — that is a real fact
+        # about this project, not a fabricated one, and it is what the detector will use.
+        self.assertEqual(body["targets"], {"brand": "", "aliases": [], "competitors": [],
+                                           "identity": ["fusehealth.com", "fusehealth"]})
         self.assertEqual(body["lists"], [])
         self.assertEqual(body["prompts"], [])
         self.assertEqual(body["aiKeywords"], [])

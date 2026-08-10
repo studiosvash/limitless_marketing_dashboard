@@ -694,18 +694,27 @@ links you do not.
    anchors by share. These five cards/charts come from the `BacklinksSnapshot` blob, not the
    `Backlink` table — they render empty until `manage.py refresh_backlinks <slug>` has been run
    at least once for that site (the page's own Refresh action calls the same path).
-2. **Backlinks** — the link table: the referring domain (linked to the exact page that carries
-   the backlink — `url_from` — falling back to the domain's homepage when a row predates that
-   column), anchor, target URL, domain-authority chip (0-100, scaled from DataForSEO's raw
-   0-1000 `domain_from_rank`), per-link spam score, dofollow/nofollow, first-seen, and NEW/LOST
-   badges. Two filter rows: status (All · New · Lost) and follow type (All links · Dofollow ·
-   Nofollow). Capped at 60 rows. ("Broken" is not tracked — no HTTP-status column exists yet.)
+2. **Backlinks** — the link table: the referring domain (linked to its homepage) with the exact
+   **source page** — `url_from` — as visible text on a second line, linked to that page; a row
+   whose source page was never recorded reads "source page unknown" rather than falling back to
+   a link to the domain's homepage, because "we know the page" and "we don't" are different
+   facts. Then anchor, target URL, domain-authority chip (0-100, scaled from DataForSEO's raw
+   0-1000 `domain_from_rank`), per-link spam score (green ≤30 · amber 31-60 · red >60),
+   dofollow/nofollow, first-seen, and NEW/LOST badges. Sortable on Domain AS, Spam and First
+   seen. Two filter rows: status (All · New · Lost) and follow type (All links · Dofollow ·
+   Nofollow) — the Nofollow chip started returning rows on 2026-08-10, when the connector
+   stopped filtering nofollow links out of the sync. **Paged at 40 rows** (changed 2026-08-10;
+   was a hard slice to 60 with no navigation, so rows 61-1000 of the payload were unreachable).
+   The counter under the table states the visible range, the number of matching rows, the
+   whole-profile total as a separate labelled clause, and whether the stored sample itself hit
+   the per-sync cap. ("Broken" is not tracked — no HTTP-status column exists yet.)
 3. **Referring Domains** — domain (linked to its homepage), authority chip, per-domain spam
    score (averaged across that domain's stored links), backlink count, links-to-us, follow type,
-   first-seen. `category` stays empty — no column/connector backs it.
+   first-seen. `category` stays empty — no column/connector backs it. **Paged at 40** (was every
+   row rendered into the DOM behind a scroller).
 4. **Anchors** — anchor text, classified type (Branded / URL / Keyword / Generic / Empty),
    backlinks, referring domains, dofollow %. Sourced from the snapshot; empty until
-   `refresh_backlinks` has run.
+   `refresh_backlinks` has run. **Paged at 40**, same reason.
 5. **Link Gap** — needs each tracked competitor's own referring-domain list, which nothing syncs
    yet, so `gapDomains` is always empty and the tab shows its empty state.
 
@@ -1425,7 +1434,11 @@ budget, conversion value). Each is labelled in the UI as derived; none is presen
 measurement.
 *(Backlinks link rows, first-seen and spam score were on this list — as of 2026-08-01 the
 `dataforseo_backlinks` connector captures `url_from`, `domain_from_rank`, `page_from_rank` and
-`backlink_spam_score` for real, so those rows are now measured, not derived. See §8.)*
+`backlink_spam_score` for real, so those rows are now measured, not derived. See §8. Capturing
+`url_from` was only half of it: until 2026-08-10 the `backlinks` unique key did not include it,
+so a domain linking from N pages could store only ONE row and the page could not show a source
+URL it did not hold. The key now covers `url_from` and the page renders it; the stored profile
+is a real per-source-page list, not a per-domain one.)*
 
 **Not offered by the data source, not a code gap**
 - AI Optimization's per-platform mention tracking covers **Google AI Overviews and ChatGPT

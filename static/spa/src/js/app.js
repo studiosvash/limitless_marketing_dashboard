@@ -2593,6 +2593,27 @@
         this.notify(this.errText(err, 'Could not add ' + (texts.length === 1 ? 'that prompt' : 'those prompts')));
       });
   }
+  aiRescan() {
+    /* FREE. `POST /ai/rescan` re-scores the answers already stored against the current
+       targets — analyze_answer is pure text analysis with no network — so fixing a missing
+       alias or adding a competitor corrects the whole grid without re-buying a single check. */
+    if (this.state.aiRescanning) return;
+    this.setState({ aiRescanning: true });
+    this.aiPost('rescan', {})
+      .then(r => {
+        if (!this._alive) return;
+        this.setState({ aiRescanning: false });
+        this.aiReload();
+        this.notify(r.detail ? r.detail
+          : 'Re-scanned ' + r.rescanned + ' stored answer' + (r.rescanned === 1 ? '' : 's')
+            + ' · ' + r.changed + ' verdict' + (r.changed === 1 ? '' : 's') + ' changed · no cost');
+      })
+      .catch(err => {
+        if (!this._alive) return;
+        this.setState({ aiRescanning: false });
+        this.notify(this.errText(err, 'Could not re-scan the stored answers'));
+      });
+  }
   aiRun(body) {
     /* The POST no longer performs the run: it plans the work, records a task and spawns
        `manage.py run_ai_checks`, then returns {task_id, planned, estimated_cost, detail}

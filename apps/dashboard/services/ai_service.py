@@ -39,11 +39,11 @@ from apps.dashboard.services.mutation_state import get_state, set_state
 from pipeline.db.schema import AIKeywordData, ConnectorCost
 from pipeline.db.writer import ensure_tables, insert_connector_cost
 from pipeline.services.ai_visibility_service import (
-    check_prompt, connected_platforms, is_platform_connected, not_connected_result,
-    not_connected_reason, platform_name,
+    analyze_answer, check_prompt, connected_platforms, is_platform_connected,
+    not_connected_result, not_connected_reason, platform_name, target_needles,
 )
 from pipeline.utils.db_connection import get_session
-from pipeline.utils.site_ids import resolve_site_ids
+from pipeline.utils.site_ids import normalize_domain, resolve_site_ids
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +75,16 @@ MENTION_PLATFORMS = [
 # verdict, position, cost, answer) in apps/dashboard/models.py; see the report.
 RESULTS_KEY = "aiPromptResults"   # {"<prompt_id>": {"results": {...}, "lastRun": iso}}
 HISTORY_KEY = "aiRunHistory"      # [entry, ...] newest first
+
+# The history cap is PER CELL, not global. It used to be a single ceiling of 50 entries, and
+# one "Run all" over 20 prompts x 4 engines produces 80 — so 30 answers were dropped the
+# instant they were written, and prompts that had just been run (and just been billed) opened
+# the Inspector claiming they had never been run at all. Two per (prompt, platform) is enough
+# to show "this answer, and the one before it" while keeping the blob bounded by the size of
+# the grid rather than by how often the user presses Run.
+MAX_HISTORY_PER_CELL = 2
+# Ad-hoc Answer Inspector runs have no prompt id, so they have no cell to be capped within.
+# They keep their own global ceiling.
 MAX_HISTORY = 50
 
 # Per-prompt cadence/country/city/webSearch. AIPrompt has no columns for these -- adding them
@@ -361,6 +371,28 @@ def _history_entry(result: dict, question: str, prompt_id) -> dict:
     }
 
 
+def _trim_history(history: list) -> list:
+    """Newest-first history, capped per (prompt, platform) — see MAX_HISTORY_PER_CELL."""
+    kept: list = []
+    per_cell: dict = {}
+    adhoc = 0
+    for entry in history:
+        if not isinstance(entry, dict):
+            continue
+        prompt_id = entry.get("promptId")
+        if prompt_id is None:
+            adhoc += 1
+            if adhoc <= MAX_HISTORY:
+                kept.append(entry)
+            continue
+        key = (str(prompt_id), entry.get("platform"))
+        seen = per_cell.get(key, 0) + 1
+        per_cell[key] = seen
+        if seen <= MAX_HISTORY_PER_CELL:
+            kept.append(entry)
+    return kept
+
+
 def _record_spend(site_id: str, connector: str, cost: float, units: int, notes: str) -> None:
     """Append the real USD this action spent to `connector_costs`. Never raises: losing a cost
     row must not lose the results the user already paid for."""
@@ -374,11 +406,40 @@ def _record_spend(site_id: str, connector: str, cost: float, units: int, notes: 
 
 
 def _target_for_run(site_id: str):
+    """(brand, aliases, competitors) as the DETECTOR should see them.
+
+    The project's own domain is appended to the aliases, and that is the fix for the single
+    most confusing thing this page did: "my domain IS mentioned but the grid says Not
+    mentioned". Competitors are stored as domains and `_needles` expands a hostname to its bare
+    label, so a competitor was matched by domain — but YOUR entity was only ever matched by
+    brand name. The matcher is boundary-aware (`(?<![a-z0-9])needle(?![a-z0-9])`), so the brand
+    "Limitless" does not match inside "limitlesshold.com": the next character is `h`. An answer
+    that recommended the site by domain therefore scored "absent".
+
+    `normalize_domain` is the one canonicaliser (§3) — the same function `add_site` stores
+    `sites.site_url` with — so the needle is the same string the rest of the app calls this
+    site. Additive: the user's own typed aliases are untouched, and the Targets editor still
+    shows exactly what they entered.
+    """
     target = AITarget.objects.filter(site_url=site_id).first()
     brand = (target.brand or "").strip() if target else ""
-    aliases = (target.aliases or []) if target else []
+    aliases = list(target.aliases or []) if target else []
     competitors = (target.competitors or []) if target else []
+    own = normalize_domain(site_id)
+    if own and own not in {str(a or "").strip().lower() for a in aliases}:
+        aliases = aliases + [own]
     return brand, aliases, competitors
+
+
+def identity_needles(site_id: str) -> list[str]:
+    """Every string that means "this project" in an answer.
+
+    THE one identity function. The verdict, the grid cell and the Inspector's "You" chip all
+    read this list — they used to answer the question three different ways, which is how a
+    "You" chip could sit on a citation directly under a verdict saying you are not mentioned.
+    """
+    brand, aliases, _competitors = _target_for_run(site_id)
+    return target_needles(brand, aliases)
 
 
 # ─────────────────────────────────────────────
@@ -616,7 +677,7 @@ def _persist_prompt_results(site_id: str, prompt_id, cells: dict, entries: list,
 
     if entries:
         history = get_run_history(site_id)
-        set_state(site_id, HISTORY_KEY, (entries[::-1] + history)[:MAX_HISTORY])
+        set_state(site_id, HISTORY_KEY, _trim_history(entries[::-1] + history))
 
 
 def execute_ai_run(site_id: str, task_id: str) -> dict:
@@ -746,6 +807,97 @@ def execute_ai_run(site_id: str, task_id: str) -> dict:
             "notConnected": sorted(not_connected), "detail": detail}
 
 
+def _answer_of(entry: dict) -> str:
+    """The answer text an archived history entry was built from.
+
+    Reconstructed from `scrape.paragraphs`, which `_paragraphs` produced by splitting the
+    answer on blank lines — so rejoining with a blank line round-trips it. Line structure
+    inside a paragraph (which is what the enumerated-list detector reads) is preserved
+    verbatim, so a re-score sees exactly the ordinals the original check did.
+    """
+    paragraphs = (entry.get("scrape") or {}).get("paragraphs") or []
+    return "\n\n".join(str(p.get("text") or "") for p in paragraphs if isinstance(p, dict))
+
+
+def rescan_stored_answers(site_id: str) -> dict:
+    """Re-score every stored answer against the CURRENT targets. Costs nothing.
+
+    `analyze_answer` is pure text analysis with no network by design, so the answers already
+    paid for can be re-read whenever the targets change. That is what makes the Targets editor
+    corrective: fixing a missing alias or adding a competitor updates the whole grid for free,
+    instead of requiring a paid re-run of every prompt to learn something the stored text
+    already says.
+
+    Returns `{"rescanned", "changed"}` — real counts, never a claim that something was fixed.
+    """
+    brand, aliases, competitors = _target_for_run(site_id)
+    if not brand:
+        return {"rescanned": 0, "changed": 0,
+                "detail": "Set your brand under Targets before re-scanning."}
+
+    history = get_run_history(site_id)
+    if not history:
+        return {"rescanned": 0, "changed": 0}
+
+    rescanned = 0
+    changed = 0
+    new_history: list = []
+    latest_by_cell: dict = {}
+
+    for entry in history:
+        answer = _answer_of(entry)
+        if not answer.strip():
+            # Nothing to re-read. Leaving it untouched is the honest option: re-scoring an
+            # answer we no longer hold would invent a verdict.
+            new_history.append(entry)
+            continue
+        analysis = analyze_answer(answer, brand, aliases, competitors)
+        rescanned += 1
+        before = (entry.get("verdict"), bool(entry.get("mentioned")), bool(entry.get("cited")),
+                  entry.get("position"), [c.get("name") for c in (entry.get("competitors") or [])])
+        entry = {
+            **entry,
+            "verdict": analysis["verdict"], "mentioned": analysis["mentioned"],
+            "cited": analysis["cited"], "position": analysis["position"],
+            "snippet": analysis["snippet"], "competitors": analysis["competitors"],
+            "scrape": {**(entry.get("scrape") or {}), "paragraphs": analysis["paragraphs"]},
+        }
+        after = (entry["verdict"], bool(entry["mentioned"]), bool(entry["cited"]),
+                 entry["position"], [c.get("name") for c in entry["competitors"]])
+        if before != after:
+            changed += 1
+        new_history.append(entry)
+        key = (str(entry.get("promptId")), entry.get("platform"))
+        if entry.get("promptId") is not None and key not in latest_by_cell:
+            latest_by_cell[key] = entry
+
+    # The grid shows the LATEST answer per cell, so only the newest re-scored entry per cell
+    # is pushed back onto it.
+    stored = get_prompt_results(site_id)
+    for (prompt_id, platform), entry in latest_by_cell.items():
+        prompt_entry = stored.get(prompt_id)
+        if not isinstance(prompt_entry, dict):
+            continue
+        results = prompt_entry.get("results")
+        if not isinstance(results, dict):
+            continue
+        cell = results.get(platform)
+        # Only a cell that really holds a checked answer. An error or not_connected cell has
+        # no observation to re-score.
+        if not isinstance(cell, dict) or cell.get("state") != "checked":
+            continue
+        results[platform] = {
+            **cell,
+            "verdict": entry["verdict"], "mentioned": entry["mentioned"],
+            "cited": entry["cited"], "position": entry["position"],
+            "snippet": entry["snippet"], "competitors": entry["competitors"],
+        }
+
+    set_state(site_id, HISTORY_KEY, new_history)
+    set_state(site_id, RESULTS_KEY, stored)
+    return {"rescanned": rescanned, "changed": changed}
+
+
 def inspect_question(site_id: str, question: str, prompt_id=None) -> dict:
     """One ad-hoc answer-engine check for the Answer Inspector.
 
@@ -773,7 +925,7 @@ def inspect_question(site_id: str, question: str, prompt_id=None) -> dict:
 
     entry = _history_entry(result, question, prompt_id)
     history = get_run_history(site_id)
-    set_state(site_id, HISTORY_KEY, ([entry] + history)[:MAX_HISTORY])
+    set_state(site_id, HISTORY_KEY, _trim_history([entry] + history))
 
     if prompt_id is not None:
         # An inspection of a tracked prompt's own text is a real observation of that prompt —
@@ -955,7 +1107,10 @@ def build_ai_response(site_id: str) -> dict:
 
     return {
         "setupDone": bool(target and target.setup_done),
-        "targets": _target_dict(target),
+        # `identity` is the needle list the verdict is actually computed from — the SPA reads
+        # it for the Inspector's "You" chips and the "You" domain filter, so the grid, the
+        # verdict and the chips can never disagree about who you are again.
+        "targets": {**_target_dict(target), "identity": identity_needles(site_id)},
         "budget": {
             # cap: the user's own configured cap. spent: real recorded answer-engine spend this
             # calendar month. weekly_est: real recorded spend over the trailing 7 days (an
