@@ -140,8 +140,132 @@
         </div>
       </div>
       
+      <!-- ===== Backlinks · anchors · spam score ==========================================
+           A SECOND, deliberate press. The Analyze button above buys ONE DataForSEO Labs
+           call; this buys three Backlinks API calls, so it is never loaded automatically and
+           the button says what the next press costs. The market dropdown in the header does
+           NOT apply to anything in this card -- the Backlinks API has no location concept --
+           and the subtitle says so rather than letting the dropdown imply otherwise. -->
+      <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
+        <div style="padding: 16px 20px; border-bottom: 1px solid #f1f5f9; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;">
+          <div>
+            <h2 style="font-size: 15px; font-weight: 600; margin: 0;">Backlinks, anchors &amp; spam score</h2>
+            <p style="font-size: 12px; color: #94a3b8; margin: 4px 0 0;">Who links to this target, what they call it, and how spammy those links look. Worldwide — the Backlinks API has no market, so the selector above does not apply here.</p>
+            <sc-if value="{{ do.bl.cachedLabel }}" hint-placeholder-val="{{ false }}">
+              <p style="font-size: 11.5px; color: #059669; margin: 6px 0 0;">{{ do.bl.cachedLabel }}</p>
+            </sc-if>
+          </div>
+          <span onClick="{{ do.bl.load }}" role="button" aria-label="Load backlinks for this target" style="{{ do.bl.btnStyle }}">{{ do.bl.btnLabel }}</span>
+        </div>
+
+        <sc-if value="{{ do.bl.error }}" hint-placeholder-val="{{ false }}">
+          <div style="padding: 14px 20px; background: #fef2f2; color: #dc2626; font-size: 13px; font-weight: 500;">{{ do.bl.error }}</div>
+        </sc-if>
+
+        <!-- Honest non-ok states: no credentials, budget refused, or a target DataForSEO
+             has no indexed backlinks for. Never a silently hidden section. -->
+        <sc-if value="{{ do.bl.showNote }}" hint-placeholder-val="{{ false }}">
+          <div style="padding: 24px 20px; text-align: center; font-size: 13px; color: #64748b;">{{ do.bl.note }}</div>
+        </sc-if>
+
+        <sc-if value="{{ do.bl.showLinks }}" hint-placeholder-val="{{ true }}">
+          <div style="padding: 20px; display: grid; grid-template-columns: repeat(4, 1fr) 1.4fr; gap: 16px; border-bottom: 1px solid #f1f5f9;">
+            <div>
+              <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: #64748b;">Backlinks</div>
+              <div style="font-size: 22px; font-weight: 700; color: #334155; margin-top: 4px;">{{ do.bl.summary.backlinks }}</div>
+            </div>
+            <div>
+              <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: #64748b;">Referring domains</div>
+              <div style="font-size: 22px; font-weight: 700; color: #334155; margin-top: 4px;">{{ do.bl.summary.refDomains }}</div>
+            </div>
+            <div>
+              <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: #64748b;">Dofollow</div>
+              <div style="font-size: 22px; font-weight: 700; color: #334155; margin-top: 4px;">{{ do.bl.summary.dofollowPct }}</div>
+            </div>
+            <div>
+              <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: #64748b;">Authority</div>
+              <div style="font-size: 22px; font-weight: 700; color: #334155; margin-top: 4px;">{{ do.bl.summary.authority }}</div>
+            </div>
+            <!-- SPAM SCORE card. Zero extra API calls: both numbers ride along on calls
+                 already being made. -->
+            <div style="border-left: 1px solid #f1f5f9; padding-left: 16px;">
+              <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: #64748b;">Spam score</div>
+              <div style="display: flex; align-items: baseline; gap: 10px; margin-top: 2px;">
+                <span style="{{ do.bl.spam.scoreStyle }}">{{ do.bl.spam.scoreText }}</span>
+                <span style="{{ do.bl.spam.bandStyle }}">{{ do.bl.spam.bandLabel }}</span>
+              </div>
+              <div style="font-size: 12px; color: #64748b; margin-top: 4px;">{{ do.bl.spam.high }} high-spam · {{ do.bl.spam.medium }} medium</div>
+              <div style="font-size: 11px; color: #94a3b8; margin-top: 2px;">{{ do.bl.spam.sampleNote }}</div>
+            </div>
+          </div>
+
+          <!-- Anchor text -->
+          <div style="padding: 14px 20px 4px; font-size: 13px; font-weight: 600; color: #334155;">Anchor text</div>
+          <div style="overflow-x: auto;">
+            <table style="width: 100%; border-collapse: collapse; font-size: 13.5px;">
+              <thead>
+                <tr style="text-align: left; color: #94a3b8; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;">
+                  <th style="font-weight: 500; padding: 10px 10px 10px 20px;">Anchor</th>
+                  <th style="font-weight: 500; padding: 10px;">Type</th>
+                  <th style="font-weight: 500; padding: 10px; text-align: right;">Backlinks</th>
+                  <th style="font-weight: 500; padding: 10px; text-align: right;">Ref. domains</th>
+                  <th style="font-weight: 500; padding: 10px 20px 10px 10px; text-align: right;">Dofollow</th>
+                </tr>
+              </thead>
+              <tbody>
+                <sc-if value="{{ do.bl.noAnchors }}" hint-placeholder-val="{{ false }}">
+                  <tr><td colspan="5" style="padding: 18px 20px; text-align: center; font-size: 13px; color: #94a3b8;">DataForSEO returned no anchor breakdown for this target.</td></tr>
+                </sc-if>
+                <sc-for list="{{ do.bl.anchors }}" as="a" hint-placeholder-count="3">
+                  <tr style="border-top: 1px solid #f1f5f9;">
+                    <td style="padding: 9px 10px 9px 20px; color: #0f172a; max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ a.anchor }}</td>
+                    <td style="padding: 9px 10px;"><span style="{{ a.typeStyle }}">{{ a.type }}</span></td>
+                    <td style="padding: 9px 10px; text-align: right; color: #475569;">{{ a.backlinks }}</td>
+                    <td style="padding: 9px 10px; text-align: right; color: #475569;">{{ a.refDomains }}</td>
+                    <td style="padding: 9px 20px 9px 10px; text-align: right; color: #475569;">{{ a.dofollowPct }}</td>
+                  </tr>
+                </sc-for>
+              </tbody>
+            </table>
+          </div>
+
+          <!-- Individual backlinks, with the per-link spam column -->
+          <div style="padding: 18px 20px 4px; display: flex; align-items: baseline; justify-content: space-between; gap: 12px;">
+            <span style="font-size: 13px; font-weight: 600; color: #334155;">Backlinks</span>
+            <span style="font-size: 11.5px; color: #94a3b8;">{{ do.bl.countLabel }}</span>
+          </div>
+          <div style="overflow-x: auto;">
+            <table style="width: 100%; border-collapse: collapse; font-size: 13.5px;">
+              <thead>
+                <tr style="text-align: left; color: #94a3b8; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;">
+                  <th style="font-weight: 500; padding: 10px 10px 10px 20px;">Referring page</th>
+                  <th style="font-weight: 500; padding: 10px;">Anchor</th>
+                  <th style="font-weight: 500; padding: 10px; text-align: center;">Follow</th>
+                  <th style="font-weight: 500; padding: 10px; text-align: right;">Domain rank</th>
+                  <th style="font-weight: 500; padding: 10px 20px 10px 10px; text-align: right;">Spam</th>
+                </tr>
+              </thead>
+              <tbody>
+                <sc-for list="{{ do.bl.links }}" as="l" hint-placeholder-count="3">
+                  <tr style="border-top: 1px solid #f1f5f9;" style-hover="background:#f8fafc">
+                    <td style="padding: 9px 10px 9px 20px; max-width: 380px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                      <div style="color: #0f172a; font-weight: 500;">{{ l.referringDomain }}</div>
+                      <div style="font-size: 11.5px; color: #94a3b8;"><a href="{{ l.urlFrom }}" target="_blank" rel="noopener" style="color: inherit; text-decoration: none;" style-hover="text-decoration:underline">{{ l.urlFrom }}</a></div>
+                    </td>
+                    <td style="padding: 9px 10px; color: #475569; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ l.anchor }}</td>
+                    <td style="padding: 9px 10px; text-align: center;"><span style="{{ l.followStyle }}">{{ l.follow }}</span></td>
+                    <td style="padding: 9px 10px; text-align: right; color: #475569;">{{ l.domainRank }}</td>
+                    <td style="padding: 9px 20px 9px 10px; text-align: right;"><span style="{{ l.spamStyle }}">{{ l.spamText }}</span></td>
+                  </tr>
+                </sc-for>
+              </tbody>
+            </table>
+          </div>
+        </sc-if>
+      </div>
+
     </sc-if>
-    
+
     <!-- ===== Send-to-project picker =====================================================
          Opened by the per-row "+ Track" and the bulk "Track selected (N)" whenever more
          than one project exists. The looked-up domain is usually a competitor's, so the

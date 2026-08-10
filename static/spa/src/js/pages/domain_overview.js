@@ -107,6 +107,137 @@
         trackSelLabel: 'Track selected'
       };
 
+      /* ---- backlinks / anchors / spam score -------------------------------------------
+         A SECOND, deliberate press. The default Analyze buys one DataForSEO Labs call; this
+         buys three Backlinks API calls (summary + 100 backlinks + 60 anchors), so it has its
+         own button and its own 24h cache. That cache is keyed by DOMAIN ONLY -- the Backlinks
+         API has no location parameter at all -- which is why the card says out loud that the
+         market selector above does not apply to it.
+
+         Computed outside the `status === 'ok'` branch: the backlink sections are their own
+         fetch with their own lifecycle, and a keywords lookup that errored must not take the
+         backlink card's state down with it. */
+      const blSt = (s.doBl && s.doBl.target === (s.doQuery || '').trim()) ? s.doBl : {};
+      const bl = blSt.data || null;
+      const blBand = {
+        low:     { fg: '#059669', bg: '#ecfdf5', bd: '#a7f3d0', label: 'Low' },
+        medium:  { fg: '#b45309', bg: '#fffbeb', bd: '#fde68a', label: 'Medium' },
+        high:    { fg: '#dc2626', bg: '#fef2f2', bd: '#fecaca', label: 'High' },
+        unknown: { fg: '#64748b', bg: '#f8fafc', bd: '#e2e8f0', label: 'Not scored' }
+      };
+      const blPill = band => {
+        const t = blBand[band] || blBand.unknown;
+        return { display: 'inline-flex', alignItems: 'center', gap: '5px', padding: '3px 9px',
+                 fontSize: '11.5px', fontWeight: 600, color: t.fg, background: t.bg,
+                 border: '1px solid ' + t.bd, borderRadius: '9999px', whiteSpace: 'nowrap' };
+      };
+
+      vals.do.bl = {
+        /* Four honest states, plus "never pressed". `state` comes from the server:
+           ok · empty (DataForSEO indexes no backlinks) · setup (no credentials) ·
+           budget (the monthly cap refused the spend) · error. */
+        loaded: !!bl,
+        showLinks: !!(bl && bl.state === 'ok'),
+        loading: !!blSt.loading,
+        error: blSt.error || null,
+        /* The label tells the user what the NEXT press costs. Once loaded, a press inside
+           24h is served from cache and free; after that it bills again. */
+        btnLabel: blSt.loading ? 'Loading backlinks…' : (bl ? 'Loaded · refresh' : 'Load backlinks'),
+        btnStyle: {
+          display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '9px 16px',
+          fontSize: '13px', fontWeight: 600, borderRadius: '8px',
+          color: bl ? '#334155' : 'white', background: bl ? '#f1f5f9' : '#0f172a',
+          border: '1px solid ' + (bl ? '#e2e8f0' : '#0f172a'),
+          cursor: blSt.loading ? 'default' : 'pointer', opacity: blSt.loading ? 0.7 : 1
+        },
+        load: () => {
+          const q = (this.state.doQuery || '').trim();
+          if (!q || (this.state.doBl && this.state.doBl.loading)) return;
+          this.setState({ doBl: { target: q, loading: true, data: null, error: null } });
+          window.FuseAPI.post('/api/domain-overview', {
+            target: q, location: this.doLocation(), project: this.state.projectId,
+            include: ['backlinks']
+          })
+            .then(r => {
+              if (!this._alive) return;
+              const b = r && r.backlinks;
+              this.setState({ doBl: { target: q, loading: false, data: b || null,
+                                      error: (b && b.state === 'error') ? b.note : (r && r.error) || null } });
+            })
+            .catch(e => {
+              if (!this._alive) return;
+              this.setState({ doBl: { target: q, loading: false, data: null,
+                                      error: 'Failed to load backlinks: ' + e } });
+            });
+        },
+        /* Non-ok states render their own message rather than an empty card. A hidden
+           section is indistinguishable from a section with nothing in it. */
+        showNote: !!(bl && bl.state !== 'ok'),
+        note: (bl && bl.note) || '',
+        isEmpty: !!(bl && bl.state === 'empty'),
+        target: (bl && bl.target) || '',
+        summary: {
+          backlinks: bl && bl.summary ? this.fmt(bl.summary.backlinks || 0) : '—',
+          refDomains: bl && bl.summary ? this.fmt(bl.summary.refDomains || 0) : '—',
+          dofollowPct: bl && bl.summary ? (bl.summary.dofollowPct || 0) + '%' : '—',
+          authority: bl && bl.summary ? String(bl.summary.authorityScore || 0) : '—'
+        },
+        /* SPAM SCORE. Costs zero extra API calls: `backlink_spam_score` already rides on
+           every row of the backlinks call and `backlinks_spam_score` on the summary --
+           both were being paid for and neither was ever read. */
+        spam: (() => {
+          const sp = (bl && bl.spam) || {};
+          const known = sp.targetScore !== null && sp.targetScore !== undefined;
+          const band = known ? (sp.targetScore <= 30 ? 'low' : (sp.targetScore <= 60 ? 'medium' : 'high')) : 'unknown';
+          const t = blBand[band];
+          return {
+            /* An em dash, never a 0: an unreported score is not a clean profile. */
+            scoreText: known ? String(sp.targetScore) : '—',
+            scoreStyle: { fontSize: '30px', fontWeight: 700, color: t.fg },
+            bandLabel: t.label,
+            bandStyle: blPill(band),
+            high: sp.highSpamLinks || 0,
+            medium: sp.mediumSpamLinks || 0,
+            scored: sp.scoredLinks || 0,
+            unknown: sp.unknownLinks || 0,
+            /* Says exactly which population each number is about. The target score is
+               profile-wide; the counts are over the sampled links only. */
+            sampleNote: 'Counted across the ' + (sp.scoredLinks || 0) + ' scored link'
+              + ((sp.scoredLinks === 1) ? '' : 's') + ' in the sample below'
+              + ((sp.unknownLinks || 0) ? ' · ' + sp.unknownLinks + ' not scored by DataForSEO' : '')
+          };
+        })(),
+        anchors: ((bl && bl.anchors) || []).map(a => ({
+          anchor: a.anchor,
+          type: a.type,
+          typeStyle: { fontSize: '11px', fontWeight: 600, color: '#475569',
+                       background: '#f1f5f9', padding: '2px 8px', borderRadius: '9999px' },
+          backlinks: this.fmt(a.backlinks || 0),
+          refDomains: this.fmt(a.refDomains || 0),
+          dofollowPct: (a.dofollowPct || 0) + '%'
+        })),
+        noAnchors: !((bl && bl.anchors) || []).length,
+        links: ((bl && bl.links) || []).map(l => ({
+          urlFrom: l.urlFrom || l.referringDomain,
+          referringDomain: l.referringDomain,
+          anchor: l.anchor || '(empty)',
+          /* domainRank/pageRank are passed through as returned; null renders as an em
+             dash rather than a fabricated 0. */
+          domainRank: (l.domainRank === null || l.domainRank === undefined) ? '—' : String(l.domainRank),
+          follow: l.dofollow ? 'dofollow' : 'nofollow',
+          followStyle: { fontSize: '11px', fontWeight: 600,
+                         color: l.dofollow ? '#059669' : '#64748b',
+                         background: l.dofollow ? '#ecfdf5' : '#f1f5f9',
+                         padding: '2px 8px', borderRadius: '9999px' },
+          spamText: (l.spamScore === null || l.spamScore === undefined) ? '—' : String(l.spamScore),
+          spamStyle: blPill(l.spamBand)
+        })),
+        countLabel: bl && bl.links
+          ? this.fmt(bl.links.length) + ' of the highest-authority backlinks · limit ' + (bl.limit || 100)
+          : '',
+        cachedLabel: (bl && bl.cached) ? 'Served from the 24-hour cache — this press cost nothing' : ''
+      };
+
       /* Same shared drawer Position Tracking uses (see App#serpDrawerVals) -- "you" here
          is the domain currently being looked up, since that's usually what a Domain
          Overview visitor wants highlighted in the live SERP, not the active project. */

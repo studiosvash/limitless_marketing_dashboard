@@ -134,14 +134,187 @@ def apply_tracked_flags(result: dict, site_id: str = "", site_pk: Optional[int] 
         return result
 
 
+# ---------------------------------------------------------------------------------------
+# Backlinks + anchors + spam score (opt-in: a deliberate SECOND button press)
+# ---------------------------------------------------------------------------------------
+
+def spam_band(score) -> str:
+    """green <= 30 · amber 31-60 · red > 60 · unknown when DataForSEO returned no score.
+
+    "unknown" is its own band, not green. A backlink DataForSEO has not scored has not been
+    found clean; colouring it green would assert a measurement nobody took.
+    """
+    if score is None:
+        return "unknown"
+    try:
+        value = float(score)
+    except (TypeError, ValueError):
+        return "unknown"
+    if value <= 30:
+        return "low"
+    if value <= 60:
+        return "medium"
+    return "high"
+
+
+def _empty_backlinks_block(state: str, note: str, **extra) -> dict:
+    block = {
+        "state": state,
+        "note": note,
+        "cached": False,
+        "target": "",
+        "links": [],
+        "anchors": [],
+        "spam": {"targetScore": None, "highSpamLinks": 0, "scoredLinks": 0, "unknownLinks": 0},
+        "summary": {},
+        "limit": BACKLINKS_LIMIT,
+        "anchorsLimit": ANCHORS_LIMIT,
+        # The Backlinks API has no location parameter. Stated in the payload so the UI can
+        # say it beside a market dropdown that governs the keyword sections only.
+        "locationApplies": False,
+    }
+    block.update(extra)
+    return block
+
+
+def _shape_links(records: list) -> list:
+    rows = []
+    for r in records:
+        score = r.get("spam_score")
+        rows.append({
+            "urlFrom": r.get("url_from") or "",
+            "referringDomain": r.get("referring_domain") or "",
+            "targetUrl": r.get("target_url") or "",
+            "anchor": r.get("anchor") or "",
+            "dofollow": bool(r.get("dofollow")),
+            "domainRank": r.get("domain_rank"),
+            "pageRank": r.get("page_from_rank"),
+            # Kept as returned -- None means "not scored", which is a different fact from 0.
+            "spamScore": score,
+            "spamBand": spam_band(score),
+            "firstSeen": r.get("first_seen").isoformat() if hasattr(r.get("first_seen"), "isoformat") else (r.get("first_seen") or ""),
+            "status": r.get("status") or "",
+        })
+    return rows
+
+
+def fetch_backlinks_block(target: str, site_id: str = "", allow_fetch: bool = True) -> dict:
+    """The Domain Overview backlink sections: link sample, anchor breakdown, spam score.
+
+    THREE billed DataForSEO calls, and only when the user presses "Load backlinks":
+      backlinks/summary/live      -- profile totals + the TARGET-LEVEL spam score
+      backlinks/backlinks/live    -- BACKLINKS_LIMIT (100) rows, highest-authority first
+      backlinks/anchors/live      -- ANCHORS_LIMIT (60) anchor rows
+
+    The spam data costs nothing extra: `backlink_spam_score` rides along on every row of the
+    backlinks call and `backlinks_spam_score` on the summary. Both were already being paid
+    for on the Backlinks page and simply never read.
+
+    Cached 24h under a DOMAIN-ONLY key. `allow_fetch=False` returns the cache or a
+    "not_loaded" block and can never spend -- that is what the PDF report uses.
+    """
+    normalised = backlink_target(target)
+    if not normalised:
+        return _empty_backlinks_block("setup", "Enter a domain or URL first.")
+
+    key = backlinks_cache_key(target)
+    cached = cache.get(key)
+    if cached is not None:
+        return {**cached, "cached": True}
+    if not allow_fetch:
+        return _empty_backlinks_block(
+            "not_loaded",
+            "Backlinks not loaded for this report — press “Load backlinks” on the Domain "
+            "Overview page first. Generating this report never buys them.",
+            target=normalised)
+
+    from pipeline.connectors.dataforseo_cost import ensure_budget
+    refusal = ensure_budget()
+    if refusal is not None:
+        return _empty_backlinks_block("budget", refusal["error"], target=normalised,
+                                      budgetExceeded=True)
+
+    # The backlinks connector RAISES on missing credentials in its constructor (unlike the
+    # domain-overview connector, which returns an error dict). Unwrapped, that is a 500 on a
+    # deployment that simply has not configured DataForSEO yet.
+    try:
+        from pipeline.connectors.dataforseo_backlinks import DataForSEOBacklinksConnector
+        connector = DataForSEOBacklinksConnector()
+    except Exception as exc:
+        logger.warning(f"domain-overview backlinks unavailable: {exc}")
+        return _empty_backlinks_block(
+            "setup",
+            "DataForSEO credentials are not configured — add them in Settings to load "
+            "backlinks.", target=normalised)
+
+    from pipeline.services.backlinks_service import fetch_anchors, summary_for
+
+    summary, links, anchors = {}, [], []
+    try:
+        summary = summary_for(normalised, site_id=site_id)
+    except Exception as exc:
+        logger.warning(f"domain-overview backlinks summary failed: {exc}")
+    try:
+        # No _write_records: there is no project to write to. An arbitrary looked-up domain
+        # is not this workspace's site, and filing its backlinks into `backlinks` would put
+        # a competitor's profile under a site_id every page reads.
+        links = _shape_links(connector.fetch(site_id=normalised, limit=BACKLINKS_LIMIT,
+                                             dofollow_only=False) or [])
+    except Exception as exc:
+        logger.warning(f"domain-overview backlinks fetch failed: {exc}")
+        return _empty_backlinks_block(
+            "error", f"DataForSEO could not return backlinks for this target: {exc}",
+            target=normalised)
+    try:
+        anchors = fetch_anchors(normalised, limit=ANCHORS_LIMIT, site_id=site_id)
+    except Exception as exc:
+        logger.warning(f"domain-overview anchors failed: {exc}")
+
+    scored = [r for r in links if r["spamScore"] is not None]
+    block = _empty_backlinks_block(
+        "ok" if links else "empty",
+        "" if links else "DataForSEO has no indexed backlinks for this target.",
+        target=normalised,
+    )
+    block.update({
+        "links": links,
+        "anchors": anchors,
+        "summary": summary,
+        "spam": {
+            # Profile-wide, straight from summary/live. None when the call failed --
+            # not 0, which would read as "measured, and clean".
+            "targetScore": summary.get("spamScore"),
+            # Counted over the sampled links only; the UI says so next to the number.
+            "highSpamLinks": sum(1 for r in scored if r["spamBand"] == "high"),
+            "mediumSpamLinks": sum(1 for r in scored if r["spamBand"] == "medium"),
+            "scoredLinks": len(scored),
+            "unknownLinks": len(links) - len(scored),
+        },
+    })
+    if links:
+        cache.set(key, block, CACHE_TTL)
+    return block
+
+
 def run_domain_overview(target: str, location: str = "United States", site_id: str = "",
-                        site_pk: Optional[int] = None) -> dict:
-    """POST /api/domain-overview handler."""
+                        site_pk: Optional[int] = None,
+                        include: Optional[list] = None) -> dict:
+    """POST /api/domain-overview handler.
+
+    `include` is the opt-in list for sections that cost extra. The default Analyze press
+    buys exactly what it always bought -- one Labs call -- so nobody's price changed when
+    the backlink sections were added; `{"include": ["backlinks"]}` is a second, deliberate
+    press behind its own button.
+    """
     target = (target or "").strip()
     if not target:
         return {"status": "error", "error": "Target URL is required."}
     location = location or "United States"
+    wanted = {str(i).strip().lower() for i in (include or [])}
 
     result = fetch_keywords_block(target, location, site_id=site_id) or {}
     result = apply_tracked_flags(result, site_id=site_id, site_pk=site_pk)
+
+    if "backlinks" in wanted:
+        result = {**result, "backlinks": fetch_backlinks_block(target, site_id=site_id)}
     return result

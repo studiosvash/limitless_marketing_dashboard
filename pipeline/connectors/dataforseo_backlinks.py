@@ -17,6 +17,37 @@ load_dotenv()
 
 DATAFORSEO_BASE = "https://api.dataforseo.com/v3"
 
+# Backlink rows the weekly project sync buys. DataForSEO bills per returned row, so this is
+# the price of a sync, and it is the one number worth turning down on a large site that does
+# not need its whole profile refreshed every week.
+DEFAULT_SYNC_LIMIT = 1000
+ALLOWED_SYNC_LIMITS = (250, 500, 1000)
+
+
+def sync_limit_for(site_id: Optional[str]) -> int:
+    """The configured per-sync backlink row limit for a project, or the 1000 default.
+
+    Stored under ProjectSettings.data["backlinksSyncLimit"] via mutation_state, NOT in a
+    Settings group: apply_settings_update replaces a whole group object with whatever the
+    request body carried, so a key the Settings form does not send would be wiped on the
+    next save of any unrelated field in that group. The mutation_state keys are documented
+    as the ones a Settings PUT can never clobber.
+
+    A value outside ALLOWED_SYNC_LIMITS falls back to the default rather than being honoured
+    -- this figure is money, and an arbitrary number arriving from a stored blob should not
+    be able to buy 50 000 rows.
+
+    Django is imported lazily so this module stays runnable outside Django (skills.md §13).
+    """
+    if not site_id:
+        return DEFAULT_SYNC_LIMIT
+    try:
+        from apps.dashboard.services.mutation_state import get_state
+        value = int(get_state(site_id, "backlinksSyncLimit", DEFAULT_SYNC_LIMIT))
+    except Exception:
+        return DEFAULT_SYNC_LIMIT
+    return value if value in ALLOWED_SYNC_LIMITS else DEFAULT_SYNC_LIMIT
+
 
 class DataForSEOBacklinksConnector(BaseConnector):
     name = "dataforseo_backlinks"
@@ -44,18 +75,34 @@ class DataForSEOBacklinksConnector(BaseConnector):
             return None
 
     @with_retry(max_retries=3, base_delay=5.0)
-    def fetch(self, site_id: Optional[str] = None) -> list[dict]:
-        """Fetch live backlinks using DataForSEO Backlinks Live endpoint."""
+    def fetch(self, site_id: Optional[str] = None, limit: Optional[int] = None,
+              dofollow_only: bool = True) -> list[dict]:
+        """Fetch live backlinks using DataForSEO Backlinks Live endpoint.
+
+        `limit` is the row count DataForSEO BILLS for, not a display cap -- the Backlinks API
+        meters per returned row. It was hardcoded at 1000, which is right for the weekly
+        project sync (buy the profile once, read it all week) and far too expensive for the
+        Domain Overview lookup, which buys an arbitrary domain's profile the moment somebody
+        types one in. The sync path keeps 1000 by default; Domain Overview passes 100.
+
+        `dofollow_only` keeps the sync's long-standing filter. Domain Overview turns it off:
+        that lookup exists partly to show a spam-score breakdown, and a spam review that
+        silently drops every nofollow link is a review of the half of the profile least
+        likely to be spam.
+        """
         target = site_id.replace("sc-domain:", "").replace("https://", "").replace("http://", "").rstrip("/") if site_id else self.clean_target
-        self.logger.info(f"[dataforseo_backlinks] Fetching backlinks for target: {target}")
+        if limit is None:
+            limit = sync_limit_for(site_id)
+        self.logger.info(f"[dataforseo_backlinks] Fetching {limit} backlinks for target: {target}")
 
         payload = [{
             "target": target,
-            "limit": 1000,
-            "filters": [["dofollow", "=", True]],  # Only dofollow backlinks
+            "limit": limit,
             "include_subdomains": True,
             "order_by": ["rank,desc"]
         }]
+        if dofollow_only:
+            payload[0]["filters"] = [["dofollow", "=", True]]
 
         resp = requests.post(
             f"{DATAFORSEO_BASE}/backlinks/backlinks/live",
@@ -96,10 +143,11 @@ class DataForSEOBacklinksConnector(BaseConnector):
         items = result[0].get("items", [])
         self.logger.info(f"[dataforseo_backlinks] Retrieved {len(items)} raw backlinks items.")
 
-        # `units` = backlink rows returned — the Backlinks API meters per returned row
-        # (this call requests limit=1000), so cost/units is the real price per backlink.
+        # `units` = backlink rows returned — the Backlinks API meters per returned row, so
+        # cost/units is the real price per backlink. The requested limit is in the note
+        # because it is what the row count was bounded by.
         record_cost(self.name, site_id, run_cost, units=len(items),
-                    notes=f"backlinks/backlinks live for {target}")
+                    notes=f"backlinks/backlinks live for {target} (limit {limit})")
 
         records = []
         for item in items:

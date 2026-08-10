@@ -118,6 +118,35 @@ def fetch_anchors(target_domain: str, limit: int = 60, site_id: str = "") -> lis
     return _shape_anchors(anchors, brand)
 
 
+def summary_for(target_domain: str, site_id: str = "") -> dict:
+    """The `backlinks/summary/live` aggregate for any target, shaped for a reader.
+
+    One billed call. Split out of fetch_backlinks_payload so the Domain Overview lookup can
+    have the profile totals and the TARGET-LEVEL spam score without also buying the
+    referring-domain and history calls the Backlinks page needs.
+
+    `spamScore` is passed through as returned: None means DataForSEO reported none, which is
+    a different fact from a measured 0. (fetch_backlinks_payload keeps its own `or 0` for
+    that field because the SPA's Backlinks page gauge has always read a number there;
+    changing it is a separate job on a page this phase does not own.)
+    """
+    if not all(_auth()):
+        raise ValueError("DataForSEO credentials are not configured.")
+    raw = _post("summary/live", {"target": _clean_domain(target_domain),
+                                 "include_subdomains": True}, site_id=site_id)
+    total_bl = raw.get("backlinks") or 0
+    nofollow = (raw.get("referring_links_attributes") or {}).get("nofollow", 0)
+    return {
+        "backlinks": total_bl,
+        "refDomains": raw.get("referring_domains") or 0,
+        "refPages": raw.get("referring_pages") or 0,
+        "dofollowPct": round((total_bl - nofollow) / total_bl * 100) if total_bl else 0,
+        "broken": raw.get("broken_backlinks") or 0,
+        "authorityScore": _as(raw.get("rank")),
+        "spamScore": raw.get("backlinks_spam_score"),
+    }
+
+
 def _shape_anchors(anchors: list[dict], brand: str) -> list[dict]:
     rows = []
     for a in anchors:

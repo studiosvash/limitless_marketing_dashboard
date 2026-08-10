@@ -1402,7 +1402,14 @@ class DomainOverviewView(APIView):
             project = resolve_project_or_404(slug)
             site_id, site_pk = project.site_url, project.id
 
-        return Response(run_domain_overview(target, location, site_id=site_id, site_pk=site_pk))
+        # `include` is opt-in and costs extra: ["backlinks"] adds three billed Backlinks API
+        # calls. The default press buys exactly the one Labs call it always did.
+        include = request.data.get("include") or []
+        if not isinstance(include, list):
+            return Response({"detail": "include must be a list"}, status=400)
+
+        return Response(run_domain_overview(target, location, site_id=site_id,
+                                            site_pk=site_pk, include=include))
 
 
 @method_decorator(login_not_required, name="dispatch")
