@@ -117,10 +117,17 @@ Lists active sites (`Site.is_active == 1`), ordered by `site_url`.
 
 `id` is the slug. `domain` is `_bare_domain(site.site_url)` (scheme, `sc-domain:` prefix and
 trailing slash stripped). The last six fields come from `ProjectSerializer._pos_summary()`,
-which runs a **fixed rolling 30-day window ending today** (not the request's `range`) over
-`KeywordRanking`, caches the result on the instance, and degrades to zeros +
-`"No sync yet"` on any exception. `last_updated` is a human string: `"Today"`, `"Yesterday"`,
-`"N days ago"`, or `"No sync yet"`.
+which caches its result on the instance and degrades to zeros + `"No sync yet"` on any
+exception. `last_updated` is a human string: `"Today"`, `"Yesterday"`, `"N days ago"`, or
+`"No sync yet"`.
+
+**The window is the same one `GET /positions` renders** (changed 2026-08-10): a 28-day window
+anchored on `views.latest_ranking_anchor` — this project's newest `keyword_rankings` date, in
+its own location — falling back to `date.today()` only when the project has never been
+measured. It used to be a fixed rolling 28 days ending *today*, with no reference to when the
+project was actually measured, so a project last synced 40 days ago had no measurement inside
+its own window: the list row said `—` ("never captured") beside a workspace reporting a real
+score for the same project.
 
 `visibility` is the Semrush-style CTR-weighted score (0–100, 1 dp) computed in
 `_get_ranking_distribution`: each tracked keyword earns the CTR of its average position
@@ -400,7 +407,7 @@ yet); `source` is always `"sync"` here.
 
 ```json
 {
-  "kpis":            {"tracked", "avg_pos", "est_traffic", "impressions"},
+  "kpis":            {"tracked", "avg_pos", "est_traffic", "impressions", "visibility"},
   "distribution":    {"top3", "p4_10", "p11_20", "p21_100"},
   "movement":        {"improved", "declined", "added", "lost"},
   "competitors":     {"domains": ["a.com"], "rows": [{"kw", "you": cell, "comps": [cell|null]}]},
@@ -418,6 +425,21 @@ yet); `source` is always `"sync"` here.
 
 A *cell* is `{pos, prev, diff, direction}` with `direction ∈ up|down|flat`.
 `rankings` and `keywords` are the same array (the template reads both names).
+
+**`kpis.visibility` is THE visibility number** (added 2026-08-10) — the same
+`_get_ranking_distribution` field, over the same window, that `GET /api/projects` returns per
+project, so the workspace and the project list cannot disagree. `null` = nothing measured in
+the window (UI shows `—`); `0.0` = measured, ranks nowhere. `build_positions_response` computed
+it and discarded it for months while the SPA's Overview card recomputed a *different* figure in
+the browser from `competitors.rows` (a single latest capture date, integer-rounded, range
+ignored). That browser calculation still runs, but only as **share of voice** — how the field's
+points split between you and the tracked competitors — and is labelled as such on screen.
+
+The window is anchored on `views.latest_ranking_anchor` whenever the project has any
+`keyword_rankings` row, forwards *or* backwards from the GSC traffic anchor. Anchoring forward
+only (the pre-2026-08-10 rule) left a stale project's workspace blank while its share-of-voice
+cards, which read the latest capture whenever it happened, showed real positions on the same
+screen.
 
 Each keyword's `source` is `"new"` when it was tracked since the last positioning sync and has no
 `keyword_rankings` row in the current window at all — `"sync"` otherwise. `source` alone is NOT

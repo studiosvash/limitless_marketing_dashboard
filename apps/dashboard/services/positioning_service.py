@@ -511,6 +511,17 @@ def build_positions_response(site_id: str, curr_start: date, curr_end: date,
         "avg_pos": dist["avg_position"],
         "est_traffic": dist["total_clicks"],
         "impressions": dist["total_impressions"],
+        # THE ONE VISIBILITY NUMBER. `_get_ranking_distribution` has always computed this
+        # Semrush-style CTR-credit score and this builder has always thrown it away — so the
+        # projects list read it straight from the distribution while the workspace Overview
+        # card recomputed a DIFFERENT figure in the browser from `competitors.rows` (a single
+        # latest capture date, integer-rounded, ignoring the requested range). Two screens,
+        # two percentages, one project. The browser calculation is now labelled "share of
+        # voice", which is the question it actually answers, and this is the visibility.
+        #
+        # None means "nothing measured in this window" and renders as an em dash. 0.0 means
+        # "measured, ranks nowhere" — a real reading. Never coerce one into the other.
+        "visibility": dist["visibility"],
     }
     distribution = {
         "top3": dist["top3"],

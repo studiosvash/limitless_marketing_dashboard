@@ -416,8 +416,16 @@ def _get_competitor_map(site_id: str, limit: int = 12, location: str | None = No
 
     `location` scopes every read to one project's tracking location (see `_location_clause`);
     `site_pk` scopes the tracked keyword list the map is built over to that same project.
-    This function computes the `visibility` percentage the project list shows, so leaving it
-    unscoped is exactly what made six Premierstaff city projects all report 65%.
+    Leaving either unscoped is what made six Premierstaff city projects report identical
+    numbers across the board.
+
+    The per-domain `visibility` this returns is NOT the project list's visibility, whatever an
+    earlier version of this docstring claimed. This one is a weighted mean of
+    `(101 - position)/100` over the captured keyword set, computed for a domain so that YOU and
+    each competitor can be compared on one scale. The project list — and `kpis.visibility` on
+    `GET /positions`, which is the same number — comes from `_get_ranking_distribution`: CTR
+    credit over a perfect #1-on-every-tracked-keyword board. Two different questions; do not
+    wire one into the other's surface.
 
     Where _get_competitor_grid answers "who ranks where for this one keyword", this answers
     "how does each competitor sit relative to us overall": how many of our tracked keywords

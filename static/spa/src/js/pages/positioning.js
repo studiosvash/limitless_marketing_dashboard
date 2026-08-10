@@ -830,7 +830,28 @@
           rawVal: d.sov != null ? d.sov : (d.visScore != null ? 0 : null)
         }));
         const hiddenOv = s.ptOvHidden || [];
+        /* YOUR VISIBILITY IS THE SERVER'S NUMBER, NOT A SECOND OPINION.
+           `data.kpis.visibility` is `_get_ranking_distribution`'s CTR-credit score over the
+           requested window — the same field, from the same function, that the projects list
+           renders in its Visibility column. It is shown here as its own labelled figure so the
+           two screens cannot disagree.
+           buildVisibilityScores above stays, but only as SHARE OF VOICE: it is computed from
+           `competitors.rows`, a single latest capture date with integer-rounded positions and
+           no reference to the range, and its whole point is the split BETWEEN domains. Two
+           different questions now carry two different labels.
+           null = nothing measured in this window -> em dash. 0 = measured, ranks nowhere. */
+        const ownVis = (data.kpis && typeof data.kpis.visibility === 'number')
+          ? data.kpis.visibility : null;
         vals.ptOv = {
+          visLabel: ownVis == null ? '—' : parseFloat(ownVis.toFixed(1)) + '%',
+          visStyle: {
+            fontSize: '24px', fontWeight: 700,
+            color: ownVis == null ? '#cbd5e1'
+                   : (ownVis >= 30 ? '#059669' : ownVis >= 10 ? '#0891b2' : '#d97706')
+          },
+          visNote: ownVis == null
+            ? 'No ranking measured in this window yet'
+            : 'CTR-weighted across all ' + (data.kpis.tracked || 0) + ' tracked keywords',
           /* /api/positions returns no snapshot dates, so the Δ caption names the
              comparison instead of printing invented calendar dates ("Jun 20 → Jul 20"
              was hardcoded). Keys kept for when the API starts returning them. */

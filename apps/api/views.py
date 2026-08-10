@@ -552,12 +552,20 @@ class ProjectPositionsView(APIView):
         site = resolve_project_or_404(slug)
         location = (site.location or "").strip() or None
 
-        # Re-anchor on the newest RANK measurement when it is newer than the GSC traffic
-        # anchor `resolve_range_periods` used. Without this a position measured today is
-        # roughly three days past the end of the window meant to show it, so a successful
-        # refresh changes nothing on screen — see `latest_ranking_anchor`.
+        # Anchor on the newest RANK measurement whenever this project has one, rather than on
+        # the GSC traffic anchor `resolve_range_periods` used. Without it a position measured
+        # today is roughly three days past the end of the window meant to show it, so a
+        # successful refresh changes nothing on screen — see `latest_ranking_anchor`.
+        #
+        # It used to re-anchor only FORWARDS (`rank_anchor > curr_end + 1 day`), which left the
+        # stale case broken in the opposite direction: a project last synced 40 days ago had no
+        # measurement inside the wall-clock 28-day window, so its own workspace rendered empty
+        # while its share-of-voice cards — built from the latest capture whenever it happened —
+        # showed real positions on the same screen. Anchoring on the measurement in both
+        # directions is also what the core contract asks for: between refreshes the user sees
+        # the last saved data, and stale-but-instant beats a blank page.
         rank_anchor = latest_ranking_anchor(site_id, location)
-        if rank_anchor and rank_anchor > curr_end + timedelta(days=1):
+        if rank_anchor:
             range_key = (request.query_params.get("range") or "28d").strip() or "28d"
             curr_start, curr_end, prev_start, prev_end = range_to_period_dates(
                 range_key, rank_anchor)

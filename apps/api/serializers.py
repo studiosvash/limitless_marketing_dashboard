@@ -38,20 +38,8 @@ class ProjectSerializer(serializers.Serializer):
                 return summary
 
             from datetime import date, timedelta
-            from pipeline.utils.db_connection import get_session
-            from sqlalchemy import select, func
-            from pipeline.db.schema import KeywordRanking
+            from apps.dashboard.services.overview_service import range_to_period_dates
             from apps.dashboard.services.shared_queries import _get_ranking_distribution, _get_position_changes
-
-            curr_end = date.today()
-            # 28d, not 30d: the SPA's default range is '28d' (matching Search Console's
-            # own windows — see OverviewQuerySerializer). The project list's visibility
-            # must use the SAME window so the number here matches the workspace Overview.
-            # The old 30-day window silently disagreed with the workspace's 28-day default,
-            # which is what caused the team-lead-reported mismatch.
-            curr_start = curr_end - timedelta(days=28)
-            prev_end = curr_start - timedelta(days=1)
-            prev_start = prev_end - timedelta(days=28)
 
             # Scope to THIS project's tracking location. These three numbers are the project
             # list's "keywords / up / down" columns, and several projects can share one
@@ -60,18 +48,34 @@ class ProjectSerializer(serializers.Serializer):
             location = (getattr(site, "location", "") or "").strip() or None
             project_pk = getattr(site, "id", None)
 
+            # THE SAME WINDOW THE POSITIONING PAGE RENDERS. This used to be built from
+            # `date.today() - 28` — wall-clock, with no reference to when the project was
+            # actually measured — while `ProjectPositionsView` anchors on
+            # `latest_ranking_anchor` (the newest keyword_rankings row + 1 day, so the
+            # `anchor - 1` arithmetic lands the window END exactly on the measurement).
+            #
+            # The two disagreed the moment a project fell behind: with its last sync 40 days
+            # ago, the wall-clock window contained no measurement at all, so the list row
+            # reported "—" (which means NEVER CAPTURED) beside a workspace showing a real
+            # score for the same project. Anchoring both on the measurement makes the list and
+            # the workspace two views of one number instead of two numbers.
+            #
+            # 28d, not 30d: the SPA's default range is '28d', matching Search Console's own
+            # windows — see OverviewQuerySerializer.
+            #
+            # Imported lazily: apps.api.views imports this module at import time, so a
+            # module-level `from apps.api.views import latest_ranking_anchor` would cycle.
+            from apps.api.views import latest_ranking_anchor
+            anchor = latest_ranking_anchor(site.site_url, location)
+            latest = (anchor - timedelta(days=1)) if anchor else None
+            curr_start, curr_end, prev_start, prev_end = range_to_period_dates(
+                "28d", anchor or date.today())
+
             dist = _get_ranking_distribution(site.site_url, curr_start, curr_end,
                                              location=location, site_pk=project_pk)
             changes = _get_position_changes(site.site_url, curr_start, curr_end,
                                             prev_start, prev_end, location=location,
                                             site_pk=project_pk)
-
-            with get_session() as session:
-                latest = session.execute(
-                    select(func.max(KeywordRanking.date))
-                    .where(KeywordRanking.site_id == site.site_url,
-                           *([KeywordRanking.location == location] if location else []))
-                ).scalar()
 
             if latest:
                 days_ago = (date.today() - latest).days
