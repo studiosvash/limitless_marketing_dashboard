@@ -33,7 +33,7 @@ from pipeline.db.schema import DEFAULT_LOCATION
 from pipeline.utils.retry import with_retry
 from pipeline.utils.date_helpers import iso, yesterday
 from pipeline.utils.db_connection import get_session
-from pipeline.db.writer import upsert_keyword_rankings
+from pipeline.db.writer import SERP_MEASUREMENT_COLUMNS, upsert_keyword_rankings
 
 load_dotenv()
 
@@ -514,7 +514,15 @@ class DataForSEOSERPConnector(BaseConnector):
         return records
 
     def _write_records(self, session, records: list[dict], site_id: Optional[str] = None) -> int:
-        return upsert_keyword_rankings(session, records, site_id=site_id)
+        # This connector INSPECTED the SERP, so the columns it owns are written unconditionally
+        # rather than COALESCEd. It captures to depth 30 and writes `position: None` when the
+        # domain is not in it — a measured absence, not a gap. Under the default COALESCE that
+        # None was discarded and the row kept whatever rank it already held, while
+        # `rank_checked_at` was stamped fresh on top: a keyword that fell off page one on a day
+        # it had previously been recorded at #4 went on reporting #4, marked freshly checked,
+        # permanently. See writer.SERP_MEASUREMENT_COLUMNS.
+        return upsert_keyword_rankings(session, records, site_id=site_id,
+                                       overwrite_columns=SERP_MEASUREMENT_COLUMNS)
 
 
 if __name__ == "__main__":
