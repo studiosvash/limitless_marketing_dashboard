@@ -226,7 +226,16 @@
                 <sc-for list="{{ aiv.trendLines }}" as="l" hint-placeholder-count="2">
                   <polyline points="{{ l.pts }}" fill="none" stroke="{{ l.color }}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"></polyline>
                 </sc-for>
+                <!-- A single week has no segment to draw, so the measurement is shown as a
+                     point. Without this the card is an empty box on a project that really has
+                     been measured once. -->
+                <sc-for list="{{ aiv.trendDots }}" as="dt" hint-placeholder-count="0">
+                  <circle cx="{{ dt.cx }}" cy="{{ dt.cy }}" r="4" fill="{{ dt.color }}"></circle>
+                </sc-for>
               </svg>
+              <sc-if value="{{ aiv.trendHasNote }}" hint-placeholder-val="{{ false }}">
+                <p style="font-size: 12px; color: #94a3b8; margin: 0; text-align: center;">{{ aiv.trendNote }}</p>
+              </sc-if>
               <div style="display: flex; justify-content: space-between; font-size: 11px; color: #94a3b8; margin-top: 4px;"><span>{{ aiv.trendFrom }}</span><span>{{ aiv.trendTo }}</span></div>
             </div>
 

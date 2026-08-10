@@ -235,10 +235,18 @@
             barStyle: { height: '8px', borderRadius: '4px', width: Math.max(3, Math.round((r.sov / maxSov) * 100)) + '%', background: r.isYou ? '#4f46e5' : '#cbd5e1' },
             youChip: r.isYou
           }));
+          /* These four are all read from the LATEST WEEKLY SNAPSHOT (`_totals_by_domain(rows,
+             this_week)` and `query_cited_pages_raw(site_id, this_week)`), not a rolling window.
+             The first was labelled "30d", so a 7-day count was being presented as a month's --
+             a project with 1 mention in the measured week read as 1 mention in thirty days.
+             The label now names the window the number actually comes from, and the week itself
+             is shown so "which week?" is answerable rather than assumed. */
+          const wkLabel = d.trend && d.trend.length ? d.trend[d.trend.length - 1].date : '';
+          const wkSub = wkLabel ? 'week of ' + wkLabel : 'latest measured week';
           aiv.kpis = [
-            { label: 'Brand mentions · 30d', value: this.fmt(kpi.mentions), sub: 'AI Overviews + ChatGPT' },
-            { label: 'AI impressions', value: this.fmt(kpi.impressions), sub: 'est. answer views citing you' },
-            { label: 'Cited pages', value: kpi.cited_pages, sub: 'of your URLs used as sources' },
+            { label: 'Brand mentions · latest week', value: this.fmt(kpi.mentions), sub: 'AI Overviews + ChatGPT · ' + wkSub },
+            { label: 'AI impressions', value: this.fmt(kpi.impressions), sub: 'est. answer views citing you · ' + wkSub },
+            { label: 'Cited pages', value: kpi.cited_pages, sub: 'of your URLs used as sources · ' + wkSub },
             { label: 'Prompt coverage', value: kpi.prompt_coverage.cited + ' of ' + kpi.prompt_coverage.total, sub: 'tracked prompts citing you' }
           ];
           const chipBase3 = { display: 'inline-flex', alignItems: 'center', gap: '7px', padding: '5px 11px', fontSize: '12px', fontWeight: 500, borderRadius: '999px', cursor: 'pointer', color: '#64748b', border: '1px solid #e2e8f0', background: 'white' };
@@ -251,17 +259,49 @@
               click: () => this.setState(st => ({ aiPlat: Object.assign({}, st.aiPlat, { [pl2.id]: !st.aiPlat[pl2.id] }) }))
             };
           });
-          const allVals = [];
-          d.mentionPlatforms.forEach(pl2 => { if (s.aiPlat[pl2.id]) d.trend.forEach(pt2 => allVals.push(pt2[pl2.id])); });
-          const maxV = Math.max(1, ...allVals);
-          aiv.trendLines = d.mentionPlatforms.filter(pl2 => s.aiPlat[pl2.id]).map(pl2 => {
-            const pts = d.trend.map((pt2, k) => {
-              const x = (k / (d.trend.length - 1)) * 590 + 5;
-              const y = 190 - (pt2[pl2.id] / maxV) * 175;
-              return x.toFixed(1) + ',' + y.toFixed(1);
-            }).join(' ');
-            return { pts, color: pl2.color };
-          });
+          /* The x divisor is (length - 1), which is ZERO on a project with exactly one weekly
+             snapshot — 0/0 is NaN, every point becomes "NaN,y", and an SVG polyline carrying a
+             NaN coordinate draws NOTHING. A real project sat at one snapshot for two weeks and
+             showed an empty box under a heading reading "last 12 weeks", which looks like "we
+             measured and found nothing" rather than "we have measured once".
+             Three distinct states, and they are different facts: no weeks measured, one week
+             measured (real, but a trend needs two), and a drawable series. A lone point also
+             needs a DOT — a one-point polyline has no segment to draw even with valid numbers. */
+          const buildTrend = (trend, platforms, active) => {
+            const weeks = trend || [];
+            const on = platforms.filter(pl2 => active[pl2.id]);
+            const valAt = (pt2, id) => Number((pt2 || {})[id]) || 0;   // a missing key is a real zero
+            const vals = [];
+            on.forEach(pl2 => weeks.forEach(pt2 => vals.push(valAt(pt2, pl2.id))));
+            const maxV = Math.max(1, ...vals);
+            const xAt = k => (weeks.length > 1 ? (k / (weeks.length - 1)) * 590 + 5 : 300);
+            const yAt = v => 190 - (v / maxV) * 175;
+            const lines = weeks.length ? on.map(pl2 => {
+              const pts = weeks.map((pt2, k) =>
+                xAt(k).toFixed(1) + ',' + yAt(valAt(pt2, pl2.id)).toFixed(1)).join(' ');
+              return {
+                pts, color: pl2.color,
+                dot: weeks.length === 1
+                  ? { cx: xAt(0).toFixed(1), cy: yAt(valAt(weeks[0], pl2.id)).toFixed(1),
+                      color: pl2.color }
+                  : null,
+              };
+            }) : [];
+            return {
+              lines,
+              singlePoint: weeks.length === 1,
+              note: weeks.length === 0
+                ? 'No weekly measurements yet — this fills in after the first AI sync.'
+                : (weeks.length === 1
+                   ? 'One weekly measurement so far — the trend line appears from the second week.'
+                   : ''),
+            };
+          };
+          const trend = buildTrend(d.trend, d.mentionPlatforms, s.aiPlat);
+          aiv.trendLines = trend.lines;
+          aiv.trendDots = trend.lines.filter(l => l.dot).map(l => l.dot);
+          aiv.trendNote = trend.note;
+          aiv.trendHasNote = !!trend.note;
           aiv.trendFrom = d.trend.length ? d.trend[0].date : '';
           aiv.trendTo = d.trend.length ? d.trend[d.trend.length - 1].date : '';
           aiv.topPages = d.topPages.map(pg2 => ({
