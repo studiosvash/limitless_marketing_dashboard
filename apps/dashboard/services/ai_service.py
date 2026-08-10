@@ -1048,7 +1048,10 @@ def build_ai_response(site_id: str) -> dict:
     """
     target = AITarget.objects.filter(site_url=site_id).first()
     lists = list(AIPromptList.objects.filter(site_url=site_id).values("id", "name"))
-    prompts_qs = AIPrompt.objects.filter(site_url=site_id)
+    # Ordered for the same reason the run planner is: without it the grid's row order is
+    # whatever the database returns, so rows could reshuffle between two renders of unchanged
+    # data -- and a user tracking one prompt down a long list has to find it again each time.
+    prompts_qs = AIPrompt.objects.filter(site_url=site_id).order_by("id")
 
     stored = get_prompt_results(site_id)
     prompts = []

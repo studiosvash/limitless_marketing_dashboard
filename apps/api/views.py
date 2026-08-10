@@ -810,7 +810,11 @@ class ProjectAIActionView(APIView):
         prompt_id = request.data.get("promptId")
         prompt_ids = request.data.get("promptIds")
         list_id = request.data.get("listId")
-        qs = AIPrompt.objects.filter(site_url=site_id)
+        # order_by("id") -- creation order. An unordered queryset leaves row order to the
+        # database, so the run planner could check prompts in any sequence and the progress
+        # panel ("now checking: …") would name them in an order that matches nothing the user
+        # sees in the grid. Cheap to guarantee, and it makes a long run's progress predictable.
+        qs = AIPrompt.objects.filter(site_url=site_id).order_by("id")
         if prompt_id is not None:
             qs = qs.filter(id=prompt_id)
             if not qs.exists():
