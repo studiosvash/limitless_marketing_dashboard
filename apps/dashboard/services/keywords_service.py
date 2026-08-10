@@ -6,6 +6,7 @@ distribution, action-bucket segments). See
 import json
 from datetime import date
 
+import numpy as np
 import pandas as pd
 from sqlalchemy import func, select
 
@@ -29,6 +30,27 @@ def _parse_trend(raw) -> list:
         return [int(v or 0) for v in vals][-12:] if isinstance(vals, list) else []
     except (ValueError, TypeError):
         return []
+
+
+def _safe_ctr(clicks: pd.Series, impressions: pd.Series) -> pd.Series:
+    """clicks/impressions as a percentage, with the two zero cases told apart.
+
+    This was `(df["clicks"] / df["impressions"] * 100).fillna(0)`. `fillna` catches 0/0, which
+    numpy makes NaN — but NOT n/0, which numpy makes ±inf and which sails straight through.
+    A keyword with clicks and zero impressions is not exotic: Search Console withholds
+    sub-threshold impression rows while still reporting the click, so `seo`-side aggregates
+    routinely produce one. The `inf` then flowed into the `ctr < 2.0` comparison that selects
+    the "High Imp, Low CTR" segment, and into the JSON payload — where `json.dumps` emits a
+    bare `Infinity` literal that is not valid JSON and that a strict client parser rejects
+    outright, taking the whole Keywords response down rather than one cell.
+
+    A ratio over zero impressions is not a small ratio, it is not a ratio at all: NaN, which
+    `df_to_dicts` turns into a real `null` at the edge, and which the SPA renders as an em
+    dash. 0 clicks / 0 impressions keeps its historical 0 — no clicks were missed there.
+    """
+    ratio = clicks / impressions * 100
+    ratio = ratio.fillna(0.0)                       # 0/0 -> no clicks lost -> 0%
+    return ratio.mask(~np.isfinite(ratio))          # n/0 -> unknown, never a fabricated 0
 
 
 def to_api_keyword(row: dict, extras: dict | None = None) -> dict:
@@ -142,7 +164,7 @@ def get_keyword_intelligence_raw(site_id: str, curr_start: date, curr_end: date,
                 if not rows:
                     return pd.DataFrame()
                 df = pd.DataFrame([dict(r._mapping) for r in rows])
-                df["ctr"] = (df["clicks"] / df["impressions"] * 100).fillna(0)
+                df["ctr"] = _safe_ctr(df["clicks"], df["impressions"])
                 return df
 
             df = get_kw_df(curr_start, curr_end)

@@ -365,6 +365,8 @@ badge (colour-banded: top-3 green, 4–10 blue, 11–20 amber, beyond grey) · C
   visible under the Volume filter, which excludes only rows whose *known* volume is below the
   threshold. A real `0` is a measurement and is filtered normally. Unknown-volume rows sort to
   the bottom of the table.
+- A tracked keyword with clicks but zero impressions reports **no CTR** (em dash) rather than a
+  number: a ratio over zero impressions is not a small ratio, it is not a ratio.
 
 **Permissions.** All roles.
 **Related pages.** Position Tracking (tracking destination), Domain Overview, Overview.
