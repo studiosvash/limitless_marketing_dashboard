@@ -42,12 +42,19 @@ google-ads>=24.0.0          # used once Google Ads credentials are provisioned
 cryptography>=42.0.0        # encrypts Ads platform credentials at rest (ProjectSettings.data)
 
 # --- PDF reports --------------------------------------------------------------
-# Renders templates/reports/*.html to PDF for the Domain Overview report endpoint.
-# NEEDS SYSTEM LIBRARIES: WeasyPrint binds to cairo, pango and libgobject at IMPORT time,
-# so `pip install` alone is not enough on a VPS -- see .claude/tech-stack.md for the
-# apt packages. It is imported lazily and the endpoint answers 501 when the import fails,
-# so a server without them still runs everything else.
+# Renders templates/reports/*.html to PDF for the Domain Overview report endpoint. Two
+# engines, tried in preference order by
+# domain_overview_report_service.load_pdf_renderer(); 501 only if BOTH fail.
+#
+# WeasyPrint is first choice for fidelity but NEEDS SYSTEM LIBRARIES: it binds to cairo,
+# pango and libgobject at IMPORT time, so `pip install` alone is not enough on a VPS or on
+# Windows -- see .claude/tech-stack.md for the apt packages.
 weasyprint>=62.0
+# xhtml2pdf is the fallback and the reason the endpoint now works out of the box: pure
+# Python on top of reportlab, zero system libraries. Narrower CSS support (it drops
+# letter-spacing and spells page footers with @frame rather than @bottom-center, which
+# templates/reports/domain_overview.html branches on), so it is second, not first.
+xhtml2pdf>=0.2.16
 
 # --- Error monitoring (optional) ----------------------------------------------
 # Only imported when SENTRY_DSN is set (see config/settings/base.py). ~14 external API

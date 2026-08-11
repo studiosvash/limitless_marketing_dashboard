@@ -29,11 +29,25 @@ Every "not loaded" block below is deliberate: a section this report did not buy 
     @page {
       size: A4;
       margin: 18mm 14mm 16mm;
+      {% if engine == "xhtml2pdf" %}
+      {% comment %}
+      xhtml2pdf has no CSS page-margin boxes. It positions a repeating footer by pointing a
+      named @frame at an element id, which is why #reportFooter exists at the end of <body>.
+      This is not a stylistic preference: xhtml2pdf's CSS parser RAISES on @bottom-center
+      (TypeError deep in cssParser._parseAtPage), so leaving the WeasyPrint spelling in place
+      does not merely lose the page numbers -- it fails the whole render.
+      {% endcomment %}
+      @frame footer_frame {
+        -pdf-frame-content: reportFooter;
+        bottom: 8mm; margin-left: 14mm; margin-right: 14mm; height: 8mm;
+      }
+      {% else %}
       @bottom-center {
         content: "Page " counter(page) " of " counter(pages);
         font-size: 8pt;
         color: #94a3b8;
       }
+      {% endif %}
     }
 
     body {
@@ -87,8 +101,15 @@ Every "not loaded" block below is deliberate: a section this report did not buy 
   {% if location_downgraded %}(requested {{ requested_location }}; DataForSEO's domain database is country-level){% endif %}
 </p>
 
-{# What this report cost. Stated first, because it is the thing a user cannot otherwise
-   find out — a PDF that quietly bought API calls looks identical to one that did not. #}
+{% comment %}
+What this report cost. Stated first, because it is the thing a user cannot otherwise find
+out — a PDF that quietly bought API calls looks identical to one that did not.
+
+NOTE: this block used to be a {# … #} comment spanning two lines. Django's inline comment
+syntax is SINGLE-LINE ONLY, so it was never stripped — its text was printed as a visible
+paragraph in every PDF this endpoint has ever produced. Multi-line means {% templatetag
+openblock %} comment {% templatetag closeblock %}, always.
+{% endcomment %}
 <div class="callout{% if fetched %} warn{% endif %}">{{ fetch_note }}</div>
 
 <h2>Organic performance</h2>
@@ -182,8 +203,10 @@ Every "not loaded" block below is deliberate: a section this report did not buy 
   </table>
   <p class="caption">{{ anchor_caption }}</p>
 {% else %}
-  {# The honest absence. This report reads the 24-hour cache and never triggers a backlink
-     fetch: three billed API calls are not something a Download press should buy. #}
+  {% comment %}
+  The honest absence. This report reads the 24-hour cache and never triggers a backlink
+  fetch: three billed API calls are not something a Download press should buy.
+  {% endcomment %}
   <div class="callout absent">
     <strong>Backlinks not loaded for this report.</strong><br>
     {{ backlinks_note }}
@@ -215,6 +238,18 @@ Every "not loaded" block below is deliberate: a section this report did not buy 
       {% for p in prompts.stored %}<tr><td>{{ p.text }}</td></tr>{% endfor %}
     </tbody>
   </table>
+{% endif %}
+
+{% if engine == "xhtml2pdf" %}
+{% comment %}
+The repeating page footer for the xhtml2pdf path. It is pulled out of the flow and drawn on
+every page by the @frame declared in @page above; it must stay LAST so it cannot displace
+any real content. WeasyPrint renders its own footer from the @bottom-center margin box and
+never sees this element.
+{% endcomment %}
+<div id="reportFooter" style="font-size: 8pt; color: #94a3b8; text-align: center;">
+  Page <pdf:pagenumber> of <pdf:pagecount>
+</div>
 {% endif %}
 
 </body>

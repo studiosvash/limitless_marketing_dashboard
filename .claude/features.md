@@ -386,16 +386,76 @@ Tracking SERP drawer's *Analyze* action, which pre-fills the URL and runs the lo
 **Data source.** `POST /api/domain-overview` → DataForSEO Labs `ranked_keywords`. Results are
 cached server-side for 24 hours per (target, location).
 
-**Sections.** A search input (`Enter` or button), three metric cards — **Organic traffic**
-(estimated), **Traffic value**, **Ranked keywords** — and a **Top Organic Keywords** table:
-Keyword · Intent badge · Position badge · Volume · CPC · Estimated traffic · Ranking URL.
+**Layout.** Always visible at the top: the search input (`Enter` or button), the market
+picker, **Download PDF**, and the **Recent** chip row. The results below are split into three
+in-page tabs (`state.doTab`, default `overview`) — they are one lookup's results, not three
+pages, so switching tabs never refetches anything:
+
+| Tab | Contents |
+|---|---|
+| **Overview** | Three metric cards — **Organic traffic** (estimated), **Traffic value**, **Ranked keywords**. Plus a read-only backlink strip (backlinks · referring domains · authority · spam) **only when a backlink block is already in hand** — loaded this session or restored from the saved-backlinks store; it never triggers that fetch itself. When nothing is loaded the strip is absent and a line points at the tab that can load it, rather than four em dashes that would read as "this domain has no backlinks". |
+| **Keywords** | The **Top Organic Keywords** table: Keyword · Intent badge · Position badge · Volume · CPC · Estimated traffic · Ranking URL, with the selection toolbar and Track / Track selected. |
+| **Backlinks** | The backlinks card described below, still behind its own button. |
+
+Tab labels carry a count only where a count is a measured fact: Keywords shows the row count;
+Backlinks shows one only once a block is actually in hand — loaded this session, or restored
+from the saved-backlinks store — never a `0` before one.
+
+### Recent searches (localStorage, per project)
+
+The last **10** lookups per project, newest first, keyed `fh_do_hist_<projectId>` — and each
+entry stores **the full result payload**, not just the URL. That is the point: every Analyze
+press is a billed DataForSEO Labs call, and while the server does cache for 24 hours, it does
+so in Django's default **LocMemCache** — per process, lost on restart, not shared between
+gunicorn workers. A server-cache hit is a coin toss; a localStorage hit is certain.
+
+- A chip under **24h old** restores from the browser and **costs nothing**; its age is printed
+  in green.
+- An **older** chip is grey and re-runs the billed lookup. Which of the two will happen is on
+  the chip *before* it is clicked — a control that spends money on some presses and not others
+  has to say which.
+- A restored result shows a green banner naming its age, because its **Tracked** marks are as
+  of the capture, not as of now.
+- One entry per (domain, market), matched case- and whitespace-insensitively, so ten slots hold
+  ten distinct lookups rather than ten repeats of one.
+- **Backlinks are never folded into a history entry** — they get their own store, below.
+- Only successful lookups are saved. Storing an error would put a chip on screen whose one
+  promise — "this is free" — it could not keep.
+- On a storage-quota failure the oldest entries are shed and the write retried; a degraded
+  history beats a `QuotaExceededError` thrown inside `setState`, which takes the render down.
+- **Clear** drops the history *and* the saved backlinks below, and its tooltip says so —
+  rebuilding either bills DataForSEO again.
+
+### Saved backlinks (localStorage, keyed by domain, global)
+
+The costlier store, and a **separate** one: `fh_do_bl`, up to **5** entries, same 24h TTL. Its
+key deliberately differs from the history's, mirroring `backlinks_cache_key()` on the server:
+
+- **Domain only, no market.** The Backlinks API has no location parameter, so one domain's links
+  are the same answer in every market. Keying by market would re-buy identical data per country.
+- **Not per project.** These are facts about somebody else's domain, so a competitor checked from
+  two projects is bought once.
+- **Host case-insensitive, path case-*sensitive*** (`_normalizeDomain` for the host, path
+  verbatim). DataForSEO matches paths exactly, so collapsing `/Blog` into `/blog` would serve one
+  page's links under another page's name.
+- **Only real answers are cached** — `ok` and `empty`. `setup`, `budget` and `error` are refusals
+  that bought nothing; caching one would pin a transient failure to a domain for 24h and make the
+  retry look broken.
+- Fewer slots than the history because each entry holds up to 100 link rows and 60 anchors; same
+  shed-and-retry on quota failure.
+
+A restored copy is **never passed off as fresh**: the button reads `Saved 3h ago · refresh` and
+the card repeats it. That was the original objection to caching backlinks at all — it is answered
+by labelling, not by re-buying. Restoring matters most here because this is the *three*-call
+press against Analyze's one, and the server's own copy is the same restart-losing LocMemCache.
 
 ### Backlinks, anchors & spam score (a second, deliberate press)
 
 Behind its own **Load backlinks** button, never loaded automatically. The Analyze press buys one
 DataForSEO Labs call (50 keywords); this buys three Backlinks API calls — summary, **100**
 backlinks, **60** anchors — so it is priced separately and the button says what the next press
-costs (`Load backlinks` → `Loading backlinks…` → `Loaded · refresh`).
+costs (`Load backlinks` → `Loading backlinks…` → `Loaded · refresh`, or `Saved 3h ago · refresh`
+when the block came back from the localStorage store above).
 
 - **Profile strip** — backlinks, referring domains, dofollow %, authority score.
 - **Spam Score card** — the profile-wide target score, plus how many of the sampled links are
@@ -416,7 +476,11 @@ out loud rather than letting the dropdown imply a scope it does not have.
 
 ### Download PDF
 
-A report of everything currently on screen, generated server-side (WeasyPrint). **It reads the
+A report of everything currently on screen, generated server-side. Two engines are tried in
+order — **WeasyPrint**, then **xhtml2pdf** — so the button works on a stock
+`pip install -r requirements.txt` with no system libraries; see `tech-stack.md`. (It
+previously shipped WeasyPrint-only and therefore answered *501 PDF engine not installed* on
+every deployment that had not run the apt step.) **It reads the
 same 24-hour caches and never buys backlinks** — a section that was not loaded prints "Backlinks
 not loaded for this report". Straight after a lookup it costs $0. If the keyword cache has
 expired it makes the one Labs call Analyze would have made and says so in the document. It also

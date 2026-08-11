@@ -20,15 +20,23 @@ it up. A project's REAL stored AIPrompt rows are included as well, but only when
 up domain resolves to a registered project -- prompts belong to a project, and showing one
 project's prompts under another domain's report would be a lie about whose they are.
 
-WeasyPrint is imported LAZILY. It needs cairo/pango system libraries that a VPS does not
-have by default; importing it at module scope would take the whole API down on a deployment
-that has not installed them, to serve one endpoint. A missing engine is a 501 with an
-actionable message.
+TWO ENGINES, TRIED IN ORDER, BOTH IMPORTED LAZILY. WeasyPrint renders best but needs
+cairo/pango system libraries that neither `pip install` nor a fresh VPS provides, so for a
+long time this endpoint answered 501 on every deployment that had not run the apt step --
+which was all of them. xhtml2pdf is the fallback: pure Python on top of reportlab, no system
+libraries at all, so `pip install -r requirements.txt` is genuinely sufficient. Its CSS
+support is narrower (it drops letter-spacing, and its page footer uses a different
+mechanism -- see the `engine` branch in templates/reports/domain_overview.html), so it is
+second choice, not first. 501 now means BOTH are unavailable, which is a much rarer thing.
+
+Importing at module scope would take the whole API down on a deployment missing a library,
+to serve one endpoint, so both imports live inside their factory.
 """
+import io
 import logging
 import re
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Callable, Optional
 
 from django.conf import settings
 
@@ -43,27 +51,68 @@ PROMPT_ROWS = 20
 PROMPT_SEEDS = 5
 
 PDF_ENGINE_MISSING = (
-    "PDF engine not installed — WeasyPrint and its cairo/pango system libraries are "
-    "missing on this server. See .claude/tech-stack.md for the deploy step."
+    "No PDF engine is available on this server — neither WeasyPrint (needs cairo/pango "
+    "system libraries) nor xhtml2pdf (pip install xhtml2pdf) could be loaded. See "
+    ".claude/tech-stack.md."
 )
 
 
-def load_pdf_engine():
-    """WeasyPrint's HTML class, or None when the engine is not usable here.
+def _weasyprint_renderer() -> Callable[[str], bytes]:
+    """First choice. Raises if the engine is not usable, which is the signal to try the next.
 
-    Imported lazily and inside its own try for two different failures that look nothing
-    alike. `pip install weasyprint` can succeed while the render still fails, because the
-    package binds to cairo, pango and libgobject at IMPORT time via ctypes and raises OSError
-    -- not ImportError -- when they are absent. That is the exact state of a fresh VPS after
-    `pip install -r requirements.txt`, so both are caught and both mean the same thing to a
-    caller: no PDF engine, answer 501 rather than taking the process down at startup.
+    Two failures that look nothing alike both mean "not usable here": `pip install
+    weasyprint` can succeed while the import still fails, because the package binds to
+    cairo, pango and libgobject at IMPORT time via ctypes and raises OSError -- not
+    ImportError. The caller catches both.
     """
-    try:
-        from weasyprint import HTML
-        return HTML
-    except Exception as exc:
-        logger.warning(f"report: PDF engine unavailable: {exc}")
-        return None
+    from weasyprint import HTML
+
+    def render(html: str) -> bytes:
+        return HTML(string=html, base_url=str(settings.BASE_DIR)).write_pdf()
+
+    return render
+
+
+def _xhtml2pdf_renderer() -> Callable[[str], bytes]:
+    """Fallback. Pure Python (reportlab underneath), so it needs no system libraries.
+
+    `pisa.CreatePDF` does NOT raise on a broken document -- it returns a result object with
+    an error count and hands back whatever bytes it managed to produce. Returning those
+    would download a truncated or empty "PDF", which is the failure mode this codebase
+    treats as worse than an honest error, so a non-zero `err` is escalated to an exception
+    and becomes the 500 the caller already handles.
+    """
+    from xhtml2pdf import pisa
+
+    def render(html: str) -> bytes:
+        out = io.BytesIO()
+        result = pisa.CreatePDF(src=html, dest=out, encoding="utf-8")
+        if result.err:
+            raise RuntimeError(f"xhtml2pdf reported {result.err} error(s) rendering the report")
+        return out.getvalue()
+
+    return render
+
+
+# Order is preference order. The template branches on the name it is given -- page footers
+# are the one construct the two engines spell differently -- so a new entry here needs a
+# matching branch there.
+PDF_ENGINES = (("weasyprint", _weasyprint_renderer), ("xhtml2pdf", _xhtml2pdf_renderer))
+
+
+def load_pdf_renderer() -> Optional[tuple]:
+    """`(render_fn, engine_name)` for the best available engine, or None when none is.
+
+    `render_fn(html) -> bytes`. The name goes into the template context because the two
+    engines spell page footers differently; nothing else in the document depends on it.
+    """
+    for name, factory in PDF_ENGINES:
+        try:
+            return factory(), name
+        except Exception as exc:
+            logger.info(f"report: PDF engine {name} unavailable: {exc}")
+    logger.warning("report: no PDF engine available")
+    return None
 
 
 # ---------------------------------------------------------------------------------------
@@ -173,8 +222,13 @@ def _prompt_rows(keywords: list, site_id: str) -> dict:
 
 
 def build_report_context(target: str, location: str = "United States",
-                         site_id: str = "", site_pk: Optional[int] = None) -> dict:
-    """Assemble everything the template prints, and record what (if anything) was fetched."""
+                         site_id: str = "", site_pk: Optional[int] = None,
+                         engine: str = "weasyprint") -> dict:
+    """Assemble everything the template prints, and record what (if anything) was fetched.
+
+    `engine` is the name from `load_pdf_renderer`. The template needs it for one thing only:
+    the two engines spell a page footer differently.
+    """
     from apps.dashboard.services.domain_overview_service import (
         backlink_target, fetch_backlinks_block, fetch_keywords_block,
     )
@@ -211,6 +265,7 @@ def build_report_context(target: str, location: str = "United States",
         "generated_at": datetime.now(timezone.utc).strftime("%d %b %Y, %H:%M UTC"),
         "project_name": (project.site_name or project.site_url) if project is not None else None,
         "font_url": report_font_url(),
+        "engine": engine,
 
         "keywords_ok": keywords_ok,
         "keywords_error": None if keywords_ok else (keywords_block.get("error")
@@ -298,18 +353,20 @@ def generate_report(target: str, location: str = "United States", site_id: str =
     if not target:
         return {"status": "error", "code": 400, "error": "Target URL is required."}
 
-    HTML = load_pdf_engine()
-    if HTML is None:
+    loaded = load_pdf_renderer()
+    if loaded is None:
         return {"status": "error", "code": 501, "error": PDF_ENGINE_MISSING}
+    render, engine = loaded
 
     try:
         from django.template.loader import render_to_string
-        context = build_report_context(target, location, site_id=site_id, site_pk=site_pk)
+        context = build_report_context(target, location, site_id=site_id, site_pk=site_pk,
+                                       engine=engine)
         html = render_to_string("reports/domain_overview.html", context)
-        pdf = HTML(string=html, base_url=str(settings.BASE_DIR)).write_pdf()
+        pdf = render(html)
     except Exception as exc:
         logger.error("report: rendering failed", exc_info=True)
         return {"status": "error", "code": 500, "error": f"Could not render the report: {exc}"}
 
     return {"status": "ok", "pdf": pdf, "filename": _safe_filename(target),
-            "fetched": context["fetched"]}
+            "fetched": context["fetched"], "engine": engine}

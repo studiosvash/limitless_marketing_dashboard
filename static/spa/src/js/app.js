@@ -35,6 +35,16 @@
     syncPanelOpen: false,
     freshness: 'Weekly · Mon',
     doQuery: '', doData: null, doLoading: false, doError: null, doSel: [], doTracked: [],
+    /* Which of the three Domain Overview result tabs is showing. An IN-PAGE tab, unrelated
+       to state.tab (the router's page): the three sections are one lookup's results, split
+       up, not three pages. Deliberately not in the nav history — a tab flick is not a
+       navigation, and the Keyword Explorer's match tabs (state.matchType) set that
+       precedent. 'overview' | 'keywords' | 'backlinks'. */
+    doTab: 'overview',
+    /* True once the user has restored a result from the localStorage history rather than
+       pressing Analyze, so the page can say the figures are a capture and name its age
+       instead of implying they were just measured. Cleared by any real lookup. */
+    doFromHist: null,
     /* Domain Overview "send to Position Tracking" destination picker. The lookup is for an
        ARBITRARY domain — usually a competitor's — so the project the keywords belong in is
        frequently NOT the one currently selected in the topbar. Sending silently to
@@ -1095,14 +1105,207 @@
     return '&near=' + encodeURIComponent(near) + '&gl=us';
   }
 
+  /* ---------- domain overview search history ----------
+     Per project, in localStorage, newest first, capped at DO_HIST_MAX. Same shape and the
+     same reasoning as the Keyword Explorer's kwHist* trio above -- see that comment -- with
+     one addition that is the entire point of this one: the ENTRY CARRIES THE RESULT.
+
+     Storing the payload is what makes revisiting a domain free. The server does keep a
+     24-hour cache (domain_overview_service.CACHE_TTL), but Django is running on the default
+     LocMemCache here: per PROCESS, dropped on every restart and not shared between gunicorn
+     workers. So a server-cache hit is genuinely a coin toss, while a localStorage hit is
+     certain. Each press of Analyze is a billed DataForSEO Labs call; this turns "I looked at
+     this domain an hour ago" into zero calls instead of maybe-zero.
+
+     Backlinks are cached too, but in a SEPARATE store keyed by domain only (doBlCache*
+     below) -- never folded into a history entry. That mirrors the server, whose two caches
+     are keyed differently for the same reason: the Backlinks API has no location parameter,
+     so one domain's links are the same answer in every market, and storing them per
+     (domain, market) would keep buying the same three calls once per country.
+
+     They were originally left out of the cache entirely, on the grounds that restoring three
+     paid calls silently would make the "Load backlinks" button misrepresent what had been
+     bought. The restoring is now done, but not silently: the button reads "Saved 3h ago ·
+     refresh", so it still states what has been paid for and what the next press costs. That
+     keeps the honesty and drops the repeat spend, which was the more expensive half -- three
+     calls against Analyze's one. */
+  DO_HIST_MAX = 10;
+  DO_HIST_TTL = 24 * 60 * 60 * 1000;   // matches the server's CACHE_TTL, so neither outlives the other
+
+  doHistKey(pid) { return 'fh_do_hist_' + (pid || ''); }
+
+  doHistLoad(pid) {
+    /* renderVals() runs on every state change -- including every keystroke in the search
+       box -- so the parsed list is memoised exactly like _kwHistCache. Without this, each
+       keystroke re-parses up to ten full lookup payloads. */
+    const k = this.doHistKey(pid);
+    if (this._doHistCache && this._doHistCache.key === k) return this._doHistCache.data;
+    let data = [];
+    try { data = JSON.parse(localStorage.getItem(k) || '[]'); } catch (e) { data = []; }
+    if (!Array.isArray(data)) data = [];
+    this._doHistCache = { key: k, data };
+    return data;
+  }
+
+  doHistSave(pid, hist) {
+    const k = this.doHistKey(pid);
+    let capped = hist.slice(0, this.DO_HIST_MAX);
+    /* A stored payload is far bigger than the Explorer's (fifty keyword rows, not a query
+       string), so quota exhaustion is a real outcome rather than a theoretical one. Shed
+       the oldest entries and retry instead of losing the whole history: a shorter history
+       is a degraded feature, a thrown QuotaExceededError inside setState is a broken page. */
+    while (capped.length) {
+      try {
+        localStorage.setItem(k, JSON.stringify(capped));
+        this._doHistCache = { key: k, data: capped };
+        return;
+      } catch (e) {
+        capped = capped.slice(0, capped.length - 1);
+      }
+    }
+    try { localStorage.removeItem(k); } catch (e) {}
+    this._doHistCache = { key: k, data: [] };
+  }
+
+  /* One entry per (domain, market). Re-analysing the same pair replaces the old entry
+     rather than adding a second one, so the chip row shows ten DISTINCT lookups instead of
+     ten repeats of this morning's. */
+  doHistId(query, location) { return (query || '').trim().toLowerCase() + '|' + (location || ''); }
+
+  doHistPush(pid, query, location, data) {
+    const id = this.doHistId(query, location);
+    const entry = { id: id, query: (query || '').trim(), location: location, data: data, ts: Date.now() };
+    const rest = this.doHistLoad(pid).filter(h => h && h.id !== id);
+    this.doHistSave(pid, [entry].concat(rest));
+  }
+
+  /* Restore a past lookup. Fresh entries render straight from localStorage and spend
+     nothing; an expired one falls through to a real lookup. The chip itself says which of
+     the two will happen BEFORE it is clicked (see vals.do.hist), because a control that
+     silently costs money on some presses and not others is a control you cannot trust. */
+  doHistOpen(entry) {
+    if (!entry) return;
+    const fresh = (Date.now() - (entry.ts || 0)) < this.DO_HIST_TTL;
+    if (!fresh) {
+      this.setState({ doQuery: entry.query, doLoc: entry.location, doFromHist: null },
+                    () => this.runDomainOverview());
+      return;
+    }
+    this.setState({
+      doQuery: entry.query, doLoc: entry.location, doData: entry.data,
+      doError: (entry.data && entry.data.error) || null,
+      doLoading: false, doSel: [], doFromHist: entry.ts, doTab: 'overview'
+    });
+  }
+
+  doHistClear() {
+    this.doHistSave(this.state.projectId, []);
+    this.doBlCacheClear();
+    this.forceUpdate();
+  }
+
+  /* ---------- domain overview backlink cache ----------
+     The expensive half. One press of "Load backlinks" buys THREE Backlinks API calls
+     (summary + 100 backlinks + 60 anchors) against Analyze's one Labs call, so this is the
+     store that saves the most money -- and the one the server is least able to help with,
+     since its own copy lives in the same restart-losing LocMemCache.
+
+     Keyed by DOMAIN ONLY, exactly like backlinks_cache_key() on the server, and NOT per
+     project: the Backlinks API has no location parameter, so the answer for a domain does
+     not vary by market. Global rather than per-project for the same reason -- these are
+     facts about somebody else's domain, not about the project looking at it, and a
+     competitor checked from two projects should be bought once.
+
+     Fewer slots than the history: each entry holds up to 100 link rows and 60 anchor rows,
+     so five is already the larger consumer of the quota. */
+  DO_BL_MAX = 5;
+  DO_BL_KEY = 'fh_do_bl';
+
+  /* Mirrors domain_overview_service.backlink_target(): host lowercased and de-www'd, path
+     preserved verbatim. The path case matters -- DataForSEO matches paths exactly, so
+     collapsing /Blog and /blog into one slot would serve one page's links under the other's
+     name, which is the fabricated-data failure this codebase refuses to ship. */
+  doBlCacheId(target) {
+    const raw = String(target || '').trim().replace(/^sc-domain:/i, '');
+    const host = this._normalizeDomain(raw);
+    if (!host) return '';
+    const afterScheme = raw.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '');
+    const cut = afterScheme.indexOf('/');
+    const path = cut === -1 ? '' : afterScheme.slice(cut);
+    return (path && path !== '/') ? host + path : host;
+  }
+
+  doBlCacheLoad() {
+    // Memoised like _doHistCache: renderVals() re-reads this on every keystroke, and these
+    // are the biggest payloads the page stores.
+    if (this._doBlCache) return this._doBlCache;
+    let data = [];
+    try { data = JSON.parse(localStorage.getItem(this.DO_BL_KEY) || '[]'); } catch (e) { data = []; }
+    if (!Array.isArray(data)) data = [];
+    this._doBlCache = data;
+    return data;
+  }
+
+  doBlCacheSave(list) {
+    let capped = list.slice(0, this.DO_BL_MAX);
+    // Same shed-and-retry as doHistSave, and more necessary here: a single entry can be
+    // hundreds of kilobytes, so one big domain can exhaust the quota on its own.
+    while (capped.length) {
+      try {
+        localStorage.setItem(this.DO_BL_KEY, JSON.stringify(capped));
+        this._doBlCache = capped;
+        return;
+      } catch (e) {
+        capped = capped.slice(0, capped.length - 1);
+      }
+    }
+    try { localStorage.removeItem(this.DO_BL_KEY); } catch (e) {}
+    this._doBlCache = [];
+  }
+
+  /* Returns the stored entry only while it is inside the same 24h TTL the keywords history
+     uses, so the two halves of one lookup never disagree about how old "recent" is. */
+  doBlCacheGet(target) {
+    const id = this.doBlCacheId(target);
+    if (!id) return null;
+    const hit = this.doBlCacheLoad().filter(e => e && e.id === id)[0];
+    if (!hit) return null;
+    if ((Date.now() - (hit.ts || 0)) >= this.DO_HIST_TTL) return null;
+    return hit;
+  }
+
+  /* Only ever called with an answer DataForSEO actually returned. `setup` (no credentials),
+     `budget` (monthly cap refused) and `error` are refusals, not data -- caching one would
+     pin a transient failure to a domain for 24 hours and make the retry look broken. */
+  doBlCachePut(target, data) {
+    if (!data || (data.state !== 'ok' && data.state !== 'empty')) return;
+    const id = this.doBlCacheId(target);
+    if (!id) return;
+    const rest = this.doBlCacheLoad().filter(e => e && e.id !== id);
+    this.doBlCacheSave([{ id: id, data: data, ts: Date.now() }].concat(rest));
+  }
+
+  doBlCacheClear() {
+    this.doBlCacheSave([]);
+  }
+
   runDomainOverview() {
     const q = this.state.doQuery.trim();
     if (!q || this.state.doLoading) return;
-    this.setState({ doLoading: true, doError: null, doSel: [] });
+    const loc = this.doLocation();
+    const pid = this.state.projectId;
+    /* doFromHist clears here: whatever comes back is a live measurement, not a replay. */
+    this.setState({ doLoading: true, doError: null, doSel: [], doFromHist: null });
     /* `project` lets the backend mark which returned keywords this project already tracks.
        Without it every row would offer Track even for keywords already on the list. */
-    window.FuseAPI.post('/api/domain-overview', { target: q, location: this.doLocation(), project: this.state.projectId })
-      .then(r => { if (this._alive) this.setState({ doLoading: false, doData: r, doError: r.error }); })
+    window.FuseAPI.post('/api/domain-overview', { target: q, location: loc, project: pid })
+      .then(r => {
+        if (!this._alive) return;
+        /* Only a successful lookup is worth replaying. Storing an error would put a chip on
+           screen whose single promise -- "this is free" -- it could not keep. */
+        if (r && r.status === 'ok' && !r.error) this.doHistPush(pid, q, loc, r);
+        this.setState({ doLoading: false, doData: r, doError: r.error });
+      })
       .catch(e => { if (this._alive) this.setState({ doLoading: false, doError: 'Failed to fetch domain overview: ' + e }); });
   }
 
@@ -2848,6 +3051,8 @@
       doInput: e => this.setState({ doQuery: e.target.value }),
       doKey: e => { if (e.key === 'Enter') this.runDomainOverview(); },
       runDomainOverview: () => this.runDomainOverview(),
+      doSetTab: t => this.setState({ doTab: t }),
+      doHistClear: () => this.doHistClear(),
       doToggleRow: kw => this.setState(st => {
         const sel = st.doSel || [];
         return { doSel: sel.indexOf(kw) >= 0 ? sel.filter(k => k !== kw) : sel.concat([kw]) };

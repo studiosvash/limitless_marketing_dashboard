@@ -286,7 +286,34 @@ From `requirements.txt`:
 | `google-auth`, `google-auth-oauthlib`, `google-auth-httplib2`, `google-api-python-client` | | Yes |
 | `google-analytics-data` | `>=0.18` | Yes |
 | `google-ads` | `>=24.0` | Only when Google Ads credentials exist |
-| `weasyprint` | `>=62.0` | Yes — `POST /api/domain-overview/report`. **Needs system libraries; see below.** |
+| `weasyprint` | `>=62.0` | Preferred engine for `POST /api/domain-overview/report`. **Needs system libraries; see below.** |
+| `xhtml2pdf` | `>=0.2.16` | Fallback engine for the same endpoint. Pure Python — no system libraries. |
+
+### Two PDF engines, tried in order
+
+`domain_overview_report_service.load_pdf_renderer()` returns `(render_fn, engine_name)` for
+the first engine that imports cleanly, in the order declared by `PDF_ENGINES`:
+
+1. **WeasyPrint** — best fidelity, but needs the system libraries below.
+2. **xhtml2pdf** — pure Python on top of reportlab, so `pip install -r requirements.txt` is
+   genuinely sufficient. Narrower CSS: it silently drops `letter-spacing`, and it has no CSS
+   page-margin boxes at all.
+
+**501 now means BOTH failed**, which should not happen on a machine that installed
+requirements. This matters because the endpoint previously shipped WeasyPrint-only and
+therefore answered 501 on every deployment that had not run the apt step — which was all of
+them.
+
+**The two engines spell page footers differently, and this is not cosmetic.** xhtml2pdf's
+CSS parser *raises* on WeasyPrint's `@bottom-center` margin box (`TypeError` inside
+`cssParser._parseAtPage`), so it does not merely lose the page number — it fails the whole
+render. `templates/reports/domain_overview.html` therefore branches on the `engine` context
+value: `@bottom-center` for WeasyPrint, an `@frame` pointing at a `#reportFooter` element for
+xhtml2pdf. **Adding an engine to `PDF_ENGINES` means adding a branch there too.**
+
+`RealPdfEngineTests` in `apps/api/tests/test_domain_overview_report.py` drives the real
+resolver against the real template for exactly this reason: every other test in that module
+hands the service a fake renderer, and a fake never touches a real engine.
 
 ### WeasyPrint needs system libraries (deploy step)
 
@@ -299,10 +326,9 @@ apt-get install -y libpango-1.0-0 libpangoft2-1.0-0 libcairo2 libgdk-pixbuf-2.0-
                    libffi-dev shared-mime-info
 ```
 
-`apps/dashboard/services/domain_overview_report_service.load_pdf_engine()` imports it
-lazily and catches both failure shapes, so a server without these libraries runs the whole
-API normally and only the report endpoint answers **501 "PDF engine not installed"**. Never
-move that import to module scope: it would take the entire API down to serve one endpoint.
+`load_pdf_renderer()` imports it lazily and catches both failure shapes, so a server without
+these libraries runs the whole API normally and simply falls through to xhtml2pdf. Never move
+that import to module scope: it would take the entire API down to serve one endpoint.
 
 **Fonts are a second, separate deploy concern.** A PDF is rendered on the server with the
 server's fonts, and a headless box has almost none — a unicode domain or an RTL anchor comes

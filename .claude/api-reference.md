@@ -1674,8 +1674,13 @@ call, labelled "Suggested prompts" with volume printed as *not measured*. A proj
 project. Tables cap at 25 keywords / 25 backlinks / 15 anchors with a caption naming the true
 total.
 
-**501** `{"detail": "PDF engine not installed — …"}` when WeasyPrint or its cairo/pango system
-libraries are missing (imported lazily; see `.claude/tech-stack.md` §7). **400** on a missing
+Rendered by whichever engine `load_pdf_renderer()` resolves first — **WeasyPrint**, else
+**xhtml2pdf** (pure Python, no system libraries). Both imports are lazy. The chosen engine's
+name is passed to the template, which branches on it for the page footer; see
+`.claude/tech-stack.md` §7.
+
+**501** `{"detail": "No PDF engine is available — …"}` only when **both** engines fail to
+import, which should not occur after `pip install -r requirements.txt`. **400** on a missing
 target.
 
 ### `POST /api/live-serp`

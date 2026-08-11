@@ -40,7 +40,37 @@
           <sc-if value="{{ !do.loading }}" hint-placeholder-val="{{ true }}">Analyze</sc-if>
         </div>
       </div>
+
+      <!-- ===== Recent searches (localStorage, per project) ==============================
+           Every Analyze press is a billed DataForSEO Labs call, so the last ten lookups are
+           kept in this browser WITH their results. A green-timestamped chip replays from
+           storage and costs nothing; a grey one has passed 24h and will re-run the lookup.
+           The distinction is on the chip rather than discovered after clicking, because a
+           control that spends money on some presses and not others has to say which.
+
+           Saved backlinks are a separate, domain-keyed store (App#doBlCache*), so they are
+           not listed here -- but Clear drops them too, which is why it says so. -->
+      <sc-if value="{{ do.histHasItems }}" hint-placeholder-val="{{ true }}">
+        <div style="padding: 0 20px 16px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+          <span style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: #94a3b8; margin-right: 2px;">Recent</span>
+          <sc-for list="{{ do.histItems }}" as="hi" hint-placeholder-count="3">
+            <span onClick="{{ hi.onClick }}" role="button" title="{{ hi.title }}" aria-label="{{ hi.title }}" style="{{ hi.style }}" style-hover="border-color:#a5b4fc">
+              {{ hi.label }}<span style="{{ hi.ageStyle }}">{{ hi.age }}</span>
+            </span>
+          </sc-for>
+          <span onClick="{{ h.doHistClear }}" role="button" title="Forget every saved lookup on this browser, including saved backlinks — reloading any of them will bill DataForSEO again" aria-label="Clear recent searches and saved backlinks" style="font-size: 11.5px; color: #94a3b8; cursor: pointer; margin-left: 2px;" style-hover="color:#64748b">Clear</span>
+        </div>
+      </sc-if>
     </div>
+
+    <!-- A restored capture is not a fresh measurement, and its Tracked marks are as of the
+         capture. Saying so is the difference between "stale but instant" and "silently
+         wrong". -->
+    <sc-if value="{{ do.fromHist }}" hint-placeholder-val="{{ false }}">
+      <div style="padding: 11px 16px; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 10px; color: #166534; font-size: 12.5px; line-height: 1.5;">
+        {{ do.fromHistNote }}
+      </div>
+    </sc-if>
     
     <sc-if value="{{ do.error }}" hint-placeholder-val="{{ false }}">
       <div style="padding: 16px 20px; background: #fef2f2; border: 1px solid #fecaca; border-radius: 12px; color: #dc2626; font-size: 13px; font-weight: 500;">
@@ -50,7 +80,24 @@
 
     <!-- Data Sections -->
     <sc-if value="{{ do.data }}" hint-placeholder-val="{{ true }}">
-      
+
+      <!-- ===== Result tabs =============================================================
+           One lookup's results, split three ways: headline metrics, the keyword table, and
+           the backlink profile. These are IN-PAGE tabs (state.doTab), not routes — the
+           three sections are one result, and switching between them must never refetch.
+           Switching to Backlinks in particular fetches nothing: that tab's data is three
+           billed API calls and stays behind its own button. -->
+      <div style="display: flex; align-items: center; gap: 6px; padding: 4px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 11px; width: fit-content;">
+        <sc-for list="{{ do.tabs }}" as="t" hint-placeholder-count="3">
+          <span onClick="{{ t.onClick }}" role="button" aria-label="{{ t.label }}" style="{{ t.style }}">
+            {{ t.label }}<sc-if value="{{ t.hasCount }}" hint-placeholder-val="{{ true }}"><span style="{{ t.countStyle }}">{{ t.count }}</span></sc-if>
+          </span>
+        </sc-for>
+      </div>
+
+      <!-- ===== TAB 1 · Overview ======================================================= -->
+      <sc-if value="{{ do.showOverviewTab }}" hint-placeholder-val="{{ true }}">
+
       <!-- KPI Cards -->
       <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px;">
         <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; padding: 20px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
@@ -69,7 +116,44 @@
           <div style="font-size: 12px; color: #94a3b8; margin-top: 4px;">Top 100 positions</div>
         </div>
       </div>
-      
+
+      <!-- Backlink headline, shown here ONLY when the Backlinks tab has already been
+           loaded. It is a read of data in hand and never triggers the fetch; when nothing
+           has been loaded the strip is absent and a line points at the tab that can load
+           it, rather than four em dashes that read as "this domain has no backlinks". -->
+      <sc-if value="{{ do.showBlSummaryOnOverview }}" hint-placeholder-val="{{ false }}">
+        <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); padding: 18px 20px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px;">
+          <div>
+            <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: #64748b;">Backlinks</div>
+            <div style="font-size: 22px; font-weight: 700; color: #334155; margin-top: 4px;">{{ do.bl.summary.backlinks }}</div>
+          </div>
+          <div>
+            <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: #64748b;">Referring domains</div>
+            <div style="font-size: 22px; font-weight: 700; color: #334155; margin-top: 4px;">{{ do.bl.summary.refDomains }}</div>
+          </div>
+          <div>
+            <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: #64748b;">Authority</div>
+            <div style="font-size: 22px; font-weight: 700; color: #334155; margin-top: 4px;">{{ do.bl.summary.authority }}</div>
+          </div>
+          <div>
+            <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: #64748b;">Spam score</div>
+            <div style="display: flex; align-items: baseline; gap: 8px; margin-top: 2px;">
+              <span style="font-size: 22px; font-weight: 700; color: #334155;">{{ do.bl.spam.scoreText }}</span>
+              <span style="{{ do.bl.spam.bandStyle }}">{{ do.bl.spam.bandLabel }}</span>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+      <sc-if value="{{ do.blSummaryHint }}" hint-placeholder-val="{{ true }}">
+        <p style="font-size: 12px; color: #94a3b8; margin: 0;">{{ do.blSummaryHint }}</p>
+      </sc-if>
+
+      </sc-if>
+      <!-- ===== /TAB 1 ================================================================= -->
+
+      <!-- ===== TAB 2 · Keywords ======================================================= -->
+      <sc-if value="{{ do.showKeywordsTab }}" hint-placeholder-val="{{ false }}">
+
       <!-- Keywords Table -->
       <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
         <div style="padding: 16px 20px; border-bottom: 1px solid #f1f5f9; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;">
@@ -153,12 +237,19 @@
         </div>
       </div>
       
+      </sc-if>
+      <!-- ===== /TAB 2 ================================================================= -->
+
+      <!-- ===== TAB 3 · Backlinks ====================================================== -->
+      <sc-if value="{{ do.showBacklinksTab }}" hint-placeholder-val="{{ false }}">
+
       <!-- ===== Backlinks · anchors · spam score ==========================================
            A SECOND, deliberate press. The Analyze button above buys ONE DataForSEO Labs
            call; this buys three Backlinks API calls, so it is never loaded automatically and
-           the button says what the next press costs. The market dropdown in the header does
-           NOT apply to anything in this card -- the Backlinks API has no location concept --
-           and the subtitle says so rather than letting the dropdown imply otherwise. -->
+           the button says what the next press costs -- OPENING THIS TAB FETCHES NOTHING.
+           The market dropdown in the header does NOT apply to anything in this card -- the
+           Backlinks API has no location concept -- and the subtitle says so rather than
+           letting the dropdown imply otherwise. -->
       <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
         <div style="padding: 16px 20px; border-bottom: 1px solid #f1f5f9; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;">
           <div>
@@ -276,6 +367,9 @@
           </div>
         </sc-if>
       </div>
+
+      </sc-if>
+      <!-- ===== /TAB 3 ================================================================= -->
 
     </sc-if>
 

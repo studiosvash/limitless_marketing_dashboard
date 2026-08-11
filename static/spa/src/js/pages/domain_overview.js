@@ -190,9 +190,18 @@
 
          Computed outside the `status === 'ok'` branch: the backlink sections are their own
          fetch with their own lifecycle, and a keywords lookup that errored must not take the
-         backlink card's state down with it. */
+         backlink card's state down with it.
+
+         TWO sources, in priority order. `doBl` is this session's fetch. Behind it sits the
+         localStorage copy (App#doBlCache*), which is what makes a restored search -- or a
+         reload, or a server restart -- show the links that were already paid for instead of
+         asking to buy them again. The saved copy is never passed off as a fresh one: the
+         button says "Saved 3h ago · refresh" and the card repeats it, so the user can still
+         see exactly what has been bought and what the next press would cost. */
       const blSt = (s.doBl && s.doBl.target === (s.doQuery || '').trim()) ? s.doBl : {};
-      const bl = blSt.data || null;
+      const blCached = blSt.data ? null : this.doBlCacheGet(s.doQuery);
+      const bl = blSt.data || (blCached && blCached.data) || null;
+      const blCacheAge = blCached ? this.relTime(new Date(blCached.ts).toISOString()) : '';
       const blBand = {
         low:     { fg: '#059669', bg: '#ecfdf5', bd: '#a7f3d0', label: 'Low' },
         medium:  { fg: '#b45309', bg: '#fffbeb', bd: '#fde68a', label: 'Medium' },
@@ -214,9 +223,14 @@
         showLinks: !!(bl && bl.state === 'ok'),
         loading: !!blSt.loading,
         error: blSt.error || null,
-        /* The label tells the user what the NEXT press costs. Once loaded, a press inside
-           24h is served from cache and free; after that it bills again. */
-        btnLabel: blSt.loading ? 'Loading backlinks…' : (bl ? 'Loaded · refresh' : 'Load backlinks'),
+        /* The label tells the user what the NEXT press costs, and never hides where what is
+           on screen came from. Three readings: nothing bought yet · bought this session ·
+           restored from a saved copy, with its age. The third is the one that has to stay
+           explicit -- a saved copy rendered under a plain "Loaded" would be indistinguishable
+           from a fresh measurement. */
+        btnLabel: blSt.loading
+          ? 'Loading backlinks…'
+          : (blCached ? 'Saved ' + blCacheAge + ' · refresh' : (bl ? 'Loaded · refresh' : 'Load backlinks')),
         btnStyle: {
           display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '9px 16px',
           fontSize: '13px', fontWeight: 600, borderRadius: '8px',
@@ -235,6 +249,10 @@
             .then(r => {
               if (!this._alive) return;
               const b = r && r.backlinks;
+              /* Save before the render so a reload, a restored search, or a server restart
+                 finds these three calls already bought. doBlCachePut ignores anything that
+                 is not a real answer. */
+              this.doBlCachePut(q, b);
               this.setState({ doBl: { target: q, loading: false, data: b || null,
                                       error: (b && b.state === 'error') ? b.note : (r && r.error) || null } });
             })
@@ -309,7 +327,13 @@
         countLabel: bl && bl.links
           ? this.fmt(bl.links.length) + ' of the highest-authority backlinks · limit ' + (bl.limit || 100)
           : '',
-        cachedLabel: (bl && bl.cached) ? 'Served from the 24-hour cache — this press cost nothing' : ''
+        /* Which of the three free routes produced this, in the order they are checked. The
+           browser copy is named separately from the server's because only one of them
+           survives a restart, and the user is entitled to know which one they are relying
+           on before they navigate away. */
+        cachedLabel: blCached
+          ? 'Saved on this browser ' + blCacheAge + ' — restored for free. Press refresh to re-buy it.'
+          : ((bl && bl.cached) ? 'Served from the 24-hour cache — this press cost nothing' : '')
       };
 
       /* Same shared drawer Position Tracking uses (see App#serpDrawerVals) -- "you" here
@@ -391,4 +415,92 @@
         vals.do.rowsMeta = this.fmt(visKws.length) + ' keywords · ' + vals.do.location;
         vals.do.trackSelLabel = 'Track selected (' + selCount + ')';
       }
+
+      /* ---- result tabs ----------------------------------------------------------------
+         One lookup's results, split three ways. Everything ABOVE the tabs (search box,
+         market picker, Download PDF) stays shared, because it applies to all three.
+
+         Counts are appended only where a count is a measured fact. Backlinks show none
+         until they have actually been loaded: a "0" beside a section that has never been
+         fetched asserts a measurement nobody paid for -- and here it would assert the
+         opposite of the truth, since the whole point of that tab is that it holds data
+         until you ask for it. */
+      const doTab = s.doTab || 'overview';
+      const doTabBase = { padding: '7px 13px', fontSize: '13px', borderRadius: '8px', cursor: 'pointer',
+                          border: '1px solid transparent', color: '#64748b', fontWeight: 500,
+                          display: 'inline-flex', alignItems: 'center', gap: '7px' };
+      const doTabOn = { padding: '7px 13px', fontSize: '13px', borderRadius: '8px', cursor: 'pointer',
+                        border: '1px solid #c7d2fe', background: '#eef2ff', color: '#4338ca', fontWeight: 600,
+                        display: 'inline-flex', alignItems: 'center', gap: '7px' };
+      const blRefDomains = (bl && bl.state === 'ok' && bl.summary) ? bl.summary.refDomains : null;
+      const doTabDefs = [
+        ['overview', 'Overview', ''],
+        ['keywords', 'Keywords', vals.do.hasRows ? this.fmt(vals.do.rows.length) : ''],
+        ['backlinks', 'Backlinks',
+         (blRefDomains === null || blRefDomains === undefined) ? '' : this.fmt(blRefDomains)]
+      ];
+      vals.do.tabs = doTabDefs.map(d => ({
+        label: d[1],
+        count: d[2],
+        hasCount: !!d[2],
+        countStyle: { fontSize: '11px', fontWeight: 600, padding: '1px 6px', borderRadius: '9999px',
+                      color: doTab === d[0] ? '#4338ca' : '#64748b',
+                      background: doTab === d[0] ? '#e0e7ff' : '#f1f5f9' },
+        onClick: () => vals.h.doSetTab(d[0]),
+        style: doTab === d[0] ? doTabOn : doTabBase
+      }));
+      vals.do.showOverviewTab = doTab === 'overview';
+      vals.do.showKeywordsTab = doTab === 'keywords';
+      vals.do.showBacklinksTab = doTab === 'backlinks';
+
+      /* The Overview tab's backlink strip. Rendered ONLY from data that is already in hand
+         -- it never triggers the three-call fetch, which stays behind the button on the
+         Backlinks tab. When nothing has been loaded the strip is absent and a line points
+         at the tab that can load it, rather than showing four em dashes that look like a
+         domain with no backlinks. */
+      vals.do.showBlSummaryOnOverview = !!(bl && bl.state === 'ok');
+      vals.do.blSummaryHint = (bl && bl.state === 'ok')
+        ? '' : 'Backlink metrics are on the Backlinks tab — they are a separate, paid lookup.';
+
+      /* ---- recent searches (localStorage, per project) --------------------------------
+         The chip states its own age and, crucially, whether clicking it will SPEND. Within
+         24h the stored payload renders directly and costs nothing; past that the entry is
+         stale and the chip re-runs the billed lookup. Saying which before the click is the
+         whole contract -- see App#doHistOpen. */
+      const doHist = this.doHistLoad(s.projectId);
+      const doNow = Date.now();
+      vals.do.histItems = doHist.map(hEntry => {
+        const fresh = (doNow - (hEntry.ts || 0)) < this.DO_HIST_TTL;
+        const age = this.relTime(new Date(hEntry.ts || 0).toISOString());
+        return {
+          label: hEntry.query.length > 30 ? hEntry.query.slice(0, 28) + '…' : hEntry.query,
+          title: hEntry.query + ' · ' + hEntry.location + ' · looked up ' + age
+            + (fresh ? ' · saved on this browser, so opening it costs nothing'
+                     : ' · older than 24h, so opening it runs a new DataForSEO lookup'),
+          age: age,
+          fresh: fresh,
+          stale: !fresh,
+          onClick: () => this.doHistOpen(hEntry),
+          style: {
+            display: 'inline-flex', alignItems: 'center', gap: '7px', padding: '5px 11px',
+            fontSize: '12px', borderRadius: '9999px', cursor: 'pointer',
+            color: fresh ? '#334155' : '#64748b',
+            background: fresh ? '#f8fafc' : 'white',
+            border: '1px solid ' + (fresh ? '#e2e8f0' : '#e2e8f0')
+          },
+          ageStyle: { fontSize: '10.5px', color: fresh ? '#059669' : '#94a3b8', fontWeight: 600 }
+        };
+      });
+      vals.do.histHasItems = doHist.length > 0;
+
+      /* Says out loud that what is on screen is a replay, and how old. Without it a restored
+         capture is indistinguishable from a fresh measurement -- and its Tracked marks are
+         as of the capture, which is exactly the kind of quietly-stale number this codebase
+         keeps getting bitten by. */
+      vals.do.fromHist = !!s.doFromHist;
+      vals.do.fromHistNote = s.doFromHist
+        ? 'Saved result from ' + this.relTime(new Date(s.doFromHist).toISOString())
+          + ' — restored from this browser, so it cost nothing. Tracked marks are as they were '
+          + 'when it was captured. Press Analyze for a fresh lookup.'
+        : '';
     }
