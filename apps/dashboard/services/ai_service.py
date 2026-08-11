@@ -807,6 +807,113 @@ def execute_ai_run(site_id: str, task_id: str) -> dict:
             "notConnected": sorted(not_connected), "detail": detail}
 
 
+def build_prompt_visibility(prompts: list, own_domain: str, competitors: list) -> dict:
+    """Share of voice computed from THE PROMPTS THIS PROJECT TRACKS. Pure function.
+
+    The AI Visibility tab used to lead with DataForSEO's LLM Mentions index — counts over
+    queries this project never asked, drawn from a weekly snapshot that can be days old, and
+    impossible to drill into because that endpoint returns totals only. Next to it the Prompts
+    tab said 0, and the two could not be reconciled by anyone who was not willing to read the
+    database. The user's objection was the right one: the overview should describe the prompts
+    they added.
+
+    So every number here comes from a stored answer the user can open in the Inspector, and it
+    moves when they add a prompt or run a check. `promptIds` is carried on every row precisely
+    so the page can offer "which prompts?" instead of asking for trust.
+
+    The denominator is APPEARANCES ACROSS PROMPTS (a prompt counts once per domain however many
+    engines named it), not raw mention counts: one prompt answered by four engines would
+    otherwise outweigh four prompts answered by one, which measures engine coverage rather than
+    visibility.
+
+    Three things are deliberately NOT counted as "nobody was mentioned":
+      * a prompt that has never been run — nothing was looked at;
+      * a check that errored — the engine failed, it did not report an absence;
+      * a domain nobody tracks — including it would change the denominator behind the user's
+        back, and the share is explicitly over the competitive set they chose.
+    """
+    own = (own_domain or "").strip().lower()
+    tracked = []
+    for comp in competitors or []:
+        name = comp if isinstance(comp, str) else str(
+            (comp or {}).get("domain") or (comp or {}).get("name") or "")
+        name = name.strip().lower()
+        if name and name != own and name not in tracked:
+            tracked.append(name)
+
+    domains = ([own] if own else []) + tracked
+    hits = {d: [] for d in domains}          # domain -> [prompt id, ...]
+    cited_ids: list = []
+    engines: dict = {}
+    run_prompts = 0
+    unrun_prompts = 0
+
+    for pr in prompts or []:
+        results = (pr or {}).get("results") or {}
+        checked = {k: v for k, v in results.items()
+                   if isinstance(v, dict) and v.get("state") == "checked"}
+        if not checked:
+            unrun_prompts += 1
+            continue
+        run_prompts += 1
+
+        you_here = False
+        cited_here = False
+        seen_here: set = set()
+        for platform, cell in checked.items():
+            stat = engines.setdefault(platform, {"platform": platform, "checks": 0, "you": 0})
+            stat["checks"] += 1
+            if cell.get("mentioned") or cell.get("cited"):
+                you_here = True
+                stat["you"] += 1
+            if cell.get("cited"):
+                cited_here = True
+            for comp in cell.get("competitors") or []:
+                name = str((comp or {}).get("name") or "").strip().lower()
+                if name in hits and name != own:
+                    seen_here.add(name)
+
+        if you_here and own:
+            hits[own].append(pr.get("id"))
+        if cited_here:
+            cited_ids.append(pr.get("id"))
+        for name in seen_here:
+            hits[name].append(pr.get("id"))
+
+    total_appearances = sum(len(v) for v in hits.values())
+    state = "no_runs" if run_prompts == 0 else ("no_competitors" if not tracked else "ok")
+
+    def _share(n):
+        # None, not 0, when nothing has been observed: 0% asserts we looked and found nothing.
+        if run_prompts == 0 or total_appearances == 0:
+            return None
+        return int(round(n / total_appearances * 100))
+
+    rows = [{
+        "domain": d,
+        "isYou": d == own,
+        "prompts": len(hits[d]),
+        "promptIds": hits[d],
+        "share": _share(len(hits[d])) or 0,
+    } for d in domains]
+    rows.sort(key=lambda r: (-r["prompts"], r["domain"]))
+
+    return {
+        "state": state,
+        "rows": rows,
+        "you": {
+            "prompts": len(hits.get(own, [])),
+            "cited_prompts": len(cited_ids),
+            "promptIds": hits.get(own, []),
+            "share": _share(len(hits.get(own, []))),
+        },
+        "engines": sorted(engines.values(), key=lambda e: e["platform"]),
+        "total_prompts": len(prompts or []),
+        "run_prompts": run_prompts,
+        "unrun_prompts": unrun_prompts,
+    }
+
+
 def _answer_of(entry: dict) -> str:
     """The answer text an archived history entry was built from.
 
@@ -1146,6 +1253,12 @@ def build_ai_response(site_id: str) -> dict:
         # these two lists are NOT interchangeable -- they were the same constant, which is why
         # the visibility toggles offered Claude/Gemini/Perplexity that could never have data.
         "llmPlatforms": MENTION_PLATFORMS,
+        # Visibility measured over THE PROMPTS THIS PROJECT TRACKS — the headline the AI
+        # Visibility tab leads with. `sov` below is a different measurement from a different
+        # DataForSEO product (its own AI-answer index, weekly, not query-drillable), kept as a
+        # clearly-labelled market-wide secondary rather than presented as the same thing.
+        "promptVisibility": build_prompt_visibility(
+            prompts, normalize_domain(site_id), (target.competitors or []) if target else []),
         "sov": vis["sov"],
         "kpis": {
             "mentions": vis["mentions"],

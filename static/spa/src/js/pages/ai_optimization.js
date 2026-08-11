@@ -204,6 +204,67 @@
         aiv.rescan = () => this.aiRescan();
 
         if (sub2 === 'visibility') {
+          /* ---- HEADLINE: visibility across the prompts THIS project tracks ----
+             This leads the tab now. Every figure is computed from a stored answer the user can
+             open in the Inspector, it moves when they add a prompt or run a check, and each
+             row carries the prompt ids behind it so "which prompts?" is answerable by clicking
+             rather than by trusting. The LLM Mentions block below is a different product
+             measuring a different thing and is labelled as such. */
+          const pv = d.promptVisibility || { rows: [], engines: [], you: {}, state: 'no_runs',
+                                             total_prompts: 0, run_prompts: 0, unrun_prompts: 0 };
+          // Two explicit flags rather than one negated in the template: `sc-if` has no negate
+          // form (support.js:walkIf reads `value` only), so a "not" written there silently
+          // renders the block always.
+          aiv.pvHasRuns = pv.run_prompts > 0;
+          aiv.pvNoRuns = pv.run_prompts === 0;
+          aiv.pvNoRunsMsg = pv.total_prompts === 0
+            ? 'Add prompts on the Prompts tab, then run them — this fills in from their answers.'
+            : ('None of your ' + pv.total_prompts + ' prompt' + (pv.total_prompts === 1 ? '' : 's')
+               + ' have been run yet. Run them to see where you appear.');
+          /* The headline is COVERAGE ("1 of 6"), not share. On the real project the share is
+             100% — you appear once, no tracked competitor appears at all — and a giant "100%"
+             over a project appearing in one prompt of six is false good news, which is the
+             same disease as the fake-looking numbers this panel replaced. Share is meaningful
+             only when somebody else also appeared, so it is shown then and not before. */
+          const youN = (pv.you && pv.you.prompts) || 0;
+          const rivalAppearances = (pv.rows || [])
+            .filter(r => !r.isYou).reduce((n, r) => n + r.prompts, 0);
+          aiv.pvHeadline = youN + ' of ' + pv.run_prompts;
+          aiv.pvHeadlineSub = 'run prompt' + (pv.run_prompts === 1 ? '' : 's') + ' name you';
+          aiv.pvHasShare = rivalAppearances > 0 && pv.you && pv.you.share !== null;
+          aiv.pvShareChip = aiv.pvHasShare ? pv.you.share + '% share of voice' : '';
+          aiv.pvSub = (pv.you && pv.you.cited_prompts)
+            ? ('Cited as a source in ' + pv.you.cited_prompts
+               + ' — the strongest form of AI visibility.')
+            : (youN
+               ? 'Named in the prose, but not cited as a source.'
+               : 'No tracked competitor appeared in these answers either.');
+          aiv.pvUnrunNote = pv.unrun_prompts
+            ? (pv.unrun_prompts + ' prompt' + (pv.unrun_prompts === 1 ? ' has' : 's have')
+               + ' not been run yet and are not counted.')
+            : '';
+          aiv.pvHasUnrun = !!pv.unrun_prompts;
+          const pvMax = pv.rows.length ? Math.max(1, ...pv.rows.map(r => r.prompts)) : 1;
+          aiv.pvRows = pv.rows.map((r, i2) => ({
+            rank: '#' + (i2 + 1),
+            domain: r.domain,
+            youChip: r.isYou,
+            countLabel: r.prompts + ' of ' + pv.run_prompts,
+            shareFmt: r.share + '%',
+            nameStyle: { fontSize: '13px', fontWeight: r.isYou ? 700 : 500, color: r.isYou ? '#4338ca' : '#334155', flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
+            barStyle: { height: '8px', borderRadius: '4px', width: Math.max(r.prompts ? 3 : 0, Math.round((r.prompts / pvMax) * 100)) + '%', background: r.isYou ? '#4f46e5' : '#f59e0b' },
+            // Clicking a row filters the Prompts tab to exactly the prompts behind that number.
+            open: () => this.setState({ aiSub: 'prompts', aiDomainFilter: r.isYou ? '__you' : r.domain, aiPromptSel: [] }),
+          }));
+          aiv.pvEngines = (pv.engines || []).map(e => {
+            const meta = llm.filter(pl2 => pl2.id === e.platform)[0];
+            return {
+              name: (meta && meta.name) || e.platform,
+              value: e.you + ' of ' + e.checks,
+              sub: e.checks ? Math.round((e.you / e.checks) * 100) + '% of checks' : 'no checks',
+            };
+          });
+
           const sov = d.sov;
           // Each empty case has its own truth; none of them is a zero.
           aiv.visSetup = d.visibilityState === 'setup';
