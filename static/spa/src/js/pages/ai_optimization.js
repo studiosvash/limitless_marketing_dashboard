@@ -213,6 +213,43 @@
           aiv.visSetupMsg = 'No AI visibility data yet — press Refresh to take the first weekly snapshot.';
           aiv.visNoCompsMsg = 'Add competitors under Targets to see share of voice.';
           aiv.visNoPagesMsg = 'AI has not cited any of your pages yet.';
+
+          /* WHY THIS PANEL AND THE PROMPTS TAB DISAGREE, stated on screen instead of leaving
+             the user to conclude the numbers are invented.
+
+             These are two unrelated DataForSEO products:
+               · this panel  — LLM Mentions API: aggregate counts over DataForSEO's OWN index
+                 of AI answers, across queries this project never asked. Totals only; the
+                 aggregate endpoint carries no query-level detail, so there is nothing to drill
+                 into and pretending otherwise would mean inventing it.
+               · Prompts tab — LLM Responses API: this project's own tracked prompts.
+
+             A real report: "eventstaff.com · 17 mentions" here beside "eventstaff.com (0)"
+             there. Both correct — the six tracked prompts' answers genuinely never name a
+             competitor — and side by side with no explanation they read as fabricated. */
+          const competitorPromptHits = (prompts) => {
+            let n = 0;
+            (prompts || []).forEach(pr => {
+              const results = (pr && pr.results) || {};
+              const hit = Object.keys(results).some(k => {
+                const r2 = results[k];
+                // An unrun or errored cell observed nothing; absence there is not evidence.
+                return r2 && r2.state === 'checked' && ((r2.competitors || []).length > 0);
+              });
+              if (hit) n += 1;
+            });
+            return n;
+          };
+          const compHits = competitorPromptHits(d.prompts);
+          const runPrompts = (d.prompts || []).filter(pr =>
+            Object.keys((pr && pr.results) || {}).length > 0).length;
+          aiv.sovProvenance =
+            'Counted by DataForSEO across its own index of AI answers — not from your tracked '
+            + 'prompts, and not drillable to individual queries.';
+          aiv.sovCrossCheck = runPrompts === 0
+            ? 'None of your tracked prompts have been run yet, so the Prompts tab has nothing to compare against.'
+            : ('Separately, across your ' + runPrompts + ' run prompt' + (runPrompts === 1 ? '' : 's') + ', a tracked '
+               + 'competitor was named in ' + compHits + ' of them — that is the number the Prompts tab filters on.');
           /* `Math.max.apply(null, [])` is -Infinity, which is TRUTHY — so `|| 1` never fired
              and every bar width became NaN%. Guard the empty array, not the falsy result. */
           const maxSov = sov.rows.length ? (Math.max.apply(null, sov.rows.map(r => r.sov)) || 1) : 1;
