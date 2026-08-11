@@ -37,6 +37,9 @@ CACHE_TTL = 60 * 60 * 24  # 24 hours, for both caches
 KEYWORDS_LIMIT = 50            # Labs ranked_keywords (unchanged — the existing default)
 BACKLINKS_LIMIT = 100          # backlinks/backlinks/live for a looked-up target
 ANCHORS_LIMIT = 60             # backlinks/anchors/live (unchanged — matches refresh_backlinks)
+# llm_mentions/search/live, PER PLATFORM (chat_gpt and google are separate requests). Measured
+# on a real account: 100 each returned 162 usable rows for $0.36. Metered per returned row.
+QUESTIONS_LIMIT = 100
 
 
 def keywords_cache_key(target: str, location: str) -> str:
@@ -49,6 +52,83 @@ def backlinks_cache_key(target: str) -> str:
     """Domain-only — see the module docstring. A path is kept because DataForSEO can answer
     for an exact page, but the market never appears."""
     return f"domain_overview_backlinks_{backlink_target(target)}"
+
+
+def questions_cache_key(target: str) -> str:
+    """Keyed on the FULL target, path included.
+
+    Unlike the backlink key, a path here changes the answer: the same domain call is filtered
+    to one page, so `premierstaff.com` and `premierstaff.com/blog/x` are different results and
+    must not share a cache entry. No market in the key — the request is per location but the
+    lookup is not offered per market on this tab.
+    """
+    from pipeline.connectors.dataforseo_llm_questions import domain_of
+    raw = str(target or "").strip().lower().rstrip("/")
+    return f"domain_overview_questions_{domain_of(raw)}_{raw}"
+
+
+def fetch_questions_block(target: str, site_id: str = "", allow_fetch: bool = True) -> dict:
+    """The AI Questions tab: which questions does this URL turn up in?
+
+    ONE billed call per platform (chat_gpt, google) against llm_mentions/search/live, and only
+    when the user presses "Find questions".
+
+    A path in `target` costs nothing extra: DataForSEO rejects a path in its `domain` field
+    (40501), so the request always carries the bare domain and the page filter is applied to
+    the rows here. One press therefore answers for the exact page AND leaves the whole
+    domain's answer in cache.
+
+    Cached 24h like the other blocks, so `allow_fetch=False` — the PDF path — reads what the
+    user already bought and can never spend on its own.
+    """
+    raw = str(target or "").strip()
+    if not raw:
+        return {"state": "setup", "rows": [], "total": 0,
+                "note": "Enter a domain or URL first."}
+
+    key = questions_cache_key(raw)
+    cached = cache.get(key)
+    if cached is not None:
+        return {**cached, "cached": True}
+    if not allow_fetch:
+        return {"state": "not_loaded", "rows": [], "total": 0,
+                "note": "AI questions not loaded for this report — press “Find questions” on "
+                        "the Domain Overview page first. Generating this report never buys them."}
+
+    from pipeline.connectors.dataforseo_cost import ensure_budget
+    refusal = ensure_budget()
+    if refusal is not None:
+        return {"state": "budget", "rows": [], "total": 0, "note": refusal["error"],
+                "budgetExceeded": True}
+
+    from pipeline.connectors.dataforseo_llm_questions import fetch_llm_questions
+    result = fetch_llm_questions(raw, limit=QUESTIONS_LIMIT, site_id=site_id)
+
+    if result.get("status") != "ok":
+        # setup / error — reported as-is, never as an empty "no questions found", which would
+        # claim a measurement that was not taken.
+        return {"state": result.get("status") or "error", "rows": [], "total": 0,
+                "note": result.get("error") or "DataForSEO did not answer."}
+
+    rows = result["rows"]
+    block = {
+        "state": "ok" if rows else "empty",
+        "rows": rows,
+        "total": len(rows),
+        # Split out because they are different findings: cited means the engine quoted this
+        # page in its answer; retrieved-only means it found the page and quoted somebody else.
+        "citedCount": sum(1 for r in rows if r["cited"]),
+        "seenCount": sum(1 for r in rows if not r["cited"]),
+        "domain": result.get("domain"),
+        "page": result.get("page"),
+        "platforms": result.get("platforms") or [],
+        "partial": result.get("partial"),
+        "cost": result.get("cost", 0.0),
+        "note": "" if rows else
+                "DataForSEO has no AI answers on record that reference this URL.",
+    }
+    cache.set(key, block, CACHE_TTL)
+    return block
 
 
 def backlink_target(target: str) -> str:
@@ -317,4 +397,8 @@ def run_domain_overview(target: str, location: str = "United States", site_id: s
 
     if "backlinks" in wanted:
         result = {**result, "backlinks": fetch_backlinks_block(target, site_id=site_id)}
+    # Same contract as backlinks: its own button, its own cache, never bought by the default
+    # Analyze press.
+    if "questions" in wanted:
+        result = {**result, "questions": fetch_questions_block(target, site_id=site_id)}
     return result
