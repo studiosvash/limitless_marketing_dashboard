@@ -479,7 +479,11 @@ def _get_competitor_map(site_id: str, limit: int = 12, location: str | None = No
         tracked_lower = [k.lower() for k in tracked_kws]
 
         from pipeline.services.competitor_service import get_tracked_competitors, _bare
-        competitors = get_tracked_competitors(site_id)
+        # site_pk, which this function already has. Without it the read widened across every
+        # sibling project on the domain, so three Premierstaff city projects each showed the
+        # other two's competitors while their own Settings modal — which DID read scoped —
+        # listed something else entirely.
+        competitors = get_tracked_competitors(site_id, site_pk=site_pk)
         if not competitors:
             return {**empty, "status": "no_competitors", "tracked_total": len(tracked_kws)}
 
@@ -652,11 +656,12 @@ def _get_competitor_grid(site_id: str, limit: int = 100, location: str | None = 
 
         tracked_lower = [k.lower() for k in tracked_kws]
         from pipeline.services.competitor_service import get_tracked_competitors, is_overridden, _bare
-        competitors = get_tracked_competitors(site_id)
-        if not competitors:
-            bare_site = _bare(site_id)
-            defaults = ["linkedin.com", "instagram.com", "facebook.com", "youtube.com", "reddit.com"]
-            competitors = [d for d in defaults if d != bare_site]
+        # Scoped to this project, and NO invented fallback. This used to hardcode
+        # ["linkedin.com", "instagram.com", "facebook.com", "youtube.com", "reddit.com"] when a
+        # project had chosen no competitors — a fabricated competitive set presented as
+        # measurement, which is exactly what skills.md rule 3 forbids. An empty list is the
+        # honest answer and the caller already renders a "no competitors" state for it.
+        competitors = get_tracked_competitors(site_id, site_pk=site_pk)
         if not competitors:
             return {"status": "no_competitors", "competitors": [], "rows": [], "dates": []}
 

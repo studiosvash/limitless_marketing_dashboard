@@ -6,7 +6,7 @@ from django.test import TestCase, override_settings
 
 from pipeline.db.engine import get_engine
 from pipeline.db.schema import (init_db, KeywordRanking, CompetitorKeywordRanking,
-                                CompetitorDomain, SavedKeyword)
+                                CompetitorDomain, SavedKeyword, TrackedCompetitor)
 from pipeline.utils.db_connection import get_session
 import pipeline.utils.db_connection as db_connection
 
@@ -50,16 +50,23 @@ class BuildPositionsResponseTests(TestCase):
                                           keyword="iv therapy", competitor_domain="driphydration.com",
                                           position=8),
                 # _get_competitor_grid resolves its column set via get_tracked_competitors(),
-                # which reads competitor_domains (auto-discovery) or tracked_competitors
-                # (override) — NOT competitor_keyword_rankings directly. Without this row the
-                # grid has no columns even though ranking data exists for the domain above.
-                CompetitorDomain(site_id="sc-domain:fusehealth.com",
-                                  competitor_domain="driphydration.com", intersections=10),
+                # which reads tracked_competitors — the domains THIS PROJECT'S USER CHOSE —
+                # and NOT competitor_keyword_rankings directly. Without these rows the grid has
+                # no columns even though ranking data exists for the domain above.
+                #
+                # These were CompetitorDomain (auto-discovery) rows until 2026-08-11. That
+                # relied on the auto-seed fallback, which was removed: a domain DataForSEO
+                # merely noticed is a suggestion, not a competitive set the user picked, and
+                # filling the grid from it showed people "competitors" (youtube.com,
+                # indeed.com) they had never chosen. The alignment this test is really about
+                # is unchanged.
+                TrackedCompetitor(site_id="sc-domain:fusehealth.com",
+                                  competitor_domain="driphydration.com"),
                 # second tracked domain with NO ranking data for "iv therapy" — proves the
                 # comps array is positionally aligned to domains (None in its own slot), not
                 # just "the one value we have, wherever it lands".
-                CompetitorDomain(site_id="sc-domain:fusehealth.com",
-                                  competitor_domain="otherdomain.com", intersections=5),
+                TrackedCompetitor(site_id="sc-domain:fusehealth.com",
+                                  competitor_domain="otherdomain.com"),
             ])
 
     def test_top_level_keys(self):

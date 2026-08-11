@@ -612,8 +612,8 @@ class ProjectAlertsView(APIView):
 @method_decorator(login_not_required, name="dispatch")
 class ProjectBacklinksView(APIView):
     def get(self, request, slug):
-        site_id = resolve_project_or_404(slug).site_url
-        return Response(build_backlinks_response(site_id))
+        site = resolve_project_or_404(slug)
+        return Response(build_backlinks_response(site.site_url, site_pk=site.id))
 
 
 @method_decorator(login_not_required, name="dispatch")

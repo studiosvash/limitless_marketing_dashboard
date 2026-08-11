@@ -328,7 +328,12 @@ class DataForSEOSerpCompetitorsConnector(BaseConnector):
         from pipeline.services.competitor_service import get_tracked_competitors
 
         resolved_site_id = self._resolve_site_id(site_id)
-        competitors = set(get_tracked_competitors(resolved_site_id))
+        # site_pk, which every other read in this connector already passes. Unscoped, this
+        # bought SERP captures for EVERY sibling project's competitors on the domain — and,
+        # while the auto-discovery fallback existed, for whatever DataForSEO had discovered
+        # too, which on a real account meant paying to track youtube.com and indeed.com.
+        competitors = set(get_tracked_competitors(
+            resolved_site_id, site_pk=getattr(self, "site_pk", None)))
         if not competitors:
             self.logger.warning(
                 "[dataforseo_serp_competitors] No tracked competitors for "

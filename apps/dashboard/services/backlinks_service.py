@@ -256,9 +256,14 @@ def build_months_from_dates(domain_dates: list[dict], window: int = 6) -> list[d
     } for k in keys]
 
 
-def build_backlinks_response(site_id: str) -> dict:
+def build_backlinks_response(site_id: str, site_pk: int | None = None) -> dict:
     """Backlinks view. Listings come from the `backlinks` table, distributions from the stored
-    DataForSEO snapshot; anything with no source behind it is empty, never filled in."""
+    DataForSEO snapshot; anything with no source behind it is empty, never filled in.
+
+    The backlink data itself is domain-level — a domain's links are the same whichever project
+    is looking — but the Link Gap competitor list is a per-PROJECT choice, so `site_pk` scopes
+    that one read. Without it, sibling projects on one domain showed each other's competitors.
+    """
     summary_raw = query_backlinks_summary_raw(site_id)
     links = query_backlinks_table_raw(site_id, limit=LINKS_LIMIT)
     ref_domains = query_referring_domains_raw(site_id, links=links)
@@ -315,7 +320,7 @@ def build_backlinks_response(site_id: str) -> dict:
 
     # Link Gap needs each competitor's referring domains; nothing syncs competitor backlinks,
     # so there is no row to build. The tracked competitor list itself is real.
-    competitors = get_tracked_competitors(site_id) or []
+    competitors = get_tracked_competitors(site_id, site_pk=site_pk) or []
     gap_domains = []
 
     if fetched_at is not None:

@@ -55,43 +55,70 @@ def _scope(site_id: str, site_pk: Optional[int]) -> list:
 
 
 def _bare(domain: str) -> str:
-    """Normalize a domain to its bare form (no scheme, no trailing slash)."""
+    """A competitor entry reduced to the HOST it names.
+
+    Delegates to `normalize_domain`, the one canonicaliser this codebase registers sites with
+    (skills.md §3), so a competitor is spelled the same way a project is.
+
+    The hand-rolled version this replaces stripped the scheme and a trailing slash but NOT the
+    path, so pasting `https://premierstaff.com/event-staffing-agency-las-vegas` into the
+    competitor box stored that entire string as a "competitor domain" — and the user's own
+    landing pages turned up listed as their rivals in Share of Voice. A URL is a reasonable
+    thing to paste; keeping the path was the bug.
+    """
     if not domain:
         return ""
-    return (
-        domain.strip()
-        .replace("https://", "")
-        .replace("http://", "")
-        .replace("sc-domain:", "")
-        .rstrip("/")
-        .lower()
-    )
+    from pipeline.utils.site_ids import normalize_domain
+    return normalize_domain(str(domain))
 
 
 def get_tracked_competitors(site_id: str, limit: int = DEFAULT_COLUMN_COUNT,
-                            site_pk: Optional[int] = None) -> list[str]:
-    """
-    Return the bare competitor domains to show as grid columns for THIS PROJECT.
+                            site_pk: Optional[int] = None,
+                            include_discovered: bool = False) -> list[str]:
+    """The competitor domains THIS PROJECT'S USER CHOSE. Nothing else, by default.
 
-    Override set wins when present; otherwise auto-seed from competitor_domains.
-    Returns an empty list when neither source has data (grid shows its empty state).
+    This used to fall back to DataForSEO's auto-discovered `competitor_domains` whenever a
+    project had chosen none — and that table is keyed by DOMAIN, so every sibling project on
+    one domain got the same list, made of whatever ranks for the same keywords: youtube.com,
+    facebook.com, indeed.com, linkedin.com, yelp.com. A user looking at Share of Voice saw
+    "competitors" they had never heard of, next to an Edit Settings modal listing four
+    completely different ones, and reasonably concluded the page was inventing data.
+
+    Auto-discovery remains a legitimate *suggestion* source, reachable two ways:
+    `include_discovered=True` here, or `get_discovered_competitors()`. It is not a stand-in for
+    a choice the user has not made. A project with no competitors returns [], and every caller
+    already has an empty state for it.
+
+    NOTE, so nobody assumes otherwise: `get_discovered_competitors()` currently has NO caller.
+    There is no "suggested competitors" picker in Settings, so a user with an empty competitor
+    list has nothing in the UI helping them fill it — worth building, and worth not papering
+    over by silently promoting suggestions into measurements, which is what this change ended.
+
+    `site_pk` scopes to one project; without it the read widens across the domain, which is
+    right only for a caller that genuinely has no project in hand.
     """
     bare_site = _bare(site_id)
+
+    def _clean(domains, cap=None):
+        out: list[str] = []
+        for d in domains:
+            bare_d = _bare(d)
+            if bare_d and bare_d != bare_site and bare_d not in out:
+                out.append(bare_d)
+                if cap and len(out) == cap:
+                    break
+        return out
+
     with get_session() as session:
         _prepare(session)
 
-        override = session.execute(
+        chosen = session.execute(
             select(TrackedCompetitor.competitor_domain)
             .where(*_scope(site_id, site_pk))
             .order_by(TrackedCompetitor.added_at.asc())
         ).scalars().all()
-        if override:
-            results = []
-            for d in override:
-                bare_d = _bare(d)
-                if bare_d and bare_d != bare_site and bare_d not in results:
-                    results.append(bare_d)
-            return results
+        if chosen or not include_discovered:
+            return _clean(chosen)
 
         discovered = session.execute(
             select(CompetitorDomain.competitor_domain)
@@ -99,14 +126,7 @@ def get_tracked_competitors(site_id: str, limit: int = DEFAULT_COLUMN_COUNT,
             .order_by(CompetitorDomain.intersections.desc())
             .limit(limit * 2)
         ).scalars().all()
-        results = []
-        for d in discovered:
-            bare_d = _bare(d)
-            if bare_d and bare_d != bare_site and bare_d not in results:
-                results.append(bare_d)
-                if len(results) == limit:
-                    break
-        return results
+        return _clean(discovered, cap=limit)
 
 
 def is_overridden(site_id: str, site_pk: Optional[int] = None) -> bool:
