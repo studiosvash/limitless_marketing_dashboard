@@ -1664,7 +1664,17 @@ class BudgetStatusView(APIView):
     DataForSEO cap is one account-wide fact, not a per-project setting."""
 
     def get(self, request):
-        from apps.dashboard.services.budget_service import budget_status
+        from apps.dashboard.services.budget_service import (
+            balance_is_stale, budget_status, refresh_balance_and_notify,
+        )
+
+        # Re-probe when money has been spent since the last reading. The balance used to be
+        # refreshed ONLY after a sync, so a Domain Overview lookup, an Explorer search, a live
+        # SERP check or an AI run could all spend real money while Settings kept displaying a
+        # figure days old. `fetch_balance` is the free /appendix/user_data call, and the
+        # staleness test means an idle page refresh still makes no request at all.
+        if balance_is_stale():
+            refresh_balance_and_notify()
         return Response(budget_status())
 
 

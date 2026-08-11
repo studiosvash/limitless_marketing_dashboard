@@ -420,9 +420,14 @@
         /* ---- DataForSEO account: shared balance + hard monthly cap ---- */
         dfsBalance: (dfs && dfs.balance != null) ? this.money(dfs.balance) : 'Not checked yet',
         dfsBalanceStyle: { fontSize: '24px', fontWeight: 600, marginTop: '3px', color: (dfs && dfs.balance != null) ? (dfs.balance <= 10 ? '#dc2626' : '#0f172a') : '#cbd5e1' },
+        /* The note has to describe what really happens. It said "re-checked after every sync"
+           back when a sync was the ONLY thing that re-read it, so a lookup, an Explorer search
+           or an AI run could spend money and leave this figure days old while the caption
+           implied it was current. It is now re-read whenever spend has happened since the last
+           reading, which is what opening this page checks. */
         dfsBalanceNote: (dfs && dfs.balance_checked_at)
-          ? ('Checked ' + this.relTime(dfs.balance_checked_at) + ' — re-checked after every sync.')
-          : 'Checked after each sync (free — does not spend credit); nothing has synced yet.',
+          ? ('Checked ' + this.relTime(dfs.balance_checked_at) + ' — re-checked whenever a DataForSEO call has spent since.')
+          : 'Read free from DataForSEO whenever spend has happened; nothing has spent yet.',
         dfsSpentText: usd(dfsSpent), dfsCapText: usd(dfsCap), dfsPctText: dfsPct.toFixed(0) + '%',
         dfsCapBar: { height: '100%', borderRadius: '9999px', background: dfsExceeded ? '#dc2626' : (dfsRed ? '#f59e0b' : '#10b981'), width: Math.min(100, dfsPct) + '%' },
         dfsExceeded: dfsExceeded,

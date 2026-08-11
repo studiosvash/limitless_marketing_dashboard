@@ -103,6 +103,59 @@ def notify_budget(severity: str, title: str, detail: str = "") -> None:
     notify("budget", title, detail, severity=severity)
 
 
+def balance_is_stale() -> bool:
+    """Has money been spent since the balance was last read?
+
+    The balance used to be re-probed in exactly ONE place — after a sync run — so every metered
+    call made outside a sync left it untouched. A Domain Overview lookup, a Keyword Explorer
+    search, a live SERP check and an AI prompt run all spend real money, and Settings could sit
+    showing a figure days old ("Checked 4d ago") as though it were the account's state.
+
+    The question is answered from the data rather than from a flag: every metered call already
+    writes a `connector_costs` row stamped with `run_at`, so "is there spend newer than my last
+    probe?" needs no new column and cannot drift out of sync with reality.
+
+    Deliberately NOT hooked into `record_cost`. That is the one chokepoint every metered call
+    passes through, but it also runs inside sync loops and inside the request cycle of the live
+    lookups — a network round-trip there would slow the user's own request down in order to
+    report on the money it had just spent. This is asked on READ instead, where the answer is
+    about to be displayed anyway.
+
+    Never raises: a balance that cannot be judged stale is simply reported as it stands.
+    """
+    try:
+        from apps.dashboard.models import BudgetState
+
+        state = BudgetState.objects.filter(pk=1).first()
+        if state is None or state.balance_checked_at is None or state.dataforseo_balance is None:
+            return True                     # never read — one probe is what makes it real
+
+        from sqlalchemy import func, select
+
+        from pipeline.db.schema import ConnectorCost
+        from pipeline.db.writer import ensure_tables
+        from pipeline.utils.db_connection import get_session
+
+        with get_session() as session:
+            ensure_tables(session, ConnectorCost)
+            last_spend = session.execute(select(func.max(ConnectorCost.run_at))).scalar()
+        if last_spend is None:
+            return False
+
+        checked = state.balance_checked_at
+        # connector_costs.run_at is naive local; balance_checked_at is tz-aware UTC. Compare
+        # like with like rather than letting a TypeError decide freshness.
+        if checked.tzinfo is not None:
+            checked = checked.astimezone(timezone.utc).replace(tzinfo=None)
+        if last_spend.tzinfo is not None:
+            last_spend = last_spend.astimezone(timezone.utc).replace(tzinfo=None)
+        return last_spend > checked
+    except Exception:
+        logger.warning("balance_is_stale check failed; reporting the stored balance as-is",
+                       exc_info=True)
+        return False
+
+
 def refresh_balance_and_notify() -> None:
     """Re-check the DataForSEO balance and update BudgetState. Called after every sync run
     (manual or scheduled). Fires a critical notification once when the balance drops to/below
