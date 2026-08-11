@@ -37,9 +37,25 @@ CACHE_TTL = 60 * 60 * 24  # 24 hours, for both caches
 KEYWORDS_LIMIT = 50            # Labs ranked_keywords (unchanged — the existing default)
 BACKLINKS_LIMIT = 100          # backlinks/backlinks/live for a looked-up target
 ANCHORS_LIMIT = 60             # backlinks/anchors/live (unchanged — matches refresh_backlinks)
-# llm_mentions/search/live, PER PLATFORM (chat_gpt and google are separate requests). Measured
-# on a real account: 100 each returned 162 usable rows for $0.36. Metered per returned row.
+# llm_mentions/search/live. MEASURED on a real account rather than assumed, because the shape
+# of this endpoint's pricing decides the whole design:
+#
+#     limit 10, 1 platform -> $0.1100        limit 25, 1 platform -> $0.1250
+#
+# so the cost is a $0.10 FIXED FEE PER REQUEST plus ~$0.001 per returned row. Two consequences,
+# both counter-intuitive:
+#
+#   * Shrinking the limit saves almost nothing — 10 rows cost $0.11, 100 rows cost $0.20. The
+#     request is the expense, not the data. So we ask for a useful number and keep it.
+#   * Halving the number of REQUESTS halves the bill. Hence one platform by default: ChatGPT,
+#     which is where this product's users actually see themselves recommended. Google AI
+#     Overviews doubles the price for a second opinion, so it is opt-in, not standard.
+#
+# For scale: the Analyze press costs $0.015 and the backlink block ~$0.03, so this tab is by
+# far the most expensive thing on the page — which is why it has its own button and a 24h
+# domain-wide cache.
 QUESTIONS_LIMIT = 100
+QUESTIONS_PLATFORMS = ("chat_gpt",)
 
 
 def keywords_cache_key(target: str, location: str) -> str:
@@ -55,16 +71,19 @@ def backlinks_cache_key(target: str) -> str:
 
 
 def questions_cache_key(target: str) -> str:
-    """Keyed on the FULL target, path included.
+    """DOMAIN-ONLY, and that is the whole cost story for this tab.
 
-    Unlike the backlink key, a path here changes the answer: the same domain call is filtered
-    to one page, so `premierstaff.com` and `premierstaff.com/blog/x` are different results and
-    must not share a cache entry. No market in the key — the request is per location but the
-    lookup is not offered per market on this tab.
+    The request can only ever ask for a domain — DataForSEO rejects a path in its `domain`
+    field — so one call already contains the answer for EVERY page on that domain, and the
+    page filter is applied when reading. Keying this on the full URL instead would buy the
+    same domain again for each page a user checked: ten blog posts on one competitor would be
+    ten calls at $0.10 base apiece instead of one.
+
+    No market in the key: the request is per location, but this tab does not offer a market
+    picker, so every lookup uses the same one.
     """
     from pipeline.connectors.dataforseo_llm_questions import domain_of
-    raw = str(target or "").strip().lower().rstrip("/")
-    return f"domain_overview_questions_{domain_of(raw)}_{raw}"
+    return f"domain_overview_questions_{domain_of(target)}"
 
 
 def fetch_questions_block(target: str, site_id: str = "", allow_fetch: bool = True) -> dict:
@@ -89,7 +108,9 @@ def fetch_questions_block(target: str, site_id: str = "", allow_fetch: bool = Tr
     key = questions_cache_key(raw)
     cached = cache.get(key)
     if cached is not None:
-        return {**cached, "cached": True}
+        # The cache holds the WHOLE domain; the page filter is applied on the way out, so a
+        # second page on a domain already looked up costs nothing.
+        return {**_narrow_to_page(cached, raw), "cached": True}
     if not allow_fetch:
         return {"state": "not_loaded", "rows": [], "total": 0,
                 "note": "AI questions not loaded for this report — press “Find questions” on "
@@ -102,7 +123,11 @@ def fetch_questions_block(target: str, site_id: str = "", allow_fetch: bool = Tr
                 "budgetExceeded": True}
 
     from pipeline.connectors.dataforseo_llm_questions import fetch_llm_questions
-    result = fetch_llm_questions(raw, limit=QUESTIONS_LIMIT, site_id=site_id)
+    # Fetched WITHOUT the page filter on purpose: the call is per domain either way, so
+    # storing the whole domain makes every other page on it free for 24h. `page_url=""`
+    # overrides the connector's own "a path means filter" default.
+    result = fetch_llm_questions(raw, page_url="", platforms=QUESTIONS_PLATFORMS,
+                                 limit=QUESTIONS_LIMIT, site_id=site_id)
 
     if result.get("status") != "ok":
         # setup / error — reported as-is, never as an empty "no questions found", which would
@@ -115,20 +140,51 @@ def fetch_questions_block(target: str, site_id: str = "", allow_fetch: bool = Tr
         "state": "ok" if rows else "empty",
         "rows": rows,
         "total": len(rows),
-        # Split out because they are different findings: cited means the engine quoted this
-        # page in its answer; retrieved-only means it found the page and quoted somebody else.
-        "citedCount": sum(1 for r in rows if r["cited"]),
-        "seenCount": sum(1 for r in rows if not r["cited"]),
         "domain": result.get("domain"),
-        "page": result.get("page"),
         "platforms": result.get("platforms") or [],
         "partial": result.get("partial"),
         "cost": result.get("cost", 0.0),
-        "note": "" if rows else
-                "DataForSEO has no AI answers on record that reference this URL.",
     }
     cache.set(key, block, CACHE_TTL)
-    return block
+    return _narrow_to_page(block, raw)
+
+
+def _narrow_to_page(block: dict, target: str) -> dict:
+    """Apply the page filter to a whole-domain block, and count what survives.
+
+    Cited and seen are counted separately because they are different findings: cited means the
+    engine QUOTED the page in its answer, seen means it retrieved the page and quoted somebody
+    else. A single "mentioned" number would hide the second, which is the one worth acting on.
+    """
+    from pipeline.connectors.dataforseo_llm_questions import url_matches
+    from urllib.parse import urlsplit
+
+    raw = str(target or "").strip()
+    probe = raw if "://" in raw else "https://" + raw
+    has_path = bool(urlsplit(probe).path.strip("/"))
+
+    all_rows = block.get("rows") or []
+    rows = [r for r in all_rows if url_matches(r.get("our_url", ""), raw)] if has_path else all_rows
+
+    if not (block.get("state") in ("ok", "empty")):
+        return block           # setup / budget / error blocks pass through untouched
+
+    return {
+        **block,
+        "rows": rows,
+        "total": len(rows),
+        "citedCount": sum(1 for r in rows if r.get("cited")),
+        "seenCount": sum(1 for r in rows if not r.get("cited")),
+        "state": "ok" if rows else "empty",
+        "page": raw if has_path else None,
+        # Stated so a page with no questions does not read as "this domain has none".
+        "domainTotal": len(all_rows),
+        "note": "" if rows else (
+            "This exact page is not referenced in any AI answer DataForSEO has on record — "
+            f"though {len(all_rows)} question(s) reference the domain."
+            if has_path and all_rows else
+            "DataForSEO has no AI answers on record that reference this URL."),
+    }
 
 
 def backlink_target(target: str) -> str:

@@ -51,10 +51,49 @@ class QuestionsBlockTests(TestCase):
         self.assertEqual(fetch.call_count, 1)
         self.assertTrue(again["cached"])
 
-    def test_a_page_and_its_domain_do_not_share_a_cache_entry(self):
-        """The page filter changes the answer, so one must not serve the other."""
-        self.assertNotEqual(svc.questions_cache_key("premierstaff.com"),
-                            svc.questions_cache_key("premierstaff.com/blog/x"))
+    def test_every_page_on_a_domain_shares_one_cache_entry(self):
+        """THE cost decision on this tab, pinned.
+
+        The request can only ask for a domain, so one call already answers for every page on
+        it. Keying the cache per URL would re-buy the same domain for each page checked — ten
+        blog posts on one competitor would be ten calls at $0.10 base apiece.
+        """
+        self.assertEqual(svc.questions_cache_key("premierstaff.com"),
+                         svc.questions_cache_key("https://premierstaff.com/blog/x"))
+
+    def test_a_second_page_on_a_looked_up_domain_costs_nothing(self):
+        with mock.patch("pipeline.connectors.dataforseo_llm_questions.fetch_llm_questions",
+                        return_value=OK) as fetch:
+            svc.fetch_questions_block("premierstaff.com/blog/x")
+            svc.fetch_questions_block("premierstaff.com/services")
+        self.assertEqual(fetch.call_count, 1, "the domain was already bought")
+
+    def test_a_page_lookup_returns_only_that_page_s_questions(self):
+        with mock.patch("pipeline.connectors.dataforseo_llm_questions.fetch_llm_questions",
+                        return_value=OK):
+            block = svc.fetch_questions_block("https://premierstaff.com/blog/x")
+        self.assertEqual(block["total"], 1)
+        self.assertEqual(block["rows"][0]["our_url"], "https://premierstaff.com/blog/x")
+        self.assertEqual(block["page"], "https://premierstaff.com/blog/x")
+
+    def test_a_page_with_no_questions_says_so_without_denying_the_domain_s(self):
+        with mock.patch("pipeline.connectors.dataforseo_llm_questions.fetch_llm_questions",
+                        return_value=OK):
+            block = svc.fetch_questions_block("premierstaff.com/nothing-here")
+        self.assertEqual(block["state"], "empty")
+        self.assertEqual(block["domainTotal"], 2)
+        self.assertIn("2 question(s) reference the domain", block["note"])
+
+    def test_only_one_platform_is_bought_by_default(self):
+        """Two platforms means two $0.10 base fees for a second opinion."""
+        self.assertEqual(svc.QUESTIONS_PLATFORMS, ("chat_gpt",))
+
+    def test_the_fetch_asks_for_the_whole_domain_not_the_page(self):
+        """Filtering happens on read; fetching pre-filtered would waste the other pages."""
+        with mock.patch("pipeline.connectors.dataforseo_llm_questions.fetch_llm_questions",
+                        return_value=OK) as fetch:
+            svc.fetch_questions_block("https://premierstaff.com/blog/x")
+        self.assertEqual(fetch.call_args.kwargs["page_url"], "")
 
     def test_the_report_path_never_fetches(self):
         with mock.patch("pipeline.connectors.dataforseo_llm_questions.fetch_llm_questions") as fetch:
