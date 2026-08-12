@@ -527,8 +527,32 @@
         storedAt: (q && q.storedAt) ? String(q.storedAt).slice(0, 10) : '',
         fromStore: !!(q && q.fromStore),
         ageDays: (q && q.ageDays !== undefined) ? q.ageDays : null,
+        /* Which engines to ask, chosen BEFORE the press. Each is a separate request with its
+           own $0.10 base fee, so the price moves with the choice and the label says so
+           rather than quoting one number for two different purchases. */
+        engines: (s.doQPlat && s.doQPlat.length) ? s.doQPlat : ['chat_gpt'],
+        engineOpts: [
+          { id: 'chat_gpt', name: 'ChatGPT' },
+          { id: 'google', name: 'Google AI Overviews' },
+        ].map(function (e) {
+          var on = ((s.doQPlat && s.doQPlat.length) ? s.doQPlat : ['chat_gpt']).indexOf(e.id) >= 0;
+          return {
+            name: e.name,
+            checked: on,
+            style: { display: 'inline-flex', alignItems: 'center', gap: '7px', padding: '6px 12px',
+                     fontSize: '12.5px', fontWeight: on ? 600 : 500, cursor: 'pointer',
+                     borderRadius: '999px', border: '1px solid ' + (on ? '#c7d2fe' : '#e2e8f0'),
+                     background: on ? '#eef2ff' : 'white', color: on ? '#4338ca' : '#64748b' },
+            boxStyle: { width: '14px', height: '14px', borderRadius: '3px', flexShrink: 0,
+                        border: '1.5px solid ' + (on ? '#4f46e5' : '#cbd5e1'),
+                        background: on ? '#4f46e5' : 'white' },
+            toggle: () => this.doToggleQEngine(e.id),
+          };
+        }, this),
         // Stated before the click, like every other paid button on this page.
-        loadLabel: s.doQLoading ? 'Finding questions…' : 'Find AI questions · ~$0.20',
+        loadLabel: s.doQLoading ? 'Finding questions…'
+          : ('Find AI questions · ~$'
+             + (0.20 * (((s.doQPlat && s.doQPlat.length) || 1))).toFixed(2)),
         load: () => this.doLoadQuestions(false),
         refresh: () => this.doLoadQuestions(true),
         busy: !!s.doQLoading,

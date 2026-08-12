@@ -59,7 +59,12 @@ ANCHORS_LIMIT = 60             # backlinks/anchors/live (unchanged — matches r
 # far the most expensive thing on the page — which is why it has its own button and a 24h
 # domain-wide cache.
 QUESTIONS_LIMIT = 100
+# The default when the caller names none. Each platform is a separate request carrying its own
+# $0.10 base fee, so the user picks: ChatGPT, Google AI Overviews, or both. On a live account
+# ChatGPT alone returned 62 questions and the pair returned 162, so "both" is worth its price
+# often enough to be offered rather than decided here.
 QUESTIONS_PLATFORMS = ("chat_gpt",)
+QUESTIONS_PLATFORM_CHOICES = ("chat_gpt", "google")
 
 
 def keywords_cache_key(target: str, location: str) -> str:
@@ -74,7 +79,7 @@ def backlinks_cache_key(target: str) -> str:
     return f"domain_overview_backlinks_{backlink_target(target)}"
 
 
-def questions_cache_key(target: str) -> str:
+def questions_cache_key(target: str, platforms=None) -> str:
     """DOMAIN-ONLY, and that is the whole cost story for this tab.
 
     The request can only ever ask for a domain — DataForSEO rejects a path in its `domain`
@@ -87,7 +92,7 @@ def questions_cache_key(target: str) -> str:
     picker, so every lookup uses the same one.
     """
     from pipeline.connectors.dataforseo_llm_questions import domain_of
-    return f"domain_overview_questions_{domain_of(target)}"
+    return f"domain_overview_questions_{domain_of(target)}_{'+'.join(platforms or QUESTIONS_PLATFORMS)}"
 
 
 def _domain_only(target: str) -> str:
@@ -96,8 +101,19 @@ def _domain_only(target: str) -> str:
     return domain_of(target)
 
 
+def normalise_platforms(platforms) -> tuple:
+    """The platforms to ask, from whatever the client sent. Unknown names are dropped.
+
+    Order is fixed rather than the caller's, so the same pair always produces the same cache
+    key however the checkboxes were ticked.
+    """
+    wanted = {str(p).strip().lower() for p in (platforms or [])}
+    chosen = tuple(p for p in QUESTIONS_PLATFORM_CHOICES if p in wanted)
+    return chosen or QUESTIONS_PLATFORMS
+
+
 def fetch_questions_block(target: str, site_id: str = "", allow_fetch: bool = True,
-                          refresh: bool = False) -> dict:
+                          refresh: bool = False, platforms=None) -> dict:
     """The AI Questions tab: which questions does this URL turn up in?
 
     ONE billed call per platform (chat_gpt, google) against llm_mentions/search/live, and only
@@ -116,14 +132,18 @@ def fetch_questions_block(target: str, site_id: str = "", allow_fetch: bool = Tr
         return {"state": "setup", "rows": [], "total": 0,
                 "note": "Enter a domain or URL first."}
 
-    key = questions_cache_key(raw)
+    chosen = normalise_platforms(platforms)
+    key = questions_cache_key(raw, chosen)
+    # The stored block is keyed by platform set too: asking ChatGPT alone and asking both are
+    # different answers, and serving one for the other would under-report without saying so.
+    store_block = "questions:" + "+".join(chosen)
     if not refresh:
         cached = cache.get(key)
         if cached is not None:
             # Both the cache and the store hold the WHOLE domain; the page filter is applied on
             # the way out, so a second page on a domain already looked up costs nothing.
             return {**_narrow_to_page(cached, raw), "cached": True}
-        stored = load_block(_domain_only(raw), "questions")
+        stored = load_block(_domain_only(raw), store_block)
         if stored is not None:
             cache.set(key, stored, CACHE_TTL)
             return _narrow_to_page(stored, raw)
@@ -142,7 +162,7 @@ def fetch_questions_block(target: str, site_id: str = "", allow_fetch: bool = Tr
     # Fetched WITHOUT the page filter on purpose: the call is per domain either way, so
     # storing the whole domain makes every other page on it free for 24h. `page_url=""`
     # overrides the connector's own "a path means filter" default.
-    result = fetch_llm_questions(raw, page_url="", platforms=QUESTIONS_PLATFORMS,
+    result = fetch_llm_questions(raw, page_url="", platforms=chosen,
                                  limit=QUESTIONS_LIMIT, site_id=site_id)
 
     if result.get("status") != "ok":
@@ -164,7 +184,7 @@ def fetch_questions_block(target: str, site_id: str = "", allow_fetch: bool = Tr
     cache.set(key, block, CACHE_TTL)
     # Keyed on the domain alone, like the request and the cache — one stored answer serves
     # every page on it, for good.
-    save_block(_domain_only(raw), "questions", block, cost=block.get("cost", 0.0))
+    save_block(_domain_only(raw), store_block, block, cost=block.get("cost", 0.0))
     return _narrow_to_page(block, raw)
 
 
@@ -475,7 +495,8 @@ def fetch_backlinks_block(target: str, site_id: str = "", allow_fetch: bool = Tr
 
 def run_domain_overview(target: str, location: str = "United States", site_id: str = "",
                         site_pk: Optional[int] = None,
-                        include: Optional[list] = None, refresh: bool = False) -> dict:
+                        include: Optional[list] = None, refresh: bool = False,
+                        platforms: Optional[list] = None) -> dict:
     """POST /api/domain-overview handler.
 
     `include` is the opt-in list for sections that cost extra. The default Analyze press
@@ -495,9 +516,27 @@ def run_domain_overview(target: str, location: str = "United States", site_id: s
     if "backlinks" in wanted:
         result = {**result, "backlinks": fetch_backlinks_block(target, site_id=site_id,
                                                                refresh=refresh)}
+    elif not refresh:
+        # Not asked for, but already OWNED — hand it back free. Without this a hard refresh
+        # showed "Load backlinks" for a target whose backlinks were sitting in the store, and
+        # the only way to see them again was to buy them again. `allow_fetch=False` guarantees
+        # this branch can never reach the network.
+        owned = fetch_backlinks_block(target, site_id=site_id, allow_fetch=False)
+        if owned.get("state") == "ok":
+            result = {**result, "backlinks": owned}
     # Same contract as backlinks: its own button, its own cache, never bought by the default
     # Analyze press.
     if "questions" in wanted:
         result = {**result, "questions": fetch_questions_block(target, site_id=site_id,
-                                                               refresh=refresh)}
+                                                               refresh=refresh,
+                                                               platforms=platforms)}
+    elif not refresh:
+        # Same rule. A stored answer for EITHER platform choice counts as owned, so a hard
+        # refresh restores whichever the user actually bought.
+        for choice in (("chat_gpt", "google"), ("chat_gpt",), ("google",)):
+            owned = fetch_questions_block(target, site_id=site_id, allow_fetch=False,
+                                          platforms=choice)
+            if owned.get("state") in ("ok", "empty") and owned.get("domainTotal") is not None:
+                result = {**result, "questions": owned}
+                break
     return result

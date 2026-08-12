@@ -152,12 +152,24 @@ class QuestionsBlockTests(TestCase):
         self.assertEqual(block["state"], "setup")
 
     def test_the_default_analyze_press_does_not_buy_questions(self):
+        """The guarantee is that Analyze cannot SPEND on questions — not that the block is
+        never consulted.
+
+        Since blocks already owned are handed back for free, a plain Analyze does now call
+        `fetch_questions_block`, but only with `allow_fetch=False`, which returns what is
+        stored and can never reach the network. Asserting "not called" would forbid the free
+        restore that fixed "hard refresh loses my backlinks".
+        """
         with mock.patch.object(svc, "fetch_keywords_block", return_value={"status": "ok"}), \
              mock.patch.object(svc, "apply_tracked_flags", side_effect=lambda r, **kw: r), \
-             mock.patch.object(svc, "fetch_questions_block") as questions:
+             mock.patch.object(svc, "fetch_questions_block",
+                               return_value={"state": "not_loaded"}) as questions:
             out = svc.run_domain_overview("premierstaff.com")
-        questions.assert_not_called()
-        self.assertNotIn("questions", out)
+
+        for call in questions.call_args_list:
+            self.assertFalse(call.kwargs.get("allow_fetch", True),
+                             "a plain Analyze must never be able to buy questions")
+        self.assertNotIn("questions", out, "and nothing owned means nothing to show")
 
     def test_include_questions_adds_the_block(self):
         with mock.patch.object(svc, "fetch_keywords_block", return_value={"status": "ok"}), \

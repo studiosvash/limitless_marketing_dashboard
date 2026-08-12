@@ -1450,9 +1450,12 @@ class DomainOverviewView(APIView):
 
         # `refresh` is the user asking to re-buy a stored lookup. Without it the answer comes
         # from the store, so a domain looked up last month is free to re-open.
+        # `platforms` picks which answer engines the AI-questions block asks. Each is a
+        # separate billed request, so the choice belongs to the user, not to a constant.
         return Response(run_domain_overview(target, location, site_id=site_id,
                                             site_pk=site_pk, include=include,
-                                            refresh=bool(request.data.get("refresh"))))
+                                            refresh=bool(request.data.get("refresh")),
+                                            platforms=request.data.get("platforms")))
 
 
 @method_decorator(login_not_required, name="dispatch")

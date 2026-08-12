@@ -36,7 +36,10 @@
     freshness: 'Weekly · Mon',
     // doQLoading is the AI Questions press, tracked apart from doLoading so the two paid
     // buttons on this page can never disable each other.
-    doQuery: '', doData: null, doLoading: false, doQLoading: false, doError: null, doSel: [], doTracked: [],
+    // doQPlat: which answer engines the AI-questions press asks. Each one is a separate
+    // billed request, so it is the user's choice and it moves the quoted price.
+    doQuery: '', doData: null, doLoading: false, doQLoading: false, doQPlat: ['chat_gpt'],
+    doError: null, doSel: [], doTracked: [],
     /* Which of the three Domain Overview result tabs is showing. An IN-PAGE tab, unrelated
        to state.tab (the router's page): the three sections are one lookup's results, split
        up, not three pages. Deliberately not in the nav history — a tab flick is not a
@@ -1319,14 +1322,24 @@
 
      Merged into doData rather than replacing it: the keyword block on screen was paid for and
      must survive this call. */
+  /* At least one engine stays selected: unticking the last one would leave a paid button
+     with nothing to buy, and the server would silently fall back to its default anyway. */
+  doToggleQEngine(id) {
+    const cur = (this.state.doQPlat && this.state.doQPlat.length) ? this.state.doQPlat : ['chat_gpt'];
+    const next = cur.indexOf(id) >= 0 ? cur.filter(x => x !== id) : cur.concat([id]);
+    this.setState({ doQPlat: next.length ? next : cur });
+  }
+
   doLoadQuestions(refresh) {
     const q = this.state.doQuery.trim();
     if (!q || this.state.doQLoading) return;
     const pid = this.state.projectId;
+    const platforms = (this.state.doQPlat && this.state.doQPlat.length)
+      ? this.state.doQPlat : ['chat_gpt'];
     this.setState({ doQLoading: true, doError: null });
     window.FuseAPI.post('/api/domain-overview', {
       target: q, location: this.doLocation(), project: pid,
-      include: ['questions'], refresh: !!refresh,
+      include: ['questions'], refresh: !!refresh, platforms: platforms,
     })
       .then(r => {
         if (!this._alive) return;
