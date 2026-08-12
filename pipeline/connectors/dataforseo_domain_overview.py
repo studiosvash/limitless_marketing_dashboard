@@ -24,6 +24,80 @@ load_dotenv()
 DATAFORSEO_BASE = "https://api.dataforseo.com/v3"
 
 
+_MOVEMENT_FLAGS = (("is_new", "new"), ("is_up", "up"), ("is_down", "down"), ("is_lost", "lost"))
+
+
+def parse_keyword_item(item: dict) -> dict:
+    """One ranked-keyword row, keeping the fields this response is already billed for.
+
+    The parser used to keep seven of roughly forty and drop the rest — including the keyword
+    difficulty, the 12-month trend, rank movement and featured-snippet wins. Every one of them
+    arrives in the same paid response; keeping them costs no extra call and no extra cent.
+
+    `kd` and `movement` stay None when the API did not say. A difficulty of 0 renders green and
+    reads as "trivial to rank for", and a movement of "flat" asserts we compared two captures
+    when we may have had only one — both are inventions, and the UI has an em dash for exactly
+    this.
+    """
+    kw_data = item.get("keyword_data") or {}
+    kw_info = kw_data.get("keyword_info") or {}
+    kw_props = kw_data.get("keyword_properties") or {}
+    serp = (item.get("ranked_serp_element") or {}).get("serp_item") or {}
+    intent_info = kw_data.get("search_intent_info")
+    main_intent = intent_info.get("main_intent") if isinstance(intent_info, dict) else None
+
+    # Oldest first, so a sparkline reads left to right the way a chart does.
+    monthly_raw = kw_info.get("monthly_searches") or []
+    monthly = [int(m.get("search_volume") or 0)
+               for m in sorted(monthly_raw,
+                               key=lambda m: (m.get("year") or 0, m.get("month") or 0))
+               if isinstance(m, dict)]
+
+    changes = serp.get("rank_changes") or {}
+    movement = next((word for flag, word in _MOVEMENT_FLAGS if changes.get(flag)), None)
+
+    kd = kw_props.get("keyword_difficulty")
+
+    return {
+        "keyword": kw_data.get("keyword", ""),
+        "intent": main_intent.capitalize() if main_intent else "Informational",
+        "position": serp.get("rank_group", 0),
+        "volume": kw_info.get("search_volume", 0),
+        "cpc": round(kw_info.get("cpc", 0) or 0, 2),
+        "traffic": round(serp.get("etv", 0) or 0, 2),
+        "url": serp.get("url", ""),
+        # --- already paid for, previously discarded ---
+        "kd": int(kd) if isinstance(kd, (int, float)) else None,
+        "competition": kw_info.get("competition_level"),
+        "monthly": monthly,
+        "movement": movement,
+        "rankAbsolute": serp.get("rank_absolute"),
+        "featuredSnippet": bool(serp.get("is_featured_snippet")),
+        "title": serp.get("title") or "",
+    }
+
+
+def parse_metrics(metrics_raw: dict) -> dict:
+    """Headline numbers plus the position distribution and movement totals.
+
+    `metrics.organic` carries sixteen numbers and three were being read. The distribution is
+    what turns "380 ranked keywords" into "and 55 of them sit on page 3, one nudge from page 2".
+    """
+    organic = (metrics_raw or {}).get("organic") or {}
+    dist = {k: organic[k] for k in (
+        "pos_1", "pos_2_3", "pos_4_10", "pos_11_20", "pos_21_30", "pos_31_40",
+        "pos_41_50", "pos_51_60", "pos_61_70", "pos_71_80", "pos_81_90", "pos_91_100",
+    ) if k in organic}
+    return {
+        "organic_traffic": organic.get("etv", 0),
+        "traffic_value": organic.get("estimated_paid_traffic_cost", 0),
+        "ranked_keywords": organic.get("count", 0),
+        "distribution": dist,
+        "movement": {word: organic.get(flag) for flag, word in _MOVEMENT_FLAGS
+                     if organic.get(flag) is not None},
+    }
+
+
 class DataForSEODomainOverviewConnector(BaseConnector):
     name = "dataforseo_domain_overview"
 
@@ -146,36 +220,15 @@ class DataForSEODomainOverviewConnector(BaseConnector):
                         notes=f"labs/ranked_keywords live for {domain} (empty result)")
             return {"status": "ok", "metrics": {}, "keywords": []}
 
-        metrics = result.get("metrics") or {}
-        metrics_raw = metrics.get("organic", {}) or {}
-        
-        # High-level KPIs
-        metrics = {
-            "organic_traffic": metrics_raw.get("etv", 0),
-            "traffic_value": metrics_raw.get("estimated_paid_traffic_cost", 0),
-            "ranked_keywords": metrics_raw.get("count", 0)
-        }
+        # Headline KPIs plus the position distribution and movement totals — thirteen more
+        # numbers out of the same response, previously read and discarded.
+        metrics = parse_metrics(result.get("metrics") or {})
 
-        # Top keywords list
+        # Top keywords list. `parse_keyword_item` keeps the difficulty, trend, movement and
+        # featured-snippet fields this response is already billed for and the old inline
+        # version threw away.
         items = result.get("items") or []
-        keywords = []
-        for item in items:
-            kw_data = item.get("keyword_data", {})
-            kw_info = kw_data.get("keyword_info", {})
-            kw_props = kw_data.get("keyword_properties", {})
-            serp_elem = item.get("ranked_serp_element", {}).get("serp_item", {})
-            intent_info = kw_data.get("search_intent_info", {})
-            main_intent = intent_info.get("main_intent") if isinstance(intent_info, dict) else None
-
-            keywords.append({
-                "keyword": kw_data.get("keyword", ""),
-                "intent": main_intent.capitalize() if main_intent else "Informational",
-                "position": serp_elem.get("rank_group", 0),
-                "volume": kw_info.get("search_volume", 0),
-                "cpc": round(kw_info.get("cpc", 0) or 0, 2),
-                "traffic": round(serp_elem.get("etv", 0) or 0, 2),
-                "url": serp_elem.get("url", "")
-            })
+        keywords = [parse_keyword_item(item) for item in items]
 
         # `units` = ranked keyword rows returned — Labs ranked_keywords meters per returned
         # keyword, so cost/units is the true per-keyword price of this lookup.
