@@ -86,9 +86,9 @@ CROSS_AGG_ZERO_CASE = {
 
 # Trimmed from a real top_pages/live response for driphydration.com, captured 2026-08-01:
 # .superpowers/sdd/2026-07-31-llm-mentions-ai-visibility/real-pages.json
-# Real numbers throughout. The real response had a third item (a second driphydration.com
-# page); it's dropped here only so "exactly one URL survives the own-host filter" stays an
-# exact assertion instead of a set-membership one.
+# Real numbers throughout, and it shows the shape that matters: the response for OUR domain
+# carries a co-cited page from someone else's (perfectb.com). Both are stored now — see
+# `_parse_top_pages` — and ownership is decided when the page is read, not when it is written.
 TOP_PAGES = {
     "tasks": [{
         "status_code": 20000,
@@ -178,17 +178,48 @@ class TopPagesParsingTests(SimpleTestCase):
                              {"DATAFORSEO_LOGIN": "u", "DATAFORSEO_PASSWORD": "p"}):
             return DataForSEOLLMMentionsConnector()
 
-    def test_only_pages_on_our_own_host_are_kept(self):
-        recs = self._connector()._parse_top_pages(TOP_PAGES, SITE, "driphydration.com", WEEK)
+    def test_co_cited_pages_from_other_domains_are_kept_not_discarded(self):
+        # They arrive in the SAME paid response as ours. Dropping them at write time is how a
+        # ten-page response became four stored rows; the "Your Most-Cited Pages" heading is
+        # honoured when the page is read (llm_mentions_service.page_is_ours), not here.
+        recs = self._connector()._parse_top_pages(TOP_PAGES, SITE, WEEK)
         urls = [r["url"] for r in recs]
-        self.assertEqual(urls, ["https://driphydration.com/blog/wolverine-stack-injury-recovery/"])
+        self.assertEqual(urls, [
+            "https://driphydration.com/blog/wolverine-stack-injury-recovery/",
+            "https://www.perfectb.com/wolverine-peptide-bpc-157-tb-500/",
+        ])
 
     def test_page_record_carries_mentions_volume_and_platforms(self):
-        rec = self._connector()._parse_top_pages(TOP_PAGES, SITE, "driphydration.com", WEEK)[0]
+        rec = self._connector()._parse_top_pages(TOP_PAGES, SITE, WEEK)[0]
         self.assertEqual(rec["_table"], "pages")
         self.assertEqual(rec["mentions"], 397)
         self.assertEqual(rec["ai_search_volume"], 305020)
         self.assertIn("google", rec["platforms"])
+
+    def test_an_entry_with_no_url_is_skipped(self):
+        blank = {"tasks": [{"status_code": 20000, "result": [{"items": [
+            {"key": "  ", "platform": []},
+            {"key": "https://driphydration.com/a", "platform": [
+                {"type": "group_element", "key": "google", "mentions": 3, "ai_search_volume": 30}]},
+        ]}]}]}
+        recs = self._connector()._parse_top_pages(blank, SITE, WEEK)
+        self.assertEqual([r["url"] for r in recs], ["https://driphydration.com/a"])
+
+    def test_the_stored_week_is_capped_at_the_limit_the_ui_loads(self):
+        from pipeline.connectors import dataforseo_llm_mentions as m
+        over = {"tasks": [{"status_code": 20000, "result": [{"items": [
+            {"key": f"https://driphydration.com/p{i}", "platform": [
+                {"type": "group_element", "key": "google", "mentions": 1, "ai_search_volume": 1}]}
+            for i in range(m.TOP_PAGES_LIMIT + 25)
+        ]}]}]}
+        recs = self._connector()._parse_top_pages(over, SITE, WEEK)
+        self.assertEqual(len(recs), m.TOP_PAGES_LIMIT)
+
+    def test_the_request_asks_for_the_full_hundred(self):
+        # At 10 the parser was handed ten URLs and stored four of them. The cost of this
+        # endpoint is dominated by the per-request fee, not the row count (skills.md §9).
+        from pipeline.connectors import dataforseo_llm_mentions as m
+        self.assertEqual(m.TOP_PAGES_LIMIT, 100)
 
 
 # Real real-agg.json (aggregated_metrics/live for fusehealth.com, captured 2026-08-01) returned

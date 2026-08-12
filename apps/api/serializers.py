@@ -60,6 +60,13 @@ class ProjectSerializer(serializers.Serializer):
             # score for the same project. Anchoring both on the measurement makes the list and
             # the workspace two views of one number instead of two numbers.
             #
+            # THE SAME RANGE, TOO. This used to hardcode "28d" while ProjectPositionsView
+            # honours the `range` query param, so selecting 7d or 90d moved the workspace's
+            # "Your visibility" figure and left this row's Visibility column on its 28-day
+            # reading — one project, two percentages, neither labelled with its window. The
+            # view now passes the caller's range through `context`; 28d stays the default so a
+            # caller that only wants the project list is unchanged.
+            #
             # 28d, not 30d: the SPA's default range is '28d', matching Search Console's own
             # windows — see OverviewQuerySerializer.
             #
@@ -68,8 +75,9 @@ class ProjectSerializer(serializers.Serializer):
             from apps.api.views import latest_ranking_anchor
             anchor = latest_ranking_anchor(site.site_url, location)
             latest = (anchor - timedelta(days=1)) if anchor else None
+            range_key = (self.context.get("range") or "28d") if self.context else "28d"
             curr_start, curr_end, prev_start, prev_end = range_to_period_dates(
-                "28d", anchor or date.today())
+                range_key, anchor or date.today())
 
             dist = _get_ranking_distribution(site.site_url, curr_start, curr_end,
                                              location=location, site_pk=project_pk)

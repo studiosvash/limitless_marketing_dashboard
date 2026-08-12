@@ -397,9 +397,10 @@ def build_positions_response(site_id: str, curr_start: date, curr_end: date,
     """
     from apps.dashboard.services.shared_queries import (
         _diff_label, _get_ranking_distribution, _get_position_changes, _get_competitor_grid,
-        _get_competitor_map,
+        _get_competitor_map, _get_visibility_history,
     )
     from pipeline.services.saved_keyword_service import list_saved_keywords
+    from pipeline.services.site_service import _bare_domain
 
     dist = _get_ranking_distribution(site_id, curr_start, curr_end, location=location,
                                      site_pk=site_pk)
@@ -611,6 +612,15 @@ def build_positions_response(site_id: str, curr_start: date, curr_end: date,
         "movement": movement,
         "competitors": competitors,
         "competitor_map": comp_map,
+        # The Overview trend line. Real stored captures only — see `_get_visibility_history`
+        # for why this is derived from keyword_rankings / competitor_keyword_rankings rather
+        # than from the `competitor_visibility` table, which has never had a writer. The
+        # domain label matches `ProjectSerializer.get_domain`, which is what the SPA legend
+        # and the share-of-voice cards are keyed on.
+        "visibility_history": _get_visibility_history(
+            site_id, curr_start, curr_end, location=location, site_pk=site_pk,
+            own_domain=_bare_domain(site_id),
+        ),
         # Makes the "no stored volume" gap visible in the payload instead of hiding it
         # behind a live paid lookup (removed 2026-07-27) or a fabricated 0.
         "volume_coverage": volume_coverage,

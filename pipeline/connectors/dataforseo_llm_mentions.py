@@ -74,7 +74,17 @@ AGG_ENDPOINT = f"{DATAFORSEO_BASE}/ai_optimization/llm_mentions/aggregated_metri
 MAX_COMPETITORS = 9
 # Entities inside a single aggregation_key (domain + brand + aliases) are capped at 10.
 MAX_ENTITIES_PER_KEY = 10
-TOP_PAGES_LIMIT = 10
+# 100, not 10, and every row that comes back is now KEPT (see `_parse_top_pages`).
+#
+# At 10 the call returned ten URLs, roughly half of them on other domains, and the parser threw
+# those away -- so a real project stored FOUR rows out of a response it had already been billed
+# for, and the page showed four. This endpoint is priced like its `search/live` sibling (skills.md
+# §9): a fixed fee per REQUEST plus ~$0.001 per row, i.e. ~$0.11 at limit 10 and ~$0.20 at limit
+# 100. Shrinking the limit therefore saves almost nothing while discarding almost everything; the
+# only real lever on cost is the once-a-week request guard in `fetch()`, which is unchanged.
+#
+# 100 is also the storage cap the UI is built against ("Cited Pages", load-all at 100).
+TOP_PAGES_LIMIT = 100
 
 
 def week_start_for(d: date) -> date:
@@ -318,8 +328,21 @@ class DataForSEOLLMMentionsConnector(BaseConnector):
         out.extend(self._discovered_rows(total, {own_domain}, site_url, week))
         return out
 
-    def _parse_top_pages(self, data: dict, site_url: str, own_domain: str,
-                         week: date) -> list[dict]:
+    def _parse_top_pages(self, data: dict, site_url: str, week: date) -> list[dict]:
+        """Every cited page the response carries -- ours AND the co-cited ones.
+
+        This used to drop any URL not on our own host, because "Your Most-Cited Pages" means
+        ours. That heading is still ours-only, but the DROP happened at STORAGE, which threw
+        away rows the project had already paid for: a real call returned ten pages and four
+        were stored. The co-cited pages (a call for driphydration.com returns perfectb.com
+        URLs) are the answer to "who else is AI citing on the questions that cite us?", which
+        is worth more than the row it costs -- nothing, since they arrive in the same response.
+
+        WHO OWNS A URL IS DECIDED AT READ TIME, in `llm_mentions_service`, by comparing hosts
+        www-insensitively. No column records it, on purpose: the answer is a pure function of
+        the URL and the project's own domain, and a stored flag would go stale the moment a
+        project is re-registered under another spelling of its host (§3).
+        """
         block = self._unwrap(data)
         if not block:
             return []
@@ -327,15 +350,7 @@ class DataForSEOLLMMentionsConnector(BaseConnector):
         out: list[dict] = []
         for entry in block.get("items") or []:
             url = (entry.get("key") or "").strip()
-            if not url or self._bare_host(canonical_domain(url)) != self._bare_host(own_domain):
-                # top_pages returns co-occurring pages from OTHER domains (a call for
-                # driphydration.com returns perfectb.com URLs). "Your Most-Cited Pages"
-                # means ours.
-                #
-                # Compared www-insensitively on BOTH sides. `own_domain` is the project's
-                # registered domain, which add_site now normalises to the bare host -- so a
-                # straight canonical_domain() equality dropped every cited page served from
-                # https://www.<us>.com/, i.e. our own pages, as if they were a competitor's.
+            if not url:
                 continue
             mentions = 0
             volume = 0
@@ -351,7 +366,10 @@ class DataForSEOLLMMentionsConnector(BaseConnector):
                 "mentions": mentions, "ai_search_volume": volume,
                 "platforms": json.dumps(platforms),
             })
-        return out
+        # `items_list_limit` already bounds the response, so this only bites if the API ever
+        # returns more than it was asked for. The stored week is capped either way, because
+        # 100 is the number the Cited Pages tab is built to load in one go.
+        return out[:TOP_PAGES_LIMIT]
 
     # ── payload building ────────────────────────────────────────────────────────────────
     # NOTE: `_entities` and the cross-aggregation payload construction inside `fetch()` were
@@ -440,7 +458,7 @@ class DataForSEOLLMMentionsConnector(BaseConnector):
                         "language_code": "en",
                         "items_list_limit": TOP_PAGES_LIMIT,
                     }])
-                    records.extend(self._parse_top_pages(pages_data, site_url, own_domain, week))
+                    records.extend(self._parse_top_pages(pages_data, site_url, week))
                 except Exception:
                     # Never discard the metrics snapshot we have already been billed for
                     # because a second, independent call failed. Without this the whole run

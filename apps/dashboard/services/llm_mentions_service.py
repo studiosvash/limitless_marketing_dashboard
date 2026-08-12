@@ -15,7 +15,7 @@ from sqlalchemy import select
 from pipeline.db.schema import LLMCitedPage, LLMMentionMetric
 from pipeline.db.writer import ensure_tables
 from pipeline.utils.db_connection import get_session
-from pipeline.utils.site_ids import resolve_site_ids
+from pipeline.utils.site_ids import canonical_domain, normalize_domain, resolve_site_ids
 
 logger = logging.getLogger(__name__)
 
@@ -42,10 +42,32 @@ def _empty_block() -> dict:
         "impressions": 0,
         "cited_pages": 0,
         "topPages": [],
+        "coCitedPages": [],
         "topDomains": [],
         "mentionPlatforms": [dict(p) for p in MENTION_PLATFORMS],
         "state": "setup",
     }
+
+
+def _bare_host(domain: str) -> str:
+    """`www.` stripped, for comparing two hosts. Mirrors the connector's helper of the name."""
+    d = (domain or "").lower()
+    return d[4:] if d.startswith("www.") else d
+
+
+def page_is_ours(url: str, own_domain: str) -> bool:
+    """Is this cited URL on the project's own site?
+
+    Host-wise with a dot boundary, so `blog.<us>.com` is ours and `notus.com` never is —
+    substring containment answers a different question and has bitten this codebase before
+    (skills.md §9, `"linkedin" in "lnkd.in"`). `www.` is stripped on both sides because the
+    two hosts are one site here (§3).
+    """
+    own = _bare_host(own_domain)
+    host = _bare_host(canonical_domain(url))
+    if not own or not host:
+        return False
+    return host == own or host.endswith("." + own)
 
 
 def query_mention_metrics_raw(site_id: str, weeks: int = 2) -> list[dict]:
@@ -79,7 +101,13 @@ def query_mention_metrics_raw(site_id: str, weeks: int = 2) -> list[dict]:
 
 
 def query_cited_pages_raw(site_id: str, week_start) -> list[dict]:
-    """Stored cited URLs for one week, most-mentioned first. [] on any failure."""
+    """Stored cited URLs for one week, most-mentioned first. [] on any failure.
+
+    Both kinds of row: the project's own pages and the co-cited pages from other domains that
+    arrived in the same paid response. `build_visibility_block` is what separates them —
+    callers wanting one or the other should read `topPages` / `coCitedPages` from there rather
+    than re-deriving ownership here.
+    """
     site_ids = resolve_site_ids(site_id)
     if not site_ids:
         return []
@@ -106,6 +134,9 @@ def query_cited_pages_raw(site_id: str, week_start) -> list[dict]:
             "url": r.url, "mentions": r.mentions or 0,
             "impressions": r.ai_search_volume or 0,
             "platforms": platforms if isinstance(platforms, list) else [],
+            # The host, so the co-cited list can say WHOSE page it is without the SPA parsing
+            # URLs. Computed here because `canonical_domain` is the one canonicaliser (§3).
+            "domain": canonical_domain(r.url),
         })
     return out
 
@@ -218,14 +249,26 @@ def build_visibility_block(site_id: str) -> dict:
         "isComp": v["type"] == "competitor",
     } for d, v in top_domains]
 
-    pages = query_cited_pages_raw(site_id, this_week)
+    # Ours vs. co-cited, decided here rather than stored (see LLMCitedPage's docstring).
+    # `normalize_domain` is the "which site is this?" question — the right one, because it is
+    # what `sites.site_url` was registered as. The measured `you` subject is the fallback for a
+    # site_id that normalises to nothing.
+    own_domain = normalize_domain(site_id) or (you_row["domain"] if you_row else "")
+    all_pages = query_cited_pages_raw(site_id, this_week)
+    pages = [p for p in all_pages if page_is_ours(p["url"], own_domain)]
+    # Pages on OTHER domains that AI cited in the same answers. They cost nothing extra (they
+    # arrive in the same top_pages response) and they answer "who else is being cited on the
+    # questions that cite us?" — the "Cited Pages" tab shows them beside ours.
+    co_cited = [p for p in all_pages if not page_is_ours(p["url"], own_domain)]
 
     return {
         "sov": {"you": you_share, "delta": delta, "rows": sov_rows},
         "mentions": agg.get(you_row["domain"], {}).get("mentions", 0) if you_row else 0,
         "impressions": agg.get(you_row["domain"], {}).get("volume", 0) if you_row else 0,
+        # Deliberately OURS only: the KPI is labelled "of your URLs used as sources".
         "cited_pages": len(pages),
         "topPages": pages,
+        "coCitedPages": co_cited,
         "topDomains": top_domains_out,
         "mentionPlatforms": [dict(p) for p in MENTION_PLATFORMS],
         "state": state,

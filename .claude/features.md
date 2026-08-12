@@ -537,9 +537,14 @@ unranked keywords and once showed 82% for a project ranking on 1 of 48 tracked k
 There is **no bar** beside the percentage (removed 2026-08-10). There used to be a track and a
 fill, but both were inline `<span>`s and a non-replaced inline box ignores width and height, so
 the fill never drew on any project — every row showed an empty grey track. The percentage is the
-whole cell. The same window that feeds this number now feeds the workspace: both anchor on
-`latest_ranking_anchor`, so a project last synced 40 days ago no longer reports `—` in the list
-beside a real score in its own workspace.
+whole cell. The same window that feeds this number now feeds the workspace, on both axes: both
+anchor on `latest_ranking_anchor`, so a project last synced 40 days ago no longer reports `—` in
+the list beside a real score in its own workspace (2026-08-10); and both use the **range the
+user selected**, so switching to 7d or 90d no longer moves the workspace figure while leaving
+this column on a 28-day reading (2026-08-12 — `GET /api/projects` takes `?range=`, `boot()`
+sends it and `setRange()` re-reads the list through `App.reloadProjects`). Any new
+`/api/projects` re-read in the SPA must go through `reloadProjects()` for that reason; a bare
+one snaps the column back to 28d without telling anyone.
 
 **+ New project** opens the **Create SEO Project wizard** — four steps with a progress rail:
 
@@ -697,19 +702,36 @@ Three workspace tabs:
   one the user chose to track, so both readings measure **ranking strength, not traffic
   potential**. The sub-line exists because the share alone cannot separate "ranks everywhere,
   mid-table" from "ranks on three keywords, all #1" — both can land on the same number.
-  Unticking a legend entry only greys its card and hides its (future) chart series; it never
+  Unticking a legend entry only greys its card and hides its chart series; it never
   changes anyone's number — including the share, whose denominator is the full card set, not the
   ticked subset.
-- A multi-series visibility line chart — **dormant**: `/api/positions` returns no per-date series,
-  so `hasHistory` is hard-`false` and an empty state renders instead. The SVG is kept as the target
-  shape; populate it only from real positions, never a generator.
-  It *is* buildable without a new table: `competitor_keyword_rankings` stores a row per
-  (keyword, domain, **date**), so the index can be recomputed for each capture date. The trap is
-  that capture sets differ between dates — the Premier Staff project has 6 keywords captured on
-  2026-07-23 and 15 on 2026-07-26 — so an index computed over "whatever was captured that day"
-  moves when the keyword set moves, not when the rankings do. Any implementation must fix the
-  denominator across dates (or plot the keyword count alongside) or the line will report sync
-  coverage as if it were performance.
+- A **multi-series visibility line chart** — live since 2026-08-12, from
+  `/api/positions` → `visibility_history` (`shared_queries._get_visibility_history`), drawn by
+  `buildHistoryChart` in `positioning.js` and covered by
+  `static/spa/tests/visibility_history_chart.test.js`. One point per date the project was
+  actually captured on, per domain; the y value is the **visibility index** — the same "index N"
+  the cards above print — so the chart is those cards over time, not a fourth definition. The
+  y axis scales to the data (these indices are routinely under 5; the old fixed 0–80 axis
+  squashed every real movement into the bottom two pixels). Legend checkboxes hide a line
+  without changing anyone's number.
+  It needed no new table: `keyword_rankings` and `competitor_keyword_rankings` store a row per
+  (keyword, domain, **date**), so every date already captured could be scored retroactively.
+  `competitor_visibility` — the table that looks like the obvious home for this — has never had
+  a writer and is deliberately still unused; see api-reference.md for why (its unique key has no
+  `location`, so the six Premier Staff city projects would overwrite each other's history).
+  **Two traps, both handled, both easy to reintroduce.** (1) Capture sets differ between dates —
+  6 keywords captured on 2026-07-23 and 15 on 2026-07-26 for Premier Staff — so an index over
+  "whatever was captured that day" moves when the keyword set moves, not when the rankings do.
+  The denominator is therefore the full tracked list on every date. (2) A fixed denominator then
+  turns the `positions_new` sync scope (which measures *only* never-measured keywords) into a
+  cliff: a handful of rows scored against the whole board plots near zero, so the chart would
+  show a crash caused by pressing "Track These New Keywords". A date is only plotted for a
+  domain when its capture covers ≥60% of that domain's best capture in the window, and each
+  point carries its `measured` count so a dip can be checked against its coverage.
+  **Two different capture dates are required** — one is not a trend, and the empty state below
+  is now an outcome of the data rather than the hardcoded `hasHistory: false` it used to be.
+  Populate it only from real positions, never a generator (it was `Math.random()` before the
+  2026-07 honesty pass, re-rolling the "trend" on every render).
 - A **competitor grid**: one row per keyword, one column per domain, each cell a position badge
   with a day-over-day diff arrow. Clicking a cell opens a URL popover with a copy button.
   Clicking the SERP icon opens the **live SERP drawer** — a real-time top-15 organic result list
@@ -1026,14 +1048,24 @@ Perplexity) and manage the prompts you want to monitor.
 
 **Header:** an AI spend/cap chip, the next scheduled run, and a **Run all now** button.
 
-**Five sub-tabs:**
+**Six sub-tabs:**
 
 1. **AI Visibility** — share-of-voice percentage with a week-over-week delta and a ranked
    competitor bar list; four KPIs (brand mentions, AI impressions, cited pages, prompt coverage);
    per-platform toggle chips (real data now, see below) that are meant to drive a multi-series
-   mentions trend chart — the chart itself has no series to plot yet, see Edge cases; your
-   most-cited pages; and the domains dominating AI answers, tagged *You* / *Competitor*.
-2. **Prompts** — a **Prompt Explorer** (seed terms → template-expanded prompt ideas, selectable
+   mentions trend chart — the chart itself has no series to plot yet, see Edge cases; **Your
+   Most-Cited Pages** (the top 5 — clicking anywhere on the card opens the full list
+   fullscreen); and the domains dominating AI answers, tagged *You* / *Competitor*.
+2. **Cited Pages** — every URL in the latest weekly LLM Mentions snapshot, in two tabs:
+   **Your pages** (what the Visibility card previews) and **Other cited pages** — pages on
+   *other* domains that AI cited in the same answers, which arrive in the same paid response
+   and were discarded before ever being stored until 2026-08-12. A URL/domain filter, 25 rows
+   with a **Load all** button (free — the rows are already in the fetched response; it renders,
+   it never fetches), and a cap of 100 pages per week, which is what one `top_pages` call is
+   asked for. The same view model backs the fullscreen overlay the Visibility card opens, so
+   the two can never disagree. Empty states are distinct: never synced, nothing on this tab,
+   and nothing matching the filter.
+3. **Prompts** — a **Prompt Explorer** (seed terms → template-expanded prompt ideas, selectable
    and addable to a list), list-filter chips, a **domain-filter chip row** (see below), a
    list manager (create / rename / delete), a
    **composer** for adding prompts in bulk with suggestion shortcuts, and the main
@@ -1069,11 +1101,11 @@ Perplexity) and manage the prompts you want to monitor.
    have not been run yet". A competitor removed from Targets keeps a greyed chip while stored
    answers still name it. Selecting a domain clears the row selection, so a row selected under
    one domain cannot be silently swept into a bulk run it is no longer visible for.
-3. **AI Keywords** — how people ask AI about your topics: keyword, AI volume, Google volume, an
+4. **AI Keywords** — how people ask AI about your topics: keyword, AI volume, Google volume, an
    AI-share ratio, a 12-month sparkline, intent, and your mention count. Segment chips
    (All / AI-heavy / Gaps / Mentioned), a search box, multi-select with bulk *add as prompts to a
    list*, and CSV export.
-4. **Answer Inspector** — ask any question and see the answer with your brand's mentions
+5. **Answer Inspector** — ask any question and see the answer with your brand's mentions
    highlighted plus the citation list. A **"Competitors in this answer"** chip row shows every
    tracked competitor the answer really named (`Mentioned` or `Cited #n`, hover for the
    sentence) — read from the `competitors` array `analyze_answer` has always stored on each
@@ -1081,7 +1113,7 @@ Perplexity) and manage the prompts you want to monitor.
    *You* tag on hostname match (the stored pairs are bare `{title, url}` — rendering `c.n`/
    `c.domain`/`c.isYou` directly printed "[undefined]"). Prompt-row meta lines also flag
    "⚠ competitors in answers: …" as the union across that prompt's stored model results.
-5. **History** — previous inspections with verdict, position and cost.
+6. **History** — previous inspections with verdict, position and cost.
 
 ### Setup wizard
 

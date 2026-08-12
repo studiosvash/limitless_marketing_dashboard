@@ -12,7 +12,8 @@ Four real sources, and nothing else:
 4. **Stored DataForSEO LLM Mentions snapshots** — assembled by
    `apps.dashboard.services.llm_mentions_service.build_visibility_block` from the
    `llm_mention_metrics` / `llm_cited_pages` tables and merged in here as `sov`, `mentionPlatforms`,
-   `topPages`, `topDomains`, `visibilityState`, and `kpis.mentions`/`.impressions`/`.cited_pages`.
+   `topPages`, `coCitedPages`, `topDomains`, `visibilityState`, and
+   `kpis.mentions`/`.impressions`/`.cited_pages`.
 
 Everything with no source is `0` / `None` / `[]` and stays that way. `trend` and `suggestions`
 are the honest empties: a trend line needs a stable weekly series to chart against, and while
@@ -1269,6 +1270,10 @@ def build_ai_response(site_id: str) -> dict:
         },
         "trend": [],   # Lean v1: weekly rows are being collected; the chart is not wired yet.
         "topPages": vis["topPages"],
+        # Cited pages on OTHER domains from the same paid top_pages response. Kept separate
+        # from topPages because "Your Most-Cited Pages" means ours; the Cited Pages tab shows
+        # both, in two tabs of its own.
+        "coCitedPages": vis["coCitedPages"],
         "topDomains": vis["topDomains"],
         "visibilityState": vis["state"],
         "lists": lists,

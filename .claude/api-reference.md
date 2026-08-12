@@ -121,13 +121,25 @@ which caches its result on the instance and degrades to zeros + `"No sync yet"` 
 exception. `last_updated` is a human string: `"Today"`, `"Yesterday"`, `"N days ago"`, or
 `"No sync yet"`.
 
-**The window is the same one `GET /positions` renders** (changed 2026-08-10): a 28-day window
-anchored on `views.latest_ranking_anchor` — this project's newest `keyword_rankings` date, in
-its own location — falling back to `date.today()` only when the project has never been
-measured. It used to be a fixed rolling 28 days ending *today*, with no reference to when the
-project was actually measured, so a project last synced 40 days ago had no measurement inside
-its own window: the list row said `—` ("never captured") beside a workspace reporting a real
-score for the same project.
+**Query params:** `range` — `7d` | `28d` | `90d`, default `28d`. Optional; a caller that only
+wants the project list can omit it.
+
+**The window is the same one `GET /positions` renders** (changed 2026-08-10, completed
+2026-08-12): a window anchored on `views.latest_ranking_anchor` — this project's newest
+`keyword_rankings` date, in its own location — falling back to `date.today()` only when the
+project has never been measured.
+
+Two halves to that, fixed separately. The **anchor** used to be a fixed rolling 28 days ending
+*today*, with no reference to when the project was actually measured, so a project last synced
+40 days ago had no measurement inside its own window: the list row said `—` ("never captured")
+beside a workspace reporting a real score for the same project. The **length** used to be
+hardcoded `28d` here while `ProjectPositionsView` honours `?range=`, so picking 7d or 90d moved
+the workspace figure and left this row on its 28-day reading — one project, two percentages,
+neither labelled with its window. `ProjectListCreateView.get` now passes the caller's range to
+`ProjectSerializer` through `context={"range": ...}`, and the SPA sends it from `boot()` and
+re-reads the list in `setRange()` (`App.reloadProjects`). Every other `/api/projects` re-read in
+the SPA (project create / edit / delete, keywords sent to tracking) goes through
+`reloadProjects()` for the same reason — a bare re-read would silently snap the list back to 28d.
 
 `visibility` is the Semrush-style CTR-weighted score (0–100, 1 dp) computed in
 `_get_ranking_distribution`: each tracked keyword earns the CTR of its average position
@@ -413,6 +425,8 @@ yet); `source` is always `"sync"` here.
   "competitors":     {"domains": ["a.com"], "rows": [{"kw", "you": cell, "comps": [cell|null]}]},
   "competitor_map":  {"status", "captured_date", "your_date", "keywords_captured",
                       "tracked_total", "volume_weighted", "domains": [mapdomain]},
+  "visibility_history": {"dates": ["2026-08-01"], "tracked_total": 45,
+                         "series": [{"domain", "own": bool, "points": [12.3, null]}]},
   "volume_coverage": {"tracked", "with_volume", "missing_volume",
                       "missing_keywords": ["kw"], "note": ""},
   "opportunities":   [opportunity],
@@ -441,6 +455,31 @@ The window is anchored on `views.latest_ranking_anchor` whenever the project has
 only (the pre-2026-08-10 rule) left a stale project's workspace blank while its share-of-voice
 cards, which read the latest capture whenever it happened, showed real positions on the same
 screen.
+
+**`visibility_history` is the Overview trend line** (added 2026-08-12) —
+`shared_queries._get_visibility_history`. One point per date the project was actually captured
+on, per domain: `dates` is ascending ISO dates, and each `series` entry's `points` array is
+index-aligned to it. A point is the same CTR-curve index as `kpis.visibility` computed over a
+**one-day** window, so the last point and the headline are the same function of the same rows
+and cannot disagree. `null` at an index means that domain was not measured that day — the SPA
+draws the line straight through to the next real reading rather than dropping to 0, which would
+invent a cliff nobody observed. Your own domain is `own: true` and keyed by the same
+`_bare_domain(site_url)` string the legend, the share-of-voice cards and `GET /api/projects`
+use; competitor lines come from `competitor_keyword_rankings` and equal the "index N" sub-line
+those cards already print, so the chart is the cards over time rather than a fourth definition
+of visibility.
+
+**It is derived, not snapshotted, and that is deliberate.** `competitor_visibility` exists as a
+table and has never had a writer — `pipeline/db/writer.upsert_competitor_visibility` has no call
+site anywhere in the pipeline, which is why this card showed "No visibility history yet" on
+every project since it shipped (the SPA compounded it: `hasHistory: false` and `series: []` were
+hardcoded, so the SVG could not render whatever the API returned). Starting a snapshot log would
+have left the chart empty for two more syncs, and that table's unique key
+`(date, site_id, competitor_domain)` carries no `location`, so the six Premierstaff city
+projects would overwrite each other's history exactly as they once did their positions.
+`keyword_rankings` and `competitor_keyword_rankings` are both keyed per date and already
+accumulate a row per capture — the history was in the database the whole time. Do not add a
+snapshot writer for this; if you need a stored series, add `location` to the table first.
 
 **`distribution` counts measured positions only** (changed 2026-08-10). `p21_100` was
 `total − top20`, where `total` is the size of the *tracked list* — so every keyword nobody had
@@ -833,8 +872,9 @@ LLM Mentions snapshots, and a couple of remaining honest placeholders.
   "sov":   {"you","delta","rows":[{"domain","sov","mentions","isYou"}]},
   "kpis":  {"mentions","impressions","cited_pages","prompt_coverage":{"cited","total"}},
   "trend": [],
-  "topPages":   [{"url","mentions","impressions","platforms"}],
-  "topDomains": [{"domain","share","mentions","isYou","isComp"}],
+  "topPages":     [{"url","mentions","impressions","platforms","domain"}],
+  "coCitedPages": [{"url","mentions","impressions","platforms","domain"}],
+  "topDomains":   [{"domain","share","mentions","isYou","isComp"}],
   "visibilityState": "ok",
   "lists":   [{"id","name"}],
   "prompts": [{"id","text","listId","cfg":{"models","cadence","country","city","webSearch"},
@@ -847,12 +887,23 @@ LLM Mentions snapshots, and a couple of remaining honest placeholders.
 
 **Real:** `targets`, `lists`, `prompts` (from the `AITarget` / `AIPromptList` / `AIPrompt`
 Django models), `aiKeywords` when `AIKeywordData` rows exist, and — as of the LLM Mentions
-feature — `sov`, `kpis.mentions`, `kpis.impressions`, `kpis.cited_pages`, `topPages`, `topDomains`
-and `visibilityState`, all assembled by
+feature — `sov`, `kpis.mentions`, `kpis.impressions`, `kpis.cited_pages`, `topPages`,
+`coCitedPages`, `topDomains` and `visibilityState`, all assembled by
 `apps/dashboard/services/llm_mentions_service.build_visibility_block(site_id)` from the
 `llm_mention_metrics` / `llm_cited_pages` tables that `pipeline/connectors/dataforseo_llm_mentions.py`
 writes weekly. Nothing on this page calls DataForSEO directly — the connector is the only caller,
 gated behind the sync scopes like every other connector.
+
+**`topPages` vs. `coCitedPages` — one stored list, split when it is read.** The weekly
+`llm_mentions/top_pages` call returns up to `TOP_PAGES_LIMIT` (100) cited URLs, and they are
+**not all ours**: a call for `driphydration.com` comes back carrying `perfectb.com` pages that
+were cited in the same AI answers. Every row is stored; `llm_mentions_service.page_is_ours(url,
+own_domain)` decides ownership per row at read time (host-wise, `www.`-insensitive, dot-boundary
+so `blog.<us>.com` is ours). `topPages` is ours — it is what the "Your Most-Cited Pages" card and
+the `cited_pages` KPI mean — and `coCitedPages` is everyone else's. Until 2026-08-12 the
+connector **discarded** the co-cited rows before storing them and asked for only 10 pages, so a
+real project stored four rows out of a response it had already paid for. The limit is now 100
+because this endpoint's cost is dominated by the per-request fee, not the row count.
 
 `setupDone` is real — `bool(target and target.setup_done)` — so the setup wizard shows when the
 project genuinely has not been configured.

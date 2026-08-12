@@ -118,6 +118,59 @@ class VisibilityBlockTests(SimpleTestCase):
         self.assertEqual(block["topPages"][0]["impressions"], 1627)
         self.assertEqual(block["topPages"][0]["platforms"], ["google"])
 
+    def _seed_pages(self, pages, week=THIS_WEEK):
+        with get_session() as s:
+            upsert_llm_cited_pages(s, [{
+                "site_id": SITE, "week_start": week, "url": u,
+                "mentions": m, "ai_search_volume": v, "platforms": '["google"]',
+            } for u, m, v in pages])
+            s.commit()
+
+    def test_co_cited_pages_are_separated_from_ours_not_dropped(self):
+        # Both arrive in one paid top_pages response. `topPages` is what the "Your Most-Cited
+        # Pages" card reads, so a competitor's URL must never appear in it — but the co-cited
+        # rows are real data the project paid for and are returned in their own list.
+        self._seed([("fusehealth.com", "you", "google", 10, 100),
+                    ("x.com", "competitor", "google", 10, 100)])
+        self._seed_pages([
+            ("https://fusehealth.com/locations/dallas", 36, 1627),
+            ("https://www.perfectb.com/peptides", 20, 900),
+            ("https://blog.fusehealth.com/iv-drip", 8, 200),
+            ("https://notfusehealth.com/copycat", 5, 50),
+        ])
+        block = build_visibility_block(SITE)
+        self.assertEqual([p["url"] for p in block["topPages"]],
+                         ["https://fusehealth.com/locations/dallas",
+                          "https://blog.fusehealth.com/iv-drip"])
+        self.assertEqual([p["url"] for p in block["coCitedPages"]],
+                         ["https://www.perfectb.com/peptides",
+                          "https://notfusehealth.com/copycat"])
+        # The KPI is labelled "of your URLs used as sources" — co-cited pages are not ours.
+        self.assertEqual(block["cited_pages"], 2)
+
+    def test_our_own_www_pages_are_ours(self):
+        # `www.x.com` and `x.com` are one site here (skills.md §3). Comparing hosts strictly
+        # filed our own www-served pages under a competitor's list.
+        self._seed([("fusehealth.com", "you", "google", 10, 100),
+                    ("x.com", "competitor", "google", 10, 100)])
+        self._seed_pages([("https://www.fusehealth.com/pricing", 12, 300)])
+        block = build_visibility_block(SITE)
+        self.assertEqual([p["url"] for p in block["topPages"]],
+                         ["https://www.fusehealth.com/pricing"])
+        self.assertEqual(block["coCitedPages"], [])
+
+    def test_each_cited_page_carries_the_host_it_is_on(self):
+        # The co-cited list has to say WHOSE page it is, and the SPA does not parse URLs.
+        self._seed([("fusehealth.com", "you", "google", 10, 100),
+                    ("x.com", "competitor", "google", 10, 100)])
+        self._seed_pages([("https://www.perfectb.com/peptides", 20, 900)])
+        block = build_visibility_block(SITE)
+        self.assertEqual(block["coCitedPages"][0]["domain"], "www.perfectb.com")
+
+    def test_a_setup_block_carries_an_empty_co_cited_list(self):
+        block = build_visibility_block(SITE)
+        self.assertEqual(block["coCitedPages"], [])
+
     def test_no_cited_pages_is_an_empty_list_not_an_error(self):
         self._seed([("fusehealth.com", "you", "google", 1, 50),
                     ("x.com", "competitor", "google", 10, 100)])

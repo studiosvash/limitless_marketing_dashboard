@@ -206,8 +206,17 @@ class PingView(APIView):
 @method_decorator(login_not_required, name="dispatch")
 class ProjectListCreateView(APIView):
     def get(self, request):
+        # `range` is optional and defaults to 28d, so an old client (or any caller that just
+        # wants the project list) is unaffected. It exists because the Visibility column in the
+        # projects list and the "Your visibility" figure in a project's own Overview are the
+        # same score over the same rows — but the list used to hardcode a 28-day window while
+        # ProjectPositionsView honours the range selector. Pick 7d or 90d and the two screens
+        # printed different percentages for one project, with nothing on either to say why.
+        # Unknown values fall through to 28d in range_to_period_dates, same as every other view.
+        range_key = (request.query_params.get("range") or "28d").strip() or "28d"
         sites = list_sites(active_only=True)
-        return Response(ProjectSerializer(sites, many=True).data)
+        return Response(ProjectSerializer(sites, many=True,
+                                          context={"range": range_key}).data)
 
     def post(self, request):
         payload = ProjectCreateSerializer(data=request.data)

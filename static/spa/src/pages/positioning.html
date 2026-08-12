@@ -415,15 +415,17 @@
               <sc-if value="{{ ptOv.noHistory }}" hint-placeholder-val="{{ true }}">
               <div style="padding: 44px 20px; text-align: center;">
                 <div style="{{ ptOv.emptyTitleStyle }}">No visibility history yet</div>
-                <div style="{{ ptOv.emptyBodyStyle }}">A trend line needs at least two saved visibility snapshots and none are stored yet. The scores above are today's reading, taken from the current SERP positions; history starts accumulating from now, and the chart appears once there is a second point to plot.</div>
+                <div style="{{ ptOv.emptyBodyStyle }}">A trend line needs two different capture dates and this project has only been measured on one so far. The scores above are that reading. The next refresh adds a second point and the chart appears — nothing here is backfilled or estimated.</div>
               </div>
               </sc-if>
-              <!-- Dormant until a visibility-history source exists: ptOv.hasHistory is
-                   false and ptOv.chart.series is empty, so this SVG never renders today.
-                   It is kept, not deleted, as the target shape — a series item is
-                   { color, points, dotX, dotY }. Do not populate it from anything but a
-                   real stored history. -->
+              <!-- Fed by ptOv.chart, built in positioning.js::buildHistoryChart from the
+                   API's `visibility_history` — one point per date the project was actually
+                   measured on. A series item is { color, points, dotX, dotY }; the axis
+                   labels in ptOv.chart.grid are computed from the data's own range, not
+                   fixed at 0-80. Do not populate it from anything but real stored captures. -->
               <sc-if value="{{ ptOv.hasHistory }}" hint-placeholder-val="{{ false }}">
+              <h3 style="font-size: 13px; font-weight: 600; margin: 14px 0 2px; color: #334155;">Visibility index over time</h3>
+              <p style="font-size: 11px; color: #94a3b8; margin: 0 0 8px;">The "index" figure under each share above, plotted per capture date. Not the share — a share always totals 100% and cannot show the whole field rising or falling.</p>
               <svg viewBox="{{ ptOv.chart.viewBox }}" style="width: 100%; height: auto; display: block; overflow: visible;">
                 <sc-for list="{{ ptOv.chart.grid }}" as="g" hint-placeholder-count="6">
                   <line x1="{{ ptOv.chart.lineX1 }}" x2="{{ ptOv.chart.lineX2 }}" y1="{{ g.y }}" y2="{{ g.y }}" stroke="#eef2f6" stroke-width="1" vector-effect="non-scaling-stroke"></line>

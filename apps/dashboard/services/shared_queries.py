@@ -317,6 +317,168 @@ def _get_ranking_distribution(site_id: str, curr_start: date, curr_end: date,
                 "avg_position": 0, "total_clicks": 0, "total_impressions": 0, "visibility": None,
                 "top3_pct": 0, "top4_10_pct": 0, "top11_20_pct": 0, "rest_pct": 0}
 
+
+def _get_visibility_history(site_id: str, curr_start: date, curr_end: date,
+                            location: str | None = None, site_pk: int | None = None,
+                            own_domain: str | None = None) -> dict:
+    """The Overview visibility trend: one visibility index per CAPTURE DATE, per domain.
+
+    WHY THIS IS DERIVED AND NOT SNAPSHOTTED. `competitor_visibility` exists as a table and has
+    never had a single writer — `upsert_competitor_visibility` has no call site anywhere in the
+    pipeline — which is why the Overview chart has shown "No visibility history yet" on every
+    project since it shipped. The fix is not to start a snapshot log (which would leave the
+    chart empty for another two syncs, and whose unique key `(date, site_id, competitor_domain)`
+    carries no `location`, so the six Premierstaff city projects would overwrite each other's
+    history the way `keyword_rankings` used to overwrite their positions). The history is
+    ALREADY IN THE DATABASE: `keyword_rankings` and `competitor_keyword_rankings` are both keyed
+    per date and accumulate a row per capture, so every date ever measured can be scored now,
+    retroactively, from real stored measurements.
+
+    Each point is `_get_ranking_distribution`'s own visibility computed over a ONE-DAY window —
+    same CTR curve, same `_position_credit`, same "every tracked keyword stays in the
+    denominator" rule. That is deliberate: the last point of the line and the headline
+    "Your visibility" figure are then the same function of the same rows and cannot disagree.
+
+    Competitor lines are the same index over `competitor_keyword_rankings`, which is what the
+    share-of-voice cards already print as their "index N" sub-line — so the chart is those
+    cards over time, not a fourth definition of visibility.
+
+    A domain with no capture on a date gets `None` at that index rather than a 0: nobody
+    measured it that day, and drawing that as "ranks nowhere" would invent a cliff. Callers
+    draw the line straight through the gap to the next real reading.
+
+    `location` scopes the measurements, `site_pk` the tracked keyword list — both for the same
+    reason as `_get_ranking_distribution`.
+    """
+    empty = {"dates": [], "series": [], "tracked_total": 0}
+    try:
+        from pipeline.utils.keywords import load_tracked_keywords
+        tracked_kws = load_tracked_keywords(site_id, location=location, site_pk=site_pk)
+        if not tracked_kws:
+            return empty
+
+        tracked_lower = [k.lower() for k in tracked_kws]
+        total = len(tracked_kws)
+
+        from pipeline.db.schema import ensure_ranking_location_columns, ensure_ranking_location_keys
+        with get_session() as session:
+            ensure_ranking_location_columns(session)
+            ensure_ranking_location_keys(session)
+            from pipeline.db.writer import ensure_tables
+            ensure_tables(session, CompetitorKeywordRanking)
+
+            own_rows = session.execute(
+                select(
+                    KeywordRanking.date,
+                    func.avg(KeywordRanking.position).label("pos"),
+                )
+                .where(
+                    _site_clause(KeywordRanking, site_id),
+                    KeywordRanking.date >= curr_start,
+                    KeywordRanking.date <= curr_end,
+                    func.lower(KeywordRanking.keyword).in_(tracked_lower),
+                    *_location_clause(KeywordRanking, location),
+                )
+                .group_by(KeywordRanking.date, KeywordRanking.keyword)
+            ).all()
+
+            comp_rows = session.execute(
+                select(
+                    CompetitorKeywordRanking.date,
+                    CompetitorKeywordRanking.competitor_domain,
+                    func.avg(CompetitorKeywordRanking.position).label("pos"),
+                )
+                .where(
+                    _site_clause(CompetitorKeywordRanking, site_id),
+                    CompetitorKeywordRanking.date >= curr_start,
+                    CompetitorKeywordRanking.date <= curr_end,
+                    func.lower(CompetitorKeywordRanking.keyword).in_(tracked_lower),
+                    *_location_clause(CompetitorKeywordRanking, location),
+                )
+                .group_by(CompetitorKeywordRanking.date,
+                          CompetitorKeywordRanking.competitor_domain,
+                          CompetitorKeywordRanking.keyword)
+            ).all()
+
+        # domain -> {date: earned CTR points}, and domain -> {date: keywords measured}. Your
+        # own domain is keyed by the label the caller renders it under so the series and the
+        # legend name the same thing.
+        own_key = (own_domain or site_id or "").strip() or site_id
+        earned: dict[str, dict] = {}
+        measured: dict[str, dict] = {}
+
+        def _add(dom, day, pos):
+            earned.setdefault(dom, {})
+            measured.setdefault(dom, {})
+            earned[dom][day] = earned[dom].get(day, 0.0) + _position_credit(pos)
+            measured[dom][day] = measured[dom].get(day, 0) + 1
+
+        for r in own_rows:
+            _add(own_key, r.date, r.pos)
+        for r in comp_rows:
+            _add(r.competitor_domain, r.date, r.pos)
+
+        # THE DENOMINATOR IS FIXED ACROSS DATES, and partial captures are dropped rather than
+        # plotted. Both halves are needed and features.md §"multi-series visibility line chart"
+        # names the trap:
+        #
+        #   * A denominator of "whatever was captured that day" makes the line move when the
+        #     KEYWORD SET moves, not when the rankings do — it would report sync coverage as
+        #     performance. So every point divides by the full tracked list (`perfect`), exactly
+        #     as `_get_ranking_distribution` does.
+        #   * But a fixed denominator turns an INCREMENTAL capture into a cliff. The
+        #     `positions_new` sync scope deliberately measures only keywords never measured
+        #     before, so it writes a date holding a handful of rows out of a 45-keyword list;
+        #     scored against the full board that date plots near zero, and the chart would show
+        #     a crash caused by a user pressing "Track These New Keywords".
+        #
+        # A date therefore only carries a point for a domain when that date's capture covers a
+        # comparable share of the keywords the domain's best capture in this window covered.
+        # The threshold is loose on purpose: it has to pass ordinary drift (keywords added or
+        # removed between two full syncs) and fail an incremental run, and those differ by an
+        # order of magnitude, not by a few percent.
+        MIN_COVERAGE = 0.6
+
+        plotted: dict[str, dict] = {}
+        for dom, per_date in earned.items():
+            peak = max(measured[dom].values())
+            plotted[dom] = {d: v for d, v in per_date.items()
+                            if measured[dom][d] >= peak * MIN_COVERAGE}
+
+        dates = sorted({d for per_date in plotted.values() for d in per_date})
+        if not dates:
+            return {"dates": [], "series": [], "tracked_total": total}
+
+        perfect = total * _PERFECT_CTR
+        series = []
+        for dom, per_date in plotted.items():
+            points = [round(per_date[d] / perfect * 100, 1) if d in per_date else None
+                      for d in dates]
+            if all(p is None for p in points):
+                continue
+            series.append({
+                "domain": dom,
+                "own": dom == own_key,
+                "points": points,
+                # How many keywords stood behind each point, so a reader (or a future tooltip)
+                # can check a dip against its coverage instead of trusting the line.
+                "measured": [measured[dom].get(d) if d in per_date else None for d in dates],
+            })
+        # Your own line first, then strongest latest reading down — the same reading order the
+        # cards are sorted into, so the legend and the chart agree.
+        series.sort(key=lambda s: (not s["own"],
+                                   -max((p for p in s["points"] if p is not None), default=-1)))
+
+        return {
+            "dates": [d.isoformat() for d in dates],
+            "series": series,
+            "tracked_total": total,
+        }
+    except Exception as e:
+        logger.error(f"_get_visibility_history error: {e}", exc_info=True)
+        return empty
+
+
 def _get_position_changes(site_id: str, curr_start: date, curr_end: date, prev_start: date,
                           prev_end: date, location: str | None = None,
                           site_pk: int | None = None) -> dict:

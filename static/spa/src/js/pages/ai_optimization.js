@@ -180,13 +180,97 @@
         const sub2 = s.aiSub;
         const goSub = v => { this.setState({ aiSub: v }); this.pushNav({ aiSub: v }); };
         const subBase2 = { padding: '10px 16px', fontSize: '13px', fontWeight: 600, cursor: 'pointer', color: '#64748b', borderBottom: '2px solid transparent', marginBottom: '-1px' };
-        aiv.subTabs = [['visibility', 'AI Visibility'], ['prompts', 'Prompts (' + prompts.length + ')'], ['aikw', 'AI Keywords (' + d.aiKeywords.length + ')'], ['inspector', 'Answer Inspector'], ['history', 'History (' + d.history.length + ')']].map(t => ({
+        /* Every cited page in the latest weekly snapshot — ours and the co-cited ones from
+           other domains. Both lists come out of ONE paid top_pages response; the co-cited half
+           used to be discarded before it was ever stored, which is why the card on the
+           Visibility tab showed four rows out of a response that carried ten. */
+        const ourPages = d.topPages || [];
+        const coPages = d.coCitedPages || [];
+        aiv.subTabs = [['visibility', 'AI Visibility'], ['prompts', 'Prompts (' + prompts.length + ')'], ['pages', 'Cited Pages (' + (ourPages.length + coPages.length) + ')'], ['aikw', 'AI Keywords (' + d.aiKeywords.length + ')'], ['inspector', 'Answer Inspector'], ['history', 'History (' + d.history.length + ')']].map(t => ({
           label: t[1],
           style: sub2 === t[0] ? Object.assign({}, subBase2, { color: '#4f46e5', borderBottom: '2px solid #4f46e5' }) : subBase2,
           click: () => goSub(t[0])
         }));
         aiv.showVisibility = sub2 === 'visibility'; aiv.showPrompts = sub2 === 'prompts';
+        aiv.showPages = sub2 === 'pages';
         aiv.showAikw = sub2 === 'aikw'; aiv.showInspector = sub2 === 'inspector'; aiv.showHistory = sub2 === 'history';
+
+        /* ---------- CITED PAGES (full list: sub-tab + fullscreen overlay) ----------
+           Built on EVERY render of the main view, not only under `sub2 === 'pages'`, because
+           the overlay opens from the Visibility tab's card — a block built only for its own
+           sub-tab would render an empty overlay from anywhere else. At most 100 rows exist
+           (TOP_PAGES_LIMIT), so this costs nothing to build. */
+        const PG_PREVIEW = 25;   // rows before "Load all" — the same list, not a second fetch
+        const pgTab = s.aiPgTab === 'others' ? 'others' : 'ours';
+        aiv.pgOursTab = pgTab === 'ours';
+        aiv.pgOthersTab = pgTab === 'others';
+        const pgSource = pgTab === 'others' ? coPages : ourPages;
+        /* Two pure helpers rather than inline expressions, because both are pinned by
+           static/spa/tests/ai_cited_pages.test.js. The filter matches URL *or* host: on the
+           co-cited tab "who else is cited?" is asked by typing a domain. */
+        const pgFilter = (rows, q) => {
+          const needle = String(q || '').trim().toLowerCase();
+          if (!needle) return rows;
+          return rows.filter(p =>
+            String(p.url || '').toLowerCase().indexOf(needle) !== -1
+            || String(p.domain || '').toLowerCase().indexOf(needle) !== -1);
+        };
+        /* "Load all" renders rows that are ALREADY in the cached response — it is not a fetch
+           and it costs nothing. The whole week is at most 100 rows (TOP_PAGES_LIMIT). */
+        const pgPage = (rows, all, preview) => { return all ? rows : rows.slice(0, preview); };
+        const pgFiltered = pgFilter(pgSource, s.aiPgQ);
+        const pgVisible = pgPage(pgFiltered, !!s.aiPgAll, PG_PREVIEW);
+        const pgTabBase = { padding: '8px 14px', fontSize: '12.5px', fontWeight: 600, cursor: 'pointer', borderRadius: '999px', border: '1px solid #e2e8f0', background: 'white', color: '#64748b' };
+        const pgTabOn = Object.assign({}, pgTabBase, { borderColor: '#4f46e5', color: '#4f46e5', background: '#eef2ff' });
+        const pgPick = v => this.setState({ aiPgTab: v, aiPgAll: false });
+        aiv.pgTabs = [
+          { label: 'Your pages (' + ourPages.length + ')', style: pgTab === 'ours' ? pgTabOn : pgTabBase, click: () => pgPick('ours') },
+          { label: 'Other cited pages (' + coPages.length + ')', style: pgTab === 'others' ? pgTabOn : pgTabBase, click: () => pgPick('others') }
+        ];
+        aiv.pgRows = pgVisible.map((p, i2) => ({
+          rank: i2 + 1,
+          url: p.url,
+          /* The co-cited list is a list of OTHER people's pages, so whose page it is has to be
+             on screen; on our own tab the host is the same on every row and would be noise. */
+          domain: pgTab === 'others' ? (p.domain || '') : '',
+          showDomain: pgTab === 'others',
+          mentions: p.mentions,
+          imprFmt: this.fmt(p.impressions),
+          platforms: (p.platforms || []).join(' · ') || '—',
+          rowStyle: { display: 'grid', gridTemplateColumns: '38px 1fr 90px 110px', gap: '10px', alignItems: 'center', padding: '11px 20px', borderTop: '1px solid #f1f5f9' }
+        }));
+        aiv.pgCount = pgFiltered.length;
+        const pgSearching = !!(s.aiPgQ || '').trim();
+        aiv.pgShowing = 'Showing ' + pgVisible.length + ' of ' + pgFiltered.length
+          + (pgSearching ? ' matching rows' : ' rows');
+        aiv.pgHasMore = pgFiltered.length > pgVisible.length;
+        aiv.pgLoadAllLabel = 'Load all ' + pgFiltered.length + ' rows';
+        aiv.pgLoadAll = () => this.setState({ aiPgAll: true });
+        aiv.pgQ = s.aiPgQ;
+        aiv.pgSet = e => this.setState({ aiPgQ: e.target.value, aiPgAll: false });
+        /* Four distinct empties, and they are four different facts — never one blank table.
+           `sc-if` reads a value, so each one is its own flag rather than a negation. */
+        aiv.pgNoSnapshot = d.visibilityState === 'setup';
+        aiv.pgEmptyTab = !aiv.pgNoSnapshot && pgSource.length === 0;
+        aiv.pgEmptyFiltered = !aiv.pgNoSnapshot && pgSource.length > 0 && pgFiltered.length === 0;
+        aiv.pgHasRows = pgFiltered.length > 0;
+        aiv.pgEmptyTabMsg = pgTab === 'others'
+          ? 'This week’s answers cited no pages outside your own site.'
+          : 'AI has not cited any of your pages yet.';
+        aiv.pgEmptyFilteredMsg = 'No page matches “' + (s.aiPgQ || '').trim() + '”.';
+        aiv.pgNoSnapshotMsg = 'No AI visibility data yet — press Refresh to take the first weekly snapshot.';
+        /* Says where the list comes from and where it stops, because "is this everything?" is
+           the question a truncated list always raises. 100 is the connector's TOP_PAGES_LIMIT. */
+        aiv.pgProvenance = 'From the latest weekly DataForSEO LLM Mentions snapshot — one '
+          + 'paid top_pages call per week, capped at 100 pages. "Other cited pages" are pages '
+          + 'on domains other than yours that AI cited in the same answers.';
+        aiv.pgTitle = 'Cited Pages';
+        aiv.pgOpen = !!s.aiPagesOpen;
+        aiv.pgOpenFull = () => this.setState({ aiPagesOpen: true });
+        aiv.pgCloseFull = () => this.setState({ aiPagesOpen: false });
+        /* Opening the full list from the card should never carry a stale filter/tab in with it,
+           and the sub-tab is the same block, so both entry points reset the same way. */
+        aiv.pgOpenOurs = () => this.setState({ aiPagesOpen: true, aiPgTab: 'ours', aiPgAll: false, aiPgQ: '' });
 
         /* targets card + edit modal */
         aiv.tgBrand = d.targets.brand;
@@ -402,10 +486,20 @@
           aiv.trendHasNote = !!trend.note;
           aiv.trendFrom = d.trend.length ? d.trend[0].date : '';
           aiv.trendTo = d.trend.length ? d.trend[d.trend.length - 1].date : '';
-          aiv.topPages = d.topPages.map(pg2 => ({
+          /* The card is a PREVIEW; the whole list lives on the Cited Pages tab and in the
+             fullscreen overlay this card opens. It used to render every stored row, which was
+             fine only because the connector was storing four of them. */
+          const CARD_PAGES = 5;
+          aiv.topPages = d.topPages.slice(0, CARD_PAGES).map(pg2 => ({
             url: pg2.url, mentions: pg2.mentions, imprFmt: this.fmt(pg2.impressions),
-            platforms: pg2.platforms.join(' · ') || '—'
+            platforms: (pg2.platforms || []).join(' · ') || '—'
           }));
+          aiv.topPagesMore = d.topPages.length > CARD_PAGES;
+          /* With no pages of our own the link still leads somewhere real — the co-cited list
+             can be full while this one is empty, and "View all 0" would say otherwise. */
+          aiv.topPagesAllLabel = d.topPages.length
+            ? 'View all ' + d.topPages.length + ' →'
+            : 'Open cited pages →';
           // Same -Infinity-is-truthy trap as maxSov above.
           const maxShare = d.topDomains.length ? (Math.max.apply(null, d.topDomains.map(dm => dm.share)) || 1) : 1;
           aiv.topDomains = d.topDomains.map((dm, i2) => ({

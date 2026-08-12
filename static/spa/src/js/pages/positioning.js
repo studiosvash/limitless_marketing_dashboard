@@ -189,7 +189,7 @@
              fetched at boot and after create/delete — so without this the switcher and the
              list kept showing the pre-edit values for the rest of the session while the
              workspace showed the new ones. */
-          window.FuseAPI.get('/api/projects').then(ps => { if (this._alive) this.setState({ projects: ps }); }).catch(() => {});
+          this.reloadProjects();
           this.startSync('positions');
           if (this.notify) this.notify('Project updated. Refreshing positions...');
         });
@@ -303,7 +303,7 @@
                  mutation. The create already succeeded and the user has already been told;
                  a second toast contradicting that to report a stale switcher count would be
                  worse than the stale count, which the next render fixes anyway. */
-              window.FuseAPI.get('/api/projects').then(ps => { if (this._alive) this.setState({ projects: ps }); }).catch(() => {});
+              this.reloadProjects();
               this.fetchTab('positioning', p.id, this.state.range, true);
               if (this.notify) this.notify('SEO project created for ' + p.domain);
             }
@@ -504,7 +504,7 @@
                 /* Silent on purpose: a post-success re-read of the project switcher, not a
                    mutation. The delete already succeeded; a failure toast here would
                    contradict it to report nothing worse than a stale list. */
-                window.FuseAPI.get('/api/projects').then(ps => { if (this._alive) this.setState({ projects: ps }); }).catch(() => {});
+                this.reloadProjects();
               }).catch(err => { if (this._alive && this.notify) this.notify(this.errText(err, 'Could not delete project')); });
             }
           },
@@ -1001,6 +1001,95 @@
           rawVal: d.sov != null ? d.sov : (d.visScore != null ? 0 : null)
         }));
         const hiddenOv = s.ptOvHidden || [];
+
+        /* THE VISIBILITY TREND, from `data.visibility_history` — one point per date the
+           project was actually measured on, per domain, computed server-side by
+           `_get_visibility_history` as the same CTR-curve index the cards print under each
+           share ("index 3.6"). The chart is therefore those cards over time.
+
+           This used to be `hasHistory: false` with an empty `series`, hardcoded, so the SVG
+           below could never render whatever the database held — the "No visibility history
+           yet" empty state was the ONLY reachable state of this card. (Before that it was
+           Math.random(), which re-rolled the "trend" on every keystroke.) Neither the API nor
+           the pipeline had a history source at all: `competitor_visibility` is a table with no
+           writer. The series now comes from the per-date ranking rows that were being stored
+           the whole time.
+
+           Geometry matches the SVG in positioning.html: plot area x 50..700, y 30 (top) to
+           180 (bottom), viewBox 0 0 720 210.
+           A null point is a date that domain was not measured on — the line is drawn straight
+           through to its next real reading rather than dropping to 0, which would invent a
+           cliff nobody measured. */
+        const buildHistoryChart = (hist, hidden, colorOf) => {
+          const X1 = 50, X2 = 700, YTOP = 30, YBOT = 180;
+          const blank = {
+            viewBox: '0 0 720 210', lineX1: X1, lineX2: X2, labelX: 42, xLabelY: 200,
+            grid: [{ y: 30, label: '80' }, { y: 68, label: '60' }, { y: 105, label: '40' },
+                   { y: 143, label: '20' }, { y: 180, label: '0' }],
+            xTicks: [], series: []
+          };
+          const dates = (hist && hist.dates) || [];
+          const rawSeries = ((hist && hist.series) || []).filter(sr => !hidden.includes(sr.domain));
+          /* Two DISTINCT dates is the bar, not two rows: one capture date cannot be a trend,
+             and a polyline of a single point renders as nothing anyway. */
+          if (dates.length < 2 || !rawSeries.length) return { chart: blank, hasHistory: false };
+
+          let peak = 0;
+          rawSeries.forEach(sr => (sr.points || []).forEach(p => { if (p != null && p > peak) peak = p; }));
+          /* Round the axis up to a readable ceiling instead of pinning it at 80: these indices
+             are routinely under 5 ("index 3.6" in the cards), and a 0-80 axis flattens every
+             real movement into the bottom pixel of the plot. */
+          const NICE = [1, 2, 5, 10, 20, 40, 60, 80, 100];
+          const top = NICE.find(n => n >= peak * 1.15) || 100;
+          const yOf = v => YBOT - (v / top) * (YBOT - YTOP);
+          const xOf = i => dates.length === 1 ? X1 : X1 + (i / (dates.length - 1)) * (X2 - X1);
+
+          const fmtDate = iso => {
+            const parts = String(iso).split('-');
+            if (parts.length !== 3) return iso;
+            const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+            return MON[parseInt(parts[1], 10) - 1] + ' ' + parseInt(parts[2], 10);
+          };
+          /* At most six labels, always including the first and last date, so a 90-day window
+             does not overprint its own axis. */
+          const step = Math.max(1, Math.ceil(dates.length / 6));
+          const tickIdx = [];
+          for (let i = 0; i < dates.length; i += step) tickIdx.push(i);
+          if (tickIdx[tickIdx.length - 1] !== dates.length - 1) tickIdx.push(dates.length - 1);
+
+          const series = rawSeries.map(sr => {
+            const pts = [];
+            (sr.points || []).forEach((p, i) => {
+              if (p != null) pts.push(xOf(i).toFixed(1) + ',' + yOf(p).toFixed(1));
+            });
+            const last = pts.length ? pts[pts.length - 1].split(',') : null;
+            return {
+              color: colorOf(sr.domain),
+              points: pts.join(' '),
+              dotX: last ? last[0] : 0,
+              dotY: last ? last[1] : 0
+            };
+          }).filter(sr => sr.points);
+          if (!series.length) return { chart: blank, hasHistory: false };
+
+          const grid = [0, 1, 2, 3, 4].map(k => {
+            const v = top - (top / 4) * k;
+            return { y: Math.round(yOf(v)), label: String(parseFloat(v.toFixed(1))) };
+          });
+          return {
+            hasHistory: true,
+            chart: {
+              viewBox: '0 0 720 210', lineX1: X1, lineX2: X2, labelX: 42, xLabelY: 200,
+              grid: grid,
+              xTicks: tickIdx.map(i => ({ x: Math.round(xOf(i)), label: fmtDate(dates[i]) })),
+              series: series
+            }
+          };
+        };
+        const ovHistory = buildHistoryChart(
+          data.visibility_history, hiddenOv,
+          dom => colors[Math.max(allDomains.indexOf(dom), 0) % colors.length]
+        );
         /* YOUR VISIBILITY IS THE SERVER'S NUMBER, NOT A SECOND OPINION.
            `data.kpis.visibility` is `_get_ranking_distribution`'s CTR-credit score over the
            requested window — the same field, from the same function, that the projects list
@@ -1048,24 +1137,15 @@
               }
             };
           }),
-          /* A trend line needs visibility HISTORY, and nothing in the pipeline stores a
-             visibility snapshot per date — there is no table, no API field, no series.
-             The old code manufactured six points per domain from a random number
-             generator, which re-rolled on every render, so the "trend" visibly changed
-             whenever the user touched anything. The chart now renders an honest empty
-             state; the SVG and its geometry stay behind `hasHistory` so it lights up
-             unchanged the day a real series exists. `xTicks` starts empty because the
-             Feb–Jul month labels were invented too. */
-          hasHistory: false,
-          noHistory: true,
+          /* Built from `data.visibility_history` — see buildHistoryChart above. The empty
+             state is still reachable and still honest: a project measured on exactly one
+             date has no trend to draw, and says so. What changed is that it is now an
+             OUTCOME of the data rather than a hardcoded `false`. */
+          hasHistory: ovHistory.hasHistory,
+          noHistory: !ovHistory.hasHistory,
           emptyTitleStyle: { fontSize: '15px', fontWeight: 600, color: '#0f172a', marginBottom: '6px' },
           emptyBodyStyle: { fontSize: '13px', color: '#64748b', maxWidth: '420px', margin: '0 auto', lineHeight: 1.5 },
-          chart: {
-            viewBox: '0 0 720 210', lineX1: 50, lineX2: 700, labelX: 42, xLabelY: 200,
-            grid: [{ y: 30, label: '80' }, { y: 68, label: '60' }, { y: 105, label: '40' }, { y: 143, label: '20' }, { y: 180, label: '0' }],
-            xTicks: [],
-            series: []
-          },
+          chart: ovHistory.chart,
           domains: allDomains.filter(d => !hiddenOv.includes(d)).map(d => ({ name: d, style: { textAlign: 'center', color: d === vals.ptWs.domain ? '#4338ca' : '#64748b', fontSize: '9.5px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } })),
           gridCols: 'minmax(180px, 1.4fr) 90px 88px repeat(' + allDomains.filter(d => !hiddenOv.includes(d)).length + ', 1fr)',
           /* Same grid shape as `rows` below (Keyword/Volume/KD%/one column per domain), for

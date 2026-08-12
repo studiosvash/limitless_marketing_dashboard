@@ -286,7 +286,13 @@
 
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
               <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
-                <div style="padding: 14px 20px; border-bottom: 1px solid #f1f5f9;"><h2 style="font-size: 14px; font-weight: 600; margin: 0;">Your Most-Cited Pages</h2></div>
+                <!-- The header opens the full list. The card is a PREVIEW of the top 5: the
+                     whole weekly snapshot (yours + the co-cited pages on other domains) lives
+                     in the fullscreen overlay and on the Cited Pages tab. -->
+                <div onClick="{{ aiv.pgOpenOurs }}" title="Open the full list of cited pages" style="display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 14px 20px; border-bottom: 1px solid #f1f5f9; cursor: pointer;" style-hover="background:#f8fafc">
+                  <h2 style="font-size: 14px; font-weight: 600; margin: 0;">Your Most-Cited Pages</h2>
+                  <span style="font-size: 12px; font-weight: 600; color: #4f46e5; white-space: nowrap;">{{ aiv.topPagesAllLabel }}</span>
+                </div>
                 <!-- Never synced: same explained-empty idiom as the SoV card, not a bare table. -->
                 <sc-if value="{{ aiv.visSetup }}" hint-placeholder-val="{{ false }}">
                   <div style="padding: 32px 20px; text-align: center;">
@@ -304,8 +310,8 @@
                 <div style="display: grid; grid-template-columns: 1fr 70px 90px; gap: 8px; padding: 8px 20px; font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8; border-bottom: 1px solid #f8fafc;">
                   <span>Page</span><span style="text-align: right;">Mentions</span><span style="text-align: right;">AI Impr.</span>
                 </div>
-                <sc-for list="{{ aiv.topPages }}" as="p" hint-placeholder-count="6">
-                  <div style="display: grid; grid-template-columns: 1fr 70px 90px; gap: 8px; align-items: center; padding: 11px 20px; border-top: 1px solid #f8fafc;">
+                <sc-for list="{{ aiv.topPages }}" as="p" hint-placeholder-count="5">
+                  <div onClick="{{ aiv.pgOpenOurs }}" title="Open the full list of cited pages" style="display: grid; grid-template-columns: 1fr 70px 90px; gap: 8px; align-items: center; padding: 11px 20px; border-top: 1px solid #f8fafc; cursor: pointer;" style-hover="background:#f8fafc">
                     <div style="min-width: 0;">
                       <div style="font-size: 13px; font-weight: 500; color: #334155; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">{{ p.url }}</div>
                       <div style="font-size: 11px; color: #94a3b8; margin-top: 2px;">{{ p.platforms }}</div>
@@ -314,6 +320,9 @@
                     <span style="font-size: 13px; color: #64748b; text-align: right;">{{ p.imprFmt }}</span>
                   </div>
                 </sc-for>
+                <sc-if value="{{ aiv.topPagesMore }}" hint-placeholder-val="{{ true }}">
+                  <div onClick="{{ aiv.pgOpenOurs }}" style="padding: 11px 20px; border-top: 1px solid #f1f5f9; text-align: center; font-size: 12.5px; font-weight: 600; color: #4f46e5; cursor: pointer;" style-hover="background:#f8fafc">{{ aiv.topPagesAllLabel }}</div>
+                </sc-if>
                 </sc-if>
                 </sc-if>
               </div>
@@ -338,6 +347,62 @@
                   </sc-for>
                 </div>
               </div>
+            </div>
+          </sc-if>
+
+          <!-- ===== CITED PAGES =====
+               The full weekly top_pages snapshot, both halves of it. "Your pages" is what the
+               Visibility card previews; "Other cited pages" are the co-cited URLs on other
+               domains that arrive in the same paid response and used to be discarded before
+               they were ever stored. Same view model as the fullscreen overlay below. -->
+          <sc-if value="{{ aiv.showPages }}" hint-placeholder-val="{{ false }}">
+            <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); overflow: hidden;">
+              <div style="padding: 16px 20px; border-bottom: 1px solid #f1f5f9;">
+                <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;">
+                  <h2 style="font-size: 15px; font-weight: 600; margin: 0;">{{ aiv.pgTitle }}</h2>
+                  <input value="{{ aiv.pgQ }}" onChange="{{ aiv.pgSet }}" placeholder="Filter by URL or domain" style="padding: 8px 12px; font-size: 12.5px; border: 1px solid #cbd5e1; border-radius: 8px; background: white; color: #0f172a; min-width: 260px;" />
+                </div>
+                <p style="font-size: 11.5px; color: #94a3b8; margin: 8px 0 0; line-height: 1.5;">{{ aiv.pgProvenance }}</p>
+                <div style="display: flex; gap: 8px; margin-top: 12px;">
+                  <sc-for list="{{ aiv.pgTabs }}" as="t" hint-placeholder-count="2">
+                    <div onClick="{{ t.click }}" style="{{ t.style }}">{{ t.label }}</div>
+                  </sc-for>
+                </div>
+              </div>
+              <sc-if value="{{ aiv.pgNoSnapshot }}" hint-placeholder-val="{{ false }}">
+                <div style="padding: 40px 20px; text-align: center;">
+                  <p style="font-size: 14px; font-weight: 600; color: #334155; margin: 0;">Not measured yet</p>
+                  <p style="font-size: 13px; color: #94a3b8; margin: 6px 0 0;">{{ aiv.pgNoSnapshotMsg }}</p>
+                </div>
+              </sc-if>
+              <sc-if value="{{ aiv.pgEmptyTab }}" hint-placeholder-val="{{ false }}">
+                <div style="padding: 40px 20px; text-align: center;"><p style="font-size: 13px; color: #94a3b8; margin: 0;">{{ aiv.pgEmptyTabMsg }}</p></div>
+              </sc-if>
+              <sc-if value="{{ aiv.pgEmptyFiltered }}" hint-placeholder-val="{{ false }}">
+                <div style="padding: 40px 20px; text-align: center;"><p style="font-size: 13px; color: #94a3b8; margin: 0;">{{ aiv.pgEmptyFilteredMsg }}</p></div>
+              </sc-if>
+              <sc-if value="{{ aiv.pgHasRows }}" hint-placeholder-val="{{ true }}">
+                <div style="display: grid; grid-template-columns: 38px 1fr 90px 110px; gap: 10px; padding: 9px 20px; font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8; border-bottom: 1px solid #f1f5f9;">
+                  <span>#</span><span>Page</span><span style="text-align: right;">Mentions</span><span style="text-align: right;">AI Impr.</span>
+                </div>
+                <sc-for list="{{ aiv.pgRows }}" as="r" hint-placeholder-count="12">
+                  <div style="{{ r.rowStyle }}">
+                    <span style="font-size: 11px; font-weight: 700; color: #94a3b8;">{{ r.rank }}</span>
+                    <div style="min-width: 0;">
+                      <a href="{{ r.url }}" target="_blank" rel="noopener" title="Open this page" style="display: block; font-size: 13px; font-weight: 500; color: #334155; text-decoration: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" style-hover="color:#4f46e5;text-decoration:underline">{{ r.url }}</a>
+                      <div style="font-size: 11px; color: #94a3b8; margin-top: 2px;"><sc-if value="{{ r.showDomain }}" hint-placeholder-val="{{ false }}"><span style="font-weight: 600; color: #64748b;">{{ r.domain }}</span> · </sc-if>{{ r.platforms }}</div>
+                    </div>
+                    <span style="font-size: 13px; font-weight: 700; color: #0f172a; text-align: right;">{{ r.mentions }}</span>
+                    <span style="font-size: 13px; color: #64748b; text-align: right;">{{ r.imprFmt }}</span>
+                  </div>
+                </sc-for>
+                <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 20px; border-top: 1px solid #f1f5f9;">
+                  <span style="font-size: 12px; color: #94a3b8;">{{ aiv.pgShowing }}</span>
+                  <sc-if value="{{ aiv.pgHasMore }}" hint-placeholder-val="{{ true }}">
+                    <div onClick="{{ aiv.pgLoadAll }}" style="cursor: pointer; padding: 8px 14px; font-size: 12.5px; font-weight: 600; color: #334155; border: 1px solid #cbd5e1; border-radius: 8px; background: white;" style-hover="background:#f8fafc">{{ aiv.pgLoadAllLabel }}</div>
+                  </sc-if>
+                </div>
+              </sc-if>
             </div>
           </sc-if>
 
@@ -665,6 +730,71 @@
                   <span style="font-size: 12px; color: #64748b; text-align: right;">{{ r.costFmt }}</span>
                 </div>
               </sc-for>
+            </div>
+          </sc-if>
+
+          <!-- ===== CITED PAGES — FULLSCREEN =====
+               Opened by the "Your Most-Cited Pages" card. Same view model as the Cited Pages
+               sub-tab above, so the two can never disagree; this one fills the viewport and
+               scrolls, because the point of opening it is to read the whole list. -->
+          <sc-if value="{{ aiv.pgOpen }}" hint-placeholder-val="{{ false }}">
+            <div style="position: fixed; inset: 0; background: rgba(15,23,42,0.55); z-index: 60; display: flex; align-items: stretch; justify-content: center; padding: 24px;">
+              <div style="background: white; border-radius: 14px; box-shadow: 0 20px 60px rgba(0,0,0,0.25); width: 100%; max-width: 1100px; display: flex; flex-direction: column; overflow: hidden;">
+                <div style="padding: 18px 24px; border-bottom: 1px solid #f1f5f9; flex-shrink: 0;">
+                  <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px;">
+                    <h2 style="font-size: 17px; font-weight: 700; margin: 0;">{{ aiv.pgTitle }}</h2>
+                    <span onClick="{{ aiv.pgCloseFull }}" title="Close" style="cursor: pointer; color: #94a3b8; font-size: 20px; font-weight: 700; line-height: 1;" style-hover="color:#0f172a">×</span>
+                  </div>
+                  <p style="font-size: 11.5px; color: #94a3b8; margin: 8px 0 0; line-height: 1.5; max-width: 760px;">{{ aiv.pgProvenance }}</p>
+                  <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-top: 14px;">
+                    <div style="display: flex; gap: 8px;">
+                      <sc-for list="{{ aiv.pgTabs }}" as="t" hint-placeholder-count="2">
+                        <div onClick="{{ t.click }}" style="{{ t.style }}">{{ t.label }}</div>
+                      </sc-for>
+                    </div>
+                    <input value="{{ aiv.pgQ }}" onChange="{{ aiv.pgSet }}" placeholder="Filter by URL or domain" style="padding: 8px 12px; font-size: 12.5px; border: 1px solid #cbd5e1; border-radius: 8px; background: white; color: #0f172a; min-width: 260px;" />
+                  </div>
+                </div>
+                <div style="flex: 1; overflow-y: auto; min-height: 0;">
+                  <sc-if value="{{ aiv.pgNoSnapshot }}" hint-placeholder-val="{{ false }}">
+                    <div style="padding: 56px 24px; text-align: center;">
+                      <p style="font-size: 14px; font-weight: 600; color: #334155; margin: 0;">Not measured yet</p>
+                      <p style="font-size: 13px; color: #94a3b8; margin: 6px 0 0;">{{ aiv.pgNoSnapshotMsg }}</p>
+                    </div>
+                  </sc-if>
+                  <sc-if value="{{ aiv.pgEmptyTab }}" hint-placeholder-val="{{ false }}">
+                    <div style="padding: 56px 24px; text-align: center;"><p style="font-size: 13px; color: #94a3b8; margin: 0;">{{ aiv.pgEmptyTabMsg }}</p></div>
+                  </sc-if>
+                  <sc-if value="{{ aiv.pgEmptyFiltered }}" hint-placeholder-val="{{ false }}">
+                    <div style="padding: 56px 24px; text-align: center;"><p style="font-size: 13px; color: #94a3b8; margin: 0;">{{ aiv.pgEmptyFilteredMsg }}</p></div>
+                  </sc-if>
+                  <sc-if value="{{ aiv.pgHasRows }}" hint-placeholder-val="{{ true }}">
+                    <div style="display: grid; grid-template-columns: 38px 1fr 90px 110px; gap: 10px; padding: 9px 24px; font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8; border-bottom: 1px solid #f1f5f9; position: sticky; top: 0; background: white; z-index: 1;">
+                      <span>#</span><span>Page</span><span style="text-align: right;">Mentions</span><span style="text-align: right;">AI Impr.</span>
+                    </div>
+                    <sc-for list="{{ aiv.pgRows }}" as="r" hint-placeholder-count="12">
+                      <div style="{{ r.rowStyle }}">
+                        <span style="font-size: 11px; font-weight: 700; color: #94a3b8;">{{ r.rank }}</span>
+                        <div style="min-width: 0;">
+                          <a href="{{ r.url }}" target="_blank" rel="noopener" title="Open this page" style="display: block; font-size: 13px; font-weight: 500; color: #334155; text-decoration: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" style-hover="color:#4f46e5;text-decoration:underline">{{ r.url }}</a>
+                          <div style="font-size: 11px; color: #94a3b8; margin-top: 2px;"><sc-if value="{{ r.showDomain }}" hint-placeholder-val="{{ false }}"><span style="font-weight: 600; color: #64748b;">{{ r.domain }}</span> · </sc-if>{{ r.platforms }}</div>
+                        </div>
+                        <span style="font-size: 13px; font-weight: 700; color: #0f172a; text-align: right;">{{ r.mentions }}</span>
+                        <span style="font-size: 13px; color: #64748b; text-align: right;">{{ r.imprFmt }}</span>
+                      </div>
+                    </sc-for>
+                  </sc-if>
+                </div>
+                <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 24px; border-top: 1px solid #f1f5f9; flex-shrink: 0;">
+                  <span style="font-size: 12px; color: #94a3b8;">{{ aiv.pgShowing }}</span>
+                  <div style="display: flex; align-items: center; gap: 10px;">
+                    <sc-if value="{{ aiv.pgHasMore }}" hint-placeholder-val="{{ true }}">
+                      <div onClick="{{ aiv.pgLoadAll }}" style="cursor: pointer; padding: 9px 16px; font-size: 12.5px; font-weight: 600; color: #334155; border: 1px solid #cbd5e1; border-radius: 8px; background: white;" style-hover="background:#f8fafc">{{ aiv.pgLoadAllLabel }}</div>
+                    </sc-if>
+                    <div onClick="{{ aiv.pgCloseFull }}" style="cursor: pointer; padding: 9px 18px; font-size: 12.5px; font-weight: 600; color: white; background: #4f46e5; border-radius: 8px;" style-hover="background:#4338ca">Close</div>
+                  </div>
+                </div>
+              </div>
             </div>
           </sc-if>
 

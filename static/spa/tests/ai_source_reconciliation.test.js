@@ -20,6 +20,10 @@
  * This pins the reconciliation line that states both facts in one sentence, so the two panels
  * stop contradicting each other on screen.
  */
+/* `describe`/`it` are NOT globals under `node --test` — without this require the whole
+   file threw ReferenceError before a single assertion ran, and a suite that collected
+   zero tests looks exactly like a suite that passed (skills.md §9). */
+const { describe, it } = require('node:test');
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');

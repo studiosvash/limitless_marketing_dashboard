@@ -733,11 +733,17 @@ class LLMMentionMetric(Base):
 
 
 class LLMCitedPage(Base):
-    """One of the project's own URLs that AI answers cited, in a given week.
+    """A URL that AI answers cited in a given week — ours or a co-cited one.
 
-    Only URLs on the project's own host are stored. The API's top_pages response also returns
-    co-occurring pages from OTHER domains (a call for driphydration.com returns perfectb.com
-    URLs), which would be wrong under a heading that says "Your Most-Cited Pages".
+    The API's top_pages response carries co-occurring pages from OTHER domains too (a call for
+    driphydration.com returns perfectb.com URLs). Those used to be dropped before storage,
+    because "Your Most-Cited Pages" means ours — but the heading is a READ concern, and
+    dropping at write time threw away rows the project had already been billed for. Both kinds
+    are stored now, up to `dataforseo_llm_mentions.TOP_PAGES_LIMIT` per week.
+
+    Ownership is not a column: `llm_mentions_service` decides it per row by comparing the URL's
+    host to the project's own, www-insensitively. A stored flag would go stale the moment a
+    project were re-registered under another spelling of its host.
     """
     __tablename__ = "llm_cited_pages"
 

@@ -19,6 +19,10 @@
  * `project_list_visibility.test.js` does it: read the source, pull the named helper out by
  * brace matching, and evaluate it in isolation.
  */
+/* `describe`/`it` are NOT globals under `node --test` — without this require the whole
+   file threw ReferenceError before a single assertion ran, and a suite that collected
+   zero tests looks exactly like a suite that passed (skills.md §9). */
+const { describe, it } = require('node:test');
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
