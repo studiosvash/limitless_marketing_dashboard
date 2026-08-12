@@ -31,7 +31,7 @@ from pipeline.db.schema import (
     CompetitorKeywordRanking, TrackedCompetitor, AIKeywordData,
     LLMCitedPage, LLMMentionMetric,
     SavedKeyword, BacklinksSnapshot,
-    AuditSnapshot, AdSearchTerm, GA4CampaignDaily, ConnectorCost,
+    AuditSnapshot, AdSearchTerm, GA4CampaignDaily, ConnectorCost, DomainLookup,
     PageCrawlMeta, ensure_page_speed_columns, ensure_backlink_url_from_key,
     ensure_ranking_location_columns, ensure_ranking_location_keys, DEFAULT_LOCATION,
     ensure_saved_keyword_project, UNOWNED_SITE_PK,
@@ -1145,6 +1145,56 @@ def upsert_page_crawl_meta(session: Session, records: list[dict], site_id: Optio
         total += len(batch)
     logger.debug(f"[writer] page_crawl_meta: upserted {total} rows")
     return total
+
+
+def upsert_domain_lookup(session: Session, records: list[dict]) -> int:
+    """Store looked-up Domain Overview blocks. Unique on (domain, path, location, block).
+
+    An upsert, unlike `insert_connector_cost` next door: a spend event is a fact that happened
+    and accumulates, but a lookup is the CURRENT answer for a target and a re-lookup replaces
+    it. Two rows for one key would just be an old answer waiting to be served.
+
+    `path` and `location` are coerced to `""` rather than left None — a NULL in a unique-key
+    column bypasses Postgres ON CONFLICT, so the row would duplicate on every write instead of
+    updating (skills.md §9).
+    """
+    if not records:
+        return 0
+    from pipeline.db.schema import ensure_domain_lookups
+
+    ensure_domain_lookups(session)
+    ensure_tables(session, DomainLookup)
+
+    prepared = [{
+        "domain": (r.get("domain") or "").strip().lower(),
+        "path": r.get("path") or "",
+        "location": r.get("location") or "",
+        "block": r.get("block") or "",
+        "payload": r.get("payload") or "{}",
+        "cost": float(r.get("cost") or 0.0),
+        "fetched_at": datetime.now(timezone.utc),
+    } for r in records]
+
+    keys = ("domain", "path", "location", "block")
+    # Deduped before the batch: two rows sharing a conflict key inside ONE multi-row upsert
+    # raise CardinalityViolation on Postgres and roll the entire batch back. SQLite applies
+    # rows one at a time and hides it completely, which is why this is easy to ship broken.
+    prepared = _dedupe_by_keys(prepared, keys)
+    update_cols = [c for c in prepared[0] if c not in keys]
+
+    insert = upsert_insert(session)
+    batch_size = max_batch_size(session, 60)
+    written = 0
+    for i in range(0, len(prepared), batch_size):
+        batch = prepared[i:i + batch_size]
+        stmt = insert(DomainLookup).values(batch)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=list(keys),
+            set_={c: stmt.excluded[c] for c in update_cols},
+        )
+        session.execute(stmt)
+        written += len(batch)
+    return written
 
 
 def insert_connector_cost(session: Session, site_id: str, connector: str, cost: float,

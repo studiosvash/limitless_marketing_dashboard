@@ -1448,8 +1448,11 @@ class DomainOverviewView(APIView):
         if not isinstance(include, list):
             return Response({"detail": "include must be a list"}, status=400)
 
+        # `refresh` is the user asking to re-buy a stored lookup. Without it the answer comes
+        # from the store, so a domain looked up last month is free to re-open.
         return Response(run_domain_overview(target, location, site_id=site_id,
-                                            site_pk=site_pk, include=include))
+                                            site_pk=site_pk, include=include,
+                                            refresh=bool(request.data.get("refresh"))))
 
 
 @method_decorator(login_not_required, name="dispatch")

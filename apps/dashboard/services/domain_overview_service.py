@@ -25,6 +25,10 @@ from urllib.parse import urlparse
 
 from django.core.cache import cache
 
+# The store is what makes a domain cost money once rather than once a day; the cache in front
+# of it only saves a DB round-trip inside a session.
+from apps.dashboard.services.domain_lookup_store import load_block, save_block
+
 logger = logging.getLogger(__name__)
 
 CACHE_TTL = 60 * 60 * 24  # 24 hours, for both caches
@@ -86,7 +90,14 @@ def questions_cache_key(target: str) -> str:
     return f"domain_overview_questions_{domain_of(target)}"
 
 
-def fetch_questions_block(target: str, site_id: str = "", allow_fetch: bool = True) -> dict:
+def _domain_only(target: str) -> str:
+    """The bare domain — the key both the request and the store use for this block."""
+    from pipeline.connectors.dataforseo_llm_questions import domain_of
+    return domain_of(target)
+
+
+def fetch_questions_block(target: str, site_id: str = "", allow_fetch: bool = True,
+                          refresh: bool = False) -> dict:
     """The AI Questions tab: which questions does this URL turn up in?
 
     ONE billed call per platform (chat_gpt, google) against llm_mentions/search/live, and only
@@ -106,11 +117,16 @@ def fetch_questions_block(target: str, site_id: str = "", allow_fetch: bool = Tr
                 "note": "Enter a domain or URL first."}
 
     key = questions_cache_key(raw)
-    cached = cache.get(key)
-    if cached is not None:
-        # The cache holds the WHOLE domain; the page filter is applied on the way out, so a
-        # second page on a domain already looked up costs nothing.
-        return {**_narrow_to_page(cached, raw), "cached": True}
+    if not refresh:
+        cached = cache.get(key)
+        if cached is not None:
+            # Both the cache and the store hold the WHOLE domain; the page filter is applied on
+            # the way out, so a second page on a domain already looked up costs nothing.
+            return {**_narrow_to_page(cached, raw), "cached": True}
+        stored = load_block(_domain_only(raw), "questions")
+        if stored is not None:
+            cache.set(key, stored, CACHE_TTL)
+            return _narrow_to_page(stored, raw)
     if not allow_fetch:
         return {"state": "not_loaded", "rows": [], "total": 0,
                 "note": "AI questions not loaded for this report — press “Find questions” on "
@@ -146,6 +162,9 @@ def fetch_questions_block(target: str, site_id: str = "", allow_fetch: bool = Tr
         "cost": result.get("cost", 0.0),
     }
     cache.set(key, block, CACHE_TTL)
+    # Keyed on the domain alone, like the request and the cache — one stored answer serves
+    # every page on it, for good.
+    save_block(_domain_only(raw), "questions", block, cost=block.get("cost", 0.0))
     return _narrow_to_page(block, raw)
 
 
@@ -217,16 +236,27 @@ def backlink_target(target: str) -> str:
 # Keywords + metrics (the default Analyze press)
 # ---------------------------------------------------------------------------------------
 def fetch_keywords_block(target: str, location: str, site_id: str = "",
-                         allow_fetch: bool = True) -> Optional[dict]:
-    """The cached Labs `ranked_keywords/live` result for this target+market.
+                         allow_fetch: bool = True, refresh: bool = False) -> Optional[dict]:
+    """The Labs `ranked_keywords/live` result for this target+market.
 
-    `allow_fetch=False` returns the cache or None and NEVER spends — that is what the PDF
-    report uses so generating a report can't silently buy a lookup.
+    READ ORDER: stored row -> 24h cache -> network. The store is what makes a domain cost
+    money ONCE rather than once a day; the cache still sits in front of it to save the DB
+    round-trip inside a session. `refresh=True` is the user pressing Refresh and is the only
+    thing that skips both.
+
+    `allow_fetch=False` returns whatever is already held and NEVER spends — that is what the
+    PDF report uses, so generating a report of a domain looked up last month is complete and
+    free.
     """
     key = keywords_cache_key(target, location)
-    cached = cache.get(key)
-    if cached is not None:
-        return cached
+    if not refresh:
+        cached = cache.get(key)
+        if cached is not None:
+            return cached
+        stored = load_block(target, "keywords", location=location)
+        if stored is not None:
+            cache.set(key, stored, CACHE_TTL)
+            return stored
     if not allow_fetch:
         return None
 
@@ -242,6 +272,9 @@ def fetch_keywords_block(target: str, location: str, site_id: str = "",
     result = connector.get_domain_overview(target, location, limit=KEYWORDS_LIMIT, site_id=site_id)
     if result.get("status") == "ok":
         cache.set(key, result, CACHE_TTL)
+        # Stored as well as cached: the cache expires in a day, the answer does not.
+        save_block(target, "keywords", result, location=location,
+                   cost=float(result.get("cost") or 0.0))
     return result
 
 
@@ -334,7 +367,8 @@ def _shape_links(records: list) -> list:
     return rows
 
 
-def fetch_backlinks_block(target: str, site_id: str = "", allow_fetch: bool = True) -> dict:
+def fetch_backlinks_block(target: str, site_id: str = "", allow_fetch: bool = True,
+                          refresh: bool = False) -> dict:
     """The Domain Overview backlink sections: link sample, anchor breakdown, spam score.
 
     THREE billed DataForSEO calls, and only when the user presses "Load backlinks":
@@ -354,9 +388,14 @@ def fetch_backlinks_block(target: str, site_id: str = "", allow_fetch: bool = Tr
         return _empty_backlinks_block("setup", "Enter a domain or URL first.")
 
     key = backlinks_cache_key(target)
-    cached = cache.get(key)
-    if cached is not None:
-        return {**cached, "cached": True}
+    if not refresh:
+        cached = cache.get(key)
+        if cached is not None:
+            return {**cached, "cached": True}
+        stored = load_block(backlink_target(target), "backlinks")
+        if stored is not None:
+            cache.set(key, stored, CACHE_TTL)
+            return stored
     if not allow_fetch:
         return _empty_backlinks_block(
             "not_loaded",
@@ -429,12 +468,14 @@ def fetch_backlinks_block(target: str, site_id: str = "", allow_fetch: bool = Tr
     })
     if links:
         cache.set(key, block, CACHE_TTL)
+        save_block(backlink_target(target), "backlinks", block,
+                   cost=float(block.get("cost") or 0.0))
     return block
 
 
 def run_domain_overview(target: str, location: str = "United States", site_id: str = "",
                         site_pk: Optional[int] = None,
-                        include: Optional[list] = None) -> dict:
+                        include: Optional[list] = None, refresh: bool = False) -> dict:
     """POST /api/domain-overview handler.
 
     `include` is the opt-in list for sections that cost extra. The default Analyze press
@@ -448,13 +489,15 @@ def run_domain_overview(target: str, location: str = "United States", site_id: s
     location = location or "United States"
     wanted = {str(i).strip().lower() for i in (include or [])}
 
-    result = fetch_keywords_block(target, location, site_id=site_id) or {}
+    result = fetch_keywords_block(target, location, site_id=site_id, refresh=refresh) or {}
     result = apply_tracked_flags(result, site_id=site_id, site_pk=site_pk)
 
     if "backlinks" in wanted:
-        result = {**result, "backlinks": fetch_backlinks_block(target, site_id=site_id)}
+        result = {**result, "backlinks": fetch_backlinks_block(target, site_id=site_id,
+                                                               refresh=refresh)}
     # Same contract as backlinks: its own button, its own cache, never bought by the default
     # Analyze press.
     if "questions" in wanted:
-        result = {**result, "questions": fetch_questions_block(target, site_id=site_id)}
+        result = {**result, "questions": fetch_questions_block(target, site_id=site_id,
+                                                               refresh=refresh)}
     return result

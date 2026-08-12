@@ -977,6 +977,45 @@ class GA4CampaignDaily(Base):
     )
 
 
+class DomainLookup(Base):
+    """Every Domain Overview lookup, kept — so a domain is paid for once, not once a day.
+
+    The page used to hold its results in a 24-hour Django cache and nothing else, which meant
+    re-opening the same URL the next morning bought it again. On the AI-questions endpoint the
+    bill is a $0.10 FIXED FEE PER REQUEST plus ~$0.001 per returned row (measured, not assumed),
+    so "make the same request again" is both the most expensive thing this page can do and the
+    easiest to stop doing.
+
+    One row per (domain, path, location, block), where `block` is `keywords` | `backlinks` |
+    `questions` — the three separately-billed sections, each behind its own button.
+
+    `path` is in the key because the questions block is filtered to a page, and it defaults to
+    `""` rather than NULL: Postgres does not treat NULL = NULL as a conflict inside a unique
+    index, so a null key column bypasses ON CONFLICT entirely and duplicates on every write
+    instead of updating in place (skills.md §9).
+
+    `payload` is JSON in a Text column, not a JSON column: SQLite and Postgres disagree about
+    JSON semantics, this project supports both, and every read here wants the whole blob
+    anyway. Encoding and decoding happen at one boundary — `domain_lookup_store`.
+    """
+    __tablename__ = "domain_lookups"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    domain = Column(String(255), nullable=False, index=True)
+    path = Column(String(500), nullable=False, default="", server_default="")
+    location = Column(String(120), nullable=False, default="", server_default="")
+    block = Column(String(32), nullable=False, index=True)
+    payload = Column(Text, nullable=False, default="{}")
+    # What this lookup actually cost, so Usage & Budget can show what persistence is saving.
+    cost = Column(Float, default=0.0)
+    fetched_at = Column(DateTime, nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("domain", "path", "location", "block", name="uq_domain_lookup"),
+        Index("ix_domain_lookup_domain_block", "domain", "block"),
+    )
+
+
 class ConnectorCost(Base):
     """What each connector run actually cost. Every DataForSEO response already carries a real
     `task.cost` and every one of them was being discarded, which is why Settings' Usage & Budget
@@ -1577,6 +1616,36 @@ def _backfill_tracked_competitor_projects(conn) -> int:
     return updated
 
 
+def ensure_domain_lookups(session_or_engine) -> bool:
+    """Provision `domain_lookups` on an existing database. Idempotent, never raises.
+
+    A brand-new table, so this is `create_all` for one model rather than an ALTER — but it
+    still has to be callable lazily, for the same reason every other `ensure_*` here is:
+    `init_db()` is a management-command entry point and a deployed database would otherwise
+    never acquire the table, so the first `select(DomainLookup)` would fail with "no such
+    table". The writer calls it before its first insert.
+
+    Returns True when it created the table. A failure here costs persistence, not correctness:
+    the caller falls back to the 24h cache and the network, which is exactly how the page
+    behaved before this table existed.
+    """
+    def _do(conn) -> bool:
+        try:
+            inspector = inspect(conn)
+            if inspector.has_table(DomainLookup.__tablename__):
+                return False
+            DomainLookup.__table__.create(bind=conn, checkfirst=True)
+            return True
+        except Exception:
+            logger.error("[schema] could not provision domain_lookups", exc_info=True)
+            return False
+
+    if isinstance(session_or_engine, Session):
+        return _do(session_or_engine.connection())
+    with session_or_engine.begin() as conn:
+        return _do(conn)
+
+
 def ensure_tracked_competitor_project(session_or_engine) -> bool:
     """Move `tracked_competitors` onto its per-PROJECT key: add `site_pk`, fill it, key on it.
 
@@ -1693,5 +1762,6 @@ def init_db(engine: Engine) -> None:
     ensure_ranking_location_keys(engine)
     # Same shape, one step each: add site_pk, backfill it, then key on it.
     ensure_saved_keyword_project(engine)
+    ensure_domain_lookups(engine)
     ensure_tracked_competitor_project(engine)
     ensure_keyword_opportunity_project(engine)

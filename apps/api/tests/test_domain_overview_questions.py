@@ -3,9 +3,16 @@
 Same contract the backlink sections established — a section that costs money gets its own
 button, its own 24h cache, and is invisible to the default Analyze press.
 """
+import tempfile
+from pathlib import Path
 from unittest import mock
 
+import pipeline.utils.db_connection as db_connection
+from pipeline.db.engine import get_engine
+from pipeline.db.schema import init_db
+
 from django.core.cache import cache
+from django.test import override_settings
 # TestCase, not SimpleTestCase: `ensure_budget()` reads BudgetState, and under SimpleTestCase
 # that read raises, the gate fails open by design, and every test here would pass without ever
 # exercising the gate it sits behind.
@@ -32,6 +39,18 @@ OK = {"status": "ok", "rows": ROWS, "total": 2, "domain": "premierstaff.com", "p
 
 class QuestionsBlockTests(TestCase):
     def setUp(self):
+        # The analytics-DB fixture is REQUIRED here now, and was not before: these blocks are
+        # persisted to `domain_lookups`, so without it every test wrote into the developer's
+        # real data/fusehealth.db and the stored rows leaked between tests — and between runs.
+        db_connection._SessionFactory = None
+        self.addCleanup(setattr, db_connection, "_SessionFactory", None)
+        db_path = str(Path(tempfile.mkdtemp()) / "fusehealth.db")
+        init_db(get_engine(db_path))
+        ctx = override_settings(ANALYTICS_DB_PATH=db_path)
+        ctx.enable()
+        self.addCleanup(ctx.disable)
+        db_connection._SessionFactory = None
+
         cache.clear()
         self.addCleanup(cache.clear)
 
