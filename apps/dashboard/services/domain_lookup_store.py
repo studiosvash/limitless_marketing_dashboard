@@ -84,6 +84,48 @@ def load_block(target: str, block: str, location: str = "") -> Optional[dict]:
     return {**payload, "storedAt": stored_at, "ageDays": age_days, "fromStore": True}
 
 
+def recent_lookups(limit: int = 10) -> list[dict]:
+    """The last N targets looked up, newest first — one entry per (domain, path, market).
+
+    Read from `domain_lookups` rather than kept as its own list, because that table already
+    records every lookup and a second copy could only ever disagree with it.
+
+    This replaces a browser-only history that stored each entry's FULL payload in
+    localStorage: the quota filled, `doHistSave` shed entries to recover, and a URL analysed
+    a minute earlier had quietly vanished from Recent after a refresh. Storing the payload
+    once in the database and the list here fixes both halves.
+
+    Never raises: an unreadable history is an empty chip row, not a broken page.
+    """
+    try:
+        with get_session() as session:
+            from pipeline.db.schema import ensure_domain_lookups
+            ensure_domain_lookups(session)
+            rows = session.execute(
+                select(DomainLookup.domain, DomainLookup.path, DomainLookup.location,
+                       DomainLookup.fetched_at)
+                .where(DomainLookup.block == "keywords")     # the block every Analyze writes
+                .order_by(DomainLookup.fetched_at.desc())
+                .limit(max(1, int(limit)))
+            ).all()
+    except Exception:
+        logger.warning("[domain_lookup_store] could not read recent lookups", exc_info=True)
+        return []
+
+    out = []
+    for domain, path, location, fetched in rows:
+        moment = None
+        if fetched is not None:
+            moment = (fetched if fetched.tzinfo else fetched.replace(tzinfo=timezone.utc)).isoformat()
+        out.append({
+            "target": (domain or "") + (path or ""),
+            "domain": domain or "",
+            "location": location or "",
+            "storedAt": moment,
+        })
+    return out
+
+
 def save_block(target: str, block: str, payload: dict, location: str = "",
                cost: float = 0.0) -> bool:
     """Persist one block. Returns True when it landed; never raises."""

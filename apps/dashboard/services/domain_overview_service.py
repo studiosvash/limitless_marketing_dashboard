@@ -27,7 +27,7 @@ from django.core.cache import cache
 
 # The store is what makes a domain cost money once rather than once a day; the cache in front
 # of it only saves a DB round-trip inside a session.
-from apps.dashboard.services.domain_lookup_store import load_block, save_block
+from apps.dashboard.services.domain_lookup_store import load_block, recent_lookups, save_block
 
 logger = logging.getLogger(__name__)
 
@@ -539,4 +539,9 @@ def run_domain_overview(target: str, location: str = "United States", site_id: s
             if owned.get("state") in ("ok", "empty") and owned.get("domainTotal") is not None:
                 result = {**result, "questions": owned}
                 break
+
+    # The Recent chips, from the database rather than the browser. localStorage held each
+    # entry's whole payload, so the quota filled and entries were shed — a URL analysed a
+    # minute earlier could be missing after a refresh.
+    result = {**result, "recent": recent_lookups()}
     return result

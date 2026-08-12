@@ -618,16 +618,43 @@
          24h the stored payload renders directly and costs nothing; past that the entry is
          stale and the chip re-runs the billed lookup. Saying which before the click is the
          whole contract -- see App#doHistOpen. */
-      const doHist = this.doHistLoad(s.projectId);
+      /* The server's list wins when it has one. localStorage held each entry's FULL payload,
+         so the quota filled, doHistSave shed entries to recover, and a URL analysed a minute
+         earlier could be missing from Recent after a refresh — silently, and starting with
+         whichever lookups had the most data behind them. The database keeps the payload once
+         and the list beside it. localStorage stays as the fallback for the moment before the
+         first response lands, and because its entries carry the replayable payload. */
+      const doServerHist = (s.doData && s.doData.recent) || [];
+      const doLocalHist = this.doHistLoad(s.projectId);
+      const doLocalById = {};
+      doLocalHist.forEach(function (h) { if (h && h.id) doLocalById[h.id] = h; });
+      const doHist = doServerHist.length
+        ? doServerHist.map(function (r) {
+            // Match the stored entry so a chip can still replay its payload for free.
+            const id = this.doHistId(r.target, r.location);
+            const local = doLocalById[id];
+            // `stored` marks an entry the SERVER holds. Those are free to open at any age —
+            // the lookup is read back out of domain_lookups — unlike the browser copy, which
+            // expires after 24h and then costs a real call.
+            return Object.assign({ id: id, query: r.target, location: r.location, data: null,
+                                   ts: r.storedAt ? Date.parse(r.storedAt) : 0 },
+                                 local || {}, { stored: true });
+          }, this)
+        : doLocalHist;
       const doNow = Date.now();
       vals.do.histItems = doHist.map(hEntry => {
-        const fresh = (doNow - (hEntry.ts || 0)) < this.DO_HIST_TTL;
+        /* Free means "we already own this answer", which is now true at ANY age for a lookup
+           the server stored — it is read back out of domain_lookups. Only a browser-only
+           entry still expires, because only its copy does. */
+        const fresh = hEntry.stored || (doNow - (hEntry.ts || 0)) < this.DO_HIST_TTL;
         const age = this.relTime(new Date(hEntry.ts || 0).toISOString());
         return {
           label: hEntry.query.length > 30 ? hEntry.query.slice(0, 28) + '…' : hEntry.query,
           title: hEntry.query + ' · ' + hEntry.location + ' · looked up ' + age
-            + (fresh ? ' · saved on this browser, so opening it costs nothing'
-                     : ' · older than 24h, so opening it runs a new DataForSEO lookup'),
+            + (fresh
+               ? (hEntry.stored ? ' · saved, so opening it costs nothing'
+                                : ' · saved on this browser, so opening it costs nothing')
+               : ' · older than 24h, so opening it runs a new DataForSEO lookup'),
           age: age,
           fresh: fresh,
           stale: !fresh,
