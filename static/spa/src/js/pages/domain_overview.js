@@ -352,6 +352,25 @@
           rankedKeywords: this.fmt(metrics.ranked_keywords || 0)
         };
 
+        /* This result came out of the store rather than off the wire. Said out loud, with a
+           way to replace it: without both, pressing Analyze on a target already stored looked
+           like it did nothing, and a lookup saved once could never be corrected. */
+        vals.do.saved = {
+          show: !!s.doData.fromStore,
+          label: s.doData.storedAt
+            ? ('Saved answer from ' + String(s.doData.storedAt).slice(0, 10)
+               + (s.doData.ageDays ? ' · ' + s.doData.ageDays + 'd old' : ''))
+            : 'Saved answer',
+          hint: 'Re-analysing buys a fresh lookup (~$0.02).',
+          reanalyze: () => this.runDomainOverview(true),
+          busy: !!s.doLoading,
+          buttonLabel: s.doLoading ? 'Re-analysing…' : 'Re-analyse · ~$0.02',
+        };
+        /* An empty stored answer for a PAGE is the shape the trailing-slash bug produced, and
+           the one most worth offering a retry on: the page may well have rankings that the
+           earlier lookup could not see. */
+        vals.do.savedEmpty = !!(s.doData.fromStore && !(s.doData.keywords || []).length);
+
         /* ---- shared cell renderers -------------------------------------------------
            Each one exists to keep an honest null from being made friendly on the way to the
            screen: a 0 where we mean "unknown" reads as a measurement, and this page's whole

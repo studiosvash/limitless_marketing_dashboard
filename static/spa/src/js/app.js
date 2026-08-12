@@ -83,6 +83,11 @@
     aiExpQ: '', aiExploring: false, aiExp: null, aiExpSel: [], aiExpAddOpen: false,
     aiKwQ: '', aiKwSeg: 'all', aiKwSel: [], aiKwAddOpen: false,
     aiInspQ: '', aiInspecting: false, aiInspEntry: null,
+    /* Cited Pages: the full weekly top_pages list. `aiPgTab` picks ours vs. the co-cited pages
+       on other domains; `aiPgAll` is the "Load all" latch (the rows are already in the cached
+       response — this renders them, it does not fetch); `aiPagesOpen` is the fullscreen overlay
+       the Visibility card opens. */
+    aiPagesOpen: false, aiPgTab: 'ours', aiPgAll: false, aiPgQ: '',
     crawlCfg: null, crawlSaved: false, auPage: null, rules: null,
     alFilter: 'all',
     creds: { gsc: '', ga4: '', dataforseo: '' }, credsFor: null, credsSaved: false,
@@ -265,7 +270,12 @@
       this.loadKeywordLists(id);
     };
 
-    api.get('/api/projects').then(ps => {
+    /* `range` is passed because the list's Visibility column is the SAME score as a
+       project's own "Your visibility" figure, over the same rows — and the workspace
+       honours the range selector. Without it the endpoint's 28d default left the two
+       screens printing different percentages for one project on 7d and 90d. See
+       reloadProjects(), which re-reads the list when the selector moves. */
+    api.get('/api/projects', { range }).then(ps => {
       if (!this._alive) return;
       this.setState({ projects: ps });
       /* No projects at all is a real answer, not a pending one — stop the skeleton rather
@@ -730,6 +740,20 @@
     if (this.state.tab === 'overview' || this.state.tab === 'positioning' || this.state.tab === 'offsite' || this.state.tab === 'seo' || this.ADSTABS.includes(this.state.tab)) {
       this.fetchTab(this.state.tab, this.state.projectId, r, false);
     }
+    /* The projects list carries per-project figures for this same window (Visibility,
+       keywords, up/down), so it is stale the moment the window changes. It is fetched once
+       at boot and nothing re-read it — which is how the Position Tracking list could show a
+       28-day visibility beside a workspace showing the 7-day one, for the same project. */
+    this.reloadProjects(r);
+  }
+
+  /* Re-read GET /api/projects for `range`. Failure is silent on purpose: the list on screen
+     is the last good answer for a different window, which is worse than useless only if it
+     is presented as current — and boot() already toasts a list that never arrives at all. */
+  reloadProjects(range) {
+    window.FuseAPI.get('/api/projects', { range: range || this.state.range })
+      .then(ps => { if (this._alive) this.setState({ projects: ps }); })
+      .catch(() => {});
   }
 
   /* ---------- sync ---------- */
@@ -1294,7 +1318,14 @@
     this.doBlCacheSave([]);
   }
 
-  runDomainOverview() {
+  /* `refresh` is the user asking to BUY a new answer for a target already stored.
+
+     Without it a stored answer was a trap: Analyze read the store, so a lookup saved once
+     was served forever and there was no way from the UI to replace it. That turned a single
+     bad lookup into a permanent wrong answer — a page analysed before the trailing-slash fix
+     kept reporting "no keywords" for a page with 46 of them, and pressing Analyze looked
+     like it did nothing at all. A cache you cannot bust is worse than no cache. */
+  runDomainOverview(refresh) {
     const q = this.state.doQuery.trim();
     if (!q || this.state.doLoading) return;
     const loc = this.doLocation();
@@ -1303,7 +1334,8 @@
     this.setState({ doLoading: true, doError: null, doSel: [], doFromHist: null });
     /* `project` lets the backend mark which returned keywords this project already tracks.
        Without it every row would offer Track even for keywords already on the list. */
-    window.FuseAPI.post('/api/domain-overview', { target: q, location: loc, project: pid })
+    window.FuseAPI.post('/api/domain-overview', { target: q, location: loc, project: pid,
+                                                  refresh: !!refresh })
       .then(r => {
         if (!this._alive) return;
         /* Only a successful lookup is worth replaying. Storing an error would put a chip on
@@ -1596,7 +1628,7 @@
          This is only a background re-read to refresh the per-project keyword counts in the
          switcher; if it fails the counts are stale until the next load, which is not worth
          contradicting the success toast the user just received. */
-      window.FuseAPI.get('/api/projects').then(ps => { if (this._alive) this.setState({ projects: ps }); }).catch(() => {});
+      this.reloadProjects();
       const proj = (this.state.projects.find(p => p.id === pid) || {}).domain || 'project';
       this.notify(rows.length + ' keyword' + (rows.length === 1 ? '' : 's') + ' sent to Position Tracking · ' + proj);
       return true;
@@ -3097,6 +3129,8 @@
       doInput: e => this.setState({ doQuery: e.target.value }),
       doKey: e => { if (e.key === 'Enter') this.runDomainOverview(); },
       runDomainOverview: () => this.runDomainOverview(),
+      // The way out of a stored answer — see runDomainOverview's note on why one is needed.
+      reanalyzeDomainOverview: () => this.runDomainOverview(true),
       doSetTab: t => this.setState({ doTab: t }),
       doHistClear: () => this.doHistClear(),
       doToggleRow: kw => this.setState(st => {
