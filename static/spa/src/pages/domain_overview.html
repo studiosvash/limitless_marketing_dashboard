@@ -191,6 +191,10 @@
                 <th style="font-weight: 500; padding: 10px 10px 10px 4px;">Keyword</th>
                 <th style="font-weight: 500; padding: 10px;">Intent</th>
                 <th style="font-weight: 500; padding: 10px; text-align: center;">Position</th>
+                <!-- KD, trend and movement all arrive in the SAME billed response as the
+                     columns beside them; they were parsed and discarded until 2026-08-11. -->
+                <th style="font-weight: 500; padding: 10px; text-align: center;" title="Keyword difficulty — a dash means DataForSEO did not report one, not that it is easy.">KD</th>
+                <th style="font-weight: 500; padding: 10px; text-align: center;" title="Search volume over the last 12 months, oldest on the left.">Trend</th>
                 <th style="font-weight: 500; padding: 10px; text-align: right;">Volume</th>
                 <th style="font-weight: 500; padding: 10px; text-align: right;">CPC</th>
                 <th style="font-weight: 500; padding: 10px; text-align: right;">Traffic</th>
@@ -209,7 +213,25 @@
                     <div style="font-size: 12px; color: #94a3b8; font-weight: 400; max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"><a href="{{ r.url }}" target="_blank" style="color: inherit; text-decoration: none;" style-hover="text-decoration:underline">{{ r.url }}</a></div>
                   </td>
                   <td style="padding: 10px;"><span style="{{ r.intentStyle }}">{{ r.intentLabel }}</span></td>
-                  <td style="padding: 10px; text-align: center;"><span style="{{ r.posStyle }}">{{ r.posText }}</span></td>
+                  <td style="padding: 10px; text-align: center;">
+                    <span style="{{ r.posStyle }}">{{ r.posText }}</span>
+                    <!-- Movement renders only when the API said so; "flat" would claim we
+                         compared two captures when there may only have been one. -->
+                    <sc-if value="{{ r.move.show }}" hint-placeholder-val="{{ false }}">
+                      <span style="font-size: 10.5px; font-weight: 700; margin-left: 5px; color: {{ r.move.color }};">{{ r.move.label }}</span>
+                    </sc-if>
+                    <sc-if value="{{ r.snippet }}" hint-placeholder-val="{{ false }}">
+                      <span title="Wins the featured snippet" style="font-size: 10px; font-weight: 700; margin-left: 4px; color: #7c3aed;">FS</span>
+                    </sc-if>
+                  </td>
+                  <td style="padding: 10px; text-align: center;">
+                    <span style="font-size: 12.5px; font-weight: 600; color: {{ r.kd.color }};" title="{{ r.kd.band }}">{{ r.kd.label }}</span>
+                  </td>
+                  <td style="padding: 10px; text-align: center;">
+                    <sc-if value="{{ r.hasSpark }}" hint-placeholder-val="{{ true }}">
+                      <svg viewBox="0 0 68 18" width="68" height="18" style="display: inline-block; vertical-align: middle;"><polyline points="{{ r.spark }}" fill="none" stroke="#818cf8" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/></svg>
+                    </sc-if>
+                  </td>
                   <td style="padding: 10px; text-align: right; color: #475569;">{{ r.volFmt }}</td>
                   <td style="padding: 10px; text-align: right; color: #475569;">{{ r.cpcFmt }}</td>
                   <td style="padding: 10px; text-align: right; color: #475569;">{{ r.trafficFmt }}</td>
@@ -370,6 +392,70 @@
 
       </sc-if>
       <!-- ===== /TAB 3 ================================================================= -->
+
+      <!-- ===== TAB 4 — AI QUESTIONS =====================================================
+           Which questions does this URL turn up in when somebody asks an answer engine.
+           A separate paid press, like Backlinks: the Analyze button never buys it. The stored
+           answer is per DOMAIN, so a second page on a domain already looked up is free. -->
+      <sc-if value="{{ do.showQuestionsTab }}" hint-placeholder-val="{{ false }}">
+      <div style="display: flex; flex-direction: column; gap: 16px;">
+
+        <sc-if value="{{ do.q.loaded }}" hint-placeholder-val="{{ false }}">
+          <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;">
+            <div style="display: flex; gap: 18px; flex-wrap: wrap; align-items: baseline;">
+              <div><span style="font-size: 22px; font-weight: 700; color: #0f172a;">{{ do.q.total }}</span>
+                   <span style="font-size: 12.5px; color: #64748b;"> questions</span></div>
+              <!-- Cited and Seen are separate findings and never merge into one number:
+                   "the engine quoted you" and "the engine found you and quoted someone else"
+                   need different work. -->
+              <div><span style="font-size: 15px; font-weight: 700; color: #047857;">{{ do.q.citedCount }}</span>
+                   <span style="font-size: 12px; color: #64748b;"> cited</span></div>
+              <div><span style="font-size: 15px; font-weight: 700; color: #b45309;">{{ do.q.seenCount }}</span>
+                   <span style="font-size: 12px; color: #64748b;"> seen only</span></div>
+              <sc-if value="{{ do.q.fromStore }}" hint-placeholder-val="{{ false }}">
+                <span style="font-size: 11.5px; color: #94a3b8;">as of {{ do.q.storedAt }}</span>
+              </sc-if>
+            </div>
+            <div onClick="{{ do.q.refresh }}" role="button" style="padding: 6px 12px; font-size: 12px; font-weight: 600; color: #334155; border: 1px solid #cbd5e1; border-radius: 8px; cursor: pointer; background: white;" style-hover="border-color:#4f46e5">Refresh · ~$0.20</div>
+          </div>
+
+          <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; overflow: hidden;">
+            <div style="display: grid; grid-template-columns: minmax(240px, 2.2fr) 86px 76px 92px minmax(160px, 1.4fr); gap: 10px; padding: 10px 16px; border-bottom: 1px solid #f1f5f9; font-size: 11px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: #94a3b8;">
+              <span>Question</span><span style="text-align: right;">AI Vol.</span><span style="text-align: center;">Status</span><span style="text-align: center;">Engine</span><span>Your page</span>
+            </div>
+            <sc-for list="{{ do.q.rows }}" as="qr" hint-placeholder-count="6">
+              <div style="display: grid; grid-template-columns: minmax(240px, 2.2fr) 86px 76px 92px minmax(160px, 1.4fr); gap: 10px; padding: 11px 16px; border-bottom: 1px solid #f8fafc; align-items: center;">
+                <div style="min-width: 0;">
+                  <div style="font-size: 13px; color: #0f172a; line-height: 1.45;">{{ qr.question }}</div>
+                  <sc-if value="{{ qr.hasFanOut }}" hint-placeholder-val="{{ false }}">
+                    <div style="font-size: 11px; color: #94a3b8; margin-top: 3px;" title="The sub-searches the engine ran internally — direct content targets.">↳ {{ qr.fanOut }}</div>
+                  </sc-if>
+                  <sc-if value="{{ qr.citedInstead }}" hint-placeholder-val="{{ false }}">
+                    <div style="font-size: 11px; color: #b45309; margin-top: 3px;">cited instead: {{ qr.citedInstead }}</div>
+                  </sc-if>
+                </div>
+                <span style="font-size: 13px; font-weight: 600; color: #0f172a; text-align: right; font-variant-numeric: tabular-nums;">{{ qr.volume }}</span>
+                <span style="justify-self: center; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 4px; color: {{ qr.badge.color }}; background: {{ qr.badge.bg }};" title="{{ qr.badge.title }}">{{ qr.badge.label }}</span>
+                <span style="justify-self: center; font-size: 11.5px; color: #64748b;">{{ qr.platform }}</span>
+                <a href="{{ qr.url }}" target="_blank" rel="noopener noreferrer" style="font-size: 11.5px; color: #4338ca; text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ qr.urlShort }}</a>
+              </div>
+            </sc-for>
+          </div>
+        </sc-if>
+
+        <!-- Not loaded, or loaded and genuinely empty. The note distinguishes "this page is
+             not referenced" from "this domain is not referenced" — different findings. -->
+        <sc-if value="{{ do.q.showEmpty }}" hint-placeholder-val="{{ true }}">
+          <div style="border-radius: 12px; background: white; border: 1px dashed #cbd5e1; padding: 34px 20px; text-align: center;">
+            <p style="font-size: 14px; font-weight: 600; color: #334155; margin: 0 0 6px;">{{ do.q.emptyTitle }}</p>
+            <p style="font-size: 13px; color: #94a3b8; margin: 0 auto 16px; max-width: 460px; line-height: 1.55;">{{ do.q.emptyNote }}</p>
+            <div onClick="{{ do.q.load }}" role="button" style="display: inline-flex; align-items: center; gap: 8px; padding: 9px 18px; font-size: 13px; font-weight: 600; color: white; background: #4f46e5; border-radius: 8px; cursor: pointer;">{{ do.q.loadLabel }}</div>
+          </div>
+        </sc-if>
+
+      </div>
+      </sc-if>
+      <!-- ===== /TAB 4 ================================================================= -->
 
     </sc-if>
 

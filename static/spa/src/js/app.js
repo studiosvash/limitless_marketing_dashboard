@@ -34,7 +34,9 @@
     sync: { active: false, progress: 0, step: '', cost: 0, steps: [], warnings: [], queued: null, stalled: false },
     syncPanelOpen: false,
     freshness: 'Weekly · Mon',
-    doQuery: '', doData: null, doLoading: false, doError: null, doSel: [], doTracked: [],
+    // doQLoading is the AI Questions press, tracked apart from doLoading so the two paid
+    // buttons on this page can never disable each other.
+    doQuery: '', doData: null, doLoading: false, doQLoading: false, doError: null, doSel: [], doTracked: [],
     /* Which of the three Domain Overview result tabs is showing. An IN-PAGE tab, unrelated
        to state.tab (the router's page): the three sections are one lookup's results, split
        up, not three pages. Deliberately not in the nav history — a tab flick is not a
@@ -1307,6 +1309,37 @@
         this.setState({ doLoading: false, doData: r, doError: r.error });
       })
       .catch(e => { if (this._alive) this.setState({ doLoading: false, doError: 'Failed to fetch domain overview: ' + e }); });
+  }
+
+  /* The AI Questions block: which questions does this URL turn up in.
+
+     A SECOND, deliberate press, like Load backlinks — the Analyze press does not buy it. The
+     answer is stored per DOMAIN, so a page on a domain already looked up comes back free and
+     `refresh: true` is the only thing that re-buys.
+
+     Merged into doData rather than replacing it: the keyword block on screen was paid for and
+     must survive this call. */
+  doLoadQuestions(refresh) {
+    const q = this.state.doQuery.trim();
+    if (!q || this.state.doQLoading) return;
+    const pid = this.state.projectId;
+    this.setState({ doQLoading: true, doError: null });
+    window.FuseAPI.post('/api/domain-overview', {
+      target: q, location: this.doLocation(), project: pid,
+      include: ['questions'], refresh: !!refresh,
+    })
+      .then(r => {
+        if (!this._alive) return;
+        const merged = Object.assign({}, this.state.doData || {},
+                                     { questions: (r && r.questions) || null });
+        this.setState({ doQLoading: false, doData: merged, doTab: 'questions' });
+      })
+      /* Never a silent .catch: a refused or failed lookup that leaves the button spinning is
+         indistinguishable from one still running. */
+      .catch(e => {
+        if (this._alive) this.setState({ doQLoading: false,
+                                         doError: 'Could not load AI questions: ' + e });
+      });
   }
 
   analyzeUrlInDomainOverview(url) {

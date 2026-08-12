@@ -352,6 +352,47 @@
           rankedKeywords: this.fmt(metrics.ranked_keywords || 0)
         };
 
+        /* ---- shared cell renderers -------------------------------------------------
+           Each one exists to keep an honest null from being made friendly on the way to the
+           screen: a 0 where we mean "unknown" reads as a measurement, and this page's whole
+           job is to be trustworthy about what was actually looked up. */
+
+        // Keyword difficulty. `null` is a dash in the neutral grey, NOT a green 0 — green on
+        // an unknown reads as "trivial to rank for", the opposite of what we know.
+        const kdView = (kd) => {
+          if (kd === null || kd === undefined || kd === '') {
+            return { label: '—', color: '#94a3b8', band: 'unknown', known: false };
+          }
+          const n = Number(kd);
+          const band = n <= 20 ? 'easy' : n <= 45 ? 'medium' : n <= 70 ? 'hard' : 'very hard';
+          const color = n <= 20 ? '#047857' : n <= 45 ? '#b45309' : n <= 70 ? '#c2410c' : '#b91c1c';
+          return { label: String(n), color: color, band: band, known: true };
+        };
+
+        // Rank movement. Unknown renders NOTHING — "flat" would assert we compared two
+        // captures when there may only ever have been one.
+        const moveView = (mv) => {
+          const map = { up: ['▲', '#047857'], down: ['▼', '#b91c1c'],
+                        'new': ['new', '#4338ca'], lost: ['lost', '#b91c1c'] };
+          const hit = map[mv];
+          if (!hit) return { show: false, label: '', color: '' };
+          return { show: true, label: hit[0], color: hit[1] };
+        };
+
+        /* 12-month sparkline. The x divisor is (len - 1), which is ZERO for a single month:
+           0/0 is NaN and an SVG polyline carrying NaN draws nothing at all. The AI mentions
+           trend shipped with exactly that bug — one point, empty chart, no explanation. */
+        const sparkPoints = (series) => {
+          const vals2 = (series || []).map(v => Number(v) || 0);
+          if (!vals2.length) return '';
+          const max = Math.max.apply(null, vals2) || 1;
+          const w = 68, h = 18;
+          if (vals2.length === 1) return (w / 2).toFixed(1) + ',' + (h - (vals2[0] / max) * h).toFixed(1);
+          return vals2.map((v, k) =>
+            ((k / (vals2.length - 1)) * w).toFixed(1) + ',' + (h - (v / max) * h).toFixed(1)
+          ).join(' ');
+        };
+
         vals.do.rows = (s.doData.keywords || []).map(k => {
           const iv = this.intentView(k.intent);
           const on = doSelSet.has(k.keyword);
@@ -385,6 +426,13 @@
             volFmt: this.fmt(k.volume),
             cpcFmt: this.money(k.cpc),
             trafficFmt: this.fmt(k.traffic),
+            /* All four arrive in the SAME billed response the seven fields above come from —
+               they were parsed and thrown away until 2026-08-11. */
+            kd: kdView(k.kd),
+            move: moveView(k.movement),
+            spark: sparkPoints(k.monthly),
+            hasSpark: !!(k.monthly && k.monthly.length),
+            snippet: !!k.featuredSnippet,
             checked: on,
             rowBg: on ? '#f5f7ff' : 'white',
             checkStyle: doChk(on),
@@ -425,6 +473,83 @@
          fetched asserts a measurement nobody paid for -- and here it would assert the
          opposite of the truth, since the whole point of that tab is that it holds data
          until you ask for it. */
+      /* ---- AI Questions -------------------------------------------------------------
+         Which questions does this URL turn up in when somebody asks an answer engine.
+
+         `cited` and `seen` never collapse into one badge. Cited means the engine QUOTED the
+         page in its reply; seen means it retrieved the page and quoted somebody else — and
+         the second one is the actionable half, because it says the page is findable but not
+         convincing. On the live account 116 rows were cited and 46 seen-only. */
+      const questionRows = (rows) => {
+       return (rows || []).map((r) => {
+        const cited = !!r.cited;
+        const months = r.monthly_searches || {};
+        // Object key order is insertion order, which the API returns newest-first; a chart
+        // reads left to right, so sort by the YYYY-MM key and drop it.
+        const monthly = Object.keys(months).sort().map(k => Number(months[k]) || 0);
+        const others = (r.cited_domains || []).filter(d => d && d !== (r.our_domain || ''));
+        return {
+          question: r.question || '',
+          // None, not 0: "we were not told how often this is asked" is not "nobody asks it".
+          volume: (r.ai_search_volume === null || r.ai_search_volume === undefined)
+            ? '—' : this.fmt(r.ai_search_volume),
+          badge: cited
+            ? { label: 'Cited', color: '#047857', bg: '#d1fae5',
+                title: 'The answer engine quoted this page in its reply.' }
+            : { label: 'Seen', color: '#b45309', bg: '#fef3c7',
+                title: 'The engine retrieved this page but quoted someone else — findable, not yet convincing.' },
+          url: r.our_url || '',
+          urlShort: (r.our_url || '').replace(/^https?:\/\//, '').slice(0, 60),
+          platform: r.platform === 'google' ? 'AI Overviews' : 'ChatGPT',
+          monthly: monthly,
+          spark: monthly.length ? monthly : null,
+          answer: r.answer || '',
+          hasAnswer: !!(r.answer || '').trim(),
+          fanOut: (r.fan_out_queries || []).join(' · '),
+          hasFanOut: !!(r.fan_out_queries || []).length,
+          // Who won the citation when we did not. Blank when we were the cited one.
+          citedInstead: cited ? '' : (others[0] || ''),
+        };
+       });
+      };
+
+      const q = (s.doData && s.doData.questions) || null;
+      vals.do.q = {
+        loaded: !!(q && q.state === 'ok'),
+        state: q ? q.state : 'idle',
+        rows: q ? questionRows(q.rows) : [],
+        total: q ? (q.total || 0) : 0,
+        citedCount: q ? (q.citedCount || 0) : 0,
+        seenCount: q ? (q.seenCount || 0) : 0,
+        note: q ? (q.note || '') : '',
+        // "as of" is shown whenever the answer came from the store rather than the wire, so a
+        // month-old lookup is never presented as live.
+        storedAt: (q && q.storedAt) ? String(q.storedAt).slice(0, 10) : '',
+        fromStore: !!(q && q.fromStore),
+        ageDays: (q && q.ageDays !== undefined) ? q.ageDays : null,
+        // Stated before the click, like every other paid button on this page.
+        loadLabel: s.doQLoading ? 'Finding questions…' : 'Find AI questions · ~$0.20',
+        load: () => this.doLoadQuestions(false),
+        refresh: () => this.doLoadQuestions(true),
+        busy: !!s.doQLoading,
+
+        /* `sc-if` has no negate form — walkIf reads `value` alone — so the empty panel gets
+           its own flag rather than a negated one, which would render always. */
+        showEmpty: !(q && q.state === 'ok'),
+        emptyTitle: !q ? 'Not looked up yet'
+          : q.state === 'empty' ? 'No AI answers reference this URL'
+          : q.state === 'budget' ? 'Monthly DataForSEO budget reached'
+          : q.state === 'setup' ? 'DataForSEO is not configured'
+          : q.state === 'not_loaded' ? 'Not loaded for this report'
+          : 'Could not load AI questions',
+        /* The service already distinguishes "this PAGE is not referenced, though the domain
+           has N" from "nothing here is referenced" — two different findings, and the first
+           one is the useful one. That sentence is passed straight through. */
+        emptyNote: (q && q.note) ? q.note
+          : 'One call asks DataForSEO which questions this domain turns up in when people ask '
+            + 'ChatGPT. The answer is kept, so every page on this domain is free afterwards.',
+      };
+
       const doTab = s.doTab || 'overview';
       const doTabBase = { padding: '7px 13px', fontSize: '13px', borderRadius: '8px', cursor: 'pointer',
                           border: '1px solid transparent', color: '#64748b', fontWeight: 500,
@@ -437,7 +562,8 @@
         ['overview', 'Overview', ''],
         ['keywords', 'Keywords', vals.do.hasRows ? this.fmt(vals.do.rows.length) : ''],
         ['backlinks', 'Backlinks',
-         (blRefDomains === null || blRefDomains === undefined) ? '' : this.fmt(blRefDomains)]
+         (blRefDomains === null || blRefDomains === undefined) ? '' : this.fmt(blRefDomains)],
+        ['questions', 'AI Questions', vals.do.q.loaded ? this.fmt(vals.do.q.total) : '']
       ];
       vals.do.tabs = doTabDefs.map(d => ({
         label: d[1],
@@ -452,6 +578,7 @@
       vals.do.showOverviewTab = doTab === 'overview';
       vals.do.showKeywordsTab = doTab === 'keywords';
       vals.do.showBacklinksTab = doTab === 'backlinks';
+      vals.do.showQuestionsTab = doTab === 'questions';
 
       /* The Overview tab's backlink strip. Rendered ONLY from data that is already in hand
          -- it never triggers the three-call fetch, which stays behind the button on the
