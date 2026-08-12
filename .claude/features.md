@@ -383,8 +383,17 @@ ranks for.
 **Navigation.** Sidebar → SEO → Domain Overview. Also reached automatically from the Position
 Tracking SERP drawer's *Analyze* action, which pre-fills the URL and runs the lookup.
 
-**Data source.** `POST /api/domain-overview` → DataForSEO Labs `ranked_keywords`. Results are
-cached server-side for 24 hours per (target, location).
+**Data source.** `POST /api/domain-overview` → DataForSEO Labs `ranked_keywords`. **Every lookup
+is stored** in `domain_lookups` (added 2026-08-11), so read order is store → 24h cache →
+network and a domain is paid for once rather than once a day. Blocks served from the store show
+an "as of" date and a **Refresh** that re-buys deliberately; a PDF of a domain looked up last
+month is complete and costs nothing.
+
+**Keyword columns.** Alongside keyword/intent/position/volume/CPC/traffic the table shows
+**KD**, a **12-month trend sparkline**, a **movement** arrow (new/up/down/lost) and a
+**featured-snippet** marker — all from the same billed response, parsed and discarded until
+2026-08-11. An unknown KD renders as an em dash in neutral grey, never a green 0; unknown
+movement renders nothing rather than "flat".
 
 **Layout.** Always visible at the top: the search input (`Enter` or button), the market
 picker, **Download PDF**, and the **Recent** chip row. The results below are split into three
@@ -396,6 +405,7 @@ pages, so switching tabs never refetches anything:
 | **Overview** | Three metric cards — **Organic traffic** (estimated), **Traffic value**, **Ranked keywords**. Plus a read-only backlink strip (backlinks · referring domains · authority · spam) **only when a backlink block is already in hand** — loaded this session or restored from the saved-backlinks store; it never triggers that fetch itself. When nothing is loaded the strip is absent and a line points at the tab that can load it, rather than four em dashes that would read as "this domain has no backlinks". |
 | **Keywords** | The **Top Organic Keywords** table: Keyword · Intent badge · Position badge · Volume · CPC · Estimated traffic · Ranking URL, with the selection toolbar and Track / Track selected. |
 | **Backlinks** | The backlinks card described below, still behind its own button. |
+| **AI Questions** | Which questions an answer engine was asked where this URL comes back, from DataForSEO's LLM Mentions **search** endpoint. Per row: the question, how often it is asked, the engine, our page, the engine's internal sub-searches, and — when we were not the one quoted — who was. **Cited** (the engine quoted this page) and **Seen** (it retrieved the page and quoted someone else) are separate badges and never merge; the second is the actionable half. Its own paid button, priced before the click. The answer is stored per DOMAIN, so a second page on a domain already looked up is free, and a page with no questions says so *without* implying the domain has none. |
 
 Tab labels carry a count only where a count is a measured fact: Keywords shows the row count;
 Backlinks shows one only once a block is actually in hand — loaded this session, or restored

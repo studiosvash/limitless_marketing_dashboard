@@ -1581,6 +1581,25 @@ Body `{"target": "example.com/path", "location": "United States", "project": "<s
 The view is a passthrough. All of the logic — the caches, the spend gate, the tracked-keyword
 join, the backlink sections — lives in `apps/dashboard/services/domain_overview_service.py`.
 
+**`include: ["questions"]` — AI questions.** Which questions an answer engine was asked where
+this URL comes back, from `ai_optimization/llm_mentions/search/live`. Its own button, like
+`backlinks`; the default Analyze press never buys it. Per row: `question`, `answer`, `platform`,
+`our_url`, `cited`, `retrieved`, `ai_search_volume`, `monthly_searches`, `fan_out_queries`,
+`cited_domains`. **`cited` and `retrieved` are distinct and must stay so** — cited means the
+engine quoted the page, retrieved means it found the page and quoted somebody else.
+
+DataForSEO **rejects a path** in its `domain` field (40501), so the request always carries the
+bare domain and the page filter is applied to the rows. One press therefore answers for every
+page on that domain. A page with no questions reports `domainTotal` alongside, because "this
+page is not referenced" and "this domain is not referenced" are different findings.
+
+**Persistence and `refresh`.** All three blocks are stored in `domain_lookups`, one row per
+(domain, path, location, block). Read order is **store → 24h cache → network**; `{"refresh":
+true}` is the only thing that re-buys. Blocks served from the store carry `storedAt`/`ageDays`
+so the UI can say "as of" rather than implying the answer is live. Measured cost model for the
+questions endpoint: **$0.10 per request + ~$0.001 per row**, so a smaller `limit` saves almost
+nothing and fewer requests saves everything.
+
 **Spend gate.** Three of the four live lookups call
 `pipeline.connectors.dataforseo_cost.ensure_budget()` before constructing a connector:
 `/api/domain-overview`, `/api/research` and `/api/live-serp`. `/api/connection-check` is

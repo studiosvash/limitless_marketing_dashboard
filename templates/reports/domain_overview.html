@@ -149,6 +149,38 @@ openblock %} comment {% templatetag closeblock %}, always.
   <div class="callout absent">{{ keywords_error }}</div>
 {% endif %}
 
+<h2>AI questions</h2>
+{% if questions_loaded %}
+  <table class="kpis">
+    <tr>
+      <td><div class="label">Questions</div><div class="value">{{ questions_total }}</div></td>
+      {# Cited and seen are different findings and are never added together: cited means the
+         engine quoted this page, seen means it found the page and quoted somebody else. #}
+      <td><div class="label">Cited in the answer</div><div class="value">{{ questions_cited }}</div></td>
+      <td><div class="label">Seen but not cited</div><div class="value">{{ questions_seen }}</div></td>
+    </tr>
+  </table>
+  <table>
+    <thead>
+      <tr><th>Question</th><th class="num">AI vol.</th><th>Status</th><th>Engine</th><th>Page</th></tr>
+    </thead>
+    <tbody>
+      {% for q in question_rows %}
+      <tr>
+        <td>{{ q.question }}</td>
+        <td class="num">{{ q.volume }}</td>
+        <td>{{ q.status }}</td>
+        <td>{{ q.engine }}</td>
+        <td class="url">{{ q.url }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="caption">{{ question_caption }}</p>
+{% else %}
+  <div class="callout absent">{{ questions_note }}</div>
+{% endif %}
+
 <h2>Backlinks &amp; spam score</h2>
 {% if backlinks_loaded %}
   <table class="kpis">

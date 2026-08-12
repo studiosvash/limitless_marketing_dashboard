@@ -45,6 +45,8 @@ logger = logging.getLogger(__name__)
 # Table caps. A report that honestly says "showing the top 25 of 4 218" is more useful than
 # one that runs forty pages, and a PDF is not a place to scroll.
 KEYWORD_ROWS = 25
+# A report that honestly truncates beats one that runs forty pages; the caption says so.
+QUESTION_ROWS = 30
 LINK_ROWS = 25
 ANCHOR_ROWS = 15
 PROMPT_ROWS = 20
@@ -250,6 +252,13 @@ def build_report_context(target: str, location: str = "United States",
     # consent to make them.
     backlinks = fetch_backlinks_block(target, site_id=site_id, allow_fetch=False)
 
+    # Same rule, same reason. Since the store landed this reads a lookup of any age rather
+    # than only one made in the last 24 hours, so a report of a domain looked up last month is
+    # complete instead of carrying an empty section.
+    from apps.dashboard.services.domain_overview_service import fetch_questions_block
+    questions = fetch_questions_block(target, site_id=site_id, allow_fetch=False)
+    question_rows = questions.get("rows") or []
+
     project = _registered_project(target)
     prompts = _prompt_rows(keywords, project.site_url if project is not None else "")
 
@@ -284,6 +293,24 @@ def build_report_context(target: str, location: str = "United States",
             "url": k.get("url") or "",
         } for k in keywords[:KEYWORD_ROWS]],
         "keyword_caption": _caption(len(keywords), KEYWORD_ROWS, "keywords"),
+
+        # --- AI questions -------------------------------------------------------------
+        # Cited and seen stay separate here too: one number would hide the finding that a page
+        # is being retrieved and passed over.
+        "questions_loaded": questions.get("state") == "ok",
+        "questions_note": questions.get("note") or "",
+        "questions_total": _fmt_int(questions.get("total")),
+        "questions_cited": _fmt_int(questions.get("citedCount")),
+        "questions_seen": _fmt_int(questions.get("seenCount")),
+        "question_rows": [{
+            "question": r.get("question") or "",
+            # "—", never 0: unknown volume is not "nobody asks this".
+            "volume": _fmt_int(r.get("ai_search_volume")) if r.get("ai_search_volume") is not None else "—",
+            "status": "Cited" if r.get("cited") else "Seen",
+            "engine": "AI Overviews" if r.get("platform") == "google" else "ChatGPT",
+            "url": r.get("our_url") or "",
+        } for r in question_rows[:QUESTION_ROWS]],
+        "question_caption": _caption(len(question_rows), QUESTION_ROWS, "questions"),
 
         "backlinks_loaded": backlinks.get("state") == "ok",
         "backlinks_note": backlinks.get("note") or "",
