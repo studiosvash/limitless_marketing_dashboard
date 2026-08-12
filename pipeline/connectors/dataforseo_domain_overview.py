@@ -27,6 +27,48 @@ DATAFORSEO_BASE = "https://api.dataforseo.com/v3"
 _MOVEMENT_FLAGS = (("is_new", "new"), ("is_up", "up"), ("is_down", "down"), ("is_lost", "lost"))
 
 
+def _has_items(data: dict) -> bool:
+    """Did this envelope carry any ranked keyword at all?
+
+    `.get("items")` with no default on purpose: DataForSEO returns `"items": null` for a page
+    it has nothing for, and `.get("items", [])` would hand back None — which is exactly the
+    shape that raised `object of type 'NoneType' has no len()` in the backlinks connector.
+    """
+    try:
+        result = ((data or {}).get("tasks") or [{}])[0].get("result") or []
+        return bool((result[0] or {}).get("items")) if result else False
+    except (AttributeError, IndexError, TypeError):
+        return False
+
+
+def slash_variants(target: str) -> list[str]:
+    """The page target, then the same target with its trailing slash toggled.
+
+    DataForSEO Labs matches a page target EXACTLY. Verified against the real API:
+
+        .../6-steps-to-calculate-wedding-bartender-cost   -> items: []
+        .../6-steps-to-calculate-wedding-bartender-cost/  -> 46 keywords, one at position 2
+
+    A person pasting a URL out of a browser bar routinely drops the slash, so a page with real
+    rankings reported "no data". The second form is only ever tried when the first found
+    nothing, so the retry costs a call solely in the case that already produced a useless
+    answer.
+
+    A bare domain and a root-only URL have nothing to toggle, and a URL carrying a query is
+    left alone — moving a slash in front of `?` produces something that matches nothing.
+    """
+    raw = str(target or "").strip()
+    if not raw or "?" in raw or "#" in raw:
+        return [raw] if raw else []
+    from urllib.parse import urlsplit
+
+    probe = raw if "://" in raw else "https://" + raw
+    path = urlsplit(probe).path or ""
+    if not path.strip("/"):
+        return [raw]                      # bare domain, or scheme + "/"
+    return [raw, raw[:-1] if raw.endswith("/") else raw + "/"]
+
+
 def parse_keyword_item(item: dict) -> dict:
     """One ranked-keyword row, keeping the fields this response is already billed for.
 
@@ -170,33 +212,47 @@ class DataForSEODomainOverviewConnector(BaseConnector):
         is_page_target = bool(path) and path != "/"
         target = (parsed_url.scheme + "://" + domain + path) if is_page_target else domain
 
-        payload = {
-            "target": target,
-            "location_name": location_name,
-            "language_name": "English",
-            "item_types": ["organic"],
-            "limit": limit,
-            "order_by": ["keyword_data.keyword_info.search_volume,desc"]
-        }
+        # A page target is matched EXACTLY, trailing slash included, so the same page is asked
+        # for both ways when the first form comes back empty. See `slash_variants`.
+        attempts = slash_variants(target) if is_page_target else [target]
+        data = None
+        run_cost = 0.0
+        for attempt in attempts:
+            payload = {
+                "target": attempt,
+                "location_name": location_name,
+                "language_name": "English",
+                "item_types": ["organic"],
+                "limit": limit,
+                "order_by": ["keyword_data.keyword_info.search_volume,desc"]
+            }
+            try:
+                resp = requests.post(
+                    f"{DATAFORSEO_BASE}/dataforseo_labs/google/ranked_keywords/live",
+                    auth=self.auth,
+                    json=[payload],
+                    timeout=45,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+            except Exception as exc:
+                self.logger.warning(f"[dataforseo_domain_overview] Failed to fetch ranked keywords: {exc}")
+                return {"status": "error", "error": f"Failed to fetch data: {exc}"}
 
-        try:
-            resp = requests.post(
-                f"{DATAFORSEO_BASE}/dataforseo_labs/google/ranked_keywords/live",
-                auth=self.auth,
-                json=[payload],
-                timeout=45,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-        except Exception as exc:
-            self.logger.warning(f"[dataforseo_domain_overview] Failed to fetch ranked keywords: {exc}")
-            return {"status": "error", "error": f"Failed to fetch data: {exc}"}
+            # Every attempt is billed the moment it returns, so the charge accumulates rather
+            # than being read once at the end.
+            run_cost += extract_cost(data)
+            if _has_items(data) or attempt is attempts[-1]:
+                if attempt != attempts[0]:
+                    self.logger.info(
+                        f"[dataforseo_domain_overview] {attempts[0]!r} returned nothing; "
+                        f"{attempt!r} did — DataForSEO matches a page target exactly.")
+                target = attempt
+                break
 
-        # The live Labs call is already billed by the time we get here. Read the charge off
-        # the envelope up front so the early returns below still book what was spent.
-        run_cost = extract_cost(data)
-
-        tasks = data.get("tasks", [])
+        # run_cost was accumulated across the attempts above, so the early returns below still
+        # book everything that was actually spent.
+        tasks = data.get("tasks") or []
         if not tasks:
             record_cost(self.name, site_id, run_cost, units=0,
                         notes=f"labs/ranked_keywords live for {domain} (no tasks)")

@@ -200,7 +200,7 @@ class DataForSEOLiveSERPConnector(BaseConnector):
         # cost/units legitimately varies with the depth the caller asked for.
         cost_note = f"serp/google/organic/live/advanced '{keyword}' @ {location_name} depth={depth}"
 
-        tasks = data.get("tasks", [])
+        tasks = data.get("tasks") or []
         if not tasks:
             record_cost(self.name, site_id, run_cost, units=1, notes=f"{cost_note} (no tasks)")
             return {"status": "error", "error": "No tasks returned from DataForSEO."}
@@ -213,7 +213,7 @@ class DataForSEOLiveSERPConnector(BaseConnector):
 
         record_cost(self.name, site_id, run_cost, units=1, notes=cost_note)
 
-        results = task.get("result", [])
+        results = task.get("result") or []
         if not results:
             return {"status": "ok", "items": []}
 

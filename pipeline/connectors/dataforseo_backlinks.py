@@ -140,7 +140,7 @@ class DataForSEOBacklinksConnector(BaseConnector):
         # empty task still books what it cost.
         run_cost = extract_cost(data)
 
-        tasks = data.get("tasks", [])
+        tasks = data.get("tasks") or []
         if not tasks:
             self.logger.warning("[dataforseo_backlinks] No tasks returned in response.")
             record_cost(self.name, site_id, run_cost, units=0,
@@ -155,14 +155,14 @@ class DataForSEOBacklinksConnector(BaseConnector):
                         notes=f"backlinks/backlinks live for {target} (status {status_code})")
             return []
 
-        result = task.get("result", [])
+        result = task.get("result") or []
         if not result:
             self.logger.warning("[dataforseo_backlinks] Empty result returned.")
             record_cost(self.name, site_id, run_cost, units=0,
                         notes=f"backlinks/backlinks live for {target} (empty result)")
             return []
 
-        items = result[0].get("items", [])
+        items = result[0].get("items") or []
         self.logger.info(f"[dataforseo_backlinks] Retrieved {len(items)} raw backlinks items.")
 
         # `units` = backlink rows returned — the Backlinks API meters per returned row, so

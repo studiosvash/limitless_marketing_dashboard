@@ -142,7 +142,7 @@ class DataForSEOOnPageConnector(BaseConnector):
         data = resp.json()
         self._run_cost += extract_cost(data)
 
-        tasks = data.get("tasks", [])
+        tasks = data.get("tasks") or []
         if not tasks:
             return []
 
@@ -151,7 +151,7 @@ class DataForSEOOnPageConnector(BaseConnector):
         if not result:
             return []
 
-        items = result[0].get("items", [])
+        items = result[0].get("items") or []
 
         records = []
         page_meta = []
