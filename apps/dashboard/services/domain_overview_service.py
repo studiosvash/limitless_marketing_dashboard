@@ -27,7 +27,9 @@ from django.core.cache import cache
 
 # The store is what makes a domain cost money once rather than once a day; the cache in front
 # of it only saves a DB round-trip inside a session.
-from apps.dashboard.services.domain_lookup_store import load_block, recent_lookups, save_block
+from apps.dashboard.services.domain_lookup_store import (
+    load_block, recent_lookups, save_block, stored_blocks,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +67,10 @@ QUESTIONS_LIMIT = 100
 # often enough to be offered rather than decided here.
 QUESTIONS_PLATFORMS = ("chat_gpt",)
 QUESTIONS_PLATFORM_CHOICES = ("chat_gpt", "google")
+# What the questions block was stored under before the platform selector existed. Renaming a
+# storage key orphans every row already written with the old one — those lookups were paid
+# for, so they are still read rather than silently re-bought.
+LEGACY_QUESTIONS_BLOCK = "questions"
 
 
 def keywords_cache_key(target: str, location: str) -> str:
@@ -144,6 +150,12 @@ def fetch_questions_block(target: str, site_id: str = "", allow_fetch: bool = Tr
             # the way out, so a second page on a domain already looked up costs nothing.
             return {**_narrow_to_page(cached, raw), "cached": True}
         stored = load_block(_domain_only(raw), store_block)
+        if stored is None and chosen == QUESTIONS_PLATFORMS:
+            # Blocks written before the platform selector existed are stored under the bare
+            # name. Renaming the key orphaned them: a domain whose questions had been bought
+            # showed "Not looked up yet" and offered to buy them again. Only the DEFAULT set
+            # falls back, because that is what those rows were fetched with.
+            stored = load_block(_domain_only(raw), LEGACY_QUESTIONS_BLOCK)
         if stored is not None:
             cache.set(key, stored, CACHE_TTL)
             return _narrow_to_page(stored, raw)
@@ -540,9 +552,13 @@ def run_domain_overview(target: str, location: str = "United States", site_id: s
                                                                refresh=refresh,
                                                                platforms=platforms)}
     elif not refresh:
-        # Same rule. A stored answer for EITHER platform choice counts as owned, so a hard
-        # refresh restores whichever the user actually bought.
-        for choice in (("chat_gpt", "google"), ("chat_gpt",), ("google",)):
+        # Same rule, but the platform set is asked of the STORE rather than guessed: the
+        # questions block is keyed by which engines were bought, so a fixed list of guesses
+        # misses whichever combination the user actually paid for — and then offers to sell it
+        # to them again. Newest stored block wins.
+        for block in stored_blocks(target, prefix="questions"):
+            suffix = block.split(":", 1)[1] if ":" in block else ""
+            choice = tuple(suffix.split("+")) if suffix else QUESTIONS_PLATFORMS
             owned = fetch_questions_block(target, site_id=site_id, allow_fetch=False,
                                           platforms=choice)
             if owned.get("state") in ("ok", "empty") and owned.get("domainTotal") is not None:

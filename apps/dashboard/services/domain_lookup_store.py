@@ -84,6 +84,34 @@ def load_block(target: str, block: str, location: str = "") -> Optional[dict]:
     return {**payload, "storedAt": stored_at, "ageDays": age_days, "fromStore": True}
 
 
+def stored_blocks(target: str, prefix: str = "") -> list[str]:
+    """Block names actually held for this target's DOMAIN, newest first.
+
+    Lets a caller ask "what do we already own?" instead of guessing names. The questions block
+    is keyed by platform set (`questions:chat_gpt`, `questions:chat_gpt+google`) plus a legacy
+    bare `questions` from before that existed, so a fixed list of guesses would miss whichever
+    combination the user actually bought — and offer to sell it to them again.
+
+    Never raises: an unreadable list means "nothing owned", which is the safe answer.
+    """
+    domain, _path, _loc = _key(target)
+    if not domain:
+        return []
+    try:
+        with get_session() as session:
+            from pipeline.db.schema import ensure_domain_lookups
+            ensure_domain_lookups(session)
+            rows = session.execute(
+                select(DomainLookup.block)
+                .where(DomainLookup.domain == domain)
+                .order_by(DomainLookup.fetched_at.desc())
+            ).scalars().all()
+    except Exception:
+        logger.warning("[domain_lookup_store] could not list blocks for %s", domain, exc_info=True)
+        return []
+    return [b for b in rows if not prefix or (b or "").startswith(prefix)]
+
+
 def recent_lookups(limit: int = 10) -> list[dict]:
     """The last N targets looked up, newest first — one entry per (domain, path, market).
 
