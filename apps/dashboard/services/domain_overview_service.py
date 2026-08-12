@@ -183,8 +183,11 @@ def fetch_questions_block(target: str, site_id: str = "", allow_fetch: bool = Tr
     }
     cache.set(key, block, CACHE_TTL)
     # Keyed on the domain alone, like the request and the cache — one stored answer serves
-    # every page on it, for good.
-    save_block(_domain_only(raw), store_block, block, cost=block.get("cost", 0.0))
+    # every page on it, for good. An empty answer is deliberately NOT kept: see the same
+    # reasoning in fetch_keywords_block. A domain DataForSEO has not indexed yet is a
+    # temporary fact, and freezing it would make the next press pointless.
+    if rows:
+        save_block(_domain_only(raw), store_block, block, cost=block.get("cost", 0.0))
     return _narrow_to_page(block, raw)
 
 
@@ -292,9 +295,15 @@ def fetch_keywords_block(target: str, location: str, site_id: str = "",
     result = connector.get_domain_overview(target, location, limit=KEYWORDS_LIMIT, site_id=site_id)
     if result.get("status") == "ok":
         cache.set(key, result, CACHE_TTL)
-        # Stored as well as cached: the cache expires in a day, the answer does not.
-        save_block(target, "keywords", result, location=location,
-                   cost=float(result.get("cost") or 0.0))
+        # Stored as well as cached — the cache expires in a day, the answer does not — but ONLY
+        # when there is an answer. A stored "we found nothing" is the one result that must
+        # never be sticky: it costs nothing to re-derive and it is the answer most likely to be
+        # wrong. It cost a real bug once already — a page target missing its trailing slash
+        # returned nothing, that nothing was persisted, and the fix for the slash could not
+        # reach the network past it, so the page kept reporting "0 keywords" after being fixed.
+        if result.get("keywords"):
+            save_block(target, "keywords", result, location=location,
+                       cost=float(result.get("cost") or 0.0))
     return result
 
 
