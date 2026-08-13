@@ -111,15 +111,22 @@ Lists active sites (`Site.is_active == 1`), ordered by `site_url`.
   "visibility": 1.6,
   "improved_count": 5,
   "declined_count": 2,
-  "last_updated": "2 days ago"
+  "last_updated": "2 days ago",
+  "syncing": false
 }]
 ```
 
 `id` is the slug. `domain` is `_bare_domain(site.site_url)` (scheme, `sc-domain:` prefix and
-trailing slash stripped). The last six fields come from `ProjectSerializer._pos_summary()`,
+trailing slash stripped). The stats fields come from `ProjectSerializer._pos_summary()`,
 which caches its result on the instance and degrades to zeros + `"No sync yet"` on any
 exception. `last_updated` is a human string: `"Today"`, `"Yesterday"`, `"N days ago"`, or
-`"No sync yet"`.
+`"No sync yet"` — and it means **when this project itself last completed a positioning run**
+(`RefreshRun` by `site_pk`, scopes `positions`/`positions_new`/`all`), falling back to the
+newest measurement date only for legacy runs with no pk. It used to be the measurement date
+alone, and `dataforseo_serp` stamps rows `yesterday()`, so a fetch finished two minutes ago
+read "Yesterday". `syncing` is true while a run is in flight **for this project** (again by
+`site_pk` — a sibling project's run on the same domain does not light it); the Position
+Tracking list renders it as "Fetching…".
 
 **Query params:** `range` — `7d` | `28d` | `90d`, default `28d`. Optional; a caller that only
 wants the project list can omit it.
@@ -1383,9 +1390,31 @@ survives navigating to another page, reloading, or even a `gunicorn`/`systemctl`
 process outlives the request, and outlives the worker that started it. The run's pid is written
 back onto the row once the child launches (`sync_api_service.start_sync_run`).
 
-**Concurrency guard**: if a `RefreshRun` is already `running` for this site, the existing
-`task_id` is returned instead of starting a second process — two tabs (or a cron tick during a
-manual refresh) attach to the same run rather than forking a race over the same `SyncLog` rows.
+**Concurrency guard — one run per DOMAIN, answered per PROJECT.** Only one `RefreshRun` may be
+`running` per `site_url` (a partial unique index enforces it). What the second caller gets
+depends on whose run holds the slot:
+
+* **Same project (or the caller passed no `site_pk`)** — the existing `task_id` is returned
+  with `already_running: true`: two tabs, a re-click, or a cron tick during a manual refresh
+  attach to the same run rather than forking a race over the same `SyncLog` rows.
+* **A DIFFERENT project on the same domain** (Position Tracking registers many projects per
+  domain) — the response is `{"sibling_running": true, "task_id": <live run>, "scope": ...,
+  "project": "<owning project's name>"}` and **no attach happens**. Attaching used to show the
+  sibling's progress bar as this project's and then "complete" having fetched nothing for this
+  project's location — which is how new city projects stayed permanently blank while the user
+  watched a successful-looking fetch. The SPA queues this project's fetch client-side
+  (`state.sync.queued`, a FIFO) and starts it when the slot frees; `task_id` is returned so it
+  can watch the live run. A running row with `site_pk NULL` (scheduler) counts as a sibling to
+  any project-specific request.
+
+**Freshness — per project for location-scoped scopes.** The already-fresh prompt
+(`{"fresh": true, "last_synced": ...}`, manual non-forced calls only) is based on `SyncLog`,
+which is keyed `(connector, site_url)` — domain-level. For scopes that fetch per-project data
+(`positions`, `positions_new`, and `all`, which includes the positioning connectors), a request
+carrying a `site_pk` is only "fresh" if **that project itself** has a successful `RefreshRun`
+for that scope (or `all`) inside the 24 h window — a sibling's sync an hour ago says nothing
+about this project's location, and used to swallow every other city project's first fetch for
+a day. Domain-level scopes (`backlinks`, `seo`, `ads`, …) keep domain-level freshness.
 
 **Response**
 
@@ -1419,6 +1448,11 @@ behind a slow one competed with whatever page GET the user had just triggered).
 `step` becomes `"Done — N records written"` on success or
 `"Completed with errors — <first line>"` on failure, with the full text in `error`.
 
+The payload also carries **whose run this is**: `site_url`, `site_pk`, and `project` (the
+owning project's display name; `null` for a domain-wide run). The SPA banner renders
+`project` — with many projects per domain, "Syncing Positions for premierstaff.com" never
+said whose fetch was actually running.
+
 `steps[].state` is one of `done` / `running` / `pending` / `error` / `skipped`. A `done` step's
 `records`/`error` come from that connector's live `SyncLog` row for *this* run
 (`SyncLog.last_synced >= run.started_at` distinguishes it from a previous run's row); a
@@ -1431,8 +1465,10 @@ before a page reload.
 
 ### `GET /api/projects/<slug>/sync/active`
 
-`{"task_id": 17, "scope": "all"}` for the in-flight `RefreshRun` on this site, or
-`{"task_id": null}` if none. Called once from the SPA's `boot()` so a hard page reload
+`{"task_id": 17, "scope": "all", …}` for the in-flight `RefreshRun` on this site — the full
+`GET /api/tasks/<id>` payload rides along, including `project`/`site_pk` (the run may belong
+to a sibling project on the same domain; the reloaded SPA uses `project` to label the banner
+truthfully and to decide the run is not its own) — or `{"task_id": null}` if none. Called once from the SPA's `boot()` so a hard page reload
 re-attaches to a sync already running server-side instead of losing track of it — before this
 endpoint existed, a reload made a 20-30 minute run invisible to the user for its remaining
 duration even though it was still writing to the database.

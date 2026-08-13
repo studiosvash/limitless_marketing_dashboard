@@ -16,10 +16,47 @@ class ProjectSerializer(serializers.Serializer):
     improved_count = serializers.SerializerMethodField()
     declined_count = serializers.SerializerMethodField()
     last_updated = serializers.SerializerMethodField()
+    syncing = serializers.SerializerMethodField()
 
     def get_domain(self, site) -> str:
         from pipeline.services.site_service import _bare_domain
         return _bare_domain(site.site_url)
+
+    def _sync_state(self):
+        """(running site_pks, latest successful positioning run per site_pk) — batched.
+
+        Two queries for the WHOLE list, memoised on the serializer (DRF's many=True reuses
+        one child instance), because this feeds two per-row facts the Position Tracking list
+        was lying about:
+
+        * `syncing` — a run in flight for THIS project. The list had no fetching state at
+          all, so a running fetch was invisible the moment the user scrolled away from the
+          banner.
+        * the run-completion timestamp behind `last_updated` — see get_last_updated.
+        """
+        if not hasattr(self, "_sync_state_cache"):
+            from apps.sync.models import RefreshRun, RefreshStatus
+            running = set(
+                RefreshRun.objects
+                .filter(status=RefreshStatus.RUNNING, site_pk__isnull=False)
+                .values_list("site_pk", flat=True)
+            )
+            latest: dict[int, object] = {}
+            rows = (RefreshRun.objects
+                    .filter(status=RefreshStatus.SUCCESS, site_pk__isnull=False,
+                            scope__in=["positions", "positions_new", "positioning",
+                                       "positioning_new", "all"],
+                            finished_at__isnull=False)
+                    .order_by("site_pk", "-finished_at")
+                    .values_list("site_pk", "finished_at"))
+            for pk, finished in rows:
+                latest.setdefault(pk, finished)
+            self._sync_state_cache = (running, latest)
+        return self._sync_state_cache
+
+    def get_syncing(self, site) -> bool:
+        running, _ = self._sync_state()
+        return getattr(site, "id", None) in running
 
     def _pos_summary(self, site) -> dict:
         if hasattr(site, "_pos_summary_cache"):
@@ -130,7 +167,29 @@ class ProjectSerializer(serializers.Serializer):
         return self._pos_summary(site)["declined"]
 
     def get_last_updated(self, site) -> str:
-        return self._pos_summary(site)["last_updated"]
+        """When this project last FETCHED, not when its data is dated.
+
+        The column header says "Updated", and the user reads it as "when did I last fetch
+        this project". It used to be derived from the newest keyword_rankings date — but
+        `dataforseo_serp` stamps every row `yesterday()` (a SERP snapshot is a complete
+        reading for its day), so a fetch completed two minutes ago honestly reported
+        "Yesterday", which reads as "nothing happened today". The project's own last
+        successful positioning run is the fact the column is asking for; the measurement
+        date remains the fallback for runs from before RefreshRun carried a site_pk.
+        """
+        from django.utils import timezone
+
+        _, latest = self._sync_state()
+        finished = latest.get(getattr(site, "id", None))
+        if finished is None:
+            return self._pos_summary(site)["last_updated"]
+        days_ago = (timezone.localtime(timezone.now()).date()
+                    - timezone.localtime(finished).date()).days
+        if days_ago <= 0:
+            return "Today"
+        if days_ago == 1:
+            return "Yesterday"
+        return f"{days_ago} days ago"
 
 
 class ProjectCreateSerializer(serializers.Serializer):

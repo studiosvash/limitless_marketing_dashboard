@@ -27,11 +27,14 @@
        notifications_service.py / budget_service.py. */
     notifications: { items: [], unread: 0 },
     budget: null,
-    /* `queued` — a refresh the user asked for while another was running; drained by
-       _pollSyncTask when the slot frees. `stalled` — the browser cannot currently reach the
-       server; the run itself is a separate process and is probably fine. Both are rendered,
-       never inferred: a button must be able to say which of the two it is in. */
-    sync: { active: false, progress: 0, step: '', cost: 0, steps: [], warnings: [], queued: null, stalled: false },
+    /* `queued` — a FIFO array of refreshes asked for while another was running; drained one
+       per completed run by _pollSyncTask. An ARRAY because the server allows one run per
+       DOMAIN and Position Tracking registers many projects per domain — fetching 12 city
+       projects back-to-back queues 11 of them, and a single-slot queue silently lost 10.
+       `stalled` — the browser cannot currently reach the server; the run itself is a
+       separate process and is probably fine. Both are rendered, never inferred: a button
+       must be able to say which of the two it is in. */
+    sync: { active: false, progress: 0, step: '', cost: 0, steps: [], warnings: [], queued: [], stalled: false },
     syncPanelOpen: false,
     freshness: 'Weekly · Mon',
     // doQLoading is the AI Questions press, tracked apart from doLoading so the two paid
@@ -762,12 +765,15 @@
    *   preTaskId  – (optional) task_id already created server-side (e.g., from POST /api/projects).
    *                When supplied the POST /api/projects/<slug>/sync call is skipped and we go
    *                straight to polling, avoiding a redundant second sync run. */
-  startSync(scope, preTaskId, force) {
-    const pid = this.state.projectId;
+  startSync(scope, preTaskId, force, pidOverride) {
+    /* `pidOverride` — fire the sync for a project the user is not currently viewing. Set
+       only by the queue drain: an entry queued for the Chicago project must run for
+       Chicago even if the user has since clicked over to Houston. */
+    const pid = pidOverride || this.state.projectId;
     const activeScope = scope || 'all';
 
-    /* A sync for this project is already in flight. Only one runs per project — the server
-       enforces that in start_sync_run — so this click cannot start now.
+    /* A sync is already in flight in this session. The server allows ONE RUN PER DOMAIN,
+       so this click cannot start now whether the run belongs to this project or a sibling.
        QUEUE IT AND SAY SO. This used to be a bare `return`: no request, no toast, no state
        change, so pressing Refresh on a second page did nothing and looked identical to a dead
        button. The user is owed one of two truthful answers, and "already running" is one of
@@ -776,19 +782,16 @@
       && (!this.state.sync.projectId || this.state.sync.projectId === pid);
     if (busy && preTaskId == null) {
       const running = this.state.sync.scope || 'all';
-      if (running === activeScope) {
+      /* Same scope, and the bar really is OUR run → the click is already satisfied. But if
+         the bar is watching a SIBLING project's run (own === false), a same-scope click is a
+         different project's fetch — it belongs in the queue, where the dedupe answers
+         "already queued" if this exact fetch is waiting. */
+      if (running === activeScope && this.state.sync.own !== false) {
         this.notify('That refresh is already running — its progress is in the bar above.');
         return;
       }
-      const q = this.state.sync.queued;
-      if (q && q.scope === activeScope && q.projectId === pid) {
-        this.notify('Already queued — it starts when the current refresh finishes.');
-        return;
-      }
-      this.setState(st => ({ sync: Object.assign({}, st.sync, {
-        queued: { scope: activeScope, projectId: pid, force: !!force },
-      }) }));
-      this.notify('Queued — this starts as soon as the ' + running + ' refresh finishes.');
+      this._queueSync(activeScope, pid, force,
+        'Queued — this starts as soon as the ' + running + ' refresh finishes.');
       return;
     }
 
@@ -819,6 +822,21 @@
           this.refreshNotifications();
           return;
         }
+        /* ANOTHER PROJECT on this domain holds the run slot (the server allows one run per
+           domain, and Position Tracking registers many projects per domain). Attaching would
+           show the sibling's progress as ours and then "complete" having fetched nothing for
+           this project — which is exactly how new city projects stayed blank while the user
+           watched a progress bar succeed. So: watch THEIR run (it owns the bar, under its own
+           name), and QUEUE ours to start the moment the slot frees. */
+        if (t.sibling_running) {
+          const who = t.project || 'another project on this domain';
+          if (!this.state.sync.active) {
+            this._pollSyncTask(t.task_id, t.scope || 'all', pid, 0, [], false);
+          }
+          this._queueSync(activeScope, pid, force,
+            'Fetching for ' + who + ' is running — yours is queued and starts automatically when it finishes.');
+          return;
+        }
         if (t.warnings && t.warnings.length) {
           // Shown once, at start, rather than repeated on every poll tick: "N steps will be
           // skipped because X credential is missing" is a fact about the whole run, not a
@@ -828,6 +846,22 @@
         this._pollSyncTask(t.task_id, activeScope, pid, t.est_cost || 0, t.steps || []);
       })
       .catch(err => { if (this._alive) this.notify(err.detail || 'Could not start sync'); });
+  }
+
+  /* Append one entry to the sync FIFO. Dedupes on (scope, projectId): re-clicking a fetch
+     that is already waiting is reassurance, not a second instruction. `message` is the toast
+     for a NEW entry — the caller knows why it queued (same-project scope clash vs a sibling
+     project holding the domain's run slot) and says so. */
+  _queueSync(scope, pid, force, message) {
+    const q = this.state.sync.queued || [];
+    if (q.some(e => e.scope === scope && e.projectId === pid)) {
+      this.notify('Already queued — it starts when the current refresh finishes.');
+      return;
+    }
+    this.setState(st => ({ sync: Object.assign({}, st.sync, {
+      queued: (st.sync.queued || []).concat([{ scope, projectId: pid, force: !!force }]),
+    }) }));
+    this.notify(message || 'Queued — it starts when the current refresh finishes.');
   }
 
   /* "40 minutes ago" for the already-fetched prompt. Coarse on purpose — the user is deciding
@@ -876,15 +910,26 @@
      takes longer than the interval piles up behind the next one and competes with whatever
      page GET the user just triggered. A 20-30 minute "all" run does not need 500ms resolution
      for its remaining 29 minutes. */
-  _pollSyncTask(taskId, scope, pid, estCost, initialSteps) {
+  _pollSyncTask(taskId, scope, pid, estCost, initialSteps, ownRun) {
     if (this._iv) { clearInterval(this._iv); this._iv = null; }
 
-    this.setState({
+    /* `own: false` — the bar is watching a SIBLING project's run (see sibling_running in
+       startSync): the banner must carry THAT project's name, and a same-scope click here
+       belongs in the queue, not in an "already running" brush-off. The run's own project
+       name arrives with the first poll payload (`st.project`); until then fall back to the
+       clicked project's name only for a run we actually own. */
+    const ownProj = ownRun === false ? null : (this.state.projects.find(p => p.id === pid) || {});
+    this.setState(st => ({
       sync: {
         active: true, scope, progress: 0.02, step: (initialSteps && initialSteps[0]) || 'Starting…',
         cost: estCost, projectId: pid, startTime: Date.now(), steps: [], warnings: [],
+        own: ownRun !== false,
+        projectName: ownProj ? (ownProj.name || null) : null,
+        /* A fetch queued a moment ago (sibling_running queues, THEN this poll starts) must
+           survive this reset. */
+        queued: (st.sync && st.sync.queued) || [],
       },
-    });
+    }));
 
     const POLL_GIVE_UP = 6;        // consecutive failures before we ADMIT the connection is lost
     const RECONNECT_MS = 5000;     // …then back off hard instead of hammering a dead network
@@ -924,12 +969,12 @@
           clearInterval(this._iv); this._iv = null;
           const wasCancelled = st.status === 'cancelled';
           /* Read the queue BEFORE the state reset below clears it. */
-          const queued = this.state.sync.queued;
+          const queued = (this.state.sync.queued || []).slice();
           this.setState(s => {
             const cache = {};
             Object.keys(s.cache).forEach(k2 => { if (k2.indexOf(pid + ':') !== 0) cache[k2] = s.cache[k2]; });
             return {
-              sync: { active: false, scope: null, progress: 1, step: 'Done', cost: estCost, projectId: null, startTime: null, steps: [], warnings: [], stopping: false, queued: null, stalled: false },
+              sync: { active: false, scope: null, progress: 1, step: 'Done', cost: estCost, projectId: null, startTime: null, steps: [], warnings: [], stopping: false, queued: [], stalled: false },
               /* A cancelled run did NOT refresh the page, so the freshness pill must not claim
                  it did. Whatever it wrote before stopping is still real, hence the refetch. */
               freshness: wasCancelled ? s.freshness : 'Just now',
@@ -946,8 +991,15 @@
              SyncLog rows so every Data source badge moves with the data it describes
              (including a connector whose run failed inside an otherwise "Done" sync). */
           this.loadSyncLog(pid);
+          /* And the projects list: its Updated column shows each project's own last fetch
+             and its `syncing` flag, both of which this run just changed. */
+          this.reloadProjects();
           const proj = this.state.projects.find(p => p.id === pid) || {};
-          const dom = proj.domain || pid;
+          /* Name the PROJECT the run belonged to, not just the domain: with many projects
+             per domain, "refreshed for premierstaff.com" never said whose fetch finished.
+             `st.project` is the server's answer and wins; the domain rides along. */
+          const dom = st.project ? (st.project + ' (' + (st.site_url || proj.domain || '') + ')')
+            : (proj.domain || pid);
           if (wasCancelled) {
             const left = Math.max(0, (st.total || 0) - (st.completed || 0));
             this.notify('Refresh stopped for ' + dom + (left ? ' — ' + left + ' step(s) did not run' : ''));
@@ -956,26 +1008,41 @@
           this.notify(scopeNotif[scope] || (scope === 'all' ? ('All modules refreshed for ' + dom) : (scope + ' refreshed for ' + dom)));
           }
 
-          /* Drain the queue. A refresh the user asked for while another was running is a real
-             instruction, not a suggestion — it runs now that the slot is free. Deferred a tick
-             so the state reset above has landed and startSync() does not see itself as busy.
-             A queue entry for a project the user has since left is dropped rather than fired
-             at whatever project happens to be open. */
-          if (queued && queued.projectId === pid && !wasCancelled) {
+          /* Drain the queue, FIFO. A refresh the user asked for while another was running is
+             a real instruction, not a suggestion — it runs now that the slot is free, FOR THE
+             PROJECT IT WAS QUEUED FOR (startSync's pidOverride), even if the user has since
+             clicked over to another project: dropping it re-creates the silent lost fetch
+             this queue exists to end. Deferred a tick so the state reset above has landed and
+             startSync() does not see itself as busy. */
+          if (queued.length && !wasCancelled) {
+            const next = queued[0], rest = queued.slice(1);
             setTimeout(() => {
-              if (!this._alive || this.state.projectId !== pid) return;
-              this.notify('Starting the queued ' + queued.scope + ' refresh…');
-              this.startSync(queued.scope, null, queued.force);
+              if (!this._alive) return;
+              /* Put the remainder back — the reset above cleared the whole queue, and
+                 startSync's poll-start now preserves whatever is in state. */
+              if (rest.length) {
+                this.setState(s2 => ({ sync: Object.assign({}, s2.sync, { queued: rest }) }));
+              }
+              const nproj = this.state.projects.find(p => p.id === next.projectId) || {};
+              this.notify('Starting the queued ' + next.scope + ' refresh for '
+                + (nproj.name || nproj.domain || next.projectId) + '…');
+              this.startSync(next.scope, null, next.force, next.projectId);
             }, 400);
-          } else if (queued && wasCancelled) {
+          } else if (queued.length && wasCancelled) {
             /* Stop means stop. Silently running the next thing after the user pressed Stop
                would be the opposite of what they asked for. */
-            this.notify('The queued ' + queued.scope + ' refresh was dropped because you stopped this one.');
+            this.notify(queued.length === 1
+              ? 'The queued ' + queued[0].scope + ' refresh was dropped because you stopped this one.'
+              : queued.length + ' queued refreshes were dropped because you stopped this one.');
           }
         } else {
           this.setState(s => ({ sync: Object.assign({}, s.sync, {
             active: true, scope, progress: st.progress, step: st.step, cost: estCost, projectId: pid,
             steps: st.steps || [], elapsed: st.elapsed || 0,
+            /* The server says whose run this is (task payload `project`) — the one source
+               that is right even when the bar is watching a sibling project's run or was
+               re-attached after a reload. */
+            projectName: st.project || s.sync.projectName || null,
           }) }));
         }
       }).catch(err => {
@@ -1004,7 +1071,7 @@
         if (pollFails < RECONNECT_GIVE_UP) return;
 
         clearInterval(this._iv); this._iv = null;
-        this.setState({ sync: { active: false, scope: null, progress: 0, step: '', cost: estCost, projectId: null, startTime: null, steps: [], warnings: [], queued: null, stalled: false } });
+        this.setState({ sync: { active: false, scope: null, progress: 0, step: '', cost: estCost, projectId: null, startTime: null, steps: [], warnings: [], queued: [], stalled: false } });
         const why = (err && err.detail) ? ' (' + err.detail + ')' : '';
         this.notify('Still cannot reach the server' + why + ' — the sync may well still be running. Reload the page to re-attach to it.');
       });
@@ -1021,7 +1088,14 @@
     window.FuseAPI.get('/api/projects/' + pid + '/sync/active').then(a => {
       if (!this._alive || !a || a.task_id == null) return;
       if (this.state.sync.active) return; // a fresh startSync already beat us to it
-      this._pollSyncTask(a.task_id, a.scope || 'all', pid, 0, []);
+      /* The active run may belong to a SIBLING project on this domain — the payload's
+         `project` says whose it is. Marking it not-ours keeps a same-scope click queueable
+         instead of brushed off as "already running". Best-effort: at boot the project list
+         may not be loaded yet, in which case ownership defaults to true and the banner is
+         still truthful (it renders the payload's own project name). */
+      const mine = this.state.projects.find(p => p.id === pid) || {};
+      const own = !a.project || !mine.name || a.project === mine.name;
+      this._pollSyncTask(a.task_id, a.scope || 'all', pid, 0, [], own);
     }).catch(() => {}); // best-effort; a normal boot must never fail over this
   }
 
@@ -3101,8 +3175,8 @@
        while any sync ran hit an early `return` in startSync() — no request, no toast, no
        change. The button looked alive and did nothing, which is indistinguishable from a
        broken button. */
-    const queuedScope = (s.sync.queued && s.sync.queued.projectId === s.projectId)
-      ? s.sync.queued.scope : null;
+    const queuedForThisProject = (s.sync.queued || []).find(e => e.projectId === s.projectId);
+    const queuedScope = queuedForThisProject ? queuedForThisProject.scope : null;
     const isPageSyncing = syncing && !!pageScope && activeScope === pageScope;
     const isPageQueued = !!pageScope && queuedScope === pageScope;
     const isPageBlocked = syncing && !!pageScope && !isPageSyncing && !isPageQueued;
@@ -3484,9 +3558,17 @@
       syncStalled: !!s.sync.stalled,
       syncTitleColor: s.sync.stalled ? '#b45309' : '#4338ca',
       syncBarColor: s.sync.stalled ? '#f59e0b' : '#4f46e5',
-      syncQueuedLabel: queuedScope
-        ? (queuedScope === 'all' ? 'all modules' : (scopeToLabel[queuedScope] || queuedScope))
-        : '',
+      /* WHOSE run the banner is showing. The server's `project` (task payload) wins — it is
+         right even when the bar is watching a sibling project's run or re-attached after a
+         reload; the domain is the fallback for pre-upgrade runs with no project name. */
+      syncForLabel: s.sync.projectName || project.domain || '',
+      /* Every waiting fetch, in start order, each named by scope AND project — with many
+         projects per domain, "Queued next: Positions" alone never said whose. */
+      syncQueuedLabel: (s.sync.queued || []).map(e => {
+        const qp = s.projects.find(p => p.id === e.projectId) || {};
+        const sc = e.scope === 'all' ? 'all modules' : (scopeToLabel[e.scope] || e.scope);
+        return sc + ' — ' + (qp.name || qp.domain || e.projectId);
+      }).join(', '),
       syncPctText: Math.round(s.sync.progress * 100) + '%', syncCostText: this.money(s.sync.cost), syncEtaText,
       syncElapsedText, syncSteps, syncStepsCount: syncSteps.length,
       syncPanelOpen: s.syncPanelOpen,

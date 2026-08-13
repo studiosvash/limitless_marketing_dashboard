@@ -138,7 +138,10 @@
           <div style="display: flex; align-items: center; gap: 14px;">
             <div style="flex: 1; min-width: 0;">
               <div style="display: flex; align-items: baseline; gap: 10px; font-size: 13px;">
-                <span style="font-weight: 600; color: {{ syncTitleColor }};">Syncing {{ syncScopeLabel }} for {{ projectDomain }}</span>
+                <!-- Names the run's OWN project (task payload `project`), not the currently open one:
+     with many projects per domain, "for premierstaff.com" never said whose fetch this
+     bar actually belonged to — see _attach_or_report_sibling in sync_api_service. -->
+                <span style="font-weight: 600; color: {{ syncTitleColor }};">Syncing {{ syncScopeLabel }} for {{ syncForLabel }}</span>
                 <span style="color: #64748b;">{{ syncStep }}</span>
                 <span style="margin-left: auto; color: #94a3b8; font-size: 12px;">{{ syncPctText }} · Est. time: {{ syncEtaText }}</span>
               </div>

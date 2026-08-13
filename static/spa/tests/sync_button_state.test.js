@@ -51,8 +51,11 @@ function buttonState({ active, runningScope, projectId, currentProject, pageScop
   };
   const syncing = s.sync.active && (!s.sync.projectId || s.sync.projectId === s.projectId);
   const activeScope = syncing ? (s.sync.scope || 'all') : null;
-  const queuedScope = (s.sync.queued && s.sync.queued.projectId === s.projectId)
-    ? s.sync.queued.scope : null;
+  /* `queued` is a FIFO ARRAY: the server allows one run per DOMAIN and Position Tracking
+     registers many projects per domain, so fetching 12 city projects back-to-back queues 11
+     of them — a single-slot queue silently lost 10. */
+  const queuedForThisProject = (s.sync.queued || []).find(e => e.projectId === s.projectId);
+  const queuedScope = queuedForThisProject ? queuedForThisProject.scope : null;
   const isPageSyncing = syncing && !!pageScope && activeScope === pageScope;
   const isPageQueued = !!pageScope && queuedScope === pageScope;
   const isPageBlocked = syncing && !!pageScope && !isPageSyncing && !isPageQueued;
@@ -90,7 +93,7 @@ test('a "Refresh all" run leaves every page button blocked, never busy', () => {
 test('a queued scope reads queued on its own page and blocked on the others', () => {
   const run = {
     active: true, runningScope: 'positions', projectId: 'p1', currentProject: 'p1',
-    queued: { scope: 'keywords', projectId: 'p1' },
+    queued: [{ scope: 'keywords', projectId: 'p1' }],
   };
   assert.strictEqual(buttonState({ ...run, pageScope: 'keywords' }), 'queued');
   assert.strictEqual(buttonState({ ...run, pageScope: 'positions' }), 'busy');
@@ -108,7 +111,7 @@ test('another project\'s run does not touch this project\'s buttons', () => {
 test('a queue entry for another project is ignored', () => {
   const st = buttonState({
     active: true, runningScope: 'positions', projectId: 'p1', currentProject: 'p1',
-    queued: { scope: 'keywords', projectId: 'p2' }, pageScope: 'keywords',
+    queued: [{ scope: 'keywords', projectId: 'p2' }], pageScope: 'keywords',
   });
   assert.strictEqual(st, 'blocked', 'a sibling project\'s queue must not label this page');
 });
@@ -120,10 +123,9 @@ test('nothing running means every button is idle', () => {
 
 /* ── startSync: a click while busy must queue and say so, never no-op ─────────────────── */
 
-function startSyncBody() {
-  const marker = '  startSync(scope, preTaskId, force) {';
+function methodBody(marker) {
   const at = APP_JS.indexOf(marker);
-  assert.ok(at !== -1, 'startSync not found in app.js');
+  assert.ok(at !== -1, marker.trim() + ' not found in app.js');
   let depth = 0, i = at + marker.length - 1;
   for (; i < APP_JS.length; i++) {
     if (APP_JS[i] === '{') depth++;
@@ -132,34 +134,71 @@ function startSyncBody() {
   return APP_JS.slice(at, i + 1);
 }
 
+function startSyncBody() {
+  return methodBody('  startSync(scope, preTaskId, force, pidOverride) {');
+}
+
 test('startSync queues instead of returning silently when a sync is running', () => {
   const body = startSyncBody();
-  assert.ok(/queued:\s*\{\s*scope:\s*activeScope/.test(body),
-    'a click during a run must record state.sync.queued');
-  assert.ok(body.includes('this.notify('),
-    'a click during a run must tell the user something');
+  assert.ok(body.includes('this._queueSync('),
+    'a click during a run must go through the queue');
   assert.ok(!/^\s*if \(this\.state\.sync\.active[^\n]*\)\s*return;\s*$/m.test(body),
     'the silent early return is back — a click that does nothing is a broken button');
+  const q = methodBody('  _queueSync(scope, pid, force, message) {');
+  assert.ok(/queued: \(st\.sync\.queued \|\| \[\]\)\.concat/.test(q),
+    '_queueSync must append to the FIFO, not overwrite it — overwriting silently lost every earlier queued fetch');
+  assert.ok(q.includes('this.notify('),
+    'a click during a run must tell the user something');
 });
 
-test('startSync does not queue the same scope twice', () => {
-  const body = startSyncBody();
-  assert.ok(body.includes('Already queued'),
+test('startSync does not queue the same scope twice for one project', () => {
+  const q = methodBody('  _queueSync(scope, pid, force, message) {');
+  assert.ok(q.includes('Already queued'),
     'pressing a queued page\'s button again must say it is already queued, not stack duplicates');
+  assert.ok(/e\.scope === scope && e\.projectId === pid/.test(q),
+    'the dedupe key is (scope, project) — the same scope for a DIFFERENT project is a real new fetch');
+});
+
+/* ── A sibling project's run: watch theirs, queue ours ───────────────────────────────── */
+
+test('a sibling_running response queues this project\'s fetch instead of attaching', () => {
+  // The live-server bug this guards: 18 premierstaff.com city projects, one run slot per
+  // domain. Attaching showed the sibling's progress as this project's, "completed", and had
+  // fetched nothing for this project's location — a permanently blank Positioning page that
+  // looked like a successful fetch.
+  const body = startSyncBody();
+  assert.ok(body.includes('t.sibling_running'),
+    'startSync must recognise the server\'s sibling_running shape');
+  const at = body.indexOf('t.sibling_running');
+  const branch = body.slice(at, at + 700);
+  assert.ok(branch.includes('this._queueSync(activeScope, pid, force'),
+    'the sibling branch must queue THIS project\'s fetch');
+  assert.ok(/_pollSyncTask\(t\.task_id[^)]*false\)/.test(branch),
+    'the sibling branch must watch the sibling run as NOT our own (ownRun=false)');
 });
 
 /* ── The queue is drained, and Stop drops it ─────────────────────────────────────────── */
 
-test('a finished run starts whatever was queued behind it', () => {
-  assert.ok(/if \(queued && queued\.projectId === pid && !wasCancelled\)/.test(APP_JS),
-    'the completion branch must drain state.sync.queued for the same project');
-  assert.ok(/this\.startSync\(queued\.scope, null, queued\.force\)/.test(APP_JS),
-    'the drained entry must actually be started, with its original force flag');
+test('a finished run starts the next queued fetch — for ITS project, wherever the user is', () => {
+  assert.ok(/if \(queued\.length && !wasCancelled\)/.test(APP_JS),
+    'the completion branch must drain the queue');
+  assert.ok(/this\.startSync\(next\.scope, null, next\.force, next\.projectId\)/.test(APP_JS),
+    'the drained entry must start with its original force flag AND its own projectId — ' +
+    'firing it at whichever project is open (or dropping it on navigation) loses the fetch');
 });
 
 test('Stop drops the queue rather than silently running the next thing', () => {
-  assert.ok(/queued && wasCancelled/.test(APP_JS),
+  assert.ok(/queued\.length && wasCancelled/.test(APP_JS),
     'a cancelled run must not hand off to the queued refresh — Stop means stop');
+});
+
+/* ── The banner names the run's own project ──────────────────────────────────────────── */
+
+test('the banner label comes from the run payload, not the open project', () => {
+  assert.ok(/syncForLabel: s\.sync\.projectName \|\| project\.domain/.test(APP_JS),
+    'syncForLabel must prefer the run\'s own project name (task payload `project`)');
+  assert.ok(/projectName: st\.project \|\| s\.sync\.projectName/.test(APP_JS),
+    'each poll tick must carry the server\'s answer for whose run this is');
 });
 
 /* ── Connection lost is a distinct, recoverable state ────────────────────────────────── */

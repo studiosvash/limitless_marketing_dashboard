@@ -62,6 +62,64 @@ def _connectors_for_scope(scope: str) -> list[str]:
 FRESH_WITHIN = timedelta(hours=24)
 
 
+# Scopes whose connectors fetch PER-PROJECT (location-scoped) data. Several projects can share
+# one domain (add_site(allow_duplicate=True) — e.g. eighteen premierstaff.com city projects),
+# and for these scopes a sibling's sync wrote rows for ITS tracking location, not this one's —
+# so neither a sibling's SyncLog freshness nor a sibling's live run can stand in for this
+# project's own fetch. 'all' is included because ALL_CONNECTORS contains the positioning
+# connectors. Domain-level scopes (backlinks, seo, ads, …) are deliberately absent: one
+# domain's links/traffic are the same answer for every sibling.
+_LOCATION_SCOPED_PAGES = {"positioning", "positioning_new"}
+
+
+def _scope_is_location_scoped(scope: str) -> bool:
+    if scope == "all":
+        return True
+    return SCOPE_ALIASES.get(scope, scope) in _LOCATION_SCOPED_PAGES
+
+
+def project_scope_last_ran(site_url: str, site_pk: int, scope: str, now=None):
+    """When THIS project itself last completed this scope, within FRESH_WITHIN — else None.
+
+    RefreshRun is the only per-PROJECT record of a sync; SyncLog is keyed (connector,
+    site_url) and cannot tell siblings on one domain apart. A 'positions' ask is also
+    covered by the project's own 'all' run (ALL_CONNECTORS includes every positioning
+    connector) and 'positions_new' by a full 'positions' run. Only SUCCESS counts: a run
+    that errored or was cancelled did not refresh what the user is asking for.
+    """
+    covering = {scope, "all"}
+    if scope == "positions_new":
+        covering.add("positions")
+    cutoff = (now or timezone.now()) - FRESH_WITHIN
+    run = (RefreshRun.objects
+           .filter(site_url=site_url, site_pk=site_pk, scope__in=covering,
+                   status=RefreshStatus.SUCCESS, finished_at__gte=cutoff)
+           .order_by("-finished_at").first())
+    return run.finished_at if run else None
+
+
+def _project_name_for_pk(site_pk: int | None) -> str | None:
+    """Display name of the project that owns a run, or None when the run is domain-wide.
+
+    Never raises: the name decorates progress payloads polled twice a second, and a lookup
+    failure must not take the progress bar down with it.
+    """
+    if not site_pk:
+        return None
+    try:
+        from pipeline.services.site_service import get_site_by_pk
+        from pipeline.utils.db_connection import get_session
+        with get_session() as session:
+            site = get_site_by_pk(session, site_pk)
+            if site is None:
+                return None
+            return site.site_name or site.slug or site.site_url
+    except Exception:
+        logger.warning("[sync] could not resolve project name for site_pk=%r", site_pk,
+                       exc_info=True)
+        return None
+
+
 def scope_last_synced(site_url: str, connectors: list[str], now=None):
     """When this whole scope last succeeded, or None if any part of it is stale.
 
@@ -128,6 +186,50 @@ def _spawn_sync_process(run_id: int) -> int | None:
     return proc.pid
 
 
+def _attach_or_report_sibling(existing: RefreshRun, site_url: str, site_pk: int | None) -> dict:
+    """The response for "a run is already in flight for this domain".
+
+    Two different truths, and the caller's `site_pk` decides which one applies:
+
+    * **Same project (or no project in hand)** — attach: return the live run's id so the SPA
+      shows its progress. Re-clicking your own running fetch, a second tab, or the scheduler
+      (which passes no site_pk and reads `task_id` unconditionally) all land here.
+
+    * **A DIFFERENT project on the same domain** — `sibling_running`: the live run is
+      fetching a SIBLING's location-scoped data, so attaching would show its progress bar as
+      this project's and then "complete" having fetched nothing for this project. That is
+      exactly how new city projects stayed permanently blank while the user watched a
+      progress bar succeed. The SPA queues this project's fetch instead and may still watch
+      `task_id` to know when the slot frees. A running row with NO site_pk is a domain-wide
+      run — it did not fetch this project's location either, so it counts as a sibling.
+    """
+    if site_pk is not None and existing.site_pk != site_pk:
+        owner = _project_name_for_pk(existing.site_pk)
+        logger.info("[sync] run #%s (project %r) holds the slot for %r — reporting sibling, "
+                    "not attaching", existing.pk, owner or existing.site_pk, site_url)
+        return {
+            "task_id": existing.pk,
+            "scope": existing.scope,
+            "sibling_running": True,
+            "project": owner or site_url,
+            "est_cost": 0,
+            "warnings": [],
+        }
+
+    logger.info("[sync] run #%s already in flight for %r — attaching instead of starting a "
+                "second one", existing.pk, site_url)
+    return {
+        "task_id": existing.pk,
+        "steps": _connectors_for_scope(existing.scope) or ["No connectors for this scope"],
+        "est_cost": 0,
+        "already_running": True,
+        "warnings": [
+            f"A {existing.scope!r} refresh is already running for this site — showing its "
+            f"progress instead of starting another."
+        ],
+    }
+
+
 def start_sync_run(site_url: str, scope: str, user=None, force: bool = False,
                    manual: bool = True, site_pk: int | None = None) -> dict:
     """Create a RefreshRun and execute it in a SEPARATE PROCESS.
@@ -178,18 +280,7 @@ def start_sync_run(site_url: str, scope: str, user=None, force: bool = False,
                 .filter(site_url=site_url, status=RefreshStatus.RUNNING)
                 .order_by("-started_at").first())
     if existing is not None:
-        logger.info("[sync] run #%s already in flight for %r — attaching instead of starting a "
-                    "second one", existing.pk, site_url)
-        return {
-            "task_id": existing.pk,
-            "steps": _connectors_for_scope(existing.scope) or ["No connectors for this scope"],
-            "est_cost": 0,
-            "already_running": True,
-            "warnings": [
-                f"A {existing.scope!r} refresh is already running for this site — showing its "
-                f"progress instead of starting another."
-            ],
-        }
+        return _attach_or_report_sibling(existing, site_url, site_pk)
 
     # The DataForSEO paywall. Checked AFTER the one-run-per-site guard (attaching to a run
     # already in flight is always fine — its spend already happened) and BEFORE the
@@ -217,6 +308,12 @@ def start_sync_run(site_url: str, scope: str, user=None, force: bool = False,
     # is what the user wanted, and answering "already up to date" would hide it.
     if manual and not force:
         last_synced = scope_last_synced(site_url, connectors)
+        if last_synced is not None and site_pk is not None and _scope_is_location_scoped(scope):
+            # SyncLog freshness is DOMAIN-level, but this scope fetches per-project data:
+            # a sibling city project's sync an hour ago says nothing about THIS project's
+            # location. Fresh only if this project itself ran it recently — and the prompt
+            # then quotes this project's own timestamp, not the sibling's.
+            last_synced = project_scope_last_ran(site_url, site_pk, scope)
         if last_synced is not None:
             logger.info("[sync] %r for %r is already fresh (since %s) — asking before running",
                         scope, site_url, last_synced.isoformat())
@@ -255,17 +352,8 @@ def start_sync_run(site_url: str, scope: str, user=None, force: bool = False,
                     .order_by("-started_at").first())
         if existing is None:
             raise
-        logger.info("[sync] lost start race for %r — attaching to run #%s", site_url, existing.pk)
-        return {
-            "task_id": existing.pk,
-            "steps": _connectors_for_scope(existing.scope) or ["No connectors for this scope"],
-            "est_cost": 0,
-            "already_running": True,
-            "warnings": [
-                f"A {existing.scope!r} refresh is already running for this site — showing its "
-                f"progress instead of starting another."
-            ],
-        }
+        logger.info("[sync] lost start race for %r to run #%s", site_url, existing.pk)
+        return _attach_or_report_sibling(existing, site_url, site_pk)
 
     try:
         pid = _spawn_sync_process(run.pk)
@@ -523,6 +611,12 @@ def task_status(task_id: int) -> dict | None:
         "started_at": run.started_at.isoformat() if run.started_at else None,
         "elapsed": int((timezone.now() - run.started_at).total_seconds()) if run.started_at else 0,
         "steps": _step_details(run, connectors),
+        # WHOSE run this is. With several projects on one domain the banner used to print
+        # only the domain, so the user could not tell which project's fetch was actually
+        # running — see _attach_or_report_sibling. `project` is None for a domain-wide run.
+        "site_url": run.site_url,
+        "site_pk": run.site_pk,
+        "project": _project_name_for_pk(run.site_pk),
     }
 
 

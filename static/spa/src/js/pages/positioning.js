@@ -353,6 +353,20 @@
         const lv = listVisibility(p);
         const improved = p.improved_count || 0;
         const declined = p.declined_count || 0;
+        /* Live fetch state for THIS row. Two sources, both needed: `p.syncing` is the
+           server's answer (covers a run started in another tab or by a colleague, and
+           survives a reload), and the client sync state covers the run/queue this session
+           just created without waiting for a projects refetch. A row that is fetching or
+           waiting must say so — "I clicked fetch and the row still says No sync yet" is
+           this exact column failing to report a run that was in flight. */
+        const fetching = p.syncing === true
+          /* Ours, and really ours — own === false means the bar is only WATCHING a sibling
+             project's run, and this project's fetch is in the queue, not in flight. */
+          || (s.sync.active && s.sync.own !== false && s.sync.projectId === p.id)
+          /* The run's actual owner, matched by the name the task payload reports — covers
+             the sibling row itself while this session watches its run. */
+          || (s.sync.active && !!s.sync.projectName && s.sync.projectName === p.name);
+        const queuedHere = !fetching && (s.sync.queued || []).some(e => e.projectId === p.id);
         /* Row subtitle. `device` used to be the literal 'Desktop' for every project,
            regardless of what the wizard collected. The projects LIST endpoint
            (ProjectSerializer) does not expose the stored device/engine/language yet, so
@@ -365,7 +379,9 @@
           sub: subParts.join(' · '),
           tracked: this.fmt(tracked), improved, declined,
           visLabel: lv.label, visColor: lv.color,
-          updated: p.last_updated || 'No sync yet',
+          updated: fetching ? 'Fetching…' : (queuedHere ? 'Queued' : (p.last_updated || 'No sync yet')),
+          /* Indigo while live so the state reads at a glance; muted for the timestamps. */
+          updatedColor: fetching ? '#4f46e5' : (queuedHere ? '#0891b2' : '#94a3b8'),
           isCurrent: isCur,
           rowStyle: { display: 'grid', gridTemplateColumns: listCols, alignItems: 'center', padding: '14px 20px', borderTop: '1px solid #f1f5f9', cursor: 'pointer', background: isCur ? '#fafaff' : 'white' },
           onOpen: () => {
@@ -495,7 +511,17 @@
             });
           },
           onDelete: () => {
-            if (confirm('Are you sure you want to delete this project?')) {
+            /* NAME THE VICTIM, and say it is permanent. The old text ("this project?") let a
+               one-click-plus-Enter hard delete go through without ever stating which of the
+               eighteen same-domain projects was about to disappear — which is exactly how a
+               real project (eventstaff.com) vanished from the live registry with nobody sure
+               they had done it. The Settings page's delete requires typing the domain; this
+               stays a confirm() for one-click ergonomics, but an honest one. */
+            if (confirm('Permanently delete "' + (proj.name || proj.domain) + '" (' + proj.domain
+                + (proj.location ? ' · ' + proj.location : '') + ')?\n\n'
+                + 'This removes the project and its tracked keyword list. There is no undo. '
+                + 'Recorded rankings stay in the database and reappear if you re-create the '
+                + 'project with the same domain, location and keywords.')) {
               /* FuseAPI exports { config, get, post, put, del } — `delete` is a
                  reserved word and is not on the transport. */
               window.FuseAPI.del('/api/projects/' + proj.id).then(() => {

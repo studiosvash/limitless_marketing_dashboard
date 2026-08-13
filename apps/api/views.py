@@ -271,7 +271,12 @@ class ProjectListCreateView(APIView):
         # progress bar immediately (GET /api/tasks/<task_id>).
         try:
             sync_info = start_sync_run(site_url, "all", user=request.user, site_pk=new_id)
-            body["sync_task_id"] = sync_info["task_id"]
+            # A SIBLING project's run may hold the domain's one run slot (sibling_running) —
+            # this project's initial sync did NOT start, and handing the SPA that task_id
+            # would show the sibling's progress as this project's first fetch. None keeps the
+            # button honest; the user's first Fetch will queue properly behind the sibling.
+            body["sync_task_id"] = (None if sync_info.get("sibling_running")
+                                    else sync_info.get("task_id"))
         except Exception:
             # Non-fatal: sync failure should never block site creation.
             body["sync_task_id"] = None
