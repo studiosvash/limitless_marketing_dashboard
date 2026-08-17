@@ -149,12 +149,16 @@ the SPA (project create / edit / delete, keywords sent to tracking) goes through
 `reloadProjects()` for the same reason — a bare re-read would silently snap the list back to 28d.
 
 `visibility` is the Semrush-style CTR-weighted score (0–100, 1 dp) computed in
-`_get_ranking_distribution`: each tracked keyword earns the CTR of its average position
+`_get_ranking_distribution`: each tracked keyword earns the CTR of its position
 (#1 = 31.7 … #10 = 1.8, ~0 past #20 — the same curve as the SPA's `buildVisibilityScores`),
 divided by a perfect #1 on **every** tracked keyword. Keywords with no ranking earn 0 but stay
-in the denominator. `null` means "never captured in the window" (UI shows `—`); `0.0` means
-"captured, ranks nowhere" — a real number. Never derive visibility from `avg_position`: it
-averages ranked keywords only, which once made 1 branded keyword at #2 out of 48 read as 82%.
+in the denominator. **Snapshot, not window average** (decision 2026-08-13, matching Semrush):
+each keyword contributes its **latest measurement** (per-keyword max date ≤ window end — not
+one latest capture date, which a `positions_new` incremental sync would break). The range
+selector moves the distribution buckets and movement counts, not this number. `null` means
+"never captured in the window" (UI shows `—`); `0.0` means "captured, ranks nowhere" — a real
+number. Never derive visibility from `avg_position`: it averages ranked keywords only, which
+once made 1 branded keyword at #2 out of 48 read as 82%.
 
 **Related frontend:** topbar site selector, Position Tracking project list.
 
@@ -448,14 +452,16 @@ yet); `source` is always `"sync"` here.
 A *cell* is `{pos, prev, diff, direction}` with `direction ∈ up|down|flat`.
 `rankings` and `keywords` are the same array (the template reads both names).
 
-**`kpis.visibility` is THE visibility number** (added 2026-08-10) — the same
-`_get_ranking_distribution` field, over the same window, that `GET /api/projects` returns per
-project, so the workspace and the project list cannot disagree. `null` = nothing measured in
-the window (UI shows `—`); `0.0` = measured, ranks nowhere. `build_positions_response` computed
-it and discarded it for months while the SPA's Overview card recomputed a *different* figure in
-the browser from `competitors.rows` (a single latest capture date, integer-rounded, range
-ignored). That browser calculation still runs, but only as **share of voice** — how the field's
-points split between you and the tracked competitors — and is labelled as such on screen.
+**`kpis.visibility` is THE visibility number** (added 2026-08-10; snapshot-based since
+2026-08-13 — see the `GET /api/projects` section for the exact rule) — the same
+`_get_ranking_distribution` field that `GET /api/projects` returns per project, so the
+workspace and the project list cannot disagree. `null` = nothing measured in the window (UI
+shows `—`); `0.0` = measured, ranks nowhere. `build_positions_response` computed it and
+discarded it for months while the SPA's Overview card recomputed a *different* figure in the
+browser from `competitors.rows`. That browser calculation still runs, but only as **share of
+voice** — and since 2026-08-13 the share is **volume-weighted** (Semrush's own SoV
+definition: each keyword's CTR credit × its search volume, unknown/zero volume weighs 1),
+while the index printed on the card's sub-line stays equal-weight like Semrush Visibility.
 
 The window is anchored on `views.latest_ranking_anchor` whenever the project has any
 `keyword_rankings` row, forwards *or* backwards from the GSC traffic anchor. Anchoring forward

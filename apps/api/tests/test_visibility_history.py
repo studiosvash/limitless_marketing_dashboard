@@ -110,15 +110,19 @@ class VisibilityHistoryTests(_Fixture):
                          [self.day_a.isoformat(), self.day_b.isoformat()],
                          "one point per date actually captured, oldest first")
 
-    def test_your_own_series_is_the_per_date_index_not_the_window_headline(self):
+    def test_your_own_series_is_the_per_date_index_and_the_headline_is_its_last_point(self):
         hist, body = self._history()
         own = next(s for s in hist["series"] if s["own"])
         self.assertEqual(own["domain"], "premierstaff.com",
                          "keyed by the same bare domain the legend and the cards use")
         self.assertEqual([round(p, 1) for p in own["points"]], [10.9, 21.6])
-        self.assertAlmostEqual(body["kpis"]["visibility"], 15.2, places=1)
-        self.assertNotIn(round(body["kpis"]["visibility"], 1), own["points"],
-                         "a chart that just repeated the window headline would not be a trend")
+        # Since 2026-08-13 (tech lead: match Semrush) the headline is a SNAPSHOT of each
+        # keyword's latest measurement — exactly Semrush's landscape, where the big number
+        # is today's reading and the chart is its history. So the headline must EQUAL the
+        # newest chart point, where it used to be the window average (15.2 here).
+        self.assertAlmostEqual(body["kpis"]["visibility"], 21.6, places=1)
+        self.assertAlmostEqual(body["kpis"]["visibility"], own["points"][-1], places=1,
+                               msg="the headline is the trend's latest point, by definition")
 
     def test_a_competitor_measured_on_one_date_only_is_null_on_the_other(self):
         hist, _ = self._history()
@@ -255,11 +259,14 @@ class ListRangeAgreementTests(_Fixture):
                 self.assertEqual(self._row(range_key)["visibility"],
                                  self._workspace(range_key))
 
-    def test_the_range_actually_changes_the_listed_number(self):
-        """Guards the fix against a silent no-op: 7d ends on the newest capture and excludes
-        the older one, so the two windows genuinely score differently here. If these ever
-        match, the `range` parameter has stopped reaching the serializer."""
-        self.assertNotEqual(self._row("7d")["visibility"], self._row("28d")["visibility"])
+    def test_the_range_does_not_move_the_visibility_number(self):
+        """Inverted on 2026-08-13 (tech lead: match Semrush). Visibility is now a snapshot
+        of each keyword's LATEST measurement, so the range selector must NOT move it — in
+        Semrush, switching the date range moves the diff and the chart, never today's
+        reading. This test used to assert the opposite (7d != 28d) back when the number was
+        a window average; if these ever differ again, the average has crept back in."""
+        self.assertEqual(self._row("7d")["visibility"], self._row("28d")["visibility"])
+        self.assertEqual(self._row("28d")["visibility"], self._row("90d")["visibility"])
 
     def test_a_caller_that_sends_no_range_still_gets_the_28d_reading(self):
         self.assertEqual(self._row()["visibility"], self._row("28d")["visibility"])

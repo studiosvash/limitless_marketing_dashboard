@@ -15,8 +15,16 @@
    two-part reading: a market-share-style % relative to the competitors actually shown,
    with the absolute index kept underneath so a field of weak boards splitting 100% is
    still visibly weak. The share MUST come from the same CTR-curve points as the index,
-   and the earlier sins must not return: no linear (100-pos)/100 credit, no volume
-   weighting, no invented positions. */
+   and the earlier sins must not return: no linear (100-pos)/100 credit, no invented
+   positions.
+
+   VOLUME WEIGHTING (decision 2026-08-13, tech lead: match Semrush exactly): the SHARE is
+   now weighted by each keyword's search volume (`r.vol`), because that is Semrush's own
+   Share of Voice definition — being #1 on a 1,000-search keyword is worth 100x being #1
+   on a 10-search keyword. The INDEX stays equal-weight (that matches Semrush's
+   Visibility, which weights keywords equally). A keyword with unknown/zero volume weighs
+   1, so rows without volume data degrade to the old equal-weight behaviour instead of
+   vanishing from the field. */
 
 const test = require('node:test');
 const assert = require('node:assert');
@@ -43,11 +51,14 @@ function extractBuilder() {
 const build = extractBuilder();
 
 /* Row shape mirrors /api/positions competitors.rows: index 0 of `domains` is "you"
-   (read from r.you.pos), every other domain is matched inside r.comps by name. */
-function row(youPos, comps) {
+   (read from r.you.pos), every other domain is matched inside r.comps by name.
+   `vol` is the keyword's search volume, mapped in from data.rankings at the call site —
+   absent/0 means "no volume on record" and weighs 1. */
+function row(youPos, comps, vol) {
   return {
     you: youPos != null ? { pos: youPos } : null,
-    comps: Object.keys(comps || {}).map(d => ({ domain: d, pos: comps[d] }))
+    comps: Object.keys(comps || {}).map(d => ({ domain: d, pos: comps[d] })),
+    vol: vol
   };
 }
 
@@ -100,6 +111,38 @@ test('better positions earn a larger share (CTR curve, not linear)', () => {
   /* #1 vs #10 on the curve is 31.7 vs 1.8 — the share gap must reflect that,
      not the linear (100-1) vs (100-10) which would give a near-even split. */
   assert.ok(out[0].sov > 90, 'a.com share should dominate, got ' + out[0].sov);
+});
+
+test('share of voice is volume-weighted, Semrush-style', () => {
+  /* a.com is #1 on the 1,000-search keyword and #10 on the 10-search one; b.com is the
+     mirror image. Equal weighting would split the field 50/50 — volume weighting must
+     hand a.com nearly everything: 1000x31.7 + 10x1.8 = 31,718 vs 1000x1.8 + 10x31.7 =
+     2,117 -> ~93.7% / ~6.3%. */
+  const rows = [
+    row(1, { 'b.com': 10 }, 1000),
+    row(10, { 'b.com': 1 }, 10)
+  ];
+  const out = build(['a.com', 'b.com'], rows);
+  assert.ok(out[0].sov > 90, 'volume must dominate the split, got ' + out[0].sov);
+  assert.ok(out[1].sov < 10, 'the low-volume #1 earns a small share, got ' + out[1].sov);
+  const total = out.reduce((t, d) => t + d.sov, 0);
+  assert.ok(Math.abs(total - 100) < 1e-9, 'weighted shares must still sum to 100');
+});
+
+test('the index ignores volume — it matches Semrush Visibility, which weights equally', () => {
+  const flat = build(['a.com', 'b.com'], [row(1, { 'b.com': 10 }), row(10, { 'b.com': 1 })]);
+  const weighted = build(['a.com', 'b.com'],
+    [row(1, { 'b.com': 10 }, 1000), row(10, { 'b.com': 1 }, 10)]);
+  assert.strictEqual(weighted[0].visScore, flat[0].visScore,
+    'volume must move the share, never the absolute index');
+});
+
+test('rows without volume fall back to equal weight, not to vanishing', () => {
+  /* No `vol` anywhere (an unpriced keyword list): every weight is 1, so the share must be
+     exactly the pre-weighting behaviour — not 0/NaN and not a division by zero. */
+  const rows = [row(1, { 'b.com': 10 }), row(10, { 'b.com': 1 })];
+  const out = build(['a.com', 'b.com'], rows);
+  assert.ok(Math.abs(out[0].sov - 50) < 1e-9, 'symmetric field with no volumes splits evenly, got ' + out[0].sov);
 });
 
 test('deep positions past #20 earn almost nothing, past #100 nothing', () => {

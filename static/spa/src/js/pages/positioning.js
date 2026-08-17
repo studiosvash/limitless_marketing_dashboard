@@ -942,22 +942,30 @@
            worth what it is actually worth: #1 = 31.7 points, #2 = 24.7, #5 = 9.5,
            #10 = 1.8, past #20 almost nothing.
 
-           Two earlier formulas were wrong here, both worth not repeating:
-             1. `(100 - pos)/100` per domain — paid 55% credit for sitting at #45, so
-                five domains totalled 264% and a domain nobody can find on Google looked
-                healthy.
-             2. The same curve weighted by SEARCH VOLUME — four keywords carry 81% of
-                this project's volume, which inverted the ranking outright:
-                atneventstaffing.com (avg position 7.7, the strongest board) scored 2.21
-                while eventstaff.com (avg 18.7) scored 12.09, purely because of where the
-                volume happened to sit.
+           WEIGHTS — the two readings deliberately weight keywords DIFFERENTLY, because
+           that is exactly what Semrush does (decision 2026-08-13, tech lead: match
+           Semrush):
 
-           Hence EQUAL weight per keyword. Every tracked keyword is one the user chose to
-           track, so each counts once and both readings measure ranking strength rather
-           than traffic potential. A keyword a domain does not rank on scores 0 but still
-           counts in the index denominator — that is what makes coverage matter, and it
-           keeps the denominator identical for every domain, which is what makes the
-           cards comparable at all.
+             * the SHARE is weighted by each keyword's SEARCH VOLUME (`r.vol`, mapped in
+               from data.rankings at the call site) — Semrush's Share of Voice definition:
+               #1 on a 1,000-search keyword is worth 100x #1 on a 10-search one. A keyword
+               with unknown or zero volume weighs 1, so an unpriced list degrades to the
+               equal-weight split instead of vanishing from the field.
+             * the INDEX stays EQUAL-weight — Semrush's Visibility weights keywords
+               equally, and the index is the ranking-strength guard: an earlier attempt
+               that volume-weighted the ONLY score inverted the field outright
+               (atneventstaffing.com, avg #7.7 and strongest, scored 2.21 while
+               eventstaff.com at avg #18.7 scored 12.09, purely because of where 81% of
+               the volume sat). Keeping the equal-weight index on the sub-line is what
+               makes that distortion visible instead of repeating it.
+
+           One earlier formula stays banned outright: `(100 - pos)/100` per domain paid
+           55% credit for sitting at #45, so five domains totalled 264% and a domain
+           nobody can find on Google looked healthy.
+
+           A keyword a domain does not rank on scores 0 but still counts in the index
+           denominator — that is what makes coverage matter, and it keeps the denominator
+           identical for every domain, which is what makes the cards comparable at all.
 
            Self-contained (curve and credit live inside) so tests/visibility_scores.test.js
            can extract and run the real function by brace-matching, same as sortRows.
@@ -977,8 +985,16 @@
             const r = Math.round(p);
             return r <= 20 ? CTR_CURVE[r - 1] : (r <= 50 ? 0.05 : 0.02);
           };
+          /* Volume weight for the SHARE: real volume when known and positive, else 1 —
+             identical for every domain on a given keyword, which is what keeps the
+             shares comparable and summing to 100. */
+          const volWeight = r => {
+            const v = Number(r && r.vol);
+            return isFinite(v) && v > 0 ? v : 1;
+          };
           const perDomain = domains.map((dom, idx) => {
             let earned = 0;
+            let earnedW = 0;
             let posSum = 0;
             const ranked = [];
             rows.forEach(r => {
@@ -990,29 +1006,41 @@
                 pos = compCell ? compCell.pos : null;
               }
               if (pos != null) { ranked.push(pos); posSum += pos; }
-              earned += posCredit(pos);
+              const credit = posCredit(pos);
+              earned += credit;                    // equal-weight -> the INDEX
+              earnedW += volWeight(r) * credit;    // volume-weight -> the SHARE
             });
             /* Having no captured rows at all is the only null. A domain that IS
                measured but ranks nowhere scores a real 0 — that is information, not a
                missing value. */
             const visScore = rows.length ? (earned / (rows.length * PERFECT)) * 100 : null;
             const avgPos = ranked.length ? Math.round(posSum / ranked.length) : null;
-            return { dom: dom, earned: earned, visScore: visScore, avgPos: avgPos,
-                     rankedCount: ranked.length, sov: null };
+            return { dom: dom, earned: earned, earnedW: earnedW, visScore: visScore,
+                     avgPos: avgPos, rankedCount: ranked.length, sov: null };
           });
-          /* Share denominator = points earned by the domains SHOWN, so the set totals
-             exactly 100. When nobody ranks anywhere there is no field to split — the
-             share stays null while the index reports its honest 0. */
-          const totalEarned = perDomain.reduce((t, d) => t + d.earned, 0);
+          /* Share denominator = volume-weighted points earned by the domains SHOWN, so
+             the set totals exactly 100. When nobody ranks anywhere there is no field to
+             split — the share stays null while the index reports its honest 0. */
+          const totalEarnedW = perDomain.reduce((t, d) => t + d.earnedW, 0);
           perDomain.forEach(d => {
-            d.sov = (d.visScore != null && totalEarned > 0)
-              ? (d.earned / totalEarned) * 100 : null;
+            d.sov = (d.visScore != null && totalEarnedW > 0)
+              ? (d.earnedW / totalEarnedW) * 100 : null;
           });
           return perDomain;
         };
 
         const compRows = (data.competitors && data.competitors.rows) || [];
-        const scMap = buildVisibilityScores(allDomains, compRows).map((d, idx) => ({
+        /* The share is volume-weighted (see buildVisibilityScores), and competitors.rows
+           carry no volume — map it in from the rankings table by keyword. Only a known
+           positive volume is attached; everything else weighs 1 inside the builder. */
+        const volByKw = {};
+        (data.rankings || []).forEach(r => {
+          const k = (r.kw || '').toLowerCase();
+          if (k && Number(r.volume) > 0) volByKw[k] = Number(r.volume);
+        });
+        const weightedRows = compRows.map(r =>
+          Object.assign({}, r, { vol: volByKw[(r.kw || '').toLowerCase()] }));
+        const scMap = buildVisibilityScores(allDomains, weightedRows).map((d, idx) => ({
           k: d.dom, name: d.dom, color: colors[idx % colors.length],
           val: d.sov != null ? d.sov.toFixed(1) + '%' : '—',
           /* Coverage, average position AND the absolute index printed under the share.

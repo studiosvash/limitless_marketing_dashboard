@@ -13,7 +13,7 @@ Used by:
 import logging
 from datetime import date, timedelta
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, select
 
 from pipeline.db.schema import (
     SEODaily, KeywordRanking, AdMetricDaily, CompetitorKeywordRanking,
@@ -287,7 +287,45 @@ def _get_ranking_distribution(site_id: str, curr_start: date, curr_end: date,
             # tracked keyword. A keyword with no ranking earns 0 but stays in the denominator —
             # averaging only ranked keywords is how a project ranking on 1 of 48 keywords
             # (its brand name, position 2.2) once displayed 82%.
-            earned = sum(_position_credit(r.avg_pos) for r in rows)
+            #
+            # A SNAPSHOT of each keyword's LATEST measurement, not the window average
+            # (decision 2026-08-13, tech lead: match Semrush's definition). Semrush's
+            # landscape reads today's positions — a keyword that moved #11 -> #1 this week
+            # reads as #1 — while the window average blended the whole range and lagged
+            # every improvement, which is why the dashboard read ~10% beside Semrush's 26%
+            # for the same campaign. The window (`rows` above) still drives the
+            # distribution buckets and movement, which genuinely are about the range.
+            #
+            # PER-KEYWORD latest (max date per keyword, joined back for that day's
+            # position), deliberately NOT one latest capture date: a `positions_new`
+            # incremental sync writes rows for the new keywords only, so a single-date
+            # snapshot would drop every previously measured keyword to 0 the moment one
+            # new keyword was tracked. Bounded by curr_end only — the newest reading at or
+            # before the window's end is the snapshot, per the stale-but-instant contract.
+            latest_per_kw = (
+                select(KeywordRanking.keyword.label("kw"),
+                       func.max(KeywordRanking.date).label("latest"))
+                .where(
+                    _site_clause(KeywordRanking, site_id),
+                    KeywordRanking.date <= curr_end,
+                    func.lower(KeywordRanking.keyword).in_(tracked_lower),
+                    *_location_clause(KeywordRanking, location),
+                )
+                .group_by(KeywordRanking.keyword)
+                .subquery()
+            )
+            snap_rows = session.execute(
+                select(KeywordRanking.keyword, func.avg(KeywordRanking.position))
+                .join(latest_per_kw,
+                      and_(KeywordRanking.keyword == latest_per_kw.c.kw,
+                           KeywordRanking.date == latest_per_kw.c.latest))
+                .where(
+                    _site_clause(KeywordRanking, site_id),
+                    *_location_clause(KeywordRanking, location),
+                )
+                .group_by(KeywordRanking.keyword)
+            ).all()
+            earned = sum(_position_credit(pos) for _, pos in snap_rows)
             visibility = round(earned / (total * _PERFECT_CTR) * 100, 1) if total else None
 
             # Percentage buckets for the distribution bar
