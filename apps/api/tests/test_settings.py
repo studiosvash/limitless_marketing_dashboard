@@ -95,7 +95,20 @@ class SettingsGetEndpointTests(APITestCase):
         for key, default in DEFAULT_SETTINGS_BLOB.items():
             self.assertEqual(body[key], default, f"{key} did not match honest default")
         self.assertEqual(body["connectors"], [])
-        self.assertEqual(body["sync"], {"next_run": None, "day": None, "last_run": None})
+        # The three header keys the SPA dereferences unguarded — all None on a project with no
+        # run history, because there is no honest date to give. Asserted key-by-key rather than
+        # as the whole dict: `sync` is additive (it gained `modules` on 2026-08-18), and an
+        # equality check on the whole shape turns every future addition into a failure here
+        # without saying anything about the honesty this test is actually about.
+        self.assertEqual(
+            {k: body["sync"][k] for k in ("next_run", "day", "last_run")},
+            {"next_run": None, "day": None, "last_run": None},
+        )
+        # Same honesty rule one level down: a module that has never run reports null, not a
+        # fabricated date, for both its last run and its next one.
+        for row in body["sync"]["modules"]:
+            self.assertIsNone(row["last_success"], f"{row['module']} invented a last run")
+            self.assertIsNone(row["next_run"], f"{row['module']} invented a next run")
         self.assertEqual(body["usage"]["budget"], 0)
         self.assertEqual(body["usage"]["month_to_date"], 0)
         self.assertEqual(body["credentials"], {

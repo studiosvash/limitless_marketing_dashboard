@@ -52,7 +52,41 @@
       };
       /* Same geometry as scoreChip, neutral palette — for a score that was never captured. */
       const mutedChip = { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', minWidth: '34px', height: '22px', padding: '0 6px', borderRadius: '4px', fontSize: '12px', fontWeight: 700, background: '#f1f5f9', color: '#cbd5e1' };
+      /* ---- the window every number on this page is about --------------------------------
+         NOT "the last 7 days". The window anchors to the newest day of Search Console data
+         (views.latest_data_anchor), and `gsc_safe_range` deliberately stops three days back
+         where Search Console's own UI stops two — so even a perfectly healthy sync produces a
+         window about a day off Console's on each end, and the totals differ to match.
+
+         Printing the dates is what lets a user tell that apart from a sync that has quietly
+         stopped. On premierstaff.com the window had drifted three weeks back and still showed
+         a complete, plausible week; the only visible symptom was that it disagreed with Search
+         Console, which reads as "the dashboard is wrong" rather than "the data is old". */
+      const fmtWinDate = (d, withYear) => d.toLocaleDateString(undefined, Object.assign(
+        { day: 'numeric', month: 'short' }, withYear ? { year: 'numeric' } : {}));
+      const win = data.window;
+      /* Same local-midnight guard relTime() uses: a bare "YYYY-MM-DD" is parsed as UTC by
+         spec, which shifts the day for anyone west of Greenwich and would print the window
+         a day early. */
+      const parseWinDate = d => new Date(String(d).length <= 10 ? d + 'T00:00:00' : d);
+      const winParsed = win && win.start && win.end
+        ? [parseWinDate(win.start), parseWinDate(win.end)] : null;
       vals.ov = {
+        /* Absent on an older cached payload — render nothing rather than "Showing undefined". */
+        hasWindow: !!winParsed,
+        windowText: winParsed
+          ? 'Showing ' + fmtWinDate(winParsed[0], false) + ' – ' + fmtWinDate(winParsed[1], true)
+          : '',
+        windowTitle: winParsed
+          ? 'Every figure on this page covers ' + win.start + ' to ' + win.end + ', inclusive.\n\n'
+            + 'This window ends on the newest day of Search Console data, not on today. Search '
+            + 'Console withholds the last ~3 days while it finalises them, and its own "Last 7 '
+            + 'days" view ends one day later than this one — so the two screens cover slightly '
+            + 'different weeks and their totals will not match exactly. Compare the dates '
+            + 'before comparing the numbers.\n\n'
+            + 'If this end date is far behind today, the sync is behind — check '
+            + 'Settings → Automation, where every module shows its own last run.'
+          : '',
         pillars: (data.pillars || []).map(p => {
           const setup = p.state === 'setup';
           const good = (p.delta || 0) >= 0;

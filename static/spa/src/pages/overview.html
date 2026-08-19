@@ -1,5 +1,10 @@
 <sc-if value="{{ showOverview }}" hint-placeholder-val="{{ false }}">
       <div data-screen-label="Overview" style="display: flex; flex-direction: column; gap: 24px;">
+        <sc-if value="{{ ov.hasWindow }}" hint-placeholder-val="{{ true }}">
+          <div style="margin: -8px 0 -12px; font-size: 12px; color: #64748b; display: flex; align-items: center; gap: 6px;" title="{{ ov.windowTitle }}">
+            <span style="color: #94a3b8;">&#128197;</span><span>{{ ov.windowText }}</span>
+          </div>
+        </sc-if>
         <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 14px;">
           <sc-for list="{{ ov.pillars }}" as="p" hint-placeholder-count="6">
             <div style="{{ p.cardStyle }}" style-hover="border-color:#cbd5e1;box-shadow:0 4px 14px rgba(0,0,0,0.07)" onClick="{{ p.onClick }}">

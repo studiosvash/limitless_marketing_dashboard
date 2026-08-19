@@ -1352,21 +1352,43 @@ broken with a widget instead of a number. Replace the row with a real credential
 connector is genuinely wired — not with the boolean.
 
 ### Automation
-A **sync schedule** row per module (Position tracking, Backlinks, Site audit crawl, Keyword
-volumes, Ads, AI visibility) with a cadence `<select>` and a **Run now** button that starts that
-scope's sync immediately. Plus **Site audit crawl** settings: max pages, frequency, JS rendering,
+A **sync schedule** row per module — **Organic traffic (Search Console + GA4)**, Position
+tracking, Backlinks, Site audit crawl, Keyword volumes, Ads, AI visibility — each with a cadence
+`<select>`, its **own last-run / next-run line**, and a **Sync now** button that starts that
+scope immediately. Plus **Site audit crawl** settings: max pages, frequency, JS rendering,
 respect robots.txt, excluded paths.
 
 Cadences are **acted on** by `python manage.py run_scheduled_syncs`, which the operator drives
 hourly from the OS scheduler (Task Scheduler / cron). It reads each module's configured cadence,
-compares it against real run history, and starts only the scopes that are actually due. The
-header's next-run date comes from `apps.sync.scheduling.schedule_summary()` — the same logic the
-command itself uses, so the promise and the behaviour cannot drift apart. The **Run now**
-buttons still trigger an immediate sync of that one scope.
+compares it against real run history, and starts only the scopes that are actually due. Both the
+header date and every row's dates come from `apps.sync.scheduling.due_modules()` — the same logic
+the command itself acts on, so the promise and the behaviour cannot drift apart.
+
+Every row offers the **same full cadence ladder** (12h / daily / weekly / every 2 weeks /
+monthly / manual). Rows used to expose hand-picked subsets, which encoded a cost opinion as a
+missing option with nothing on screen explaining it; the real guard is the DataForSEO cap, which
+`run_scheduled_syncs` checks before every start, and each row prints its own per-unit cost.
+
+**Organic traffic is the row that was missing until 2026-08-18, and its absence is worth
+remembering.** `SYNC_MODULES` held six modules whose connector lists between them contained
+`gsc_keywords`, `gsc_pages` and `ga4` — but never plain `gsc`, the connector that writes
+`seo_daily_totals`, i.e. the organic clicks / impressions / average position the Overview opens
+on. So the dashboard's headline number had no cadence that could refresh it and moved only when
+a human pressed **Refresh all**. On premierstaff.com it sat three weeks stale while every module
+the user *had* scheduled ran exactly as promised — and because the Overview's `7d` window
+anchors to the newest stored date rather than to today (see §Overview), the page kept showing a
+complete, plausible week that was three weeks behind Search Console's own 7-day report. It
+defaults to `daily`: GSC and GA4 are free and unmetered.
+
+**Each row shows its own last run**, and that matters for the same reason. The header's site-wide
+"Last run" is the newest `SyncLog` row from *any* connector, so a 12-hourly Ads sync made the
+whole panel read as current while Search Console had not been fetched in weeks. Row dates are
+**success-anchored** — a failed attempt fetched nothing and must not read as a run — and a row
+with a real cadence that has never succeeded is coloured amber rather than left to look normal.
 
 ⚠️ The hourly OS task is an **operator install step**, not something the app can do for itself.
 Until it is registered, cadences are stored and the panel is accurate about what *would* run,
-but nothing fires.
+but nothing fires. `crontab -l | grep run_scheduled_syncs` is the one-line check.
 
 ### Usage & Budget
 Month-to-date spend against budget, projected monthly, a DataForSEO budget cap with a soft-cap

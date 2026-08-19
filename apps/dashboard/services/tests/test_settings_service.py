@@ -209,7 +209,22 @@ class BuildSettingsResponseNoRowTests(TestCase):
         from apps.dashboard.services.settings_service import build_settings_response
         body = build_settings_response(SITE_ID)
 
-        self.assertEqual(body["sync"], {"next_run": None, "day": None, "last_run": None})
+        # The three header keys the SPA dereferences unguarded, on a project with no runs at
+        # all: every one of them None, because there is no honest date to give.
+        self.assertEqual(
+            {k: body["sync"][k] for k in ("next_run", "day", "last_run")},
+            {"next_run": None, "day": None, "last_run": None},
+        )
+        # `modules` is the per-row breakdown. Every schedulable module appears even when
+        # nothing has ever run -- a row missing from here would render as a cadence dropdown
+        # with no schedule under it, which is the exact blind spot this key was added to close.
+        from apps.sync.scheduling import SYNC_MODULES
+
+        rows = body["sync"]["modules"]
+        self.assertEqual({r["module"] for r in rows}, set(SYNC_MODULES))
+        for row in rows:
+            self.assertIsNone(row["last_success"])
+            self.assertIsNone(row["next_run"], "no successful run to measure a cadence from")
         self.assertEqual(body["usage"]["budget"], 0)
         self.assertEqual(body["usage"]["currency"], "USD")
         self.assertEqual(body["usage"]["month_to_date"], 0)

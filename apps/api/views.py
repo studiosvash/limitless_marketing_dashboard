@@ -71,13 +71,80 @@ def resolve_project_or_404(slug: str) -> Site:
 
 
 def latest_data_anchor(site_id: str) -> date_cls:
-    """Most recent date we have SEO data for, or today if none — periods anchor to this so
-    the API never defaults to a window that postdates the data.
+    """Anchor for every Search Console TRAFFIC window: `newest day with GSC data + 1`, or
+    today when there is none. Periods anchor to this so the API never defaults to a window
+    that postdates — or undershoots — the data it reports.
 
     Takes the later of the two SEO tables. `seo_daily_totals` is what the headline KPIs read
     and it is re-fetched further forward than the (date, country, device, page) breakdown, so
     anchoring on `seo_daily` alone would hold every window back to the breakdown's last date
     and silently report a stale week as if it were the current one.
+
+    **`impressions > 0` is load-bearing, not a tidy-up.** `seo_daily` is a shared table: the
+    `ga4` connector writes the analytics columns and leaves clicks/impressions/ctr/avg_position
+    at 0 (ga4._normalize), and its window runs to *yesterday* while `gsc_safe_range` stops at
+    today-3. Without the predicate this read GA4's cursor and anchored a Search Console window
+    on a day Search Console had no data for. Measured on premierstaff.com, 2026-08-18:
+
+        seo_daily WHERE impressions > 0   max = 2026-07-19   <- Search Console's real cursor
+        seo_daily (unfiltered)            max = 2026-08-02   <- what this function read
+        seo_daily_totals                  max = 2026-07-31   <- where the KPIs actually read
+
+    The 7-day window therefore ran 26 Jul – 1 Aug while the totals stopped on 31 Jul: a
+    "7-day" figure built from six days, drifting further every time GA4 synced without GSC.
+    The predicate is exact rather than a heuristic — the Search Analytics API only returns a
+    row because that page was served, so a GSC row always has `impressions >= 1`. It is the
+    same predicate, for the same reason, that `gsc._get_last_synced_date` already applies to
+    its own cursor after GA4's rows made that connector return [] on every run (2026-07-30).
+    `seo_daily_totals` needs no predicate: the gsc connector is its only writer.
+
+    **WHY `+ 1`.** `range_to_period_dates` ends its window at `anchor - 1`, because Search
+    Console's most recent day is partial. That is true of *today* and not of this anchor:
+    `gsc_safe_range` already ends at today-3, so every day stored here is a settled one. The
+    two safety margins stacked, and the newest real day of data fell outside every window that
+    was meant to display it. Returning `max + 1` lands that `- 1` exactly on the last day with
+    data, instead of changing the shared arithmetic underneath the ranking pages.
+    `latest_ranking_anchor` resolves the identical mismatch the identical way — see its
+    docstring for the version of this that made rank measurements unrenderable.
+
+    The fallback stays TODAY, never today + 1: with no data there is no measurement to land
+    on, and an anchor of tomorrow would put the window's end in the future.
+    """
+    with get_session() as session:
+        ensure_tables(session, SEODailyTotal)
+        breakdown = session.execute(
+            select(func.max(SEODaily.date)).where(
+                SEODaily.site_id == site_id,
+                SEODaily.impressions > 0,
+            )
+        ).scalar()
+        totals = session.execute(
+            select(func.max(SEODailyTotal.date)).where(SEODailyTotal.site_id == site_id)
+        ).scalar()
+        candidates = [d for d in (breakdown, totals) if d is not None]
+        if not candidates:
+            return date_cls.today()
+        return max(candidates) + timedelta(days=1)
+
+
+def latest_analytics_anchor(site_id: str) -> date_cls:
+    """Anchor for the GA4-driven pages (Off-site SEO, Ads), where Search Console is not the
+    data source and its cursor is the wrong one to use.
+
+    THIS IS DELIBERATELY NOT `latest_data_anchor`, and the difference is the point. That
+    function answers "what is the newest day of SEARCH CONSOLE data" — it filters `seo_daily`
+    to `impressions > 0` and adds a day, both correct for a window whose numbers come from
+    `seo_daily_totals`. Applied to Off-site or Ads it is simply the wrong question: those pages
+    read GA4's session/channel data and the Google Ads tables, and Search Console's three-day
+    reporting lag has nothing to do with when GA4 last reported. A site with GA4 connected and
+    Search Console not yet verified has no GSC rows at all, so a GSC-only anchor would fall
+    back to *today* and render every GA4 page empty.
+
+    So this keeps the ORIGINAL semantics unchanged — newest `seo_daily` / `seo_daily_totals`
+    row of any kind, no predicate and no `+ 1` — because that is what these two pages have
+    always been measured against, and the 2026-08-18 anchor fix was scoped to the Search
+    Console pages that were actually wrong. Changing what Ads and Off-site report was not part
+    of that fix and must not be a side effect of it.
     """
     with get_session() as session:
         ensure_tables(session, SEODailyTotal)
@@ -175,18 +242,33 @@ def build_frontend_link(request, path: str) -> str:
     return f"{base}{path}"
 
 
-def resolve_range_periods(request, slug: str):
+def resolve_range_periods(request, slug: str, anchor_fn=None):
     """Resolve a range-taking view's full request context in one call: site lookup (404 on
     unknown slug), `range` query param validation (default 28d), and period-date resolution
     anchored to the latest data date. Returns (site_id, curr_start, curr_end, prev_start,
-    prev_end). Used by every apps.api view that takes both a `slug` and a `range` param."""
+    prev_end). Used by every apps.api view that takes both a `slug` and a `range` param.
+
+    `anchor_fn` picks WHICH data family's cursor the window is measured against, and it is
+    explicit because there is no single right answer. Search Console, GA4 and the SERP rank
+    captures are all written on different schedules by different connectors, and a window
+    anchored to the wrong one lands off the data it is supposed to show:
+
+        latest_data_anchor       (default)  Search Console traffic — Overview, SEO, Keywords
+        latest_analytics_anchor             GA4 sessions / Ads — Off-site SEO, Ads
+        latest_ranking_anchor               newest rank capture — Positioning (applied by the
+                                            view itself, on top of the anchor chosen here)
+
+    Defaulting to the GSC anchor keeps every existing caller's behaviour; a GA4-driven page
+    that forgets to pass its own would anchor on Search Console's three-day-lagged cursor,
+    which is exactly the mistake this parameter exists to make visible.
+    """
     site_id = resolve_project_or_404(slug).site_url
 
     query = OverviewQuerySerializer(data=request.query_params)
     query.is_valid(raise_exception=True)
     range_key = query.validated_data["range"]
 
-    anchor = latest_data_anchor(site_id)
+    anchor = (anchor_fn or latest_data_anchor)(site_id)
     curr_start, curr_end, prev_start, prev_end = range_to_period_dates(range_key, anchor)
     return site_id, curr_start, curr_end, prev_start, prev_end
 
@@ -352,6 +434,16 @@ class ProjectOverviewView(APIView):
         priority = build_priority_feed(build_alerts_response(site_id)["feed"])
 
         return Response({
+            # The dates every number on this page is actually about. The page prints them,
+            # because the window is NOT "the last 7 days": it anchors to the newest day of
+            # Search Console data (latest_data_anchor), and `gsc_safe_range` stops three days
+            # back where Search Console's own UI stops two. So a perfectly healthy sync still
+            # produces a window about a day off Search Console's on each end, and its totals
+            # differ accordingly. Printing the dates is what lets a user tell that apart from
+            # a sync that has silently stopped — the two were confused for exactly that reason
+            # on premierstaff.com (2026-08-18), where the window had drifted three weeks back
+            # and still showed a complete, plausible-looking week.
+            "window": {"start": curr_start.isoformat(), "end": curr_end.isoformat()},
             "kpis": kpis,
             "pillars": pillars,
             "modules": modules,
@@ -640,14 +732,20 @@ class ProjectSiteAuditView(APIView):
 @method_decorator(login_not_required, name="dispatch")
 class ProjectOffsiteView(APIView):
     def get(self, request, slug):
-        site_id, curr_start, curr_end, prev_start, prev_end = resolve_range_periods(request, slug)
+        # GA4/Ads data, not Search Console — see `latest_analytics_anchor` for why this page
+        # must not be measured against GSC's three-day-lagged cursor.
+        site_id, curr_start, curr_end, prev_start, prev_end = resolve_range_periods(
+            request, slug, anchor_fn=latest_analytics_anchor)
         return Response(build_offsite_response(site_id, curr_start, curr_end, prev_start, prev_end))
 
 
 @method_decorator(login_not_required, name="dispatch")
 class ProjectAdsView(APIView):
     def get(self, request, slug):
-        site_id, curr_start, curr_end, prev_start, prev_end = resolve_range_periods(request, slug)
+        # GA4/Ads data, not Search Console — see `latest_analytics_anchor` for why this page
+        # must not be measured against GSC's three-day-lagged cursor.
+        site_id, curr_start, curr_end, prev_start, prev_end = resolve_range_periods(
+            request, slug, anchor_fn=latest_analytics_anchor)
         return Response(build_ads_response(site_id, curr_start, curr_end, prev_start, prev_end))
 
 

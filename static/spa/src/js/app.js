@@ -2527,6 +2527,31 @@
     if (days < 365) return Math.floor(days / 30) + 'mo ago';
     return Math.floor(days / 365) + 'y ago';
   }
+  /* The mirror of relTime() for a timestamp in the FUTURE. It exists because relTime() cannot
+     be used for one and fails silently when it is: a future date gives a negative `diff`,
+     which passes `diff < 60000`, so "next sync in 6 days" renders as "just now". That is the
+     worst possible wrong answer on a schedule panel — it reads as "this just ran".
+
+     Anything already in the past (or within the minute) is 'now', because the only future
+     dates this renders are scheduler due-dates, and one that has arrived means the next
+     hourly tick picks it up. Beyond a week it switches to an absolute date: "in 23d" is not
+     something anyone can act on, while "17 Sep" is. */
+  untilTime(ts) {
+    if (!ts) return '';
+    const raw = String(ts);
+    const d = new Date(raw.length <= 10 ? raw + 'T00:00:00' : raw);
+    const t = d.getTime();
+    if (isNaN(t)) return raw;
+    const diff = t - Date.now();
+    if (diff < 60000) return 'now';
+    const mins = Math.floor(diff / 60000);
+    if (mins < 60) return 'in ' + mins + 'm';
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return 'in ' + hrs + 'h';
+    const days = Math.floor(hrs / 24);
+    if (days < 7) return 'in ' + days + 'd';
+    return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+  }
   posBadge(p) {
     // 28px fit a single digit; a decimal position like "35.9" needs more room.
     const base = { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', minWidth: '38px', height: '24px', borderRadius: '4px', fontSize: '12px', fontWeight: 600 };

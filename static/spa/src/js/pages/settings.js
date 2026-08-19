@@ -61,15 +61,35 @@
       const tabOn = Object.assign({}, tabBase, { color: '#4f46e5', fontWeight: 600, borderBottom: '2px solid #4f46e5' });
 
       const cadenceLabels = { '12h': 'Every 12 hours', daily: 'Daily', weekly: 'Weekly', biweekly: 'Every 2 weeks', monthly: 'Monthly', manual: 'Manual only' };
-      const mkOpts = keys => keys.map(k => ({ value: k, label: cadenceLabels[k] }));
+      /* Every module offers the SAME full ladder. Each row used to expose a hand-picked subset
+         — backlinks could not be set to daily, keywords could not be set to biweekly — which
+         encoded a cost opinion as a missing option, with nothing on screen saying so. The user
+         asked for the full choice, and the real guard against an expensive cadence is the one
+         that already exists and actually works: `run_scheduled_syncs` checks the DataForSEO cap
+         before every start and skips the run when it is exceeded. Each row still prints its own
+         per-unit cost in `desc`, so the choice is informed rather than merely permitted. */
+      const CADENCES = ['12h', 'daily', 'weekly', 'biweekly', 'monthly', 'manual'];
+      const cadOpts = CADENCES.map(k => ({ value: k, label: cadenceLabels[k] }));
+      /* [syncConfig key, label, cost/description, sync-now scope].
+         Order matches apps/sync/scheduling.SYNC_MODULES, which is also the scheduler's
+         tie-break order — so the panel reads top-to-bottom in the order work actually wins a
+         slot. `organic` leads for the same reason it leads there: it is free and it feeds the
+         numbers on the Overview. */
       const SYNC_MODS = [
-        ['positions', 'Position tracking', 'SERP Standard queue · ~$0.0015/keyword', ['daily', 'weekly', 'biweekly', 'monthly', 'manual'], 'positions'],
-        ['backlinks', 'Backlinks', 'Summary + new/lost deltas', ['weekly', 'biweekly', 'monthly', 'manual'], 'backlinks'],
-        ['audit', 'Site audit crawl', 'OnPage crawl · ~$0.00125/page', ['weekly', 'biweekly', 'monthly', 'manual'], 'audit'],
-        ['keywords', 'Keyword volumes', 'Labs volume / KD / intent refresh', ['weekly', 'monthly', 'manual'], 'keywords'],
-        ['ads', 'Ads (Google + GA4)', 'GAQL reports + GA4 runReport · $0', ['12h', 'daily', 'manual'], null],
-        ['ai', 'AI visibility', 'LLM mention checks across 5 models', ['weekly', 'biweekly', 'monthly', 'manual'], 'ai']
+        ['organic', 'Organic traffic (Search Console + GA4)', 'GSC daily totals + GA4 sessions · free, unmetered', 'organic'],
+        ['positions', 'Position tracking', 'SERP Standard queue · ~$0.0015/keyword', 'positions'],
+        ['backlinks', 'Backlinks', 'Summary + new/lost deltas', 'backlinks'],
+        ['audit', 'Site audit crawl', 'OnPage crawl · ~$0.00125/page', 'audit'],
+        ['keywords', 'Keyword volumes', 'Labs volume / KD / intent refresh', 'keywords'],
+        ['ads', 'Ads (Google + GA4)', 'GAQL reports + GA4 runReport · $0', 'ads'],
+        ['ai', 'AI visibility', 'LLM mention checks across 5 models', 'ai']
       ];
+      /* Per-module schedule facts, keyed for lookup. settings_service._sync_summary_raw builds
+         these from the SAME apps.sync.scheduling.due_modules() the scheduler acts on, so a row
+         cannot promise a run that will not happen. `|| []` because an older cached payload
+         (or a project whose settings response predates this field) has no `modules` key, and a
+         schedule panel that throws is worse than one showing "—". */
+      const modInfo = (data.sync.modules || []).reduce((acc, m) => { acc[m.module] = m; return acc; }, {});
 
       const PLAT = [
         ['linkedin', 'LinkedIn', 'LinkedIn Marketing API — impressions & CTR for Organic Social'],
@@ -407,11 +427,39 @@
         // concatenation would otherwise produce.
         nextRun: data.sync.next_run ? (data.sync.next_run + ' (' + data.sync.day + ')') : 'nothing due — every module is set to manual, or nothing has synced yet',
         lastRun: data.sync.last_run || 'never',
-        syncRows: SYNC_MODS.map(m => ({
-          label: m[1], desc: m[2], value: syncCfg[m[0]] || 'weekly', options: mkOpts(m[3]),
-          onChange: e => this.editSyncCfg(m[0], e.target.value),
-          canSync: !!m[4] && !syncing, run: () => this.startSync(m[4])
-        })),
+        syncRows: SYNC_MODS.map(m => {
+          const info = modInfo[m[0]] || {};
+          /* The cadence the SCHEDULER resolved, not the raw saved blob. get_sync_config()
+             merges a saved partial over the shipped defaults, so a project that has never
+             opened this tab has a real cadence the panel must show — the old `|| 'weekly'`
+             fallback invented one, and showed "Weekly" next to a module the backend was
+             running every 12 hours. */
+          const cadence = info.cadence || syncCfg[m[0]] || 'weekly';
+          /* SUCCESS-anchored (see _sync_summary_raw): a failed attempt is not a run, and
+             showing one as "Last run" is how a module that has fetched nothing for three
+             weeks reads as current. */
+          const last = info.last_success ? 'Last run ' + this.relTime(info.last_success) : 'Never run';
+          /* Three genuinely different states, none of them a date:
+               manual        — nothing will ever start it; saying "due now" would be a lie.
+               due           — the next hourly tick takes it; that IS "now".
+               no next_run   — a real cadence with no successful run to measure from. The
+                               scheduler treats it as due, so say so rather than print nothing. */
+          const next = cadence === 'manual' ? 'runs only when you press Sync now'
+            : info.due ? 'due now — next hourly check will start it'
+            : info.next_run ? 'next ' + this.untilTime(info.next_run)
+            : 'due now — never synced';
+          return {
+            label: m[1], desc: m[2], value: cadence, options: cadOpts,
+            onChange: e => this.editSyncCfg(m[0], e.target.value),
+            schedule: last + ' · ' + next,
+            /* Amber only for a real cadence that has never produced data — the state this
+               whole change exists to surface. An overdue-by-an-hour row is normal (the tick is
+               hourly) and must not cry wolf. */
+            scheduleStyle: { fontSize: '11.5px', marginTop: '3px', color: (!info.last_success && cadence !== 'manual') ? '#b45309' : '#94a3b8' },
+            title: info.reason || '',
+            canSync: !syncing, run: () => this.startSync(m[3])
+          };
+        }),
         crawlMax: String(crawlCfg.maxPages), crawlFreq: crawlCfg.frequency, crawlExcl: crawlCfg.excludedPaths,
         jsToggle: toggle(!!crawlCfg.jsRendering),
         robotsToggle: toggle(!!crawlCfg.respectRobots),

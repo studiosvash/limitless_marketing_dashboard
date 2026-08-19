@@ -33,8 +33,18 @@ def make_run(site_url, scope, status, age):
 
 
 def set_cadences(site_url, **cadences):
+    """Set the named cadences and pin EVERY other module to `manual`.
+
+    The pinning is the point. get_sync_config() merges a saved blob over the shipped defaults,
+    so a module a test does not mention inherits its real default -- and a test that means
+    "exactly these two modules are due" would silently acquire a third the day a new module
+    ships with a live default cadence. That is exactly what happened when `organic` was added:
+    five fixtures that named all six modules by hand started asserting against seven.
+    """
+    blob = {m: "manual" for m in scheduling.SYNC_MODULES}
+    blob.update(cadences)
     ProjectSettings.objects.update_or_create(
-        site_url=site_url, defaults={"data": {"syncConfig": cadences}}
+        site_url=site_url, defaults={"data": {"syncConfig": blob}}
     )
 
 
@@ -531,3 +541,177 @@ class ProcessAliveTests(TestCase):
     def test_this_processs_own_pid_is_alive_on_the_real_platform(self):
         """End-to-end on whatever OS the suite is running on, with no mocking at all."""
         self.assertIs(scheduling._process_alive(os.getpid()), True)
+
+
+class OrganicTrafficModuleTests(TestCase):
+    """The Overview headline KPIs (organic clicks / impressions / avg position) are written by
+    the `gsc` connector into `seo_daily_totals`. Until 2026-08-18 no schedulable module ran it:
+    `SYNC_MODULES` was ("positions", "backlinks", "audit", "keywords", "ads", "ai"), and the
+    connector lists behind those six contain `gsc_keywords`, `gsc_pages` and `ga4` but never
+    plain `gsc`. So the one number the dashboard opens on could ONLY be refreshed by a human
+    pressing "Refresh all" — on premierstaff.com it therefore sat three weeks stale while the
+    Settings panel truthfully reported that everything the user HAD scheduled was running.
+
+    These tests pin the fix: a module whose connectors include `gsc`, schedulable like the rest.
+    """
+
+    def test_some_schedulable_module_actually_runs_the_gsc_connector(self):
+        """The regression itself. If this fails, the Overview KPIs are unschedulable again."""
+        from pipeline.services.sync_engine import PAGE_CONNECTORS
+
+        runs_gsc = [
+            m for m in scheduling.SYNC_MODULES
+            if "gsc" in PAGE_CONNECTORS.get(scheduling._SCOPE_TO_PAGE_KEY.get(m, m), [])
+        ]
+        self.assertTrue(
+            runs_gsc,
+            "No schedulable module runs the `gsc` connector, so nothing can keep the Overview "
+            "organic clicks/impressions/position fresh except a manual Refresh all.",
+        )
+
+    def test_organic_resolves_to_the_gsc_and_ga4_connectors(self):
+        """Same resolution the scheduler and the sync API both go through, so the row the user
+        sees in Settings and the connectors that actually run cannot drift apart."""
+        from apps.dashboard.services.sync_api_service import _connectors_for_scope
+
+        self.assertEqual(_connectors_for_scope("organic"), ["gsc", "ga4"])
+
+    def test_organic_has_a_shipped_default_cadence(self):
+        """Search Console and GA4 cost nothing per call, so the default is a real cadence, not
+        `manual` — an unconfigured project must still keep its headline numbers current."""
+        from apps.dashboard.services.settings_service import DEFAULT_SETTINGS_BLOB
+
+        cadence = DEFAULT_SETTINGS_BLOB["syncConfig"].get("organic")
+        self.assertIn(cadence, scheduling.CADENCE_INTERVALS)
+        self.assertIsNotNone(
+            scheduling.CADENCE_INTERVALS[cadence],
+            "`organic` must not default to manual: GSC/GA4 are free and this is the module "
+            "that keeps the Overview honest.",
+        )
+
+    def test_a_full_refresh_counts_as_an_organic_run(self):
+        """`gsc` and `ga4` are both in ALL_CONNECTORS, so Refresh all genuinely refreshes this
+        module and must reset its clock rather than re-running it an hour later."""
+        make_run(SITE, "all", RefreshStatus.SUCCESS, timedelta(hours=1))
+        due, _ = scheduling.is_due(SITE, "organic", "daily")
+        self.assertFalse(due)
+
+    def test_organic_is_not_due_before_a_day_has_passed(self):
+        make_run(SITE, "organic", RefreshStatus.SUCCESS, timedelta(hours=23))
+        self.assertFalse(scheduling.is_due(SITE, "organic", "daily")[0])
+
+    def test_organic_is_due_once_a_day_has_passed(self):
+        make_run(SITE, "organic", RefreshStatus.SUCCESS, timedelta(hours=25))
+        self.assertTrue(scheduling.is_due(SITE, "organic", "daily")[0])
+
+    def test_the_command_accepts_organic_as_a_forced_scope(self):
+        """`--scope` validates against SYNC_MODULES, so an unregistered module is a hard
+        CommandError -- which is how an operator would discover the gap, if they looked."""
+        out = StringIO()
+        with mock.patch("pipeline.services.site_service.get_active_site_ids", return_value=[SITE]):
+            call_command("run_scheduled_syncs", "--dry-run", "--site", SITE,
+                         "--scope", "organic", stdout=out)
+        self.assertIn("WOULD START  organic", out.getvalue())
+
+
+class ScopeAliasMirrorTests(TestCase):
+    """`scheduling._SCOPE_TO_PAGE_KEY` is a hand-copy of `sync_api_service.SCOPE_ALIASES`.
+    A copy that drifts is worse than no copy: the scheduler would decide "is this module due?"
+    against one connector list and then start a run that fetches a different one. These pin the
+    copy to the original."""
+
+    def test_the_two_alias_maps_agree(self):
+        from apps.dashboard.services.sync_api_service import SCOPE_ALIASES
+
+        for scope, page in scheduling._SCOPE_TO_PAGE_KEY.items():
+            self.assertEqual(
+                SCOPE_ALIASES.get(scope), page,
+                f"scheduling maps {scope!r} to {page!r} but sync_api_service maps it to "
+                f"{SCOPE_ALIASES.get(scope)!r} — the scheduler and the runner would disagree.",
+            )
+
+    def test_every_schedulable_module_resolves_to_real_connectors(self):
+        """A module the UI can set a cadence on but whose scope runs nothing is a control that
+        appears to schedule work and schedules none."""
+        from apps.dashboard.services.sync_api_service import _connectors_for_scope
+
+        for module in scheduling.SYNC_MODULES:
+            self.assertTrue(
+                _connectors_for_scope(module),
+                f"{module!r} is schedulable but resolves to no connectors.",
+            )
+
+    def test_every_schedulable_module_has_a_shipped_default(self):
+        """get_sync_config() merges saved values OVER the defaults and drops unknown keys, so a
+        module absent from DEFAULT_SETTINGS_BLOB can never be scheduled at all."""
+        from apps.dashboard.services.settings_service import DEFAULT_SETTINGS_BLOB
+
+        self.assertEqual(
+            set(DEFAULT_SETTINGS_BLOB["syncConfig"]), set(scheduling.SYNC_MODULES),
+        )
+
+
+class PerModuleScheduleTests(TestCase):
+    """`_sync_summary_raw` used to serve THREE values for the whole panel -- one next_run, one
+    last_run, one weekday -- so a user looking at six cadence dropdowns had no way to tell
+    which module the dates belonged to, or that one of them had not run in three weeks. The
+    header dates are kept (they are still the "what happens next on this site" answer) and a
+    per-module breakdown is added alongside, derived from the same `due_modules()` the
+    scheduler itself acts on."""
+
+    def _summary(self):
+        from apps.dashboard.services.settings_service import _sync_summary_raw
+
+        return _sync_summary_raw(SITE)
+
+    def test_every_schedulable_module_appears_exactly_once(self):
+        by_module = {m["module"]: m for m in self._summary()["modules"]}
+        self.assertEqual(set(by_module), set(scheduling.SYNC_MODULES))
+        self.assertEqual(len(self._summary()["modules"]), len(scheduling.SYNC_MODULES))
+
+    def test_a_module_reports_its_own_last_success_not_the_sites(self):
+        """The bug this exists to prevent: one site-wide "Last run" made a three-week-stale
+        module look as fresh as the one that ran an hour ago."""
+        set_cadences(SITE, organic="daily", positions="weekly")
+        make_run(SITE, "organic", RefreshStatus.SUCCESS, timedelta(hours=1))
+        make_run(SITE, "positions", RefreshStatus.SUCCESS, timedelta(days=21))
+
+        by_module = {m["module"]: m for m in self._summary()["modules"]}
+        organic = timezone.now() - timedelta(hours=1)
+        positions = timezone.now() - timedelta(days=21)
+        self.assertAlmostEqual(
+            (timezone.datetime.fromisoformat(by_module["organic"]["last_success"]) - organic)
+            .total_seconds(), 0, delta=5,
+        )
+        self.assertAlmostEqual(
+            (timezone.datetime.fromisoformat(by_module["positions"]["last_success"]) - positions)
+            .total_seconds(), 0, delta=5,
+        )
+
+    def test_a_module_that_never_ran_reports_null_not_a_date(self):
+        by_module = {m["module"]: m for m in self._summary()["modules"]}
+        self.assertIsNone(by_module["backlinks"]["last_success"])
+        self.assertIsNone(by_module["backlinks"]["next_run"])
+
+    def test_a_manual_module_gets_no_next_run_even_after_a_successful_one(self):
+        set_cadences(SITE, ai="manual")
+        make_run(SITE, "ai", RefreshStatus.SUCCESS, timedelta(days=1))
+        by_module = {m["module"]: m for m in self._summary()["modules"]}
+        self.assertIsNotNone(by_module["ai"]["last_success"])
+        self.assertIsNone(by_module["ai"]["next_run"])
+        self.assertEqual(by_module["ai"]["cadence"], "manual")
+
+    def test_each_row_carries_the_cadence_and_the_due_reason_the_scheduler_uses(self):
+        set_cadences(SITE, organic="daily")
+        make_run(SITE, "organic", RefreshStatus.SUCCESS, timedelta(days=3))
+        organic = next(m for m in self._summary()["modules"] if m["module"] == "organic")
+        self.assertEqual(organic["cadence"], "daily")
+        self.assertTrue(organic["due"])
+        self.assertIn("daily", organic["reason"])
+
+    def test_the_header_values_are_unchanged(self):
+        """The SPA dereferences next_run/day/last_run unguarded; adding a key must not move
+        them."""
+        summary = self._summary()
+        for key in ("next_run", "day", "last_run"):
+            self.assertIn(key, summary)

@@ -44,6 +44,13 @@ SCOPE_ALIASES = {
     # the Keyword Explorer does not require re-querying the entire tracked set against every
     # competitor -- which is slow and, because DataForSEO meters per query, billable.
     "positions_new": "positioning_new",
+    # Settings -> Automation's "Organic traffic (Search Console + GA4)" row and the scheduler
+    # module of the same name. It maps onto the existing `seo` page key (gsc + ga4) rather than
+    # adding a seventh connector list, so the scheduled run and the SEO page's own Refresh
+    # button are by construction the same fetch. Added 2026-08-18: until then NO schedulable
+    # module ran the plain `gsc` connector, so the Overview's headline organic numbers could
+    # only be refreshed by pressing "Refresh all" -- see apps/sync/scheduling.SYNC_MODULES.
+    "organic": "seo",
 }
 
 

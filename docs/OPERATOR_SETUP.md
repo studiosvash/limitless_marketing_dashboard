@@ -138,8 +138,25 @@ and its real run history. Running it hourly does not mean syncing hourly.
 
 ### 3c. Confirm
 
-Settings → Automation shows the next run date. That date comes from the *same* logic the command
-acts on, so what it promises and what happens cannot drift apart.
+Settings → Automation shows the next run date **and a last-run line under every module row**.
+Those dates come from the *same* logic the command acts on, so what they promise and what happens
+cannot drift apart.
+
+Read the rows, not just the header. The header's "Last run" is the newest sync of *any* connector
+on this site — it goes green the moment a 12-hourly Ads sync lands, whatever the rest are doing.
+A module that has genuinely stopped shows up as an old date on **its own row**, and one that has
+a real cadence but has never succeeded is coloured amber.
+
+If the rows are not moving, the task is almost certainly not installed. On Linux that is one
+line:
+
+```bash
+crontab -l | grep run_scheduled_syncs      # is it registered at all?
+tail -50 /var/log/fusehealth/cron.log      # is it running, and what does it say?
+```
+
+The command prints one line per module per tick (`STARTED` / `DEFERRED` / `not due` with the
+reason), so the log answers "why did this not sync?" directly.
 
 ---
 

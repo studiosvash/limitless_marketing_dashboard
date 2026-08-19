@@ -389,7 +389,24 @@ window.FuseFixtures = (function () {
         { name: 'OpenAI (summaries)', status: 'ok', last_sync: iso(now - 2 * DAY), records: 4 }
       ],
       prefs: { email_alerts: true, weekly_digest: true },
-      sync: { cadence: 'weekly', day: 'Monday', next_run: iso(now + ((8 - new Date(now).getDay()) % 7 || 7) * DAY) }
+      /* `modules` mirrors settings_service._sync_summary_raw's per-row breakdown, which the
+         Automation panel renders one line per row from. Without it every row in fixture mode
+         reads "Never run", which is a worse demo than no demo: this panel exists precisely to
+         make a module that has not run in three weeks visible. */
+      sync: {
+        cadence: 'weekly', day: 'Monday',
+        next_run: iso(now + ((8 - new Date(now).getDay()) % 7 || 7) * DAY),
+        modules: [
+          { module: 'organic', cadence: 'daily', due: false, reason: 'last synced 6h ago (daily)', last_success: iso(now - 0.25 * DAY), next_run: iso(now + 0.75 * DAY) },
+          { module: 'positions', cadence: 'weekly', due: false, reason: 'last synced 2d 0h ago (weekly)', last_success: iso(now - 2 * DAY), next_run: iso(now + 5 * DAY) },
+          { module: 'backlinks', cadence: 'weekly', due: false, reason: 'last synced 2d 0h ago (weekly)', last_success: iso(now - 2 * DAY), next_run: iso(now + 5 * DAY) },
+          { module: 'audit', cadence: 'monthly', due: false, reason: 'last synced 9d 0h ago (monthly)', last_success: iso(now - 9 * DAY), next_run: iso(now + 21 * DAY) },
+          { module: 'keywords', cadence: 'monthly', due: false, reason: 'last synced 9d 0h ago (monthly)', last_success: iso(now - 9 * DAY), next_run: iso(now + 21 * DAY) },
+          { module: 'ads', cadence: '12h', due: true, reason: 'last synced 14h ago (12h)', last_success: iso(now - 0.6 * DAY), next_run: iso(now) },
+          /* Deliberately never run: the empty state has to be visible in the demo too. */
+          { module: 'ai', cadence: 'manual', due: false, reason: 'manual', last_success: null, next_run: null }
+        ]
+      }
     };
 
     /* ----- site audit (OnPage-shaped) ----- */

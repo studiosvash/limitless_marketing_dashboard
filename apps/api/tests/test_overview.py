@@ -1,5 +1,5 @@
 import tempfile
-from datetime import date
+from datetime import date, date as date_cls, timedelta
 from pathlib import Path
 
 from django.contrib.auth import get_user_model
@@ -8,7 +8,9 @@ from rest_framework.authtoken.models import Token
 from rest_framework.test import APIClient, APITestCase
 
 from pipeline.db.engine import get_engine
-from pipeline.db.schema import init_db, Site, SEODaily, KeywordRanking, AISummary, Anomaly
+from pipeline.db.schema import (
+    init_db, Site, SEODaily, SEODailyTotal, KeywordRanking, AISummary, Anomaly,
+)
 from pipeline.utils.db_connection import get_session
 import pipeline.utils.db_connection as db_connection
 
@@ -27,11 +29,15 @@ class OverviewEndpointTests(APITestCase):
         with get_session() as session:
             session.add(Site(site_url="sc-domain:fusehealth.com", site_name="FuseHealth",
                               slug="fusehealth", is_active=1))
-            # Two rows, not one: range_to_period_dates("30d", anchor) treats `anchor` (the max
-            # data date) as "today" and excludes it from the current window (yesterday =
-            # anchor - 1 — pre-existing behavior in pipeline/utils/period_utils.py, not
-            # introduced here). The 07-01 row is the max date and therefore intentionally
-            # excluded; 06-30 is the one actually inside the current-period window.
+            # Two rows, and since 2026-08-18 BOTH are inside the current window. They used
+            # not to be: `latest_data_anchor` returned the max data date itself, and
+            # range_to_period_dates ends its window at `anchor - 1` (Search Console's most
+            # recent day is partial), so the newest row was excluded from every window meant
+            # to show it. That partial-day guard belongs to *today*, not to this anchor —
+            # `gsc_safe_range` already stops at today-3, so only settled days are ever stored,
+            # and the two margins were stacking. The anchor now returns max + 1 so that `- 1`
+            # lands exactly on the last day of data. See `latest_data_anchor`, and
+            # `latest_ranking_anchor` for the same fix made earlier for rank measurements.
             session.add(SEODaily(date=date(2026, 6, 30), site_id="sc-domain:fusehealth.com",
                                   clicks=100, impressions=1000, ctr=0.10, avg_position=8.0,
                                   landing_page="https://fusehealth.com/a"))
@@ -55,9 +61,9 @@ class OverviewEndpointTests(APITestCase):
         resp = self.client_auth.get("/api/projects/fusehealth/overview", {"range": "30d"})
         kpis = resp.json()["kpis"]
         clicks_kpi = next(k for k in kpis if k["label"] == "Total clicks")
-        # 100, not 100+999=1099 — the 07-01 row is the max date, excluded from the current
-        # window by design (see the comment on the seeded rows in setUp above).
-        self.assertEqual(clicks_kpi["value"], 100)
+        # 1099 = 100 + 999: both seeded days. It was 100 while the newest day of data fell
+        # outside the window — see the comment on the seeded rows in setUp.
+        self.assertEqual(clicks_kpi["value"], 1099)
 
     def test_unbuilt_pillars_report_setup_state_not_fake_data(self):
         resp = self.client_auth.get("/api/projects/fusehealth/overview", {"range": "30d"})
@@ -151,12 +157,16 @@ class OverviewEndpointTests(APITestCase):
         # Avg. position pillar's `sub` reports the same top3_count.
         avg_pos_pillar = next(p for p in body["pillars"] if p["label"] == "Avg. position")
         self.assertEqual(avg_pos_pillar["sub"], "1 keywords in top 3")
-        # 8.0 == the single SEODaily row's avg_position inside the current window (setUp).
-        self.assertEqual(avg_pos_pillar["value"], 8.0)
+        # Impression-weighted across BOTH seeded days, never a plain mean of 8.0 and 1.0:
+        #   (8.0 x 1000 + 1.0 x 9999) / (1000 + 9999) = 17999 / 10999 = 1.636… -> 1.6
+        # The 9,999-impression day dominating the 1,000-impression one is the whole point of
+        # weighting; an unweighted AVG() would report 4.5 and disagree with Search Console.
+        self.assertEqual(avg_pos_pillar["value"], 1.6)
 
-        # Organic clicks pillar value is a real number matching setUp's SEODaily total.
+        # Organic clicks pillar value is a real number matching setUp's SEODaily total —
+        # both seeded days, same 1099 the Total clicks KPI reports above.
         organic_clicks_pillar = next(p for p in body["pillars"] if p["label"] == "Organic clicks")
-        self.assertEqual(organic_clicks_pillar["value"], 100)
+        self.assertEqual(organic_clicks_pillar["value"], 1099)
 
         # AI summary wins/critical are populated with the actual seeded bullet text.
         summary = body["summary"]
@@ -417,9 +427,11 @@ class ResolveProjectHelperTests(APITestCase):
             resolve_project_or_404("does-not-exist")
 
     def test_latest_data_anchor_finds_max_date(self):
+        """max data date + 1, so range_to_period_dates' `anchor - 1` window end lands ON the
+        newest day of data rather than one day short of it. See `latest_data_anchor`."""
         from apps.api.views import latest_data_anchor
         anchor = latest_data_anchor("sc-domain:fusehealth.com")
-        self.assertEqual(anchor, date(2026, 7, 1))
+        self.assertEqual(anchor, date(2026, 7, 2))
 
     def test_latest_data_anchor_falls_back_to_today_when_no_data(self):
         from datetime import date as date_cls
@@ -488,3 +500,229 @@ class ResolveRangePeriodsTests(APITestCase):
         request = Request(django_request)
         with self.assertRaises(Http404):
             resolve_range_periods(request, "does-not-exist")
+
+
+
+class GSCTrafficAnchorTests(APITestCase):
+    """What `latest_data_anchor` is allowed to treat as "the newest day we have GSC data for".
+
+    Two independent defects met here, and together they moved the Overview's headline window
+    off the data it reports. Measured on production (premierstaff.com, 2026-08-18):
+
+        seo_daily_totals    max = 2026-07-31   <- where the headline KPIs actually read
+        seo_daily           max = 2026-08-02   <- what latest_data_anchor read
+        seo_daily WHERE impressions > 0
+                            max = 2026-07-19   <- Search Console's real cursor
+
+    1. GA4'S ROWS SET SEARCH CONSOLE'S WINDOW. `seo_daily` is a shared table: the `ga4`
+       connector writes the analytics columns and leaves clicks/impressions/ctr/avg_position
+       at 0 (see ga4._normalize), and its window runs to *yesterday* while `gsc_safe_range`
+       stops at today-3. An unfiltered `MAX(date)` therefore reads GA4's cursor — 14 days past
+       Search Console's, above — and anchors a window whose numbers come entirely from Search
+       Console. The window then ends after the last day of GSC data, and a "7-day" total is
+       silently a 6- or 5-day one. It gets worse every time GA4 syncs without GSC.
+
+       The GSC connector already solved exactly this for itself: `_get_last_synced_date` filters
+       on `impressions > 0` and its docstring records that reading GA4's cursor made the
+       connector return [] on every run while the Overview sat at 0 (production, 2026-07-30).
+       This function never got the same predicate.
+
+    2. THE NEWEST COMPLETE DAY WAS DROPPED. `range_to_period_dates` ends its window at
+       `anchor - 1` because Search Console's most recent day is partial. That is true of
+       *today*; it is not true of the anchor, because `gsc_safe_range` already ends at today-3
+       and only complete days are ever stored. The two safety margins stacked, and the newest
+       real day of data fell outside every window that was supposed to show it.
+
+       `latest_ranking_anchor` hit the identical mismatch and fixed it by returning `max + 1`
+       so the `anchor - 1` arithmetic lands on the measurement. This does the same, rather than
+       changing the shared arithmetic underneath the ranking pages.
+    """
+
+    def setUp(self):
+        db_connection._SessionFactory = None
+        self.addCleanup(setattr, db_connection, "_SessionFactory", None)
+        tmp = tempfile.mkdtemp()
+        db_path = str(Path(tmp) / "fusehealth.db")
+        init_db(get_engine(db_path))
+        self._ctx = override_settings(ANALYTICS_DB_PATH=db_path)
+        self._ctx.enable()
+        self.addCleanup(self._ctx.disable)
+        self.site = "sc-domain:fusehealth.com"
+        with get_session() as session:
+            session.add(Site(site_url=self.site, site_name="FuseHealth",
+                             slug="fusehealth", is_active=1))
+
+    def _gsc_row(self, d, clicks=10, impressions=100):
+        """A Search Console row. impressions >= 1 always — the Search Analytics API only
+        returns a row because that page was served."""
+        return SEODaily(date=d, site_id=self.site, clicks=clicks, impressions=impressions,
+                        ctr=clicks / impressions, avg_position=8.0,
+                        landing_page="https://fusehealth.com/a")
+
+    def _ga4_row(self, d):
+        """A GA4 row as ga4._normalize writes it: analytics columns only, the four Search
+        Console columns left at 0."""
+        return SEODaily(date=d, site_id=self.site, clicks=0, impressions=0, ctr=0.0,
+                        avg_position=0.0, landing_page="https://fusehealth.com/a",
+                        sessions=42)
+
+    def test_a_newer_ga4_row_does_not_drag_the_anchor_past_search_console(self):
+        from apps.api.views import latest_data_anchor
+
+        with get_session() as session:
+            session.add(self._gsc_row(date(2026, 7, 19)))
+            session.add(self._ga4_row(date(2026, 8, 2)))     # 14 days newer, zero GSC data
+        # +1 so the window's `anchor - 1` end lands ON 07-19; the GA4 row is ignored entirely.
+        self.assertEqual(latest_data_anchor(self.site), date(2026, 7, 20))
+
+    def test_the_newest_day_with_gsc_data_is_inside_the_window(self):
+        from apps.api.views import latest_data_anchor, range_to_period_dates
+
+        with get_session() as session:
+            for offset in range(9):
+                session.add(self._gsc_row(date(2026, 7, 31) - timedelta(days=offset)))
+        anchor = latest_data_anchor(self.site)
+        curr_start, curr_end, _, _ = range_to_period_dates("7d", anchor)
+        self.assertEqual(curr_end, date(2026, 7, 31), "the newest day of data was excluded")
+        self.assertEqual(curr_start, date(2026, 7, 25), "the window must be 7 days, inclusive")
+
+    def test_the_totals_table_still_counts_and_all_of_its_rows_are_gsc(self):
+        """`seo_daily_totals` is written by the gsc connector alone, so it needs no predicate —
+        and it is re-fetched further forward than the breakdown, so it is routinely the later
+        of the two. Anchoring on the breakdown alone would hold every window back."""
+        from apps.api.views import latest_data_anchor
+
+        with get_session() as session:
+            session.add(self._gsc_row(date(2026, 7, 19)))
+            session.add(SEODailyTotal(date=date(2026, 7, 31), site_id=self.site,
+                                      clicks=500, impressions=9000, ctr=0.055,
+                                      avg_position=12.0))
+        self.assertEqual(latest_data_anchor(self.site), date(2026, 8, 1))
+
+    def test_a_site_with_only_ga4_rows_falls_back_to_today(self):
+        """No Search Console data at all is not "the window ends whenever GA4 last ran". It is
+        the no-data case, and the honest anchor for that is today."""
+        from apps.api.views import latest_data_anchor
+
+        with get_session() as session:
+            session.add(self._ga4_row(date(2026, 8, 2)))
+        self.assertEqual(latest_data_anchor(self.site), date_cls.today())
+
+    def test_no_rows_at_all_still_falls_back_to_today_not_tomorrow(self):
+        """The +1 applies to a measured date, never to the fallback — an anchor of tomorrow
+        would put the window's end in the future."""
+        from apps.api.views import latest_data_anchor
+
+        self.assertEqual(latest_data_anchor(self.site), date_cls.today())
+
+    def test_the_window_never_runs_past_the_data_it_reports(self):
+        """The regression in one assertion: whatever the mix of connectors, the current
+        window's end must not be later than the newest day Search Console actually gave us."""
+        from apps.api.views import latest_data_anchor, range_to_period_dates
+
+        with get_session() as session:
+            for offset in range(30):
+                session.add(self._gsc_row(date(2026, 7, 19) - timedelta(days=offset)))
+            session.add(self._ga4_row(date(2026, 8, 2)))
+        _, curr_end, _, _ = range_to_period_dates("7d", latest_data_anchor(self.site))
+        self.assertLessEqual(curr_end, date(2026, 7, 19))
+
+    # -- the GSC anchor is NOT the anchor for GA4-driven pages ---------------------------
+
+    def test_the_analytics_anchor_does_see_ga4s_rows(self):
+        """The mirror image of the first test in this class, and the reason there are two
+        anchors rather than one. Off-site SEO and Ads read GA4 and the Ads tables; Search
+        Console's cursor is not their cursor, and filtering it out of THEIR anchor would
+        measure them against a date that has nothing to do with their data."""
+        from apps.api.views import latest_analytics_anchor, latest_data_anchor
+
+        with get_session() as session:
+            session.add(self._gsc_row(date(2026, 7, 19)))
+            session.add(self._ga4_row(date(2026, 8, 2)))
+        self.assertEqual(latest_analytics_anchor(self.site), date(2026, 8, 2))
+        self.assertEqual(latest_data_anchor(self.site), date(2026, 7, 20))
+
+    def test_a_ga4_only_site_still_has_an_analytics_anchor(self):
+        """The regression the split exists to prevent. A site with GA4 connected and Search
+        Console not yet verified has NO rows with impressions > 0, so a GSC-only anchor falls
+        back to today and every GA4 page renders empty — which is what happened to Off-site
+        and Ads the first time `latest_data_anchor` was narrowed."""
+        from apps.api.views import latest_analytics_anchor, latest_data_anchor
+
+        with get_session() as session:
+            session.add(self._ga4_row(date(2026, 8, 2)))
+        self.assertEqual(latest_analytics_anchor(self.site), date(2026, 8, 2))
+        self.assertEqual(latest_data_anchor(self.site), date_cls.today())
+
+    def test_the_analytics_anchor_keeps_its_original_no_plus_one_semantics(self):
+        """`+ 1` is a Search Console correction: it cancels the partial-last-day guard that
+        `gsc_safe_range` already provides. GA4's window ends at *yesterday* with no such
+        pre-trim, so the guard is doing real work there and must stay. Pinned because the two
+        functions look almost identical and the difference is easy to "tidy away"."""
+        from apps.api.views import latest_analytics_anchor
+
+        with get_session() as session:
+            session.add(self._ga4_row(date(2026, 8, 2)))
+        self.assertEqual(latest_analytics_anchor(self.site), date(2026, 8, 2))
+
+    def test_both_anchors_fall_back_to_today_on_an_empty_site(self):
+        from apps.api.views import latest_analytics_anchor, latest_data_anchor
+
+        self.assertEqual(latest_analytics_anchor(self.site), date_cls.today())
+        self.assertEqual(latest_data_anchor(self.site), date_cls.today())
+
+
+class OverviewWindowTests(APITestCase):
+    """The Overview reports a window the user cannot see, and that is how two correct screens
+    come to look like a bug.
+
+    The dashboard's `7d` is the last 7 days OF DATA — it anchors to the newest Search Console
+    day, not to today. Search Console's own "Last 7 days" anchors to ITS newest day, and
+    `gsc_safe_range` deliberately stops three days back where Google's UI stops two. So even
+    with the sync running perfectly the two windows sit about a day apart on each end and their
+    totals differ accordingly. Both numbers are right; they are answers to different questions.
+
+    Until the dates were on screen there was no way to tell that from a stale sync, and the two
+    were confused for exactly that reason (2026-08-18). So the response carries the window it
+    actually reported, and the page prints it.
+    """
+
+    def setUp(self):
+        db_connection._SessionFactory = None
+        self.addCleanup(setattr, db_connection, "_SessionFactory", None)
+        tmp = tempfile.mkdtemp()
+        db_path = str(Path(tmp) / "fusehealth.db")
+        init_db(get_engine(db_path))
+        self._ctx = override_settings(ANALYTICS_DB_PATH=db_path)
+        self._ctx.enable()
+        self.addCleanup(self._ctx.disable)
+        with get_session() as session:
+            session.add(Site(site_url="sc-domain:fusehealth.com", site_name="FuseHealth",
+                             slug="fusehealth", is_active=1))
+            for offset in range(40):
+                d = date(2026, 7, 31) - timedelta(days=offset)
+                session.add(SEODaily(date=d, site_id="sc-domain:fusehealth.com",
+                                     clicks=10, impressions=100, ctr=0.1, avg_position=8.0,
+                                     landing_page="https://fusehealth.com/a"))
+        user = get_user_model().objects.create_user("founder1", password="x")
+        token = Token.objects.get(user=user)
+        self.client_auth = APIClient()
+        self.client_auth.credentials(HTTP_AUTHORIZATION=f"Bearer {token.key}")
+
+    def _window(self, range_key):
+        resp = self.client_auth.get("/api/projects/fusehealth/overview", {"range": range_key})
+        self.assertEqual(resp.status_code, 200)
+        return resp.json()["window"]
+
+    def test_the_window_is_reported_and_matches_the_range(self):
+        self.assertEqual(self._window("7d"), {"start": "2026-07-25", "end": "2026-07-31"})
+
+    def test_the_window_tracks_the_range_the_caller_asked_for(self):
+        self.assertEqual(self._window("28d"), {"start": "2026-07-04", "end": "2026-07-31"})
+
+    def test_the_window_ends_on_the_newest_day_of_search_console_data(self):
+        """The value of printing it at all: whatever the range, the end date is the last day
+        we actually have — so a window that has drifted weeks behind is visible on the page
+        instead of being inferred from a number that looks plausible."""
+        for range_key in ("7d", "28d", "90d"):
+            self.assertEqual(self._window(range_key)["end"], "2026-07-31", range_key)

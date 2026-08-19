@@ -40,12 +40,30 @@ logger = logging.getLogger(__name__)
 # Modules and cadences
 # ---------------------------------------------------------------------------
 
-# The six keys the Settings -> Automation UI writes into `syncConfig`. These are also the
+# The keys the Settings -> Automation UI writes into `syncConfig`. These are also the
 # scope strings the SPA POSTs to /api/projects/<slug>/sync, so they are passed straight to
-# start_sync_run() -- which owns the one alias that differs from the engine's page key
-# (positions -> positioning, see sync_api_service.SCOPE_ALIASES). Kept as an ordered tuple
-# because it doubles as the tie-break order when two modules come due in the same hour.
-SYNC_MODULES: tuple[str, ...] = ("positions", "backlinks", "audit", "keywords", "ads", "ai")
+# start_sync_run() -- which owns the aliases that differ from the engine's page key
+# (positions -> positioning, organic -> seo; see sync_api_service.SCOPE_ALIASES). Kept as an
+# ordered tuple because it doubles as the tie-break order when two modules come due in the
+# same hour.
+#
+# `organic` was added 2026-08-18 and is the reason this comment is worth reading. The list was
+# ("positions", "backlinks", "audit", "keywords", "ads", "ai") -- six modules whose connector
+# lists between them contain `gsc_keywords`, `gsc_pages` and `ga4`, but NOT plain `gsc`. `gsc`
+# is the connector that writes `seo_daily_totals`, i.e. the organic clicks / impressions /
+# average position the dashboard OPENS on. So the headline number had no cadence that could
+# refresh it: it moved only when a human pressed "Refresh all". On premierstaff.com it sat
+# three weeks stale while every module the user HAD scheduled ran exactly as promised, and the
+# Overview's own "7d" window -- which anchors to the newest stored date, not to today --
+# silently drifted three weeks behind Search Console's own 7-day report.
+#
+# It is deliberately FIRST in the tuple. The command starts at most one module per site per
+# tick, and ties are broken by this order; `organic` is two free, fast API calls (no DataForSEO
+# meter, no crawl), so letting it win a tie costs nothing and keeps the most-looked-at number
+# on the most-frequent clock.
+SYNC_MODULES: tuple[str, ...] = (
+    "organic", "positions", "backlinks", "audit", "keywords", "ads", "ai",
+)
 
 # Cadence code -> how long a successful run stays "fresh". These are exactly the values the
 # Settings dropdowns emit (see settings_service._CADENCE_LABELS).
@@ -74,7 +92,11 @@ CADENCE_INTERVALS: dict[str, timedelta | None] = {
 # `ads` is the module this deliberately excludes: PAGE_CONNECTORS["ads"] contains
 # `google_ads`, which is NOT in ALL_CONNECTORS, so a full refresh never actually pulls Ads
 # data and must not be allowed to reset the Ads clock.
-_SCOPE_TO_PAGE_KEY = {"positions": "positioning"}  # mirrors sync_api_service.SCOPE_ALIASES
+# Mirrors sync_api_service.SCOPE_ALIASES. It is a copy rather than an import because
+# sync_api_service pulls in the whole sync stack and this module is reached from
+# AppConfig-adjacent code paths; `test_scheduling.ScopeAliasMirrorTests` asserts the two agree,
+# so the copy cannot drift without a test failing.
+_SCOPE_TO_PAGE_KEY = {"positions": "positioning", "organic": "seo"}
 
 
 def _covered_by_all_scope(module: str) -> bool:

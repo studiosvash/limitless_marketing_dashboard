@@ -36,12 +36,47 @@ raises `Http404` on a miss; every slug-taking endpoint returns **404** for an un
 Internally the slug is immediately converted to `Site.site_url`, which is the `site_id` string
 used as the join key across both databases.
 
-**Date ranges.** Endpoints marked *range-aware* accept `?range=7d|30d|90d` (default `30d`,
-validated by `OverviewQuerySerializer`; any other value is a **400**). Periods are anchored to
-`latest_data_anchor(site_id)` — the maximum `SEODaily.date` for the site, or today if there is
-no data — so a stale dataset never yields an empty window. Because `get_period_dates` treats the
-anchor as "today" and the current window ends at *anchor − 1 day*, **the newest data row is
-excluded from the current period by design**.
+**Date ranges.** Endpoints marked *range-aware* accept `?range=7d|28d|90d` (default `28d`,
+validated by `OverviewQuerySerializer`; any other value is a **400**). `30d` is still accepted
+from cached SPA builds and bookmarked URLs and resolves to the *same* 28-day window, never a
+second slightly-different one — 28 matches Search Console's own 7/28/90 choices, so one number
+appears on both screens. Periods are anchored to
+`latest_data_anchor(site_id)` so a stale dataset never yields an empty window.
+
+That anchor is **`newest day with Search Console data + 1 day`**, or today when there is none.
+Both halves were wrong until 2026-08-18 and the corrections are worth knowing:
+
+* **It reads GSC's own rows, not any row.** `seo_daily` is shared — the `ga4` connector writes
+  the analytics columns and leaves clicks/impressions/ctr/avg_position at `0`, and GA4's window
+  runs to *yesterday* while `gsc_safe_range` stops at *today − 3*. An unfiltered `MAX(date)`
+  therefore anchored a Search Console window on a day Search Console had no data for. On
+  premierstaff.com the 7-day window ran 26 Jul – 1 Aug while `seo_daily_totals` stopped on
+  31 Jul: a "7-day" figure built from six days, drifting further with every GA4-only sync. The
+  fix is the predicate `impressions > 0` — exact, not a heuristic, because the Search Analytics
+  API only returns a row for a page that was served. `gsc._get_last_synced_date` already
+  applied it to its own cursor for the same reason. `seo_daily_totals` needs no predicate: the
+  `gsc` connector is its only writer.
+* **The `+ 1` cancels `get_period_dates`' `anchor − 1`.** That `− 1` guards against Search
+  Console's most recent day being partial — true of *today*, not of this anchor, since
+  `gsc_safe_range` already ends at today − 3 and only settled days are ever stored. The two
+  margins stacked and the newest real day fell outside every window meant to show it.
+  `latest_ranking_anchor` resolves the identical mismatch identically, for rank measurements.
+
+So the current window now **ends on the newest day of Search Console data, inclusive.** The
+fallback stays *today*, never today + 1 — an anchor of tomorrow would put the window end in the
+future.
+
+`GET /overview` returns the window it used as **`window: {start, end}`** (ISO dates, inclusive)
+and the page prints it — "Showing 25 – 31 Jul 2026". Without it a window that has drifted weeks
+behind still renders a complete, plausible week, and the only visible symptom is that it
+disagrees with Search Console — which reads as "the dashboard is wrong" rather than "the data
+is old". That is exactly how the 2026-08-18 investigation started.
+
+⚠️ **This window is not Search Console's own "last 7 days".** `gsc_safe_range` deliberately stops
+at *today − 3* (Google keeps revising a day for ~2 days after first publishing it), so a freshly
+synced 7-day window is `today−9 … today−3` where Search Console's UI shows `today−8 … today−2`.
+The two screens are one day apart on both ends **by design**, and their totals will differ
+accordingly. Do not "fix" this by comparing the two numbers — compare the dates first.
 
 **Errors.** The API returns:
 
@@ -982,7 +1017,8 @@ once, and the Answer Inspector / History sub-tabs stay empty until then.
   "connectors":  [{"name","status","records","last_sync","error"}],
   "team":        [{"id","name","email","role","status","last_active","initials"}],
   "invitations": [{"id","email","role","invited_by","created_at","expires_at"}],
-  "sync":  {"next_run": null, "day": null, "last_run": "2026-07-24T…"},
+  "sync":  {"next_run": null, "day": null, "last_run": "2026-07-24T…",
+            "modules": [{"module","cadence","due","reason","last_success","next_run"}]},
   "usage": {"budget","currency","month_to_date","est_monthly","items":[{"module","cadence","est","note"}]},
 
   "workspace":  {"name","timezone","week_start","owner_email"},
@@ -992,7 +1028,7 @@ once, and the Answer Inspector / History sub-tabs stay empty until then.
                     "route_high","route_medium","route_info"},
   "aiConfig":   {"provider","model","tone","cadence","monthly_cap","brand_voice"},
   "dataPrefs":  {"export_format","retention","report_timezone","number_format"},
-  "syncConfig": {"positions","backlinks","audit","keywords","ads","ai"},
+  "syncConfig": {"organic","positions","backlinks","audit","keywords","ads","ai"},
   "platformConnectors": {"linkedin","reddit","youtube","x","facebook","instagram","meta_ads"},
   "budget":     {"cap","enforce","quotas":{…}},
   "alertRules": [{"id","label","threshold","unit","on"}],
@@ -1013,6 +1049,27 @@ is normalised to `Admin` and written back.
 date shown is by construction the date the scheduler will use, not a parallel guess. They are
 `null` only where no honest date exists: every module set to `manual`, or a brand-new project
 with no successful run to measure a cadence from.
+
+`sync.modules` is the **per-module** breakdown behind those three header values, one entry per
+`apps.sync.scheduling.SYNC_MODULES` key, built from the same `due_modules()` the scheduler calls:
+
+| field | meaning |
+|---|---|
+| `module` | `organic` \| `positions` \| `backlinks` \| `audit` \| `keywords` \| `ads` \| `ai` |
+| `cadence` | the resolved cadence (saved value merged over `DEFAULT_SETTINGS_BLOB`), **not** the raw blob — a project that never opened Settings still reports the cadence actually in force |
+| `due` | the scheduler's own verdict for right now |
+| `reason` | its wording for that verdict, e.g. `"next due 2026-08-25 15:12 UTC (weekly)"` |
+| `last_success` | `started_at` of the newest **successful** run, or `null`. Success-anchored on purpose: a failed attempt fetched nothing, and presenting it as "last run" reports a module as current when it is not |
+| `next_run` | `null` for `manual`, and `null` when there is no successful run to measure a cadence from — both cases where any date would be invented |
+
+The header keys keep their names and types (the SPA dereferences `next_run`/`day`/`last_run`
+unguarded); `modules` is purely additive, and an older client that ignores it is unaffected.
+
+`syncConfig` gained `organic` (Search Console + GA4, default `daily`) on 2026-08-18. Its keys
+must stay exactly `SYNC_MODULES`: `get_sync_config()` merges a saved blob **over** the defaults
+and drops keys the defaults do not contain, so a module missing from `DEFAULT_SETTINGS_BLOB`
+cannot be scheduled however the UI is configured. `test_scheduling.ScopeAliasMirrorTests` pins
+the two lists together.
 
 `usage` is **real measured spend**. `_usage_raw()` calls all three `cost_service` readers over
 the `connector_costs` rows the DataForSEO connectors write per run. The five original keys keep

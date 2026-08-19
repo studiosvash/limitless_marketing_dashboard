@@ -77,8 +77,16 @@ DEFAULT_SETTINGS_BLOB = {
                  "monthly_cap": 0, "brand_voice": ""},
     "dataPrefs": {"export_format": "CSV", "retention": "24m",
                   "report_timezone": "America/Chicago", "number_format": "1,234.56"},
-    "syncConfig": {"positions": "weekly", "backlinks": "weekly", "audit": "monthly",
-                   "keywords": "monthly", "ads": "12h", "ai": "weekly"},
+    # Every key here must exist in apps.sync.scheduling.SYNC_MODULES -- get_sync_config()
+    # merges a saved blob OVER these defaults and drops keys it does not recognise, so a
+    # module missing from this dict can never be scheduled however the UI is configured.
+    #
+    # `organic` (Search Console + GA4) defaults to `daily`, not `weekly`: both APIs are free
+    # and unmetered, this is the number the Overview opens on, and Search Console itself only
+    # finalises a day about three days late -- so a weekly cadence would show a window up to
+    # ten days behind Search Console's own report even when everything worked.
+    "syncConfig": {"organic": "daily", "positions": "weekly", "backlinks": "weekly",
+                   "audit": "monthly", "keywords": "monthly", "ads": "12h", "ai": "weekly"},
     "platformConnectors": {"linkedin": False, "reddit": False, "youtube": False, "x": False,
                             "facebook": False, "instagram": False, "meta_ads": False},
     "budget": {"cap": 0, "enforce": False,
@@ -384,12 +392,35 @@ def _sync_summary_raw(site_id: str) -> dict:
     `last_run` is unchanged and still real: the most recent SyncLog.last_synced across every
     connector for this site, if any connector has ever actually run.
 
-    Shape is unchanged (the same three keys) -- per-module detail is available from
-    apps.sync.scheduling.due_modules(), which the SPA does not render.
+    `modules` is the per-row breakdown the panel needs and did not have. The header's single
+    pair of dates answers "what happens next on this site", which is not the question a user
+    staring at seven cadence dropdowns is asking: they want to know whether THIS module is
+    keeping up. One site-wide "Last run" actively hid the failure this whole change came from
+    — a project whose Ads module ran every 12 hours reported a fresh site-wide last-run while
+    its Search Console data was three weeks old, because SyncLog's newest row belongs to
+    whichever connector ran most recently, whatever module it came from.
+
+    Every value here comes from `due_modules()`, i.e. the same function `run_scheduled_syncs`
+    calls to decide what to start. The panel therefore cannot promise a run the scheduler will
+    not make. Per row:
+
+      module / cadence   what the dropdown is set to
+      last_success       started_at of the newest SUCCESSFUL run of this module, or None. It
+                         is SUCCESS-anchored, not last-attempt, because that is what the
+                         cadence measures from -- showing a failed attempt as "Last run" would
+                         report the module as current when nothing was actually fetched.
+      next_run           None for `manual` and for a module with no successful run to measure
+                         from; both are cases where any date would be invented (see
+                         scheduling.next_run_for).
+      due / reason       the scheduler's own verdict and its wording, so a row that is overdue
+                         can say why instead of leaving the user to infer it from two dates.
+
+    Cost: three small indexed queries per module. At seven modules and 2-3 users on a page
+    that is opened deliberately, that is not worth a denormalised cache that could go stale.
     """
     # Imported inside the function: apps.sync.scheduling reads DEFAULT_SETTINGS_BLOB from this
     # module, so a module-level import here would be circular.
-    from apps.sync.scheduling import schedule_summary
+    from apps.sync.scheduling import due_modules, schedule_summary
 
     latest = (
         SyncLog.objects.filter(site_url=site_id, last_synced__isnull=False)
@@ -397,9 +428,23 @@ def _sync_summary_raw(site_id: str) -> dict:
         .values_list("last_synced", flat=True)
         .first()
     )
+    # due_modules() sorts most-overdue-first for the scheduler's benefit. The panel renders a
+    # fixed list of rows, so it re-keys by `module` and ignores this order -- but the order is
+    # left as-is rather than re-sorted here, so that the one function stays the one authority.
     return {
         **schedule_summary(site_id),
         "last_run": latest.isoformat() if latest else None,
+        "modules": [
+            {
+                "module": row["module"],
+                "cadence": row["cadence"],
+                "due": row["due"],
+                "reason": row["reason"],
+                "last_success": row["last_success"].isoformat() if row["last_success"] else None,
+                "next_run": row["next_run"].isoformat() if row["next_run"] else None,
+            }
+            for row in due_modules(site_id)
+        ],
     }
 
 

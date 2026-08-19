@@ -188,6 +188,11 @@ window.FuseAPI = (function () {
         { label: 'CTR', value: ctr, delta: null, unit: '%' }
       ],
       pillars, modules, priority,
+      /* Mirrors the real response's `window` (apps/api/views.ProjectOverviewView). Without it
+         fixture mode silently drops the "Showing 25–31 Jul" line, and the demo stops showing
+         the one thing that line exists to make visible. `cur` is already the sliced window, so
+         its own first/last dates are the honest answer here. */
+      window: cur.length ? { start: cur[0].date, end: cur[cur.length - 1].date } : null,
       signals: signals.slice(0, 3),
       trend: cur,
       summary: {
