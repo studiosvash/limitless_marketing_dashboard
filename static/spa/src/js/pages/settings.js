@@ -69,7 +69,8 @@
          before every start and skips the run when it is exceeded. Each row still prints its own
          per-unit cost in `desc`, so the choice is informed rather than merely permitted. */
       const CADENCES = ['12h', 'daily', 'weekly', 'biweekly', 'monthly', 'manual'];
-      const cadOpts = CADENCES.map(k => ({ value: k, label: cadenceLabels[k] }));
+      const mkOpts = keys => keys.map(k => ({ value: k, label: cadenceLabels[k] }));
+      const cadOpts = mkOpts(CADENCES);
       /* [syncConfig key, label, cost/description, sync-now scope].
          Order matches apps/sync/scheduling.SYNC_MODULES, which is also the scheduler's
          tie-break order — so the panel reads top-to-bottom in the order work actually wins a
