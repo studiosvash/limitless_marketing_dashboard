@@ -806,7 +806,15 @@
            ranks and you do not is the gap this grid exists to show, and it was invisible. */
         compRows: data.competitors.rows.filter(row => row.you && row.you.measured).map(row => {
           const mapCell = c => {
-            if (c == null || c.pos == null) return { text: '—', style: { color: '#cbd5e1' }, diff: '', diffStyle: {}, url: '', domain: (c && c.domain) || '' };
+            /* `aio` (AI Overview citation slot) and `feat` (best Local Pack / Featured
+               Snippet slot) ride on BOTH branches: a domain can be cited in the AI Overview
+               while ranking nowhere organically — dropping the feature fields on the
+               "no organic position" branch would hide exactly those cells. Both are absent
+               (undefined) on payloads from a server that predates the feature — the
+               renderer shows an em dash either way, never an invented value. */
+            const aio = c && c.aio != null ? c.aio : null;
+            const feat = c && c.feat ? c.feat : null;
+            if (c == null || c.pos == null) return { text: '—', style: { color: '#cbd5e1' }, diff: '', diffStyle: {}, url: '', domain: (c && c.domain) || '', aio: aio, feat: feat };
             const pos = Math.round(c.pos);
             const d = c.diff;
             const dir = c.direction;
@@ -817,7 +825,7 @@
             /* Carry the cell's OWN ranking URL through. It used to be dropped here, so the
                table below fell back to your row-level URL and every competitor cell popped up
                one of YOUR pages. */
-            return { text: pos, style: this.posBadge(pos), diff: diffStr, diffStyle: diffSty, url: c.url || '', domain: c.domain || '' };
+            return { text: pos, style: this.posBadge(pos), diff: diffStr, diffStyle: diffSty, url: c.url || '', domain: c.domain || '', aio: aio, feat: feat };
           };
           return {
             kw: row.kw,
@@ -1201,7 +1209,10 @@
           emptyBodyStyle: { fontSize: '13px', color: '#64748b', maxWidth: '420px', margin: '0 auto', lineHeight: 1.5 },
           chart: ovHistory.chart,
           domains: allDomains.filter(d => !hiddenOv.includes(d)).map(d => ({ name: d, style: { textAlign: 'center', color: d === vals.ptWs.domain ? '#4338ca' : '#64748b', fontSize: '9.5px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } })),
-          gridCols: 'minmax(180px, 1.4fr) 90px 88px repeat(' + allDomains.filter(d => !hiddenOv.includes(d)).length + ', 1fr)',
+          /* Each domain group holds three sub-columns (Pos | SERP | AIO — decision
+             2026-08-18, Semrush parity), so it needs real width: minmax keeps groups from
+             crushing each other and the card's overflow-x scroll absorbs the rest. */
+          gridCols: 'minmax(180px, 1.4fr) 90px 88px repeat(' + allDomains.filter(d => !hiddenOv.includes(d)).length + ', minmax(150px, 1fr))',
           /* Same grid shape as `rows` below (Keyword/Volume/KD%/one column per domain), for
              keywords with no captured position anywhere yet -- source: none of them have a
              `you` cell, since `pt.compRows` already excludes exactly these. Rendered as its
@@ -1246,9 +1257,31 @@
               onSerp: () => vals.h.fetchLiveSerp(row.kw, vals.ptWs.location),
               cells: row.cells.filter((_, i) => !hiddenOv.includes(allDomains[i])).map(c => {
                 const pos = c.text;
+                /* The two Semrush-style feature sub-columns per domain (decision 2026-08-18).
+                   SERP: best non-organic feature slot, L = Local Pack, F = Featured Snippet.
+                   AIO: the domain's citation slot inside Google's AI Overview source list —
+                   a real ordinal (slot 1 = first source), not a rank. Absent data is an em
+                   dash; nothing is ever invented for a domain the snapshot did not record. */
+                const featText = c.feat
+                  ? ((c.feat.type === 'local_pack' ? 'L' : 'F') + (c.feat.slot != null ? c.feat.slot : ''))
+                  : '—';
                 return {
                   pos: pos, diff: c.diff || '', cellStyle: { textAlign: 'center', padding: '6px', borderRadius: '6px', cursor: 'pointer', transition: 'background 0.15s' },
                   posStyle: c.style, diffStyle: c.diffStyle || { fontSize: '11px', color: '#94a3b8', marginLeft: '4px' },
+                  featText: featText,
+                  featStyle: c.feat
+                    ? { fontSize: '11.5px', fontWeight: 600, color: '#0e7490', background: '#ecfeff', padding: '2px 6px', borderRadius: '4px' }
+                    : { color: '#e2e8f0', fontSize: '12px' },
+                  featTitle: c.feat
+                    ? (c.feat.type === 'local_pack' ? ('Local Pack slot ' + c.feat.slot) : 'Featured Snippet')
+                    : 'No SERP feature captured for this domain on this keyword',
+                  aioText: c.aio != null ? ('✦' + c.aio) : '—',
+                  aioStyle: c.aio != null
+                    ? { fontSize: '11.5px', fontWeight: 700, color: '#7c3aed', background: '#f5f3ff', padding: '2px 6px', borderRadius: '4px' }
+                    : { color: '#e2e8f0', fontSize: '12px' },
+                  aioTitle: c.aio != null
+                    ? ('Cited in Google\'s AI Overview — source #' + c.aio)
+                    : 'Not cited in the AI Overview for this keyword',
                   /* The ranking URL is whatever the SERP snapshot recorded. Synthesising
                      'https://<domain>/<keyword-slug>' when it is missing produced a link
                      to a page that does not exist — and offered to open it. */

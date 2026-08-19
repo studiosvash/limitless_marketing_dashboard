@@ -28,7 +28,7 @@ from pipeline.db.schema import (
     CompetitorVisibility, CompetitorDomain,
     PageSpeed, IndexingStatus, SEOAggregate,
     Anomaly, ComparativeMetrics,
-    CompetitorKeywordRanking, TrackedCompetitor, AIKeywordData,
+    CompetitorKeywordRanking, TrackedCompetitor, AIKeywordData, SerpFeatureRanking,
     LLMCitedPage, LLMMentionMetric,
     SavedKeyword, BacklinksSnapshot,
     AuditSnapshot, AdSearchTerm, GA4CampaignDaily, ConnectorCost, DomainLookup,
@@ -831,6 +831,48 @@ def upsert_competitor_keyword_rankings(session: Session, records: list[dict], si
         session.execute(stmt)
         total += len(batch)
     logger.debug(f"[writer] competitor_keyword_rankings: upserted {total} rows")
+    return total
+
+
+# ─────────────────────────────────────────────
+# SERP feature rankings (AI Overview citations, local pack, featured snippet — 2026-08-18)
+# ─────────────────────────────────────────────
+
+def upsert_serp_feature_rankings(session: Session, records: list[dict], site_id: Optional[str] = None) -> int:
+    """Upsert per-keyword SERP-feature rows (AI Overview citations, local pack,
+    featured snippet). Unique on (date, site_id, keyword, location, domain, feature_type).
+
+    The connector sends the MIN slot when one domain appears several times inside one
+    AI Overview; a duplicate key inside one batch still collapses via _dedupe_by_keys
+    (last occurrence wins), which keeps the Postgres multi-row upsert from raising
+    CardinalityViolation.
+    """
+    if not records:
+        return 0
+
+    ensure_tables(session, SerpFeatureRanking)
+    _ensure_site_id(records, site_id)
+    for r in records:
+        r.setdefault("site_id", "")
+        if not r.get("location"):
+            r["location"] = DEFAULT_LOCATION
+
+    insert = upsert_insert(session)
+    BATCH_SIZE = max_batch_size(session, 60)
+    _upsert_keys = ("date", "site_id", "keyword", "location", "domain", "feature_type")
+    records = _dedupe_by_keys(records, _upsert_keys)
+    update_cols = [k for k in records[0] if k not in _upsert_keys]
+    total = 0
+    for i in range(0, len(records), BATCH_SIZE):
+        batch = records[i:i + BATCH_SIZE]
+        stmt = insert(SerpFeatureRanking).values(batch)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=list(_upsert_keys),
+            set_={k: stmt.excluded[k] for k in update_cols},
+        )
+        session.execute(stmt)
+        total += len(batch)
+    logger.debug(f"[writer] serp_feature_rankings: upserted {total} rows")
     return total
 
 

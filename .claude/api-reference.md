@@ -449,7 +449,17 @@ yet); `source` is always `"sync"` here.
 }
 ```
 
-A *cell* is `{pos, prev, diff, direction}` with `direction ∈ up|down|flat`.
+A *cell* is `{pos, prev, diff, direction}` with `direction ∈ up|down|flat` — plus, since
+2026-08-18, two SERP-feature fields (Semrush parity, tech-lead request): `aio` (int|null — the
+domain's 1-based **citation slot in Google's AI Overview** source list for that keyword; a
+real ordinal, not a rank) and `feat` (`{type, slot}`|null — best non-organic feature slot,
+`type ∈ local_pack|featured_snippet`). Both come from the `serp_feature_rankings` table,
+written by `dataforseo_serp_competitors` (task_post now sends `load_async_ai_overview: true`,
++$0.0006/query auto-refunded when no AIO exists, and results are fetched via
+`task_get/advanced` — the regular endpoint never returns AI Overview items). The whole
+reference list is stored per capture (every cited domain, not just tracked ones), so
+share-of-AIO-citations can be computed later without refetching. Cells for domains the
+snapshot did not record keep `aio`/`feat` null — nothing is invented.
 `rankings` and `keywords` are the same array (the template reads both names).
 
 **`kpis.visibility` is THE visibility number** (added 2026-08-10; snapshot-based since

@@ -17,6 +17,7 @@ from sqlalchemy import and_, func, select
 
 from pipeline.db.schema import (
     SEODaily, KeywordRanking, AdMetricDaily, CompetitorKeywordRanking,
+    SerpFeatureRanking,
 )
 from pipeline.utils.db_connection import get_session
 from pipeline.utils.site_ids import resolve_site_ids
@@ -945,6 +946,28 @@ def _get_competitor_grid(site_id: str, limit: int = 100, location: str | None = 
                 .group_by(KeywordRanking.keyword, KeywordRanking.date)
             ).all()
 
+            # SERP features (AI Overview citations, local pack, featured snippet) captured
+            # alongside the competitor SERPs. Latest capture date only — a snapshot, like
+            # the grid's `latest` column. The table stores EVERY referenced domain (see
+            # SerpFeatureRanking's docstring); matching rows to "you" / a competitor column
+            # happens below, at read time.
+            ensure_tables(session, SerpFeatureRanking)  # idempotent; pre-first-capture safety
+            feat_date = session.execute(
+                select(func.max(SerpFeatureRanking.date))
+                .where(_site_clause(SerpFeatureRanking, site_id),
+                       *_location_clause(SerpFeatureRanking, location))
+            ).scalar()
+            feat_rows = []
+            if feat_date:
+                feat_rows = session.execute(
+                    select(SerpFeatureRanking.keyword, SerpFeatureRanking.domain,
+                           SerpFeatureRanking.feature_type, SerpFeatureRanking.slot)
+                    .where(_site_clause(SerpFeatureRanking, site_id),
+                           SerpFeatureRanking.date == feat_date,
+                           func.lower(SerpFeatureRanking.keyword).in_(tracked_lower),
+                           *_location_clause(SerpFeatureRanking, location))
+                ).all()
+
         # cell[keyword][domain] = {"latest": pos, "prev": pos}
         # Populated ONLY from real CompetitorKeywordRanking rows (captured by the
         # dataforseo_serp_competitors connector). A keyword/domain pair with no captured row
@@ -978,6 +1001,44 @@ def _get_competitor_grid(site_id: str, limit: int = 100, location: str | None = 
 
         keywords = sorted(set(cell) | set(your_cell))
 
+        # feat_map[keyword_lower] = [(stored_domain_lower, feature_type, slot), ...]
+        feat_map: dict = {}
+        for r in feat_rows:
+            feat_map.setdefault((r.keyword or "").lower(), []).append(
+                ((r.domain or "").lower(), r.feature_type, r.slot))
+
+        def features_for(kw: str, target: str) -> tuple:
+            """(aio_slot | None, {"type","slot"} | None) for `target` on this keyword.
+
+            A stored feature row matches a target domain when the target string is
+            CONTAINED in the stored domain (lowercased) — the same contains rule the
+            connector's organic matching applies, so a subdomain the SERP reported
+            (m.example.com) still lights up example.com's column. Keywords with no
+            feature rows keep (None, None) — an absent feature is never invented.
+            """
+            target = (target or "").lower()
+            if not target:
+                return None, None
+            aio = None
+            feat = None
+            for stored_domain, ftype, slot in feat_map.get(kw.lower(), []):
+                if target not in stored_domain:
+                    continue
+                if ftype == "ai_overview":
+                    if slot is not None and (aio is None or slot < aio):
+                        aio = slot
+                else:  # local_pack / featured_snippet — keep the best (min) slot
+                    cand = {"type": ftype, "slot": slot}
+                    if feat is None:
+                        feat = cand
+                    elif slot is not None and (feat["slot"] is None or slot < feat["slot"]):
+                        feat = cand
+            return aio, feat
+
+        # Your own domain, in registration form — what the stored SERP domains are matched
+        # against for the "you" cell.
+        you_domain = _bare(site_id) or site_id
+
         def make_cell(data: dict) -> dict:
             lp, pp = data.get("latest"), data.get("prev")
             diff, direction = _diff_label(lp, pp)
@@ -986,15 +1047,22 @@ def _get_competitor_grid(site_id: str, limit: int = 100, location: str | None = 
             return {"pos": lp, "prev": pp, "diff": diff, "direction": direction,
                     "url": data.get("url") or ""}
 
+        def with_features(cell_dict: dict, kw: str, target: str) -> dict:
+            aio, feat = features_for(kw, target)
+            cell_dict["aio"] = aio      # AI Overview citation slot (1-based) or None
+            cell_dict["feat"] = feat    # best local_pack/featured_snippet slot or None
+            return cell_dict
+
         rows = []
         for kw in keywords:
             kw_comps = [
-                {"domain": dom, **make_cell(cell.get(kw, {}).get(dom, {}))}
+                {"domain": dom,
+                 **with_features(make_cell(cell.get(kw, {}).get(dom, {})), kw, dom)}
                 for dom in competitors
             ]
             rows.append({
                 "kw": kw,
-                "you": make_cell(your_cell.get(kw, {})),
+                "you": with_features(make_cell(your_cell.get(kw, {})), kw, you_domain),
                 "comps": kw_comps
             })
 
@@ -1007,6 +1075,10 @@ def _get_competitor_grid(site_id: str, limit: int = 100, location: str | None = 
             "rows": rows[:limit],
             "latest_date": str(latest),
             "prev_date": str(prev) if prev else None,
+            # When the SERP features on the grid were last captured — may lag latest_date
+            # (features ship with the competitor SERP sync from 2026-08-18 onward). None
+            # until the first advanced capture; the cells' aio/feat stay None with it.
+            "features_captured": str(feat_date) if feat_date else None,
             "overridden": is_overridden(site_id),
         }
     except Exception as e:

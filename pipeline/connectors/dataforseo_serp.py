@@ -84,6 +84,42 @@ TASK_PENDING = (40601, 40602)      # still working — keep polling, never disca
 # a third of a cent per keyword to make the button actually finish is the right trade.
 TASK_PRIORITY = 2
 
+# The (device, os) pairs a SERP task_post accepts. Keys are the lowercased form of
+# `sites.device`; anything unrecognised (or unset) tracks the desktop SERP.
+_DEVICE_PAYLOADS = {
+    "mobile": ("mobile", "android"),
+    "desktop": ("desktop", "windows"),
+}
+
+
+def _resolve_device(site_pk, site_id) -> tuple[str, str]:
+    """The (device, os) a SERP capture should be posted with, for THIS project.
+
+    Both SERP connectors used to hardcode `"device": "desktop", "os": "windows"` while
+    `sites.device` sat stored-but-unread, so a "Los Angeles - Mobile" project was silently
+    tracking desktop SERPs — and Semrush reconciliation requires mirroring the device the
+    project declares, because mobile and desktop are different SERPs with different ranks.
+
+    Resolution mirrors `resolve_tracking_location`: the exact project by pk first (siblings
+    on one domain can differ), the domain as a fallback, desktop when nothing is configured.
+    Never raises — a resolution failure must not stop a sync, so it degrades to desktop.
+    """
+    try:
+        from pipeline.services.site_service import get_site, get_site_by_pk
+        with get_session() as session:
+            site = get_site_by_pk(session, site_pk) or get_site(session, site_id)
+            if site:
+                key = (site.device or "").strip().lower()
+                if key in _DEVICE_PAYLOADS:
+                    return _DEVICE_PAYLOADS[key]
+    except Exception:
+        import logging
+        logging.getLogger("dataforseo_serp").warning(
+            "[dataforseo_serp] could not resolve the project's device; tracking desktop",
+            exc_info=True,
+        )
+    return _DEVICE_PAYLOADS["desktop"]
+
 
 class DataForSEOSERPConnector(BaseConnector):
     name = "dataforseo_serp"
@@ -173,13 +209,16 @@ class DataForSEOSERPConnector(BaseConnector):
         return keywords
     @with_retry(max_retries=3, base_delay=5.0)
     def _submit_tasks(self, keywords: list[str], target_domain: str,
-                      location: str = DEFAULT_LOCATION) -> list[str]:
+                      location: str = DEFAULT_LOCATION,
+                      device: str = "desktop", os_name: str = "windows") -> list[str]:
         """
         Submit keywords to DataForSEO Standard Queue for a specific target domain.
         Batch up to 100 keywords per request for efficiency.
 
         `location` is this project's tracking location in the SPA's display form
         ("United States - Las Vegas, NV"); it is converted to DataForSEO's wire form here.
+        `device`/`os_name` come from `_resolve_device` — the project's configured device,
+        not a hardcoded desktop (see that function for what hardcoding it cost).
 
         Returns:
             List of task_ids to poll.
@@ -200,8 +239,11 @@ class DataForSEOSERPConnector(BaseConnector):
                     "keyword": kw,
                     "location_name": api_location,
                     "language_name": "English",
-                    "device": "desktop",
-                    "os": "windows",
+                    # The PROJECT's device (sites.device via _resolve_device), not a literal:
+                    # a "Los Angeles - Mobile" project was silently tracking desktop SERPs,
+                    # and Semrush reconciliation requires mirroring device.
+                    "device": device,
+                    "os": os_name,
                     "target": target_domain,         # Per-site target (resolved from Site row)
                     # NO `stop_crawl_on_match`. The API rejects it outright —
                     # `40501 Invalid Field: 'stop_crawl_on_match'` — so EVERY task this
@@ -487,7 +529,9 @@ class DataForSEOSERPConnector(BaseConnector):
             # delays a number rather than losing it.
             records = self._drain_ready_tasks(target_domain, resolved_site_id, location)
 
-            task_ids = self._submit_tasks(keywords, target_domain, location)
+            device, os_name = _resolve_device(getattr(self, "site_pk", None), resolved_site_id)
+            task_ids = self._submit_tasks(keywords, target_domain, location,
+                                          device=device, os_name=os_name)
             if not task_ids:
                 # Not "no response" — every task was REJECTED, and _submit_tasks has already
                 # logged each rejection reason. Raise instead of returning [], so the run is

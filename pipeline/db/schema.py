@@ -72,10 +72,16 @@ class Site(Base):
     # hardcoded "Desktop" no matter what the user picked. They are stored here so the header
     # can report the user's actual choice.
     #
-    # STILL A STORED PREFERENCE, NOT A SYNC PARAMETER — for these three. Both SERP connectors
-    # post language_name="English" and device="desktop" as literals and read neither column.
+    # STILL A STORED PREFERENCE, NOT A SYNC PARAMETER — for `search_engine` and `language`.
+    # Both SERP connectors post language_name="English" as a literal and read neither column.
     # Recording what the user chose is honest; claiming it changes what gets fetched would not
     # be. See ensure_site_columns() below for how an existing database acquires them.
+    #
+    # `device` IS a sync parameter as of 2026-08-18: both SERP connectors resolve it per
+    # project via `dataforseo_serp._resolve_device` and post ("mobile", "android") when it is
+    # "Mobile" (case-insensitive), else ("desktop", "windows"). Until then they posted a
+    # literal "desktop", so a "Los Angeles - Mobile" project was silently tracking desktop
+    # SERPs — and Semrush reconciliation requires mirroring the device the project declares.
     #
     # `location` (declared above) IS a sync parameter as of 2026-08-06 and is no longer
     # covered by the paragraph above: both SERP connectors resolve it per project via
@@ -642,6 +648,53 @@ class CompetitorKeywordRanking(Base):
                          name="uq_comp_kw_rank_loc"),
         Index("ix_comp_kw_rank_site_date", "site_id", "date"),
         Index("ix_comp_kw_rank_site_loc_date", "site_id", "location", "date"),
+    )
+
+
+class SerpFeatureRanking(Base):
+    """
+    SERP-feature presence captured from the live SERP alongside the organic ranks —
+    AI Overview citations, local-pack slots and featured snippets, per keyword.
+    Sibling of CompetitorKeywordRanking (same capture run, same date/location identity)
+    so the same date-over-date logic applies.
+
+    The WHOLE reference list is stored, not just rows matching your domain or the
+    tracked competitors. Two reasons:
+
+      * Share-of-AIO-citations later needs the full denominator — "you are citation 3
+        of 11" is a different fact from "you are cited", and a write-time filter would
+        throw away data the SERP capture already paid for (skills.md §9: filter when
+        you READ, not when you write — a read-time filter is free and reversible).
+      * Matching a stored domain to a tracked one is a READ-time contains-match, the
+        same rule the connector's organic parsing applies (`c in domain`). The tracked
+        competitor list changes over time; rows written before a competitor was added
+        must still light up for it.
+
+    `domain` is therefore the domain exactly as the SERP reported it (lowercased,
+    scheme-stripped); resolving it to "you" / a tracked competitor happens in
+    `_get_competitor_grid`, never here.
+    """
+    __tablename__ = "serp_feature_rankings"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    date = Column(Date, nullable=False, index=True)
+    site_id = Column(String(255), nullable=False, index=True, default="")
+    keyword = Column(Text, nullable=False, index=True)
+    # Same role as CompetitorKeywordRanking.location — the SERP this feature was read from.
+    location = Column(String(255), nullable=False, index=True, default=DEFAULT_LOCATION)
+    domain = Column(String(255), nullable=False, index=True)  # as the SERP reported it
+    feature_type = Column(String(50), nullable=False)  # 'ai_overview' | 'local_pack' | 'featured_snippet'
+    # AI Overview: 1-based order of the domain's FIRST appearance across the combined
+    # reference list. local_pack: rank_group (1-3). featured_snippet: 1.
+    slot = Column(Integer, nullable=True)
+    url = Column(Text, nullable=True)
+    title = Column(Text, nullable=True)
+    last_fetched = Column(DateTime, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("date", "site_id", "keyword", "location", "domain", "feature_type",
+                         name="uq_serp_feat"),
+        Index("ix_serp_feat_site_loc_date", "site_id", "location", "date"),
     )
 
 

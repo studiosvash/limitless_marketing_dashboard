@@ -7,12 +7,18 @@ tracked keywords through the SERP API and keeps the position of every TRACKED
 COMPETITOR domain found in the results — the data behind the SEMrush-style
 Positioning grid (your rank vs each competitor's, tracked over time).
 
-Fetches: daily SERP positions for each tracked competitor domain, per keyword.
-Writes to: competitor_keyword_rankings table.
+Fetches: daily SERP positions for each tracked competitor domain, per keyword —
+plus the SERP features on the same result set (AI Overview citations, local pack,
+featured snippet), retrieved via `task_get/advanced` (the `regular` endpoint returns
+only organic/paid/featured_snippet; `ai_overview` items exist only on `advanced`,
+and retrieval itself is free — billing happens at task_post).
+Writes to: competitor_keyword_rankings + serp_feature_rankings tables.
 
 Cost: $0.0006/query (Standard Queue) — same profile as dataforseo_serp, paid
-separately. Triggered by the Positioning page refresh / scheduled sync only;
-never on page render (DB-first contract).
+separately — plus a +$0.0006/query surcharge for `load_async_ai_overview`, which
+is auto-refunded by DataForSEO whenever the SERP has no AI Overview. Triggered by
+the Positioning page refresh / scheduled sync only; never on page render
+(DB-first contract).
 """
 
 import os
@@ -30,13 +36,15 @@ from pipeline.connectors.dataforseo_live_serp import normalize_location_name
 # One definition of the DataForSEO task status codes and the queue priority, with
 # the full account of what each wrong value cost. See dataforseo_serp.py.
 from pipeline.connectors.dataforseo_serp import (
-    TASK_CREATED, TASK_OK, TASK_PENDING, TASK_PRIORITY,
+    TASK_CREATED, TASK_OK, TASK_PENDING, TASK_PRIORITY, _resolve_device,
 )
 from pipeline.db.schema import DEFAULT_LOCATION
 from pipeline.utils.retry import with_retry
 from pipeline.utils.date_helpers import iso, yesterday
 from pipeline.utils.db_connection import get_session
-from pipeline.db.writer import upsert_competitor_keyword_rankings
+from pipeline.db.writer import (
+    upsert_competitor_keyword_rankings, upsert_serp_feature_rankings,
+)
 
 load_dotenv()
 
@@ -59,6 +67,10 @@ class DataForSEOSerpCompetitorsConnector(BaseConnector):
         # USD DataForSEO reported for the current fetch() — accumulated across the
         # task_post batches and task_get polls, written once per run in fetch().
         self._run_cost = 0.0
+        # SERP-feature rows (serp_feature_rankings) collected by _normalize_task as a side
+        # channel of the current fetch(). fetch() resets it before any task is drained or
+        # submitted; _write_records writes it in the same session as the competitor rows.
+        self._feature_records: list[dict] = []
 
     @staticmethod
     def _strip(domain: str) -> str:
@@ -116,14 +128,17 @@ class DataForSEOSerpCompetitorsConnector(BaseConnector):
         return keywords
     @with_retry(max_retries=3, base_delay=5.0)
     def _submit_tasks(self, keywords: list[str],
-                      location: str = DEFAULT_LOCATION) -> list[str]:
+                      location: str = DEFAULT_LOCATION,
+                      device: str = "desktop", os_name: str = "windows") -> list[str]:
         """
         Submit keywords to the Standard Queue. Unlike dataforseo_serp, we do NOT
         set a `target` or `stop_crawl_on_match` — we need the full result set so
         every competitor's position is visible.
 
         `location` is this project's tracking location in the SPA's display form; it is
-        converted to DataForSEO's wire form here.
+        converted to DataForSEO's wire form here. `device`/`os_name` come from
+        `_resolve_device` (dataforseo_serp) — the project's configured device, not a
+        hardcoded desktop.
         """
         batch_size = 100
         task_ids: list[str] = []
@@ -136,10 +151,17 @@ class DataForSEOSerpCompetitorsConnector(BaseConnector):
                     "keyword": kw,
                     "location_name": api_location,
                     "language_name": "English",
-                    "device": "desktop",
-                    "os": "windows",
+                    # The PROJECT's device (sites.device via _resolve_device), not a literal:
+                    # a "Los Angeles - Mobile" project was silently tracking desktop SERPs,
+                    # and Semrush reconciliation requires mirroring device.
+                    "device": device,
+                    "os": os_name,
                     "depth": 30,                 # top 30 — same depth as own-domain tracking
                     "calculate_rectangles": False,
+                    # +$0.0006/query surcharge, auto-refunded when the SERP has no AI
+                    # Overview. Makes the ai_overview item (and its citation references)
+                    # available on task_get/advanced — retrieval itself is free.
+                    "load_async_ai_overview": True,
                     # Priority queue — see TASK_PRIORITY in dataforseo_serp.py for the
                     # measurement. The Standard Queue does not finish inside any poll window a
                     # user is willing to watch.
@@ -192,8 +214,11 @@ class DataForSEOSerpCompetitorsConnector(BaseConnector):
             still_pending = []
             for task_id in pending:
                 try:
+                    # `advanced`, not `regular`: the regular endpoint returns only
+                    # organic/paid/featured_snippet — ai_overview items exist only here.
+                    # Retrieval is free either way; billing happened at task_post.
                     resp = requests.get(
-                        f"{DATAFORSEO_BASE}/serp/google/organic/task_get/regular/{task_id}",
+                        f"{DATAFORSEO_BASE}/serp/google/organic/task_get/advanced/{task_id}",
                         auth=self.auth, timeout=20,
                     )
                     resp.raise_for_status()
@@ -264,8 +289,10 @@ class DataForSEOSerpCompetitorsConnector(BaseConnector):
                          f"ready by an earlier run")
         for row in mine:
             try:
+                # `advanced` for the same reason as the poll loop above: ai_overview items
+                # are absent from the `regular` rendering of the same paid-for task.
                 resp = requests.get(
-                    f"{DATAFORSEO_BASE}/serp/google/organic/task_get/regular/{row['id']}",
+                    f"{DATAFORSEO_BASE}/serp/google/organic/task_get/advanced/{row['id']}",
                     auth=self.auth, timeout=20,
                 )
                 resp.raise_for_status()
@@ -290,10 +317,18 @@ class DataForSEOSerpCompetitorsConnector(BaseConnector):
 
         Rows carry the location they were measured in — part of their identity, so two city
         projects on one domain keep separate grids instead of overwriting each other.
+
+        Side channel: SERP-feature items on the same (advanced) result — ai_overview,
+        local_pack, featured_snippet — are appended to `self._feature_records`, one row per
+        referenced domain, UNFILTERED by the tracked-competitor set. See
+        SerpFeatureRanking's docstring: matching to tracked domains is a read-time
+        contains-match, and the full citation list is the denominator share-of-AIO needs.
         """
         keyword = task_data.get("data", {}).get("keyword", "")
         result = task_data.get("result") or [{}]
         items = (result[0] or {}).get("items") or []
+
+        self._extract_feature_records(items, keyword, tracking_date, site_id, location)
 
         best: dict[str, dict] = {}
         for item in items:
@@ -317,6 +352,67 @@ class DataForSEOSerpCompetitorsConnector(BaseConnector):
                     "url": url,
                 }
         return list(best.values())
+
+    def _extract_feature_records(self, items: list, keyword: str, tracking_date: date,
+                                 site_id: str, location: str = DEFAULT_LOCATION) -> None:
+        """Append serp_feature_rankings rows for one SERP's feature items.
+
+        ai_overview — one row per DISTINCT referenced domain. The combined, in-order
+        reference list is the item's top-level `references` followed by each nested
+        element's own `references`; `slot` is the 1-based order of the domain's FIRST
+        appearance in that combined list (a repeat keeps its first slot).
+        local_pack — one row per item that names a domain; slot = rank_group (1-3).
+        featured_snippet — one row, slot 1.
+
+        Nothing is filtered by the tracked-competitor set — every referenced domain is
+        stored (see SerpFeatureRanking's docstring for why).
+        """
+        def _row(domain: str, feature_type: str, slot, url, title) -> dict:
+            return {
+                "date": tracking_date,
+                "site_id": site_id,
+                "keyword": keyword,
+                "location": location,
+                "domain": domain,
+                "feature_type": feature_type,
+                "slot": slot,
+                "url": url,
+                "title": title,
+            }
+
+        for item in items or []:
+            itype = item.get("type")
+            if itype == "ai_overview":
+                # Combined, in-order citation list: top-level references first, then each
+                # nested element's references.
+                refs = list(item.get("references") or [])
+                for el in item.get("items") or []:
+                    refs.extend((el or {}).get("references") or [])
+                seen: set[str] = set()
+                for ref in refs:
+                    domain = self._strip((ref or {}).get("domain")
+                                         or (ref or {}).get("url") or "")
+                    if not domain or domain in seen:
+                        continue    # first appearance wins the slot
+                    seen.add(domain)
+                    self._feature_records.append(_row(
+                        domain, "ai_overview", len(seen),
+                        (ref or {}).get("url"), (ref or {}).get("title"),
+                    ))
+            elif itype == "local_pack":
+                domain = self._strip(item.get("domain") or "")
+                if domain:
+                    self._feature_records.append(_row(
+                        domain, "local_pack", item.get("rank_group"),
+                        item.get("url"), item.get("title"),
+                    ))
+            elif itype == "featured_snippet":
+                domain = self._strip(item.get("domain") or item.get("url") or "")
+                if domain:
+                    self._feature_records.append(_row(
+                        domain, "featured_snippet", 1,
+                        item.get("url"), item.get("title"),
+                    ))
 
     def fetch(self, site_id: Optional[str] = None) -> list[dict]:
         """
@@ -352,13 +448,18 @@ class DataForSEOSerpCompetitorsConnector(BaseConnector):
             f"across {len(keywords)} keywords for {resolved_site_id!r} @ {location!r}"
         )
         self._run_cost = 0.0
+        # Reset BEFORE the drain: _normalize_task appends feature rows for every task it
+        # normalizes, drained leftovers included, and a stale list from a previous fetch()
+        # would re-write another run's rows under this run's summary.
+        self._feature_records = []
         records: list[dict] = []
         try:
             # Leftovers an earlier run paid for and abandoned — free to collect, and the
             # reason a slow queue now costs a delay rather than the data.
             records = self._drain_ready_tasks(competitors, resolved_site_id, location)
 
-            task_ids = self._submit_tasks(keywords, location)
+            device, os_name = _resolve_device(getattr(self, "site_pk", None), resolved_site_id)
+            task_ids = self._submit_tasks(keywords, location, device=device, os_name=os_name)
             if not task_ids:
                 # Every task was REJECTED (each reason already logged). Raise rather than
                 # return [], so the run shows `error` and its cause instead of the
@@ -381,12 +482,21 @@ class DataForSEOSerpCompetitorsConnector(BaseConnector):
                        f"competitors @ {location}"),
             )
         self.logger.info(
-            f"[dataforseo_serp_competitors] Captured {len(records)} competitor ranking rows"
+            f"[dataforseo_serp_competitors] Captured {len(records)} competitor ranking rows "
+            f"and {len(self._feature_records)} SERP-feature rows"
         )
         return records
 
     def _write_records(self, session, records: list[dict], site_id: Optional[str] = None) -> int:
-        return upsert_competitor_keyword_rankings(session, records, site_id=site_id)
+        written = upsert_competitor_keyword_rankings(session, records, site_id=site_id)
+        # Same session/write step: the feature rows _normalize_task collected alongside the
+        # competitor rows. Their dicts already carry the resolved site_id (stamped in
+        # _normalize_task, same as competitor rows); the writer's param only fills gaps.
+        # They count toward the run's records_written — they are rows this run captured.
+        feature_records = getattr(self, "_feature_records", None) or []
+        if feature_records:
+            written += upsert_serp_feature_rankings(session, feature_records, site_id=site_id)
+        return written
 
 
 if __name__ == "__main__":
