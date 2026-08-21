@@ -477,6 +477,16 @@
       if (!txt.trim() && !txt.includes(" ")) return null;
       return () => txt;
     }
+    /* Inside SVG text content ({{ }} in a <text>/<tspan>), an interpolation must yield a
+       PLAIN string: the h("span") wrappers below are HTML elements, and SVG renders only
+       SVG children inside <text> — so every interpolated axis label inside an <svg>
+       silently disappeared while the sibling <line>/<circle> elements (attribute-only)
+       drew fine. The Positioning visibility chart shipped with invisible axis labels
+       because of this; the founder's feedback screenshot had the axes drawn on in red pen.
+       Detected at compile time from the template's own namespace, so HTML behaviour
+       (styled .sc-interp spans, editor placeholders) is untouched. */
+    const svgText = node.parentElement
+      && node.parentElement.namespaceURI === "http://www.w3.org/2000/svg";
     const parts = txt.split(/\{\{([\s\S]+?)\}\}/g);
     return (vals, ctx, key) => h(
       getReact().Fragment,
@@ -484,6 +494,16 @@
       ...parts.map((p, i) => {
         if (!(i & 1)) return p;
         const v = resolve(vals, p);
+        if (svgText) {
+          if (v === void 0) {
+            if (!ctx?.__streamingNow) {
+              warnUnresolved(ctx, "{{ " + p.trim() + " }} never resolved — rendered as empty");
+            }
+            return null;
+          }
+          if (v === null || typeof v === "boolean") return null;
+          return String(v);
+        }
         if (v === void 0) {
           if (!ctx?.__streamingNow) {
             if (document.body?.hasAttribute("data-dc-editor-on")) {

@@ -1086,9 +1086,10 @@
           const X1 = 50, X2 = 700, YTOP = 30, YBOT = 180;
           const blank = {
             viewBox: '0 0 720 210', lineX1: X1, lineX2: X2, labelX: 42, xLabelY: 200,
-            grid: [{ y: 30, label: '80' }, { y: 68, label: '60' }, { y: 105, label: '40' },
-                   { y: 143, label: '20' }, { y: 180, label: '0' }],
-            xTicks: [], series: []
+            yTop: YTOP, yBot: YBOT,
+            grid: [{ y: 30, label: '80%' }, { y: 68, label: '60%' }, { y: 105, label: '40%' },
+                   { y: 143, label: '20%' }, { y: 180, label: '0%' }],
+            xTicks: [], series: [], hover: []
           };
           const dates = (hist && hist.dates) || [];
           const rawSeries = ((hist && hist.series) || []).filter(sr => !hidden.includes(sr.domain));
@@ -1134,17 +1135,44 @@
           }).filter(sr => sr.points);
           if (!series.length) return { chart: blank, hasHistory: false };
 
+          /* '%' on every y label (2026-08-21, Semrush parity): the value IS a percentage,
+             and a bare "2" beside a line gave the axis nothing to anchor to. */
           const grid = [0, 1, 2, 3, 4].map(k => {
             const v = top - (top / 4) * k;
-            return { y: Math.round(yOf(v)), label: String(parseFloat(v.toFixed(1))) };
+            return { y: Math.round(yOf(v)), label: parseFloat(v.toFixed(1)) + '%' };
+          });
+          /* Per-date hover data (pure — the mouse handlers are attached by the caller, so
+             tests can keep extracting and running this function standalone). One entry per
+             capture date: the guide-line x, equal-width mouse zones spanning the plot, the
+             tooltip rows (every domain measured that day, in card order), and the dots to
+             light on each series at that date. */
+          const zoneW = dates.length > 1 ? (X2 - X1) / (dates.length - 1) : (X2 - X1);
+          const hover = dates.map((d, i) => {
+            const x = xOf(i);
+            const rows = [];
+            const dots = [];
+            rawSeries.forEach(sr => {
+              const p = (sr.points || [])[i];
+              if (p == null) return;
+              rows.push({ domain: sr.domain, color: colorOf(sr.domain),
+                          value: parseFloat(Number(p).toFixed(2)) + '%' });
+              dots.push({ x: x.toFixed(1), y: yOf(p).toFixed(1), color: colorOf(sr.domain) });
+            });
+            return {
+              x: x.toFixed(1), label: fmtDate(d),
+              zx: (x - zoneW / 2).toFixed(1), zw: zoneW.toFixed(1),
+              rows: rows, dots: dots
+            };
           });
           return {
             hasHistory: true,
             chart: {
               viewBox: '0 0 720 210', lineX1: X1, lineX2: X2, labelX: 42, xLabelY: 200,
+              yTop: YTOP, yBot: YBOT,
               grid: grid,
               xTicks: tickIdx.map(i => ({ x: Math.round(xOf(i)), label: fmtDate(dates[i]) })),
-              series: series
+              series: series,
+              hover: hover
             }
           };
         };
@@ -1208,6 +1236,32 @@
           emptyTitleStyle: { fontSize: '15px', fontWeight: 600, color: '#0f172a', marginBottom: '6px' },
           emptyBodyStyle: { fontSize: '13px', color: '#64748b', maxWidth: '420px', margin: '0 auto', lineHeight: 1.5 },
           chart: ovHistory.chart,
+          /* Hover interaction for the trend (2026-08-21, Semrush parity): equal-width mouse
+             zones per capture date drive `chartHoverIndex` (the same state key the Overview
+             tab's chart uses — the two are never on screen together), and the tooltip lists
+             every domain measured on the hovered date. Handlers live HERE, not in
+             buildHistoryChart, so that function stays pure and test-extractable. */
+          histZones: ((ovHistory.chart && ovHistory.chart.hover) || []).map((hz, i) => ({
+            zx: hz.zx, zw: hz.zw,
+            onEnter: () => this.setState({ chartHoverIndex: i })
+          })),
+          histHover: (() => {
+            const hv = (ovHistory.chart && ovHistory.chart.hover) || [];
+            const i = s.chartHoverIndex;
+            if (i == null || !hv[i] || !hv[i].rows.length) return { show: false, rows: [], dots: [], ttX: 0, ttH: 0, x: 0, label: '' };
+            const x = parseFloat(hv[i].x);
+            return {
+              show: true, x: hv[i].x, label: hv[i].label, dots: hv[i].dots,
+              rows: hv[i].rows.map(r => ({
+                domain: r.domain, value: r.value,
+                swatch: { width: '8px', height: '8px', borderRadius: '2px', background: r.color, display: 'inline-block', flexShrink: 0 }
+              })),
+              /* Flip the tooltip to the left half past the plot's midpoint so it never
+                 clips off the right edge — same rule as the Overview chart's ttX. */
+              ttX: (x < 375 ? x + 14 : x - 194).toFixed(1),
+              ttH: 38 + hv[i].rows.length * 19
+            };
+          })(),
           domains: allDomains.filter(d => !hiddenOv.includes(d)).map(d => ({ name: d, style: { textAlign: 'center', color: d === vals.ptWs.domain ? '#4338ca' : '#64748b', fontSize: '9.5px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } })),
           /* Each domain group holds three sub-columns (Pos | SERP | AIO — decision
              2026-08-18, Semrush parity), so it needs real width: minmax keeps groups from

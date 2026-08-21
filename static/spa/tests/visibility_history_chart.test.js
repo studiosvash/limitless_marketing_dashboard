@@ -91,8 +91,35 @@ test('the y axis scales to the data instead of a fixed 0-80', () => {
   }, [], COLOR);
   const top = parseFloat(small.chart.grid[0].label);
   assert.ok(top <= 5, 'a 3.6 peak must not be plotted against an 80 ceiling, got ' + top);
-  assert.strictEqual(small.chart.grid[small.chart.grid.length - 1].label, '0',
+  // '0%' not '0' since 2026-08-21: the y labels carry their unit (Semrush-style axes).
+  assert.strictEqual(small.chart.grid[small.chart.grid.length - 1].label, '0%',
     'the axis still starts at zero — a truncated baseline exaggerates every movement');
+});
+
+/* The hover layer (2026-08-21, Semrush parity): one entry per capture date — guide x,
+   mouse-zone geometry, tooltip rows for every domain measured that day, and the dots to
+   light. Pure data; the caller attaches the handlers. */
+test('hover data lists every measured domain per date and skips the unmeasured', () => {
+  const out = buildHistoryChart({
+    dates: ['2026-08-01', '2026-08-08'],
+    series: [{ domain: 'premierstaff.com', points: [10.9, 21.6] },
+             { domain: 'eventstaff.com', points: [null, 6.0] }]
+  }, [], COLOR);
+  const hover = out.chart.hover;
+  assert.strictEqual(hover.length, 2, 'one hover entry per capture date');
+  assert.strictEqual(hover[0].rows.length, 1, 'eventstaff was not measured on day one');
+  assert.strictEqual(hover[1].rows.length, 2);
+  assert.strictEqual(hover[1].rows[1].domain, 'eventstaff.com');
+  assert.strictEqual(hover[1].rows[1].value, '6%');
+  assert.strictEqual(hover[1].dots.length, 2, 'a dot per measured series at that date');
+  assert.strictEqual(hover[0].label, 'Aug 1', 'the tooltip is titled with the real date');
+  /* A hidden domain must vanish from the tooltip too, not just from the lines. */
+  const hidden = buildHistoryChart({
+    dates: ['2026-08-01', '2026-08-08'],
+    series: [{ domain: 'premierstaff.com', points: [10.9, 21.6] },
+             { domain: 'eventstaff.com', points: [4.0, 6.0] }]
+  }, ['eventstaff.com'], COLOR);
+  assert.strictEqual(hidden.chart.hover[1].rows.length, 1);
 });
 
 test('a null point is skipped, not drawn as zero', () => {
