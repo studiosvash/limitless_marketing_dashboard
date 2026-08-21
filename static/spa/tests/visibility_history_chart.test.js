@@ -91,7 +91,8 @@ test('the y axis scales to the data instead of a fixed 0-80', () => {
   }, [], COLOR);
   const top = parseFloat(small.chart.grid[0].label);
   assert.ok(top <= 5, 'a 3.6 peak must not be plotted against an 80 ceiling, got ' + top);
-  assert.strictEqual(small.chart.grid[small.chart.grid.length - 1].label, '0',
+  // '0%' not '0' since 2026-08-21: the y labels carry the unit (Semrush-style axes).
+  assert.strictEqual(small.chart.grid[small.chart.grid.length - 1].label, '0%',
     'the axis still starts at zero — a truncated baseline exaggerates every movement');
 });
 

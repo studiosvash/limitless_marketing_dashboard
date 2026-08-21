@@ -1,6 +1,7 @@
 /* Tests for buildVisibilityScores — the Positioning Overview's per-domain scoring:
-   share of voice (primary, % of the tracked field, sums to 100) plus the absolute
-   visibility index (100 = #1 on every tracked keyword) on the sub-line.
+   the visibility index (100 = #1 on every tracked keyword; the cards' headline since
+   2026-08-21, founder request — Semrush's "Visibility" tab) plus share of voice
+   (volume-weighted, sums to 100; on the sub-line).
 
    Run: node --test static/spa/tests/
 
