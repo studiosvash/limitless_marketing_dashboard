@@ -391,13 +391,12 @@
           <sc-if value="{{ ptTabOverview }}" hint-placeholder-val="{{ false }}">
           <div style="display: flex; flex-direction: column; gap: 20px;">
             <div style="border-radius: 12px; background: white; border: 1px solid #e2e8f0; padding: 20px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
-              <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; flex-wrap: wrap; gap: 8px;"><div><h2 style="font-size: 15px; font-weight: 600; margin: 0;">Visibility</h2><sc-if value="{{ pt.srcVisibility.show }}" hint-placeholder-val="{{ true }}"><div style="margin-top: 6px;"><span style="{{ pt.srcVisibility.style }}" title="{{ pt.srcVisibility.title }}" aria-label="{{ pt.srcVisibility.aria }}">{{ pt.srcVisibility.text }}</span></div></sc-if></div><span style="font-size: 12px; color: #94a3b8;" title="Your visibility is the CTR-weighted score across every tracked keyword — #1 = 31.7 points, #2 = 24.7, #5 = 9.5, #10 = 1.8, below #20 almost nothing — over a perfect board of #1 on all of them. It is the same number the projects list shows for this project. Share of voice below answers a different question: how those points split between you and the competitors shown, from the latest SERP capture, so those cards total 100%.">Visibility: 100 = #1 on every tracked keyword · share of voice below totals 100% across the field</span></div>
-              <div style="margin-bottom: 20px; padding-bottom: 18px; border-bottom: 1px solid #f1f5f9;">
-                <div style="font-size: 12px; color: #64748b; margin-bottom: 3px;">Your visibility</div>
-                <div style="{{ ptOv.visStyle }}">{{ ptOv.visLabel }}</div>
-                <div style="font-size: 11px; color: #94a3b8; margin-top: 2px;">{{ ptOv.visNote }}</div>
-              </div>
-              <h3 style="font-size: 13px; font-weight: 600; margin: 0 0 12px; color: #334155;">Share of voice</h3>
+              <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; flex-wrap: wrap; gap: 8px;"><div><h2 style="font-size: 15px; font-weight: 600; margin: 0;">Visibility</h2><sc-if value="{{ pt.srcVisibility.show }}" hint-placeholder-val="{{ true }}"><div style="margin-top: 6px;"><span style="{{ pt.srcVisibility.style }}" title="{{ pt.srcVisibility.title }}" aria-label="{{ pt.srcVisibility.aria }}">{{ pt.srcVisibility.text }}</span></div></sc-if></div><span style="font-size: 12px; color: #94a3b8;" title="Your visibility is the CTR-weighted score across every tracked keyword — #1 = 31.7 points, #2 = 24.7, #5 = 9.5, #10 = 1.8, below #20 almost nothing — over a perfect board of #1 on all of them. It is the same number the projects list shows for this project. Share of voice below answers a different question: how those points split between you and the competitors shown, from the latest SERP capture, so those cards total 100%.">Visibility: 100% = #1 on every tracked keyword (Semrush's own credit curve; AI Overview &amp; Local Pack slots count) · each card's share-of-voice sub-line totals 100%</span></div>
+              <!-- "Your visibility" as a separate figure was removed (founder, 2026-08-21):
+                   the cards below lead with visibility per domain — your own card carries
+                   the same server number the projects list prints — matching Semrush's
+                   "Visibility" tab. Share of voice lives on each card's sub-line. -->
+              <h3 style="font-size: 13px; font-weight: 600; margin: 0 0 12px; color: #334155;">Visibility</h3>
               <div style="display: flex; flex-wrap: wrap; gap: 28px; margin-bottom: 18px;">
                 <sc-for list="{{ ptOv.scoreCards }}" as="c" hint-placeholder-count="4">
                   <div style="min-width: 108px;">
@@ -424,8 +423,8 @@
                    labels in ptOv.chart.grid are computed from the data's own range, not
                    fixed at 0-80. Do not populate it from anything but real stored captures. -->
               <sc-if value="{{ ptOv.hasHistory }}" hint-placeholder-val="{{ false }}">
-              <h3 style="font-size: 13px; font-weight: 600; margin: 14px 0 2px; color: #334155;">Visibility index over time</h3>
-              <p style="font-size: 11px; color: #94a3b8; margin: 0 0 8px;">The "index" figure under each share above, plotted per capture date. Not the share — a share always totals 100% and cannot show the whole field rising or falling.</p>
+              <h3 style="font-size: 13px; font-weight: 600; margin: 14px 0 2px; color: #334155;">Visibility over time</h3>
+              <p style="font-size: 11px; color: #94a3b8; margin: 0 0 8px;">Each domain's visibility above, plotted per capture date. A share always totals 100% and cannot show the whole field rising or falling — this can.</p>
               <!-- Semrush-style plot (2026-08-21, founder request): drawn x/y axes, %-labelled
                    y grid, hover guide + per-date tooltip. The axis labels were INVISIBLE for
                    the chart's whole life — the DSL wrapped every {{ }} in an HTML <span>,

@@ -1076,20 +1076,31 @@
         });
         const weightedRows = compRows.map(r =>
           Object.assign({}, r, { vol: volByKw[(r.kw || '').toLowerCase()] }));
-        const scMap = buildVisibilityScores(allDomains, weightedRows).map((d, idx) => ({
-          k: d.dom, name: d.dom, color: colors[idx % colors.length],
-          val: d.sov != null ? d.sov.toFixed(1) + '%' : '—',
-          /* Coverage, average position AND the absolute index printed under the share.
-             The share alone cannot distinguish "ranks everywhere, mid-table" from
-             "ranks on three keywords, all at #1", nor a strong field from a weak one —
-             the sub-line is what makes the big number auditable instead of something
-             the user has to trust. */
-          sub: d.visScore == null ? ''
-               : (d.rankedCount
-                  ? 'index ' + d.visScore.toFixed(1) + ' · ' + d.rankedCount + '/' + compRows.length + ' keywords · avg #' + d.avgPos
-                  : 'no positions on ' + compRows.length + ' keywords'),
-          rawVal: d.sov != null ? d.sov : (d.visScore != null ? 0 : null)
-        }));
+        /* YOUR domain's visibility is the SERVER's number (`kpis.visibility`) whenever it
+           exists — the same field the projects list prints — so the card, the workspace
+           and the list cannot disagree. Competitors have no server figure; theirs is the
+           same-basis browser score from the latest capture (same _SEMRUSH_CREDIT curve,
+           same feature-aware best position). */
+        const ownVis = (data.kpis && typeof data.kpis.visibility === 'number')
+          ? data.kpis.visibility : null;
+        const scMap = buildVisibilityScores(allDomains, weightedRows).map((d, idx) => {
+          /* THE BIG NUMBER IS VISIBILITY (founder, 2026-08-21 — Semrush's "Visibility"
+             tab): each domain's own score on Semrush's measured credit curve. These do
+             NOT sum to 100 — that is the point: the whole field can rise or fall.
+             Share of voice (volume-weighted) is NOT gone — it moves to the sub-line,
+             with coverage and average position, so the big number stays auditable. */
+          const vis = (idx === 0 && ownVis != null) ? ownVis : d.visScore;
+          return {
+            k: d.dom, name: d.dom, color: colors[idx % colors.length],
+            val: vis != null ? parseFloat(Number(vis).toFixed(1)) + '%' : '—',
+            sub: d.visScore == null ? ''
+                 : (d.rankedCount
+                    ? ((d.sov != null ? 'share of voice ' + d.sov.toFixed(1) + '%' : 'share of voice —')
+                       + ' · ' + d.rankedCount + '/' + compRows.length + ' keywords · avg #' + d.avgPos)
+                    : 'no positions on ' + compRows.length + ' keywords'),
+            rawVal: vis != null ? Number(vis) : null
+          };
+        });
         const hiddenOv = s.ptOvHidden || [];
 
         /* THE VISIBILITY TREND, from `data.visibility_history` — one point per date the
@@ -1213,28 +1224,11 @@
           data.visibility_history, hiddenOv,
           dom => colors[Math.max(allDomains.indexOf(dom), 0) % colors.length]
         );
-        /* YOUR VISIBILITY IS THE SERVER'S NUMBER, NOT A SECOND OPINION.
-           `data.kpis.visibility` is `_get_ranking_distribution`'s CTR-credit score over the
-           requested window — the same field, from the same function, that the projects list
-           renders in its Visibility column. It is shown here as its own labelled figure so the
-           two screens cannot disagree.
-           buildVisibilityScores above stays, but only as SHARE OF VOICE: it is computed from
-           `competitors.rows`, a single latest capture date with integer-rounded positions and
-           no reference to the range, and its whole point is the split BETWEEN domains. Two
-           different questions now carry two different labels.
-           null = nothing measured in this window -> em dash. 0 = measured, ranks nowhere. */
-        const ownVis = (data.kpis && typeof data.kpis.visibility === 'number')
-          ? data.kpis.visibility : null;
+        /* The separate "Your visibility" figure was REMOVED (founder, 2026-08-21): the
+           score cards above now lead with visibility per domain, and your own card already
+           carries the server's `kpis.visibility` (see `ownVis` beside scMap), so a second
+           copy of the same number above the cards was pure repetition. */
         vals.ptOv = {
-          visLabel: ownVis == null ? '—' : parseFloat(ownVis.toFixed(1)) + '%',
-          visStyle: {
-            fontSize: '24px', fontWeight: 700,
-            color: ownVis == null ? '#cbd5e1'
-                   : (ownVis >= 30 ? '#059669' : ownVis >= 10 ? '#0891b2' : '#d97706')
-          },
-          visNote: ownVis == null
-            ? 'No ranking measured in this window yet'
-            : 'CTR-weighted across all ' + (data.kpis.tracked || 0) + ' tracked keywords',
           /* /api/positions returns no snapshot dates, so the Δ caption names the
              comparison instead of printing invented calendar dates ("Jun 20 → Jul 20"
              was hardcoded). Keys kept for when the API starts returning them. */
