@@ -979,19 +979,49 @@
            can extract and run the real function by brace-matching, same as sortRows.
            `domains[0]` is "you" (read from r.you), the rest match inside r.comps. */
         const buildVisibilityScores = (domains, rows) => {
-          const CTR_CURVE = [31.7, 24.7, 18.7, 13.3, 9.5, 6.8, 4.9, 3.5, 2.5, 1.8,
-                             1.4, 1.2, 1.0, 0.9, 0.8, 0.7, 0.6, 0.5, 0.45, 0.4];
-          const PERFECT = CTR_CURVE[0];
+          /* SEMRUSH'S OWN CREDIT CURVE, measured (2026-08-21) — same values, provenance and
+             rounding rule as the server's _SEMRUSH_CREDIT in shared_queries.py, which holds
+             the full story: reverse-engineered from the team's real campaign's per-keyword
+             Vi contributions and validated by reproducing Semrush's reported visibility to
+             the decimal (21.83). #1 = 1.0, #2 = 0.343, #49 still earns 0.014, 0 past #100.
+             The old organic-CTR curve (#1 = 31.7 … ~0 past #20) modelled clicks, not
+             Semrush's Visibility, and read ~3% beside Semrush's ~22% for the same rankings. */
+          const SEMRUSH_CREDIT = [
+            1.0, 0.343406, 0.26099, 0.217033, 0.167582, 0.112638, 0.104396, 0.096153,
+            0.082418, 0.060439, 0.050824, 0.041209, 0.038462, 0.035714, 0.034341, 0.032967,
+            0.032005, 0.031044, 0.029945, 0.028846, 0.027884, 0.026923, 0.026374, 0.025825,
+            0.025275, 0.024725, 0.024176, 0.023627, 0.023077, 0.022528, 0.021978, 0.021429,
+            0.02088, 0.02033, 0.01978, 0.019231, 0.018682, 0.018132, 0.01774, 0.017347,
+            0.016955, 0.016562, 0.01617, 0.015777, 0.015385, 0.01511, 0.014835, 0.014561,
+            0.014286, 0.014011, 0.013737, 0.013462, 0.013187, 0.012912, 0.012637, 0.012362,
+            0.012088, 0.011813, 0.011538, 0.011263, 0.010989, 0.010714, 0.010439, 0.010165,
+            0.00989, 0.009615, 0.009341, 0.009066, 0.008791, 0.008516, 0.008242, 0.007967,
+            0.007692, 0.007417, 0.007143, 0.006868, 0.006593, 0.006318, 0.006044, 0.005769,
+            0.005494, 0.00522, 0.004945, 0.00467, 0.004396, 0.004121, 0.003846, 0.003571,
+            0.003297, 0.003022, 0.002747, 0.002473, 0.002198, 0.001923, 0.001649, 0.001374,
+            0.001099, 0.000824, 0.000549, 0.000274
+          ];
+          const PERFECT = 1.0;
           const posCredit = pos => {
             const p = Number(pos);
             if (!isFinite(p) || p < 1 || p > 100) return 0;
             /* Positions arrive as 1-dp averages (8.4, 24.5 — every service rounds to 1 dp),
-               and an array will not interpolate: CTR_CURVE[8.4 - 1] is CTR_CURVE[7.4] =
-               undefined, one undefined poisons the whole earned-points sum, and the card
-               printed "index NaN". Round to the nearest whole position for the curve
-               lookup — the curve is only defined at whole positions anyway. */
-            const r = Math.round(p);
-            return r <= 20 ? CTR_CURVE[r - 1] : (r <= 50 ? 0.05 : 0.02);
+               and an array will not interpolate: [8.4 - 1] is [7.4] = undefined, one
+               undefined poisons the whole earned-points sum, and the card printed
+               "index NaN". Round to the nearest whole position for the curve lookup —
+               the curve is only defined at whole positions anyway. */
+            return SEMRUSH_CREDIT[Math.round(p) - 1];
+          };
+          /* A keyword's position is its BEST placement on the SERP — organic, Local Pack
+             slot, or AI Overview citation slot — exactly as Semrush counts it (verified:
+             a #1 AIO citation contributes the full 1.0). The cell's `feat`/`aio` fields
+             come from serp_feature_rankings; absent on older payloads → organic only. */
+          const bestPos = cell => {
+            if (!cell) return null;
+            const cands = [cell.pos,
+                           cell.feat != null ? cell.feat.slot : null,
+                           cell.aio].filter(v => v != null && isFinite(Number(v)));
+            return cands.length ? Math.min.apply(null, cands.map(Number)) : null;
           };
           /* Volume weight for the SHARE: real volume when known and positive, else 1 —
              identical for every domain on a given keyword, which is what keeps the
@@ -1006,13 +1036,11 @@
             let posSum = 0;
             const ranked = [];
             rows.forEach(r => {
-              let pos = null;
-              if (idx === 0) {
-                pos = r.you ? r.you.pos : null;
-              } else {
-                const compCell = (r.comps || []).find(c => c && c.domain === dom);
-                pos = compCell ? compCell.pos : null;
-              }
+              const cell = idx === 0 ? r.you
+                : ((r.comps || []).find(c => c && c.domain === dom) || null);
+              /* Best placement including SERP features — a domain cited #1 in the AI
+                 Overview with no organic row still ranks #1 for this keyword. */
+              const pos = bestPos(cell);
               if (pos != null) { ranked.push(pos); posSum += pos; }
               const credit = posCredit(pos);
               earned += credit;                    // equal-weight -> the INDEX

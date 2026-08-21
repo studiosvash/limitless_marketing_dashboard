@@ -108,16 +108,34 @@ test('better positions earn a larger share (CTR curve, not linear)', () => {
   const rows = [row(1, { 'b.com': 10 }), row(1, { 'b.com': 10 })];
   const out = build(['a.com', 'b.com'], rows);
   assert.ok(out[0].sov > out[1].sov);
-  /* #1 vs #10 on the curve is 31.7 vs 1.8 — the share gap must reflect that,
-     not the linear (100-1) vs (100-10) which would give a near-even split. */
+  /* #1 vs #10 on the Semrush credit curve is 1.0 vs 0.060439 — the share gap must reflect
+     that, not the linear (100-1) vs (100-10) which would give a near-even split. */
   assert.ok(out[0].sov > 90, 'a.com share should dominate, got ' + out[0].sov);
+});
+
+test('SERP-feature slots count as positions (Semrush parity, 2026-08-21)', () => {
+  /* Verified against Semrush's own per-keyword contributions: a #1 AI Overview citation
+     with NO organic ranking earns the full 1.0 credit, and a Local Pack slot beats a worse
+     organic position. Dropping feature slots is how a local business read ~3% here beside
+     ~22% in Semrush for the same SERPs. */
+  const rows = [
+    { you: { pos: null, aio: 1 }, comps: [{ domain: 'b.com', pos: 14, feat: { type: 'local_pack', slot: 2 } }] },
+    { you: { pos: 5 }, comps: [{ domain: 'b.com', pos: 5 }] }
+  ];
+  const out = build(['a.com', 'b.com'], rows);
+  // a.com: credit(1) + credit(5) = 1.167582 over a perfect 2 -> 58.379…
+  assert.ok(Math.abs(out[0].visScore - 58.3791) < 0.01,
+    'an AIO #1 citation must earn full #1 credit, got ' + out[0].visScore);
+  // b.com: Local Pack slot 2 beats organic #14 -> credit(2) + credit(5).
+  assert.ok(Math.abs(out[1].visScore - ((0.343406 + 0.167582) / 2 * 100)) < 0.01,
+    'the Local Pack slot must beat the organic position, got ' + out[1].visScore);
 });
 
 test('share of voice is volume-weighted, Semrush-style', () => {
   /* a.com is #1 on the 1,000-search keyword and #10 on the 10-search one; b.com is the
      mirror image. Equal weighting would split the field 50/50 — volume weighting must
-     hand a.com nearly everything: 1000x31.7 + 10x1.8 = 31,718 vs 1000x1.8 + 10x31.7 =
-     2,117 -> ~93.7% / ~6.3%. */
+     hand a.com nearly everything: 1000x1.0 + 10x0.060439 = 1000.6 vs
+     1000x0.060439 + 10x1.0 = 70.4 -> ~93.4% / ~6.6%. */
   const rows = [
     row(1, { 'b.com': 10 }, 1000),
     row(10, { 'b.com': 1 }, 10)
@@ -180,9 +198,9 @@ test('fractional average positions score real numbers, never NaN', () => {
     assert.ok(Number.isFinite(d.visScore), d.dom + ' visScore must be finite, got ' + d.visScore);
     assert.ok(Number.isFinite(d.sov), d.dom + ' sov must be finite, got ' + d.sov);
   }
-  /* 8.4 rounds to #8 (credit 3.5), not down to #8.4-floor-by-accident: check the exact
-     earned points so the rounding rule itself is pinned. 8.4→#8=3.5, 24.5→#25(wait, rounds
-     to 24 or 25? Math.round(24.5)=25)=0.05, 1.2→#1=31.7. */
-  assert.ok(Math.abs(out[0].earned - (3.5 + 0.05 + 31.7)) < 1e-9,
+  /* 8.4 rounds to #8 (credit 0.096153), not down to #8.4-floor-by-accident: check the
+     exact earned points so the rounding rule itself is pinned. 8.4→#8=0.096153,
+     24.5→#25 (Math.round(24.5)=25)=0.025275, 1.2→#1=1.0. */
+  assert.ok(Math.abs(out[0].earned - (0.096153 + 0.025275 + 1.0)) < 1e-9,
             'expected exact rounded-curve credit, got ' + out[0].earned);
 });

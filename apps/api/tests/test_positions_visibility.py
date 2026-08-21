@@ -85,8 +85,9 @@ class StaleProjectVisibilityTests(_Fixture):
                       "build_positions_response computes dist['visibility'] and must return it")
         self.assertIsNotNone(body["kpis"]["visibility"],
                              "three tracked keywords were measured — this is not 'never captured'")
-        # #2 = 24.7 CTR points, #14 = 0.9, unranked = 0, over 3 keywords x 31.7 perfect.
-        self.assertAlmostEqual(body["kpis"]["visibility"], 26.9, places=1)
+        # Semrush credit curve (see _SEMRUSH_CREDIT): #2 = 0.343406, #14 = 0.035714,
+        # unranked = 0, over 3 keywords x a perfect 1.0 each -> 12.6%.
+        self.assertAlmostEqual(body["kpis"]["visibility"], 12.6, places=1)
 
     def test_the_project_list_reports_the_same_number(self):
         listed = self.client_auth.get("/api/projects").json()
@@ -149,14 +150,14 @@ class SnapshotVisibilityTests(_Fixture):
     def test_visibility_reads_each_keywords_latest_measurement(self):
         body = self.client_auth.get("/api/projects/staff-dc/positions",
                                     {"range": "28d"}).json()
-        # event staffing @ latest = #1 -> 31.7; brand ambassadors @ its latest = #2 -> 24.7;
-        # perfect = 2 x 31.7. (31.7 + 24.7) / 63.4 = 88.958... -> 89.0.
-        self.assertAlmostEqual(body["kpis"]["visibility"], 89.0, places=1)
+        # Semrush credit curve: event staffing @ latest = #1 -> 1.0; brand ambassadors @ its
+        # latest = #2 -> 0.343406; perfect = 2 x 1.0. 1.343406 / 2 = 67.17 -> 67.2.
+        self.assertAlmostEqual(body["kpis"]["visibility"], 67.2, places=1)
 
     def test_the_project_list_reports_the_same_snapshot(self):
         listed = self.client_auth.get("/api/projects").json()
         row = next(p for p in listed if p["id"] == "staff-dc")
-        self.assertAlmostEqual(row["visibility"], 89.0, places=1)
+        self.assertAlmostEqual(row["visibility"], 67.2, places=1)
 
 
 class NoMeasurementVisibilityTests(_Fixture):

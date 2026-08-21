@@ -75,11 +75,12 @@ class VisibilityScoreTests(TestCase):
         _seed({"a": 1})
         self.assertEqual(self._vis(), 25.0)
 
-    def test_credit_follows_the_ctr_curve_not_a_linear_scale(self):
-        # #10 earns 1.8 of a perfect 31.7 → 5.7%. Linear (100-10)/100 would say 90%.
+    def test_credit_follows_the_semrush_curve_not_a_linear_scale(self):
+        # #10 earns 0.060439 of a perfect 1.0 on the measured Semrush credit curve
+        # (_SEMRUSH_CREDIT, 2026-08-21) → 6.0%. Linear (100-10)/100 would say 90%.
         _track(["a"])
         _seed({"a": 10})
-        self.assertEqual(self._vis(), 5.7)
+        self.assertEqual(self._vis(), 6.0)
 
     def test_no_capture_in_window_is_none_not_zero(self):
         _track(["a", "b"])

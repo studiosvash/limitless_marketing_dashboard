@@ -188,25 +188,113 @@ def _location_clause(model, location: str | None) -> list:
     return [model.location == location] if location else []
 
 
-# Google organic CTR by position — the same curve, values and rounding rule as the SPA's
-# buildVisibilityScores (positioning.js), so the project list and the workspace Overview can
-# never disagree about what "visibility" means. #1 = 31.7 … #10 = 1.8, ~0 past #20.
-_CTR_CURVE = [31.7, 24.7, 18.7, 13.3, 9.5, 6.8, 4.9, 3.5, 2.5, 1.8,
-              1.4, 1.2, 1.0, 0.9, 0.8, 0.7, 0.6, 0.5, 0.45, 0.4]
-_PERFECT_CTR = _CTR_CURVE[0]
+# SEMRUSH'S OWN CREDIT CURVE, measured — not an organic-CTR curve (replaced 2026-08-21).
+#
+# Provenance: reverse-engineered from Semrush's Position Tracking API for the team's real
+# campaign (24205096_2898523, 2026-08-21). `tracking_position_organic` returns each keyword's
+# per-domain visibility CONTRIBUTION (`Vi`), and with 19 tracked keywords every #1 contributed
+# exactly 100/19 — so credit(pos) = Vi x N / 100, equal weight per keyword, no volume. 38
+# positions were directly measured (1-10 complete, then 12…96); the gaps are linear
+# interpolation, which the measured tail is exactly (slope -0.000549/pos through the 20s-30s,
+# -0.000275/pos beyond ~45, hitting 0 just past 100). Recomputing Σcredit/N over the
+# campaign's own positions reproduces Semrush's reported visibility to the decimal
+# (21.83 = 21.83).
+#
+# The old curve here was Google organic CTR (#1 = 31.7% … ~0 past #20). It is a fine model of
+# CLICKS, but it is not what Semrush's Visibility means: Semrush keeps paying meaningful
+# credit deep into the top 100 (#49 still earns 1.4%), so real projects read ~3% on our curve
+# beside ~22% in Semrush for identical rankings — which the founder read, reasonably, as the
+# metric being broken. Same values, same rounding rule as the SPA's buildVisibilityScores.
+_SEMRUSH_CREDIT = [
+    1.0, 0.343406, 0.26099, 0.217033, 0.167582, 0.112638, 0.104396, 0.096153,
+    0.082418, 0.060439, 0.050824, 0.041209, 0.038462, 0.035714, 0.034341, 0.032967,
+    0.032005, 0.031044, 0.029945, 0.028846, 0.027884, 0.026923, 0.026374, 0.025825,
+    0.025275, 0.024725, 0.024176, 0.023627, 0.023077, 0.022528, 0.021978, 0.021429,
+    0.02088, 0.02033, 0.01978, 0.019231, 0.018682, 0.018132, 0.01774, 0.017347,
+    0.016955, 0.016562, 0.01617, 0.015777, 0.015385, 0.01511, 0.014835, 0.014561,
+    0.014286, 0.014011, 0.013737, 0.013462, 0.013187, 0.012912, 0.012637, 0.012362,
+    0.012088, 0.011813, 0.011538, 0.011263, 0.010989, 0.010714, 0.010439, 0.010165,
+    0.00989, 0.009615, 0.009341, 0.009066, 0.008791, 0.008516, 0.008242, 0.007967,
+    0.007692, 0.007417, 0.007143, 0.006868, 0.006593, 0.006318, 0.006044, 0.005769,
+    0.005494, 0.00522, 0.004945, 0.00467, 0.004396, 0.004121, 0.003846, 0.003571,
+    0.003297, 0.003022, 0.002747, 0.002473, 0.002198, 0.001923, 0.001649, 0.001374,
+    0.001099, 0.000824, 0.000549, 0.000274,
+]
+# A perfect board is #1 on every tracked keyword: credit 1.0 each.
+_PERFECT_CREDIT = 1.0
 
 
 def _position_credit(pos) -> float:
-    """CTR points a single keyword earns at `pos`. Positions arrive as 1-dp averages (and as
-    Decimal from Postgres), so round to the whole position the curve is defined at."""
+    """Credit a single keyword earns at `pos` (1.0 at #1, 0 past #100). Positions arrive as
+    1-dp averages (and as Decimal from Postgres), so round to the whole position the curve is
+    defined at."""
     try:
         p = float(pos)
     except (TypeError, ValueError):
         return 0.0
     if p < 1 or p > 100:
         return 0.0
-    r = round(p)
-    return _CTR_CURVE[r - 1] if r <= 20 else (0.05 if r <= 50 else 0.02)
+    return _SEMRUSH_CREDIT[round(p) - 1]
+
+
+def _feature_slot_map(session, site_id: str, location: str | None,
+                      tracked_lower: list[str], curr_start: date | None,
+                      curr_end: date, targets: dict) -> dict:
+    """(target_key, date, keyword_lower) -> best SERP-feature slot, from
+    serp_feature_rankings. `targets` maps a caller's series/cell key to the domain string it
+    tracks; a stored row matches a target when the target string is contained in the stored
+    domain (lowercased) — the same contains rule the connector uses for organic matching,
+    because the SERP reports domains in whatever spelling it likes. All feature types count:
+    Semrush treats a Local Pack slot, an AI Overview citation slot and a sitelink all as
+    positions (its `Lt` field says which one won). `curr_start=None` means "any date up to
+    curr_end". Never raises — features are an enrichment, and a failed read must not take
+    visibility down with it."""
+    try:
+        from pipeline.db.schema import SerpFeatureRanking
+        from pipeline.db.writer import ensure_tables
+        ensure_tables(session, SerpFeatureRanking)
+        conds = [
+            _site_clause(SerpFeatureRanking, site_id),
+            SerpFeatureRanking.date <= curr_end,
+            func.lower(SerpFeatureRanking.keyword).in_(tracked_lower),
+            SerpFeatureRanking.slot.isnot(None),
+            *_location_clause(SerpFeatureRanking, location),
+        ]
+        if curr_start is not None:
+            conds.append(SerpFeatureRanking.date >= curr_start)
+        rows = session.execute(
+            select(SerpFeatureRanking.date, SerpFeatureRanking.domain,
+                   SerpFeatureRanking.keyword, SerpFeatureRanking.slot)
+            .where(*conds)
+        ).all()
+        lowered = {key: (dom or "").lower() for key, dom in targets.items()}
+        best: dict = {}
+        for r in rows:
+            stored = (r.domain or "").lower()
+            kw = (r.keyword or "").lower()
+            for key, target in lowered.items():
+                if target and target in stored:
+                    k = (key, r.date, kw)
+                    if k not in best or r.slot < best[k]:
+                        best[k] = r.slot
+        return best
+    except Exception as e:
+        logger.warning(f"_feature_slot_map error: {e}", exc_info=True)
+        return {}
+
+
+def _own_feature_slots(session, site_id: str, location: str | None,
+                       tracked_lower: list[str], curr_end: date) -> dict:
+    """keyword_lower -> the OWN domain's best feature slot from the LATEST feature capture at
+    or before `curr_end` — the per-keyword companion to the visibility snapshot."""
+    from pipeline.services.site_service import _bare_domain
+    own = _bare_domain(site_id)
+    all_dates = _feature_slot_map(session, site_id, location, tracked_lower,
+                                  None, curr_end, {"own": own})
+    if not all_dates:
+        return {}
+    latest = max(d for (_, d, _) in all_dates)
+    return {kw: slot for (_, d, kw), slot in all_dates.items() if d == latest}
 
 
 def _get_ranking_distribution(site_id: str, curr_start: date, curr_end: date,
@@ -326,8 +414,21 @@ def _get_ranking_distribution(site_id: str, curr_start: date, curr_end: date,
                 )
                 .group_by(KeywordRanking.keyword)
             ).all()
-            earned = sum(_position_credit(pos) for _, pos in snap_rows)
-            visibility = round(earned / (total * _PERFECT_CTR) * 100, 1) if total else None
+            # SERP features COUNT AS POSITIONS (2026-08-21, verified against Semrush's own
+            # per-keyword contributions): a Local Pack slot, an AI Overview citation slot or
+            # a sitelink is the keyword's position when it beats the organic one — Semrush's
+            # `Lt` field marks exactly which source produced each best position, and a #1
+            # AIO citation earns the full 1.0 credit. Without this, a local business sitting
+            # in packs and AI Overviews all day reads ~3% here beside ~22% in Semrush for
+            # the same rankings. A keyword cited in a feature with NO organic row still
+            # earns its slot's credit — Semrush counts it, and so must we.
+            own_feat = _own_feature_slots(session, site_id, location, tracked_lower, curr_end)
+            snap_pos = {(kw or "").lower(): pos for kw, pos in snap_rows}
+            earned = 0.0
+            for kw in set(snap_pos) | set(own_feat):
+                candidates = [p for p in (snap_pos.get(kw), own_feat.get(kw)) if p is not None]
+                earned += _position_credit(min(candidates)) if candidates else 0.0
+            visibility = round(earned / (total * _PERFECT_CREDIT) * 100, 1) if total else None
 
             # Percentage buckets for the distribution bar
             top3_pct = round(top3 / total * 100) if total else 0
@@ -409,6 +510,7 @@ def _get_visibility_history(site_id: str, curr_start: date, curr_end: date,
             own_rows = session.execute(
                 select(
                     KeywordRanking.date,
+                    KeywordRanking.keyword,
                     func.avg(KeywordRanking.position).label("pos"),
                 )
                 .where(
@@ -425,6 +527,7 @@ def _get_visibility_history(site_id: str, curr_start: date, curr_end: date,
                 select(
                     CompetitorKeywordRanking.date,
                     CompetitorKeywordRanking.competitor_domain,
+                    CompetitorKeywordRanking.keyword,
                     func.avg(CompetitorKeywordRanking.position).label("pos"),
                 )
                 .where(
@@ -439,23 +542,60 @@ def _get_visibility_history(site_id: str, curr_start: date, curr_end: date,
                           CompetitorKeywordRanking.keyword)
             ).all()
 
-        # domain -> {date: earned CTR points}, and domain -> {date: keywords measured}. Your
-        # own domain is keyed by the label the caller renders it under so the series and the
-        # legend name the same thing.
-        own_key = (own_domain or site_id or "").strip() or site_id
+            # SERP-feature slots per (domain, date, keyword) — features count as positions
+            # (see the snapshot in _get_ranking_distribution). Targets: your own bare domain
+            # plus every competitor that appears in this window's rows; the stored feature
+            # rows carry whatever domain spelling the SERP reported, hence contains-matching
+            # inside _feature_slot_map.
+            own_key = (own_domain or site_id or "").strip() or site_id
+            from pipeline.services.site_service import _bare_domain
+            feat_targets = {own_key: _bare_domain(site_id)}
+            for r in comp_rows:
+                feat_targets.setdefault(r.competitor_domain, r.competitor_domain)
+            feat_best = _feature_slot_map(session, site_id, location, tracked_lower,
+                                          curr_start, curr_end, feat_targets)
+
+        # (domain, date, keyword) -> best position across organic and SERP features, so each
+        # keyword is credited once, at its best placement — the same rule as the headline
+        # snapshot, so the last point of the line and the headline cannot disagree.
+        best_pos: dict = {}
+
+        def _merge(dom, day, kw, pos):
+            if pos is None:
+                return
+            k = (dom, day, kw)
+            if k not in best_pos or float(pos) < float(best_pos[k]):
+                best_pos[k] = pos
+
+        for r in own_rows:
+            _merge(own_key, r.date, (r.keyword or "").lower(), r.pos)
+        for r in comp_rows:
+            _merge(r.competitor_domain, r.date, (r.keyword or "").lower(), r.pos)
+        for (dom, day, kw), slot in feat_best.items():
+            _merge(dom, day, kw, slot)
+        # A keyword measured-but-not-ranking (organic row with NULL position, no feature)
+        # still counts as measured for the coverage rule below, so re-walk the raw rows.
         earned: dict[str, dict] = {}
         measured: dict[str, dict] = {}
+        seen_kw: dict = {}
 
-        def _add(dom, day, pos):
+        def _count(dom, day, kw):
+            k = (dom, day, kw)
+            if k in seen_kw:
+                return
+            seen_kw[k] = True
             earned.setdefault(dom, {})
             measured.setdefault(dom, {})
-            earned[dom][day] = earned[dom].get(day, 0.0) + _position_credit(pos)
+            earned[dom][day] = (earned[dom].get(day, 0.0)
+                               + _position_credit(best_pos.get(k)))
             measured[dom][day] = measured[dom].get(day, 0) + 1
 
         for r in own_rows:
-            _add(own_key, r.date, r.pos)
+            _count(own_key, r.date, (r.keyword or "").lower())
         for r in comp_rows:
-            _add(r.competitor_domain, r.date, r.pos)
+            _count(r.competitor_domain, r.date, (r.keyword or "").lower())
+        for (dom, day, kw) in feat_best:
+            _count(dom, day, kw)
 
         # THE DENOMINATOR IS FIXED ACROSS DATES, and partial captures are dropped rather than
         # plotted. Both halves are needed and features.md §"multi-series visibility line chart"
@@ -488,7 +628,7 @@ def _get_visibility_history(site_id: str, curr_start: date, curr_end: date,
         if not dates:
             return {"dates": [], "series": [], "tracked_total": total}
 
-        perfect = total * _PERFECT_CTR
+        perfect = total * _PERFECT_CREDIT
         series = []
         for dom, per_date in plotted.items():
             points = [round(per_date[d] / perfect * 100, 1) if d in per_date else None

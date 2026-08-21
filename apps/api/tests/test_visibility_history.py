@@ -61,13 +61,12 @@ class _Fixture(APITestCase):
 class VisibilityHistoryTests(_Fixture):
     """Two capture dates, seven days apart, and one competitor measured on only the newer.
 
-    Positions are chosen so every expected figure is exact and so the per-date points differ
-    from the window-wide headline — a chart that merely repeated the headline N times would
-    pass a laxer assertion.
+    Positions are chosen so every expected figure is exact. Semrush credit curve
+    (_SEMRUSH_CREDIT; #1 = 1.0 per keyword, perfect = 1.0 each):
 
-      day_a: #5 -> 9.5, #14 -> 0.9, unranked -> 0    = 10.4 / (3 x 31.7) = 10.9%
-      day_b: #3 -> 18.7, #10 -> 1.8, unranked -> 0   = 20.5 / (3 x 31.7) = 21.6%
-      28d headline averages per keyword first: #4 -> 13.3, #12 -> 1.2    = 15.2%
+      day_a: #5 -> 0.167582, #14 -> 0.035714, unranked -> 0  = 0.203296 / 3 = 6.8%
+      day_b: #3 -> 0.260990, #10 -> 0.060439, unranked -> 0  = 0.321429 / 3 = 10.7%
+      headline = snapshot of each keyword's latest = day_b's reading = 10.7%
     """
 
     def setUp(self):
@@ -115,12 +114,12 @@ class VisibilityHistoryTests(_Fixture):
         own = next(s for s in hist["series"] if s["own"])
         self.assertEqual(own["domain"], "premierstaff.com",
                          "keyed by the same bare domain the legend and the cards use")
-        self.assertEqual([round(p, 1) for p in own["points"]], [10.9, 21.6])
+        self.assertEqual([round(p, 1) for p in own["points"]], [6.8, 10.7])
         # Since 2026-08-13 (tech lead: match Semrush) the headline is a SNAPSHOT of each
         # keyword's latest measurement — exactly Semrush's landscape, where the big number
         # is today's reading and the chart is its history. So the headline must EQUAL the
-        # newest chart point, where it used to be the window average (15.2 here).
-        self.assertAlmostEqual(body["kpis"]["visibility"], 21.6, places=1)
+        # newest chart point.
+        self.assertAlmostEqual(body["kpis"]["visibility"], 10.7, places=1)
         self.assertAlmostEqual(body["kpis"]["visibility"], own["points"][-1], places=1,
                                msg="the headline is the trend's latest point, by definition")
 
@@ -130,7 +129,8 @@ class VisibilityHistoryTests(_Fixture):
         self.assertIsNone(comp["points"][0],
                           "nobody measured this domain that day — 0 would draw a cliff "
                           "nobody observed")
-        self.assertAlmostEqual(comp["points"][1], 19.7, places=1)
+        # #3 on 1 of 3 tracked keywords: 0.260990 / 3 = 8.7 on the Semrush credit curve.
+        self.assertAlmostEqual(comp["points"][1], 8.7, places=1)
 
     def test_the_denominator_is_the_whole_tracked_list(self):
         hist, _ = self._history()

@@ -183,11 +183,17 @@ re-reads the list in `setRange()` (`App.reloadProjects`). Every other `/api/proj
 the SPA (project create / edit / delete, keywords sent to tracking) goes through
 `reloadProjects()` for the same reason — a bare re-read would silently snap the list back to 28d.
 
-`visibility` is the Semrush-style CTR-weighted score (0–100, 1 dp) computed in
-`_get_ranking_distribution`: each tracked keyword earns the CTR of its position
-(#1 = 31.7 … #10 = 1.8, ~0 past #20 — the same curve as the SPA's `buildVisibilityScores`),
-divided by a perfect #1 on **every** tracked keyword. Keywords with no ranking earn 0 but stay
-in the denominator. **Snapshot, not window average** (decision 2026-08-13, matching Semrush):
+`visibility` is Semrush's Visibility, reproduced (0–100, 1 dp), computed in
+`_get_ranking_distribution`: each tracked keyword earns `_SEMRUSH_CREDIT[position]` — a curve
+**measured from Semrush's own per-keyword contributions** for the team's real campaign
+(2026-08-21; #1 = 1.0, #2 = 0.343, #49 still 0.014, 0 past #100; provenance and validation —
+reproduces Semrush's reported 21.83 to the decimal — in the constant's comment; same values in
+the SPA's `buildVisibilityScores`) — divided by a perfect #1 on **every** tracked keyword,
+equal weight, no volume. **A keyword's position is its best placement including SERP
+features**: Local Pack slot, AI Overview citation slot (from `serp_feature_rankings`) — a #1
+AIO citation with no organic ranking earns the full 1.0, exactly as Semrush counts it.
+Keywords with no ranking anywhere earn 0 but stay in the denominator. **Snapshot, not window
+average** (decision 2026-08-13, matching Semrush):
 each keyword contributes its **latest measurement** (per-keyword max date ≤ window end — not
 one latest capture date, which a `positions_new` incremental sync would break). The range
 selector moves the distribution buckets and movement counts, not this number. `null` means
