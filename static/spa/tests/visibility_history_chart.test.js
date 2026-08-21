@@ -66,8 +66,10 @@ test('no history at all, and a missing field, both fall to the empty state', () 
 test('points span the full plot area, oldest at the left', () => {
   const out = buildHistoryChart(TWO_DATES, [], COLOR);
   const [first, last] = out.chart.series[0].points.split(' ');
-  assert.strictEqual(first.split(',')[0], '50.0');
-  assert.strictEqual(last.split(',')[0], '700.0');
+  // 100/1400 since 2026-08-21: the viewBox is 1:1 with rendered pixels so in-SVG text
+  // matches the page's base font size instead of scaling up ~2x.
+  assert.strictEqual(first.split(',')[0], '100.0');
+  assert.strictEqual(last.split(',')[0], '1400.0');
   /* Higher visibility is a HIGHER point on screen: y decreases as the value rises. */
   assert.ok(parseFloat(last.split(',')[1]) < parseFloat(first.split(',')[1]));
 });
@@ -129,7 +131,7 @@ test('a null point is skipped, not drawn as zero', () => {
   }, [], COLOR);
   const pts = out.chart.series[0].points.split(' ');
   assert.strictEqual(pts.length, 2, 'the unmeasured date contributes no vertex');
-  assert.notStrictEqual(pts[0].split(',')[0], '50.0',
+  assert.notStrictEqual(pts[0].split(',')[0], '100.0',
     'the line starts at the first date that was actually measured, not at the axis');
 });
 

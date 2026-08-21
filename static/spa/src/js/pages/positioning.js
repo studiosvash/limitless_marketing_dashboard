@@ -1083,12 +1083,17 @@
            through to its next real reading rather than dropping to 0, which would invent a
            cliff nobody measured. */
         const buildHistoryChart = (hist, hidden, colorOf) => {
-          const X1 = 50, X2 = 700, YTOP = 30, YBOT = 180;
+          /* 1 viewBox unit ≈ 1 rendered pixel at the card's real width (~1400-1500px).
+             The old 720-unit viewBox stretched ~2x, so font-size 11 rendered ~23px and
+             the r=4.5 dots ~19px wide — cartoonishly large beside the page's 11-13px
+             base text. Strokes were immune (vector-effect: non-scaling-stroke); text,
+             dots and the foreignObject tooltip were not. */
+          const X1 = 100, X2 = 1400, YTOP = 60, YBOT = 360;
           const blank = {
-            viewBox: '0 0 720 210', lineX1: X1, lineX2: X2, labelX: 42, xLabelY: 200,
+            viewBox: '0 0 1440 420', lineX1: X1, lineX2: X2, labelX: 88, xLabelY: 400,
             yTop: YTOP, yBot: YBOT,
-            grid: [{ y: 30, label: '80%' }, { y: 68, label: '60%' }, { y: 105, label: '40%' },
-                   { y: 143, label: '20%' }, { y: 180, label: '0%' }],
+            grid: [{ y: 60, label: '80%' }, { y: 135, label: '60%' }, { y: 210, label: '40%' },
+                   { y: 285, label: '20%' }, { y: 360, label: '0%' }],
             xTicks: [], series: [], hover: []
           };
           const dates = (hist && hist.dates) || [];
@@ -1167,7 +1172,7 @@
           return {
             hasHistory: true,
             chart: {
-              viewBox: '0 0 720 210', lineX1: X1, lineX2: X2, labelX: 42, xLabelY: 200,
+              viewBox: '0 0 1440 420', lineX1: X1, lineX2: X2, labelX: 88, xLabelY: 400,
               yTop: YTOP, yBot: YBOT,
               grid: grid,
               xTicks: tickIdx.map(i => ({ x: Math.round(xOf(i)), label: fmtDate(dates[i]) })),
@@ -1257,9 +1262,11 @@
                 swatch: { width: '8px', height: '8px', borderRadius: '2px', background: r.color, display: 'inline-block', flexShrink: 0 }
               })),
               /* Flip the tooltip to the left half past the plot's midpoint so it never
-                 clips off the right edge — same rule as the Overview chart's ttX. */
-              ttX: (x < 375 ? x + 14 : x - 194).toFixed(1),
-              ttH: 38 + hv[i].rows.length * 19
+                 clips off the right edge — same rule as the Overview chart's ttX.
+                 (Coordinates are 1:1 with rendered pixels — see the viewBox note in
+                 buildHistoryChart.) */
+              ttX: (x < 750 ? x + 18 : x - 218).toFixed(1),
+              ttH: 42 + hv[i].rows.length * 20
             };
           })(),
           domains: allDomains.filter(d => !hiddenOv.includes(d)).map(d => ({ name: d, style: { textAlign: 'center', color: d === vals.ptWs.domain ? '#4338ca' : '#64748b', fontSize: '9.5px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } })),

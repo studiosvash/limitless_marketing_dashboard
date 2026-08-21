@@ -435,25 +435,25 @@
                 <line x1="{{ ptOv.chart.lineX1 }}" x2="{{ ptOv.chart.lineX2 }}" y1="{{ ptOv.chart.yBot }}" y2="{{ ptOv.chart.yBot }}" stroke="#cbd5e1" stroke-width="1.5" vector-effect="non-scaling-stroke"></line>
                 <sc-for list="{{ ptOv.chart.grid }}" as="g" hint-placeholder-count="6">
                   <line x1="{{ ptOv.chart.lineX1 }}" x2="{{ ptOv.chart.lineX2 }}" y1="{{ g.y }}" y2="{{ g.y }}" stroke="#e2e8f0" stroke-width="1" vector-effect="non-scaling-stroke"></line>
-                  <text x="{{ ptOv.chart.labelX }}" y="{{ g.y }}" text-anchor="end" dominant-baseline="middle" font-size="11" fill="#64748b" font-family="Roboto, sans-serif">{{ g.label }}</text>
+                  <text x="{{ ptOv.chart.labelX }}" y="{{ g.y }}" text-anchor="end" dominant-baseline="middle" font-size="11.5" fill="#64748b" font-family="Roboto, sans-serif">{{ g.label }}</text>
                 </sc-for>
                 <sc-for list="{{ ptOv.chart.xTicks }}" as="t" hint-placeholder-count="6">
-                  <text x="{{ t.x }}" y="{{ ptOv.chart.xLabelY }}" text-anchor="middle" font-size="11" fill="#64748b" font-family="Roboto, sans-serif">{{ t.label }}</text>
+                  <text x="{{ t.x }}" y="{{ ptOv.chart.xLabelY }}" text-anchor="middle" font-size="11.5" fill="#64748b" font-family="Roboto, sans-serif">{{ t.label }}</text>
                 </sc-for>
                 <sc-for list="{{ ptOv.chart.series }}" as="s" hint-placeholder-count="4">
-                  <polyline points="{{ s.points }}" fill="none" stroke="{{ s.color }}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"></polyline>
+                  <polyline points="{{ s.points }}" fill="none" stroke="{{ s.color }}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"></polyline>
                   <circle cx="{{ s.dotX }}" cy="{{ s.dotY }}" r="4.5" fill="{{ s.color }}" stroke="white" stroke-width="1.5"></circle>
                 </sc-for>
                 <!-- Invisible per-date mouse zones; entering one selects that capture date. -->
                 <sc-for list="{{ ptOv.histZones }}" as="hz" hint-placeholder-count="6">
-                  <rect x="{{ hz.zx }}" y="20" width="{{ hz.zw }}" height="170" fill="transparent" onMouseEnter="{{ hz.onEnter }}"></rect>
+                  <rect x="{{ hz.zx }}" y="40" width="{{ hz.zw }}" height="340" fill="transparent" onMouseEnter="{{ hz.onEnter }}"></rect>
                 </sc-for>
                 <sc-if value="{{ ptOv.histHover.show }}" hint-placeholder-val="{{ false }}">
                   <line x1="{{ ptOv.histHover.x }}" x2="{{ ptOv.histHover.x }}" y1="{{ ptOv.chart.yTop }}" y2="{{ ptOv.chart.yBot }}" stroke="#94a3b8" stroke-width="1" stroke-dasharray="4" vector-effect="non-scaling-stroke"></line>
                   <sc-for list="{{ ptOv.histHover.dots }}" as="hd" hint-placeholder-count="4">
                     <circle cx="{{ hd.x }}" cy="{{ hd.y }}" r="4.5" fill="{{ hd.color }}" stroke="white" stroke-width="1.5"></circle>
                   </sc-for>
-                  <foreignObject x="{{ ptOv.histHover.ttX }}" y="24" width="180" height="{{ ptOv.histHover.ttH }}">
+                  <foreignObject x="{{ ptOv.histHover.ttX }}" y="48" width="204" height="{{ ptOv.histHover.ttH }}">
                     <div xmlns="http://www.w3.org/1999/xhtml" style="background: #0f172a; color: white; border-radius: 8px; padding: 8px 10px; font-size: 11px; line-height: 1.55; box-shadow: 0 4px 12px rgba(0,0,0,0.18); pointer-events: none;">
                       <div style="font-weight: 600; margin-bottom: 4px; color: #e2e8f0;">{{ ptOv.histHover.label }}</div>
                       <sc-for list="{{ ptOv.histHover.rows }}" as="tr" hint-placeholder-count="4">
