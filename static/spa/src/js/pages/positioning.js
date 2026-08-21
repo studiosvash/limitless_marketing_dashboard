@@ -1048,31 +1048,20 @@
         });
         const weightedRows = compRows.map(r =>
           Object.assign({}, r, { vol: volByKw[(r.kw || '').toLowerCase()] }));
-        /* YOUR domain's visibility is the SERVER's number (`kpis.visibility`) whenever it
-           exists — the same field the projects list prints, pinned equal by tests — so the
-           card, the workspace and the list cannot disagree. Competitors have no server
-           figure; theirs is the same-basis browser index from the latest capture. */
-        const ownVis = (data.kpis && typeof data.kpis.visibility === 'number')
-          ? data.kpis.visibility : null;
-        const scMap = buildVisibilityScores(allDomains, weightedRows).map((d, idx) => {
-          /* THE BIG NUMBER IS VISIBILITY (2026-08-21, founder request — Semrush's
-             "Visibility" tab): each domain's own CTR index against a perfect board. These
-             do NOT sum to 100 and are not meant to — that is the point: the whole field
-             can rise or fall. Share of voice (volume-weighted, 2026-08-13) is NOT gone —
-             it moves to the sub-line, demoted from headline to context, together with
-             coverage and average position so the big number stays auditable. */
-          const vis = (idx === 0 && ownVis != null) ? ownVis : d.visScore;
-          return {
-            k: d.dom, name: d.dom, color: colors[idx % colors.length],
-            val: vis != null ? parseFloat(Number(vis).toFixed(1)) + '%' : '—',
-            sub: d.visScore == null ? ''
-                 : (d.rankedCount
-                    ? ((d.sov != null ? 'share of voice ' + d.sov.toFixed(1) + '%' : 'share of voice —')
-                       + ' · ' + d.rankedCount + '/' + compRows.length + ' keywords · avg #' + d.avgPos)
-                    : 'no positions on ' + compRows.length + ' keywords'),
-            rawVal: vis != null ? Number(vis) : null
-          };
-        });
+        const scMap = buildVisibilityScores(allDomains, weightedRows).map((d, idx) => ({
+          k: d.dom, name: d.dom, color: colors[idx % colors.length],
+          val: d.sov != null ? d.sov.toFixed(1) + '%' : '—',
+          /* Coverage, average position AND the absolute index printed under the share.
+             The share alone cannot distinguish "ranks everywhere, mid-table" from
+             "ranks on three keywords, all at #1", nor a strong field from a weak one —
+             the sub-line is what makes the big number auditable instead of something
+             the user has to trust. */
+          sub: d.visScore == null ? ''
+               : (d.rankedCount
+                  ? 'index ' + d.visScore.toFixed(1) + ' · ' + d.rankedCount + '/' + compRows.length + ' keywords · avg #' + d.avgPos
+                  : 'no positions on ' + compRows.length + ' keywords'),
+          rawVal: d.sov != null ? d.sov : (d.visScore != null ? 0 : null)
+        }));
         const hiddenOv = s.ptOvHidden || [];
 
         /* THE VISIBILITY TREND, from `data.visibility_history` — one point per date the
@@ -1097,9 +1086,8 @@
           const X1 = 50, X2 = 700, YTOP = 30, YBOT = 180;
           const blank = {
             viewBox: '0 0 720 210', lineX1: X1, lineX2: X2, labelX: 42, xLabelY: 200,
-            yTop: YTOP, yBot: YBOT,
-            grid: [{ y: 30, label: '80%' }, { y: 68, label: '60%' }, { y: 105, label: '40%' },
-                   { y: 143, label: '20%' }, { y: 180, label: '0%' }],
+            grid: [{ y: 30, label: '80' }, { y: 68, label: '60' }, { y: 105, label: '40' },
+                   { y: 143, label: '20' }, { y: 180, label: '0' }],
             xTicks: [], series: []
           };
           const dates = (hist && hist.dates) || [];
@@ -1146,20 +1134,14 @@
           }).filter(sr => sr.points);
           if (!series.length) return { chart: blank, hasHistory: false };
 
-          /* '%' on every y label (2026-08-21, Semrush parity): the index IS a percentage
-             of a perfect board, and a bare "2" beside a line gave the axis nothing to
-             anchor to — the founder's screenshot literally had axes drawn on in red pen. */
           const grid = [0, 1, 2, 3, 4].map(k => {
             const v = top - (top / 4) * k;
-            return { y: Math.round(yOf(v)), label: parseFloat(v.toFixed(1)) + '%' };
+            return { y: Math.round(yOf(v)), label: String(parseFloat(v.toFixed(1))) };
           });
           return {
             hasHistory: true,
             chart: {
               viewBox: '0 0 720 210', lineX1: X1, lineX2: X2, labelX: 42, xLabelY: 200,
-              /* Real drawn axes, not just floating gridlines — see the template's two
-                 <line> elements anchored on these. */
-              yTop: YTOP, yBot: YBOT,
               grid: grid,
               xTicks: tickIdx.map(i => ({ x: Math.round(xOf(i)), label: fmtDate(dates[i]) })),
               series: series
@@ -1170,11 +1152,28 @@
           data.visibility_history, hiddenOv,
           dom => colors[Math.max(allDomains.indexOf(dom), 0) % colors.length]
         );
-        /* The separate "Your visibility" figure was REMOVED 2026-08-21 (founder request):
-           the score cards above now lead with visibility per domain, and your own card
-           already carries the server's `kpis.visibility` (see `ownVis` beside scMap), so a
-           second copy of the same number above the cards was pure repetition. */
+        /* YOUR VISIBILITY IS THE SERVER'S NUMBER, NOT A SECOND OPINION.
+           `data.kpis.visibility` is `_get_ranking_distribution`'s CTR-credit score over the
+           requested window — the same field, from the same function, that the projects list
+           renders in its Visibility column. It is shown here as its own labelled figure so the
+           two screens cannot disagree.
+           buildVisibilityScores above stays, but only as SHARE OF VOICE: it is computed from
+           `competitors.rows`, a single latest capture date with integer-rounded positions and
+           no reference to the range, and its whole point is the split BETWEEN domains. Two
+           different questions now carry two different labels.
+           null = nothing measured in this window -> em dash. 0 = measured, ranks nowhere. */
+        const ownVis = (data.kpis && typeof data.kpis.visibility === 'number')
+          ? data.kpis.visibility : null;
         vals.ptOv = {
+          visLabel: ownVis == null ? '—' : parseFloat(ownVis.toFixed(1)) + '%',
+          visStyle: {
+            fontSize: '24px', fontWeight: 700,
+            color: ownVis == null ? '#cbd5e1'
+                   : (ownVis >= 30 ? '#059669' : ownVis >= 10 ? '#0891b2' : '#d97706')
+          },
+          visNote: ownVis == null
+            ? 'No ranking measured in this window yet'
+            : 'CTR-weighted across all ' + (data.kpis.tracked || 0) + ' tracked keywords',
           /* /api/positions returns no snapshot dates, so the Δ caption names the
              comparison instead of printing invented calendar dates ("Jun 20 → Jul 20"
              was hardcoded). Keys kept for when the API starts returning them. */
