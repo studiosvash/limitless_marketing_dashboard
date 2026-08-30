@@ -12,16 +12,23 @@
          exactly the projects that have never paid for one. Unknown is now said out loud. */
       const perCheck = (d.costs && d.costs.model != null) ? d.costs.model : null;
       const costOf = n => perCheck == null ? 'cost unknown' : '~' + money3(perCheck * n);
+      /* Hover title for a paid run button. The price moved here from the labels (2026-08-27):
+         still one hover away — a paid action must never look free — without every button
+         quoting dollars at the user. */
+      const costTitle = n => n === 0 ? 'Everything is up to date'
+        : 'Estimated cost ' + costOf(n) + ' · skips cells that already have an answer';
       /* cfg.models is null on a prompt whose tracked_models was wiped; an unguarded read here
          blanked the ENTIRE SPA render (§10). One accessor, guarded once. */
       const modelsOf = pr => (pr.cfg && pr.cfg.models) || [];
       const unrunOf = pr => pr.unrun || [];
       /* The label must state the plan the server would actually execute — not the price of
          the whole grid, which is what every Run button used to quote while the run itself
-         re-billed every cell. */
+         re-billed every cell. Prices were then dropped from the labels entirely (2026-08-27,
+         user request): the count is the plan, and cost lives in hover titles and the spend
+         cards instead of shouting from every button. */
       const planLabel = (verb, n) => n === 0
         ? 'Everything is up to date'
-        : verb + ' ' + n + ' unrun check' + (n === 1 ? '' : 's') + ' · ' + costOf(n);
+        : verb + ' ' + n + ' unrun check' + (n === 1 ? '' : 's');
       const inputStyle = { padding: '9px 12px', fontSize: '13px', border: '1px solid #cbd5e1', borderRadius: '8px', background: 'white', color: '#0f172a', width: '100%' };
       const redBtn = { display: 'inline-flex', alignItems: 'center', gap: '6px', cursor: 'pointer', padding: '7px 14px', fontSize: '12.5px', fontWeight: 600, color: '#dc2626', border: '1px solid #fecaca', borderRadius: '8px', background: '#fff5f5', whiteSpace: 'nowrap' };
       const priBtn = { display: 'inline-flex', alignItems: 'center', gap: '8px', cursor: 'pointer', padding: '9px 18px', fontSize: '13px', fontWeight: 600, color: 'white', background: '#4f46e5', borderRadius: '8px' };
@@ -152,14 +159,16 @@
         aiv.runNote = (!running && runState.state === 'done' && runState.detail) ? runState.detail : '';
 
         aiv.runAllLabel = running ? 'Running…' : planLabel('Run', allUnrun);
+        aiv.runAllTitle = costTitle(allUnrun);
         aiv.runAllStyle = (running || allUnrun === 0)
           ? Object.assign({}, redBtn, { background: '#fef2f2', color: '#fca5a5', borderColor: '#fee2e2', cursor: 'default' })
           : redBtn;
         aiv.runAll = () => { if (allUnrun && !running) this.aiRun({}); };
         /* The separate, explicitly-labelled paid action: everything else skips what has
            already been answered, and this is the only way to ask for fresh answers. */
-        aiv.rerunLabel = running ? 'Running…'
-          : 'Re-run (fresh answers) · ' + costOf(allCells);
+        aiv.rerunLabel = running ? 'Running…' : 'Re-run (fresh answers)';
+        aiv.rerunTitle = 'Ask every tracked engine again, even where an answer is already stored'
+          + ' · estimated cost ' + costOf(allCells);
         aiv.rerunStyle = running
           ? Object.assign({}, ghostBtn, { color: '#cbd5e1', cursor: 'default' })
           : ghostBtn;
@@ -576,6 +585,17 @@
           }));
           aiv.listsOpen = s.aiListsOpen;
           aiv.listsToggle = () => this.setState(st => ({ aiListsOpen: !st.aiListsOpen }));
+          // A real button with a chevron, not a dashed chip: the chip read as a disabled
+          // filter, and nothing signalled that clicking it opens the manage panel below.
+          aiv.listsBtnLabel = s.aiListsOpen ? 'Manage lists ▴' : 'Manage lists ▾';
+          aiv.listsBtnStyle = {
+            display: 'inline-flex', alignItems: 'center', padding: '6px 14px',
+            fontSize: '12px', fontWeight: 600, borderRadius: '8px', cursor: 'pointer',
+            boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
+            color: s.aiListsOpen ? '#4f46e5' : '#334155',
+            background: s.aiListsOpen ? '#eef2ff' : 'white',
+            border: '1px solid ' + (s.aiListsOpen ? '#c7d2fe' : '#cbd5e1')
+          };
           aiv.manageRows = d.lists.map(l => ({
             name: l.name, count: counts[l.id] + ' prompt' + (counts[l.id] === 1 ? '' : 's'),
             rename: e => { const nm = e.target.value.trim(); if (nm && nm !== l.name) this.aiListOp('rename', l.id, nm); },
@@ -714,12 +734,12 @@
           aiv.promptRemoveSel = () => this.aiRemovePrompts(visPromptSel.map(pr => pr.id));
           const selUnrun = visPromptSel.reduce((n, pr) => n + unrunOf(pr).length, 0);
           aiv.promptRunSelLabel = running ? 'Running…' : planLabel('Run', selUnrun);
+          aiv.promptRunSelTitle = costTitle(selUnrun);
           aiv.promptRunSelStyle = (running || selUnrun === 0)
             ? Object.assign({}, redBtn, { background: '#fef2f2', color: '#fca5a5', borderColor: '#fee2e2', cursor: 'default' })
             : redBtn;
           aiv.promptRunSel = () => { if (!running && selUnrun) this.aiRun({ promptIds: visPromptSel.map(pr => pr.id) }); };
-          aiv.promptRerunSelLabel = running ? 'Running…'
-            : 'Re-run · ' + costOf(visPromptSel.reduce((n, pr) => n + modelsOf(pr).length, 0));
+          aiv.promptRerunSelLabel = running ? 'Running…' : 'Re-run';
           aiv.promptRerunSel = () => { if (!running && visPromptSel.length) this.aiRun({ promptIds: visPromptSel.map(pr => pr.id), force: true }); };
 
           /* Row click opens the prompt in the Answer Inspector — showing the answer that was
@@ -777,7 +797,11 @@
               openIns: () => openInspector(pr),
               runLabel: running ? 'Running…'
                 : (unrunOf(pr).length === 0 ? 'Up to date'
-                  : 'Run ' + unrunOf(pr).length + ' · ' + costOf(unrunOf(pr).length)),
+                  : 'Run ' + unrunOf(pr).length),
+              runTitle: unrunOf(pr).length
+                ? 'Run the ' + unrunOf(pr).length + ' unrun check' + (unrunOf(pr).length === 1 ? '' : 's')
+                  + ' · ' + costOf(unrunOf(pr).length)
+                : 'Every tracked engine already has an answer',
               runStyle: (running || unrunOf(pr).length === 0)
                 ? Object.assign({}, redBtn, { background: '#fef2f2', color: '#fca5a5', borderColor: '#fee2e2', cursor: 'default', padding: '6px 10px' })
                 : Object.assign({}, redBtn, { padding: '6px 10px' }),
@@ -793,6 +817,7 @@
             const listUnrun = visPrompts.reduce((n, pr) => n + unrunOf(pr).length, 0);
             aiv.runListShown = visPrompts.length > 0;
             aiv.runListLabel = running ? 'Running…' : planLabel('Run "' + flt.name + '" —', listUnrun);
+            aiv.runListTitle = costTitle(listUnrun);
             aiv.runListStyle = (running || listUnrun === 0)
               ? Object.assign({}, redBtn, { background: '#fef2f2', color: '#fca5a5', borderColor: '#fee2e2', cursor: 'default' })
               : redBtn;
@@ -935,7 +960,8 @@
           const inspGo = () => this.aiInspect(this.state.aiInspQ, this.state.aiInspPromptId || null);
           aiv.inspQKey = e => { if (e.key === 'Enter') inspGo(); };
           aiv.inspRun = inspGo;
-          aiv.inspRunLabel = s.aiInspecting ? 'Inspecting…' : 'Inspect now · ' + money3(d.costs.inspect);
+          aiv.inspRunLabel = s.aiInspecting ? 'Inspecting…' : 'Inspect now';
+          aiv.inspRunTitle = 'Runs one live check · estimated cost ' + money3(d.costs.inspect);
           aiv.inspRunStyle = Object.assign({}, redBtn, { padding: '9px 16px', fontSize: '13px' });
           /* false = a prompt row was opened that has never been run: show the honest "not run
              yet" panel instead of silently falling back to some other question's answer. */
@@ -970,7 +996,16 @@
                show only the model id, so it was impossible to tell which of four columns you
                were reading. `platformName` has always been stored on the entry. */
             aiv.inspMeta = (entry.platformName || entry.platform || 'Unknown engine')
-              + ' · ' + sc2.model + ' · ' + sc2.location + ' · captured ' + entry.ts;
+              + ' · ' + sc2.model + ' · ' + sc2.location + ' · captured ' + entry.ts
+              /* DataForSEO reports whether the provider REALLY searched — a model handed the
+                 tool can still answer from memory, and that difference explains a citation-
+                 less generic answer better than any verdict chip can. */
+              + (entry.webSearchUsed === true ? ' · searched the web'
+                : entry.webSearchUsed === false ? ' · answered from memory (no web search)' : '');
+            /* The answer's own #1 recommendation, whoever it names — the first item of its
+               ranked list. The verdict says whether WE appear; this says who actually won. */
+            aiv.inspTopPick = entry.topPick || '';
+            aiv.inspHasTopPick = !!entry.topPick;
             aiv.inspVerdict = entry.verdict === 'cited' ? 'You are cited at position #' + entry.position : entry.verdict === 'mentioned' ? 'You are mentioned but not cited' : 'You are not mentioned in this answer';
             aiv.inspVerdictStyle = Object.assign({}, vc.style, { fontSize: '12px', padding: '4px 10px', borderRadius: '999px' });
             /* Tracked competitors the answer really named — analyze_answer has always detected

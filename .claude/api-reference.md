@@ -1342,6 +1342,43 @@ entry are the real provider-verified `{title, url}` source annotations DataForSE
 previously always `[]`. `not_connected` now means "DataForSEO credentials are unset", not
 "this provider has no connector".)*
 
+*(Changed 2026-08-27: `webSearch` now defaults **on** — in `DEFAULT_PROMPT_CFG`, in
+`check_prompt`'s own signature, and in `inspect` (which passes the inspected prompt's stored
+config, or the default for an ad-hoc question — previously the Inspector always ran searchless).
+Without web search only Perplexity's search-native `sonar` ever returned citations, so the other
+three columns could not show "Cited" at all. Web-search checks bill higher per call; the
+per-prompt toggle still opts out. `_citation_hit` additionally matches a bare-brand-name needle
+against a citation host's registrable label by exact equality, so competitors tracked by name
+rather than domain are seen in citations.)*
+
+*(Also 2026-08-27 — web-search request fields are now gated per provider
+(`_WEB_SEARCH_FIELDS`), verified against DataForSEO's per-provider docs and one live failure:
+**chatgpt/claude** accept `web_search` + `force_web_search` + `web_search_country_iso_code` +
+`web_search_city` (all four now sent, force included so the model cannot skip the search);
+**gemini** accepts `web_search` only — a geo field comes back `40501 Invalid Field` and kills
+the check, which is exactly what happened in production; **perplexity** (sonar always searches)
+accepts only `web_search_country_iso_code`. The prompt config's City field is therefore REAL
+for ChatGPT/Claude and the modal says so. `check_prompt` results and history entries now carry
+`location` = the geo targeting actually sent ("US · Austin") or the honest "No location
+targeting". Per-prompt `cadence` remains stored-but-unscheduled: nothing runs tracked prompts
+automatically (`next_run: None` by design — the site Automation "ai" module refreshes only
+AI keywords + LLM Mentions). Cells and history entries additionally carry `topPick` — the
+answer's own #1 ranked-list item, whoever it names, extracted by `analyze_answer` and
+backfilled by the free rescan — and `webSearchUsed`, DataForSEO's report of whether the
+provider REALLY searched (None when the envelope is silent); the Answer Inspector renders
+both. ChatGPT's default model is `gpt-5.4-mini` (was `gpt-4o-mini`, mid-2024 and two
+generations behind chatgpt.com; noticeably pricier per check ~$0.03 with web search).
+`check_prompt` self-heals `40501 Invalid Field` rejections by dropping the named optional
+field and retrying — gpt-5.x rejects `max_output_tokens`, `temperature` AND
+`force_web_search`, all fine on gpt-4o; rejected tasks bill $0, and learned rejections are
+cached per (platform, model) for the process. An answer whose text ends in a colon-intro
+("…options to consider:") is treated as provider truncation → `state: "error"`, never scored
+"absent" — observed live on 2 of 5 gpt-4o-mini checks. New prompts seed
+`DEFAULT_TRACKED_MODELS` = chatgpt/gemini/perplexity — Claude is excluded from DEFAULT
+tracking by founder cost decision (each engine's web-search fee is per-provider;
+~$0.072/prompt for the trio vs ~$0.094 for four) but stays connectable and can be re-added
+per prompt in Settings.)*
+
 ---
 
 ## 6. Team, invitations & account

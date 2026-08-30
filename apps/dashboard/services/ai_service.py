@@ -94,7 +94,12 @@ MAX_HISTORY = 50
 # `prompts-config` accepted the fields and silently discarded them: the modal showed a Save
 # button for values that were never actually persisted.
 PROMPT_CFG_KEY = "aiPromptCfg"    # {"<prompt_id>": {"cadence": "weekly", "country": "", ...}}
-DEFAULT_PROMPT_CFG = {"cadence": "weekly", "country": "", "city": "", "webSearch": False}
+# webSearch defaults ON (changed 2026-08-27): citations only exist on web-search-enabled
+# checks, so with it off ChatGPT/Claude/Gemini could never return a source and the grid read
+# "Not mentioned" everywhere while Perplexity (search-native) was the lone column with data.
+# A web-search check costs more per call than a bare completion — that trade was chosen
+# deliberately: a visibility check without search does not observe what AI actually answers.
+DEFAULT_PROMPT_CFG = {"cadence": "weekly", "country": "", "city": "", "webSearch": True}
 
 # ── Where a RUN IN FLIGHT is tracked ─────────────────────────────────────────────────────────
 # One task per site, in the same JSON blob. It exists because a run is not a request: a full
@@ -336,6 +341,10 @@ def _cell(result: dict, prompt_hash: str | None = None, previous: dict | None = 
         "position": result.get("position"),
         "snippet": result.get("snippet") or "",
         "competitors": result.get("competitors") or [],
+        # The answer's own #1 recommendation (first ranked-list item), whoever it names, and
+        # whether the provider REALLY searched the web — both read straight off the response.
+        "topPick": result.get("topPick"),
+        "webSearchUsed": result.get("webSearchUsed"),
         "cost": result.get("cost"),
         "error": result.get("error"),
         "checkedAt": result.get("checkedAt"),
@@ -360,10 +369,14 @@ def _history_entry(result: dict, question: str, prompt_id) -> dict:
         "snippet": result.get("snippet") or "",
         "competitors": result.get("competitors") or [],
         "cost": result.get("cost"),
+        "topPick": result.get("topPick"),
+        "webSearchUsed": result.get("webSearchUsed"),
         "scrape": {
             "model": result.get("model"),
-            # Real: no geo-targeting is applied to the request, so there is no location to name.
-            "location": "No location targeting",
+            # What was REALLY sent as web-search geo targeting ("US · Austin"), reported by
+            # check_prompt itself. Falls back to the honest negative — a country configured
+            # on a provider that accepts no geo fields (gemini) was NOT applied.
+            "location": result.get("location") or "No location targeting",
             "paragraphs": result.get("paragraphs") or [],
             # Provider-verified sources from a web-search-enabled DataForSEO check; [] when the
             # prompt ran without web search. Never URLs scraped out of the answer prose.
@@ -754,6 +767,7 @@ def execute_ai_run(site_id: str, task_id: str) -> dict:
         prompt_cfg = get_prompt_cfg(site_id, prompt.id)
         web_search = bool(prompt_cfg.get("webSearch"))
         country = prompt_cfg.get("country")
+        city = prompt_cfg.get("city")
 
         # The cell as it stands right now, so a repeated failure keeps counting up and a
         # recovery clears it. Re-read per prompt rather than cached: the blob may have moved.
@@ -772,7 +786,7 @@ def execute_ai_run(site_id: str, task_id: str) -> dict:
                 completed += 1
                 continue
             result = check_prompt(prompt.text, brand, aliases, competitors, platform=platform,
-                                  web_search=web_search, country=country)
+                                  web_search=web_search, country=country, city=city)
             cells[platform] = _cell(result, current_hash, prev.get(platform))
             completed += 1
             if not result.get("ok"):
@@ -975,6 +989,9 @@ def rescan_stored_answers(site_id: str) -> dict:
             "verdict": analysis["verdict"], "mentioned": analysis["mentioned"],
             "cited": analysis["cited"], "position": analysis["position"],
             "snippet": analysis["snippet"], "competitors": analysis["competitors"],
+            # Backfills entries stored before topPick existed — pure extraction from the
+            # already-stored answer text, so a free rescan upgrades old history too.
+            "topPick": analysis["topPick"],
             "scrape": {**(entry.get("scrape") or {}), "paragraphs": analysis["paragraphs"]},
         }
         after = (entry["verdict"], bool(entry["mentioned"]), bool(entry["cited"]),
@@ -1006,6 +1023,7 @@ def rescan_stored_answers(site_id: str) -> dict:
             "verdict": entry["verdict"], "mentioned": entry["mentioned"],
             "cited": entry["cited"], "position": entry["position"],
             "snippet": entry["snippet"], "competitors": entry["competitors"],
+            "topPick": entry.get("topPick"),
         }
 
     set_state(site_id, HISTORY_KEY, new_history)
@@ -1034,7 +1052,14 @@ def inspect_question(site_id: str, question: str, prompt_id=None) -> dict:
         return {"ok": False, "reason": not_connected_reason("chatgpt"), "notConnected": True}
 
     platform = available[0]
-    result = check_prompt(question, brand, aliases, competitors, platform=platform)
+    # Same knobs as a tracked run: an inspection of a tracked prompt honours that prompt's own
+    # config; an ad-hoc question gets the defaults (web search on). Without this the Inspector
+    # ran searchless, so its Citations panel was empty on every engine but Perplexity and the
+    # inspected answer was not the one the Prompts grid would have scored.
+    cfg = get_prompt_cfg(site_id, prompt_id) if prompt_id is not None else dict(DEFAULT_PROMPT_CFG)
+    result = check_prompt(question, brand, aliases, competitors, platform=platform,
+                          web_search=bool(cfg.get("webSearch")), country=cfg.get("country"),
+                          city=cfg.get("city"))
     if not result.get("ok"):
         return {"ok": False, "reason": result.get("error") or f"{platform_name(platform)} check failed."}
 

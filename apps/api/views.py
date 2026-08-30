@@ -43,7 +43,7 @@ from apps.dashboard.services.ads_service import build_ads_response
 from apps.dashboard.services.ai_service import (
     build_ai_response, inspect_question, start_ai_run,
 )
-from pipeline.services.ai_visibility_service import connectable_platforms
+from pipeline.services.ai_visibility_service import DEFAULT_TRACKED_MODELS
 from apps.dashboard.services.settings_service import build_settings_response, apply_settings_update
 from apps.dashboard.models import AITarget, AIPromptList, AIPrompt
 from apps.dashboard.services.shared_queries import (
@@ -790,13 +790,13 @@ class ProjectAIActionView(APIView):
         )
         for text in data.get("prompts", []):
             if text and text.strip():
-                # Seed the engines this build actually has a connector for, so "Run now" does
-                # something on a freshly set-up project. `connectable_platforms()` (not
-                # `connected_platforms()`) deliberately ignores whether the key is set right
-                # now: which engines a prompt tracks must not depend on which env vars happened
-                # to be present the moment setup ran.
+                # Seed the DEFAULT engine set, so "Run now" does something on a freshly
+                # set-up project. A constant, not `connected_platforms()`: which engines a
+                # prompt tracks must not depend on which env vars happened to be present the
+                # moment setup ran. DEFAULT_TRACKED_MODELS deliberately excludes Claude
+                # (cost decision — see its definition); the settings modal can add it back.
                 AIPrompt.objects.create(site_url=site_id, text=text.strip(),
-                                        tracked_models=connectable_platforms())
+                                        tracked_models=list(DEFAULT_TRACKED_MODELS))
         return Response({})
 
     def _handle_targets(self, request, site_id):
@@ -818,13 +818,13 @@ class ProjectAIActionView(APIView):
         # prompt showed "0 models", every model cell read "off", and run_prompt_checks skipped
         # it entirely (it treats an empty tracked_models list as nothing to run). The AI
         # Keywords -> "add as prompt" flow was therefore creating prompts that could never be
-        # run. Seed the same connectable_platforms() _handle_setup already uses, so a prompt
+        # run. Seed the same DEFAULT_TRACKED_MODELS _handle_setup already uses, so a prompt
         # is runnable the moment it's created regardless of which entry point added it.
         data = request.data
         list_id = data.get("listId")
         texts = [t.strip() for t in data.get("texts", []) if t and t.strip()]
         created = [
-            AIPrompt(site_url=site_id, list_id=list_id, text=t, tracked_models=connectable_platforms())
+            AIPrompt(site_url=site_id, list_id=list_id, text=t, tracked_models=list(DEFAULT_TRACKED_MODELS))
             for t in texts
         ]
         AIPrompt.objects.bulk_create(created)

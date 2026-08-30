@@ -1147,6 +1147,31 @@ verified source list DataForSEO returns — previously `webSearch` was stored an
 `citations` was always `[]`. This is unrelated to DataForSEO's separate **LLM Mentions** product
 (see below) — see `api-reference.md`'s `/ai` section for the full distinction.
 
+**As of 2026-08-27, web search defaults ON** (`DEFAULT_PROMPT_CFG` and `check_prompt`'s own
+default; the Answer Inspector passes the inspected prompt's config, or the default for an ad-hoc
+question). Live data showed why: with the flag off — which it was for 207 of 213 prompts on the
+production premierstaff project — ChatGPT/Claude/Gemini can never return a citation (`annotations`
+exist only on web-search-enabled responses), so every one of their 341 stored answers scored
+"absent"/0 citations while search-native Perplexity (`sonar`, which searches regardless of the
+flag) carried citations on 222 of 222. A web-search check bills higher per call than a bare
+completion; the per-prompt toggle still opts out. Citation matching also now recognises a
+competitor tracked by bare brand name ("eventstaff") when a citation host's registrable label
+equals it exactly (`eventstaff.com`, `blog.eventstaff.com`) — previously only hostname-shaped
+entries were compared against citation URLs, so a brand-name competitor cited at source #2 was
+reported as absent. Multi-word competitor names ("julia valler") still need their domain added
+to be citation-visible.
+
+**Prompt-settings truth table (audited 2026-08-27).** Prompt text, the model toggles, the list
+picker and the web-search toggle are fully real end-to-end. Country and City apply per provider
+capability (`_WEB_SEARCH_FIELDS` in `ai_visibility_service`): ChatGPT and Claude receive
+country + city (plus `force_web_search`), Perplexity receives country only, and Gemini receives
+neither — a geo field on Gemini is a hard `40501 Invalid Field` error, which is what broke the
+one Gemini check on a country-configured prompt. **Cadence is stored but not yet consumed by
+any scheduler** — the modal's "manual runs only" hint is literal: the weekly "ai" Automation
+module refreshes AI keywords and LLM Mentions, never the tracked-prompt grid, and the AI page
+reports `next_run: null` accordingly. Wiring cadence to a real schedule is an open product
+decision because each automatic run bills real checks.
+
 As of the 2026-07-31 LLM Mentions feature, **share-of-voice, the brand-mentions/AI-impressions/
 cited-pages KPIs, your most-cited pages, and the domains-dominating-AI-answers list are real
 too** — read back weekly from DataForSEO's LLM Mentions API by the `dataforseo_llm_mentions`

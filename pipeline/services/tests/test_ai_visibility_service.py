@@ -40,7 +40,8 @@ STUB_COST = 0.0055
 
 
 def _dfs_response(text, input_tokens=120, output_tokens=80, cost=STUB_COST,
-                  annotations=None, model_name="gpt-4o-mini", status_code=20000):
+                  annotations=None, model_name="gpt-4o-mini", status_code=20000,
+                  web_search_used=None, status_message=None):
     """A stubbed DataForSEO llm_responses/live envelope. The real API is NEVER called from a
     test: a check is a real charge."""
     section = {"type": "text", "text": text}
@@ -52,12 +53,13 @@ def _dfs_response(text, input_tokens=120, output_tokens=80, cost=STUB_COST,
         "cost": cost,
         "tasks": [{
             "status_code": status_code,
-            "status_message": "Ok." if status_code == 20000 else "Task error.",
+            "status_message": status_message or ("Ok." if status_code == 20000 else "Task error."),
             "cost": cost,
             "result": [{
                 "model_name": model_name,
                 "input_tokens": input_tokens,
                 "output_tokens": output_tokens,
+                **({"web_search": web_search_used} if web_search_used is not None else {}),
                 "items": [
                     # A reasoning item must never leak into the answer text.
                     {"type": "reasoning", "sections": [{"type": "summary_text",
@@ -157,6 +159,71 @@ class AnalyzeAnswerTests(SimpleTestCase):
         paras = svc.analyze_answer(ANSWER_CITED, "FuseHealth")["paragraphs"]
         self.assertTrue(any(p["hit"] for p in paras))
         self.assertTrue(any(not p["hit"] for p in paras))
+
+    def test_top_pick_is_the_answers_first_list_item_whoever_it_names(self):
+        # ANSWER_COMPETITOR_ONLY ranks Acme Wellness first and never names us — the top pick
+        # is still extracted, because "who did the model actually recommend" is a fact of the
+        # answer independent of whether we appear in it.
+        result = svc.analyze_answer(ANSWER_COMPETITOR_ONLY, "FuseHealth")
+        self.assertIn("Acme Wellness", result["topPick"])
+
+    def test_an_answer_with_no_list_has_no_top_pick(self):
+        self.assertIsNone(svc.analyze_answer(ANSWER_MENTION_ONLY, "FuseHealth")["topPick"])
+
+
+class CitationMatchingTests(SimpleTestCase):
+    """How tracked entities are found in provider-verified citations.
+
+    The 2026-08-27 addition under test: a competitor tracked by BARE BRAND NAME
+    ("eventstaff") now matches a citation whose host's registrable label equals it exactly
+    (eventstaff.com, blog.eventstaff.com, eventstaff.co.uk). Live data showed the gap:
+    eventstaff.com stood at source #2 of a stored Perplexity answer while the tracked
+    competitor "eventstaff" reported nothing, because only hostname-shaped needles were ever
+    compared against citation URLs.
+    """
+
+    CITS = [
+        {"title": "Runway Waiters", "url": "https://www.runwaywaiters.com/hire"},
+        {"title": "Booking guide — Eventstaff", "url": "https://eventstaff.com/blog/guide"},
+    ]
+
+    def test_bare_name_competitor_matches_the_hosts_registrable_label(self):
+        result = svc.analyze_answer("Rates vary by city.", "Premier Staff",
+                                    competitors=["eventstaff"], citations=self.CITS)
+        self.assertEqual(len(result["competitors"]), 1)
+        hit = result["competitors"][0]
+        self.assertEqual(hit["name"], "eventstaff")
+        self.assertTrue(hit["cited"])
+        self.assertEqual(hit["position"], 2)  # the [n] the user sees in the source list
+
+    def test_bare_name_matches_subdomain_and_cctld_hosts(self):
+        for url in ("https://blog.eventstaff.com/post", "https://eventstaff.co.uk/rates"):
+            result = svc.analyze_answer("Rates vary.", "Premier Staff",
+                                        competitors=["eventstaff"],
+                                        citations=[{"title": "t", "url": url}])
+            self.assertTrue(result["competitors"], url)
+
+    def test_bare_name_is_equality_never_a_substring(self):
+        # "acme" must not match acme-lookalike.io — the design rule the substring test broke.
+        result = svc.analyze_answer("Rates vary.", "Acme",
+                                    citations=[{"title": "t",
+                                                "url": "https://acme-lookalike.io/x"}])
+        self.assertEqual(result["verdict"], "absent")
+
+    def test_names_with_spaces_or_under_four_chars_never_match_a_label(self):
+        result = svc.analyze_answer("Rates vary.", "Premier Staff",
+                                    competitors=["julia valler", "ats"],
+                                    citations=[{"title": "t", "url": "https://ats.com/x"}])
+        self.assertEqual(result["competitors"], [])
+
+    def test_own_domain_citation_still_upgrades_the_verdict_to_cited(self):
+        # The pre-existing hostname-needle path, untouched: our domain rides in as an alias.
+        result = svc.analyze_answer("Nothing names us in prose.", "Premier Staff",
+                                    aliases=["premierstaff.com"],
+                                    citations=[{"title": "Average cost",
+                                                "url": "https://premierstaff.com/blog/cost"}])
+        self.assertEqual(result["verdict"], "cited")
+        self.assertEqual(result["position"], 1)
 
 
 class ExtractAnswerTests(SimpleTestCase):
@@ -276,9 +343,13 @@ class CheckPromptTests(SimpleTestCase):
         )
         self.assertEqual(post.call_args.kwargs["auth"], ("login", "secret"))
         task = post.call_args.kwargs["json"][0]
-        self.assertEqual(task["model_name"], "gpt-4o-mini")
+        # Read from PLATFORMS rather than pinned: the configured default is policy, and this
+        # test is about the request shape, not about which tier is current this quarter.
+        self.assertEqual(task["model_name"], svc.PLATFORMS["chatgpt"]["model"])
         self.assertEqual(task["user_prompt"], "best iv therapy in austin")
-        self.assertNotIn("web_search", task)  # off unless the prompt's config turns it on
+        # Web search is the DEFAULT (2026-08-27): citations only exist on a web-search-enabled
+        # check, and the no-arg call is what the Answer Inspector and any future caller gets.
+        self.assertIs(task["web_search"], True)
         self.assertEqual(post.call_args.kwargs["timeout"], svc.REQUEST_TIMEOUT)
 
     @mock.patch.dict(os.environ, DFS_ENV, clear=False)
@@ -313,6 +384,126 @@ class CheckPromptTests(SimpleTestCase):
         self.assertEqual(result["citations"], [
             {"title": "Best IV therapy — Healthline", "url": "https://healthline.example/iv"},
         ])
+
+    @mock.patch.dict(os.environ, DFS_ENV, clear=False)
+    @mock.patch.object(svc.requests, "post")
+    def test_a_rejected_optional_field_is_dropped_and_the_call_retried(self, post, _models):
+        # Live failure this reproduces: gpt-5.x rejects `max_output_tokens` with 40501.
+        # The rejected task bills 0, so dropping the named field and retrying turns a dead
+        # check into a real answer for the same money.
+        # Learned rejections are process-global by design; keep them out of other tests.
+        self.addCleanup(svc._REJECTED_FIELDS.clear)
+        # Both live wordings of the rejection, in the order gpt-5.4-mini produced them.
+        post.side_effect = [
+            _dfs_response("", status_code=40501,
+                          status_message="Invalid Field: 'max_output_tokens'."),
+            _dfs_response("", status_code=40501,
+                          status_message="Invalid Field: 'this model does not support "
+                                         "'temperature''."),
+            _dfs_response(ANSWER_CITED),
+        ]
+        result = svc.check_prompt("best iv therapy in austin", "FuseHealth")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["verdict"], "cited")
+        retried = post.call_args.kwargs["json"][0]
+        self.assertNotIn("max_output_tokens", retried)
+        self.assertNotIn("temperature", retried)
+        self.assertEqual(post.call_count, 3)
+
+    @mock.patch.dict(os.environ, DFS_ENV, clear=False)
+    @mock.patch.object(svc.requests, "post")
+    def test_an_unknown_task_failure_still_errors_without_retrying(self, post, _models):
+        post.return_value = _dfs_response("", status_code=40402,
+                                          status_message="Some other failure.")
+        result = svc.check_prompt("best iv therapy in austin", "FuseHealth")
+        self.assertEqual(result["state"], "error")
+        self.assertEqual(post.call_count, 1)
+
+    @mock.patch.dict(os.environ, DFS_ENV, clear=False)
+    @mock.patch.object(svc.requests, "post")
+    def test_truncated_answer_is_an_error_not_an_absent_verdict(self, post, _models):
+        # Live failure this reproduces: the stream died right after "…options to consider:",
+        # so the list that would have named the brands never arrived. "Absent" from that stump
+        # would be fabricated; an error cell gets retried by the next run instead.
+        post.return_value = _dfs_response(
+            "Here are several reputable options to consider:\n\n ")
+        result = svc.check_prompt("best staffing agency in nyc", "FuseHealth")
+        self.assertEqual(result["state"], "error")
+        self.assertIsNone(result["verdict"])
+        self.assertIn("truncated", result["error"])
+
+    @mock.patch.dict(os.environ, DFS_ENV, clear=False)
+    @mock.patch.object(svc.requests, "post")
+    def test_response_web_search_flag_and_top_pick_are_reported(self, post, _models):
+        # DataForSEO says whether the provider REALLY searched; None when the envelope is
+        # silent. The top pick rides along from analyze_answer on every checked result.
+        post.return_value = _dfs_response(ANSWER_CITED, web_search_used=True)
+        result = svc.check_prompt("best iv therapy in austin", "FuseHealth")
+        self.assertIs(result["webSearchUsed"], True)
+        self.assertIn("FuseHealth", result["topPick"])
+
+        post.return_value = _dfs_response(ANSWER_CITED)
+        self.assertIsNone(
+            svc.check_prompt("best iv therapy in austin", "FuseHealth")["webSearchUsed"])
+
+    @mock.patch.dict(os.environ, DFS_ENV, clear=False)
+    @mock.patch.object(svc.requests, "post")
+    def test_chatgpt_and_claude_get_the_full_web_search_field_set(self, post, _models):
+        # Both providers document web_search, force_web_search, country AND city. force_web_
+        # search matters: a model handed the search tool may still answer from memory, and the
+        # check must measure the grounded answer.
+        for platform in ("chatgpt", "claude"):
+            post.return_value = _dfs_response(ANSWER_CITED)
+            result = svc.check_prompt("best iv therapy", "FuseHealth", platform=platform,
+                                      web_search=True, country="US", city="Austin")
+            task = post.call_args.kwargs["json"][0]
+            self.assertIs(task["web_search"], True, platform)
+            self.assertIs(task["force_web_search"], True, platform)
+            self.assertEqual(task["web_search_country_iso_code"], "US", platform)
+            self.assertEqual(task["web_search_city"], "Austin", platform)
+            self.assertEqual(result["location"], "US · Austin", platform)
+
+    @mock.patch.dict(os.environ, DFS_ENV, clear=False)
+    @mock.patch.object(svc.requests, "post")
+    def test_gemini_gets_web_search_only_and_never_a_geo_field(self, post, _models):
+        # The exact production failure this guards: gemini rejects geo fields with
+        # `40501 Invalid Field: 'web_search_country_iso_code'`, so sending the configured
+        # country errored the whole check instead of being ignored.
+        post.return_value = _dfs_response(ANSWER_CITED, model_name="gemini-2.5-flash-lite")
+        result = svc.check_prompt("best iv therapy", "FuseHealth", platform="gemini",
+                                  web_search=True, country="US", city="Austin")
+        task = post.call_args.kwargs["json"][0]
+        self.assertIs(task["web_search"], True)
+        self.assertNotIn("force_web_search", task)
+        self.assertNotIn("web_search_country_iso_code", task)
+        self.assertNotIn("web_search_city", task)
+        # The location field reports what was SENT, never what was configured.
+        self.assertIsNone(result["location"])
+
+    @mock.patch.dict(os.environ, DFS_ENV, clear=False)
+    @mock.patch.object(svc.requests, "post")
+    def test_perplexity_gets_only_the_country_code(self, post, _models):
+        # Sonar models always search; the endpoint documents NO web_search/force/city fields.
+        post.return_value = _dfs_response(ANSWER_CITED, model_name="sonar")
+        result = svc.check_prompt("best iv therapy", "FuseHealth", platform="perplexity",
+                                  web_search=True, country="US", city="Austin")
+        task = post.call_args.kwargs["json"][0]
+        self.assertNotIn("web_search", task)
+        self.assertNotIn("force_web_search", task)
+        self.assertNotIn("web_search_city", task)
+        self.assertEqual(task["web_search_country_iso_code"], "US")
+        self.assertEqual(result["location"], "US")
+
+    @mock.patch.dict(os.environ, DFS_ENV, clear=False)
+    @mock.patch.object(svc.requests, "post")
+    def test_web_search_false_is_still_honoured_and_omitted_from_the_task(self, post, _models):
+        # The opt-out must keep working: a caller that explicitly wants the cheaper,
+        # source-less completion sends no web_search key at all (DataForSEO treats absence
+        # as off; sending false would be redundant).
+        post.return_value = _dfs_response(ANSWER_CITED)
+        result = svc.check_prompt("best iv therapy in austin", "FuseHealth", web_search=False)
+        self.assertTrue(result["ok"])
+        self.assertNotIn("web_search", post.call_args.kwargs["json"][0])
 
     @mock.patch.dict(os.environ, DFS_ENV, clear=False)
     @mock.patch.object(svc.requests, "post")

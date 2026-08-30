@@ -77,11 +77,41 @@ TEMPERATURE = 0.0
 # reported success. Providers rotate these names continuously; the code must not assume a
 # literal it read once is still valid.
 PLATFORMS = {
-    "chatgpt": {"name": "ChatGPT", "llm_type": "chat_gpt", "model": "gpt-4o-mini"},
+    # gpt-5.4-mini, not gpt-4o-mini (changed 2026-08-27): the check should approximate what
+    # chatgpt.com answers TODAY, and gpt-4o-mini is a mid-2024 model two generations behind
+    # it — benchmarked against manual chatgpt.com searches it named different agencies and
+    # missed brands the live product recommends. Still the mini tier: representative, not
+    # frontier-priced.
+    "chatgpt": {"name": "ChatGPT", "llm_type": "chat_gpt", "model": "gpt-5.4-mini"},
     "claude": {"name": "Claude", "llm_type": "claude", "model": "claude-haiku-4-5"},
     "gemini": {"name": "Gemini", "llm_type": "gemini", "model": "gemini-2.5-flash-lite"},
     "perplexity": {"name": "Perplexity", "llm_type": "perplexity", "model": "sonar"},
 }
+
+# Which web-search request fields each provider's llm_responses endpoint ACCEPTS — verified
+# against DataForSEO's per-provider docs on 2026-08-27, and against a live failure: gemini
+# rejects any geo field with `40501 Invalid Field: 'web_search_country_iso_code'`, which
+# errored the whole check. Sending only what a provider documents is therefore correctness,
+# not tidiness. Notes per provider:
+#   chatgpt/claude — full set; `force_web_search` matters because a model given the search
+#     TOOL may still answer from memory, and a visibility check wants the grounded answer.
+#   gemini — `web_search` only; no geo fields, no force flag.
+#   perplexity — sonar models always search; the endpoint accepts NO web_search/force/city
+#     fields at all, only the country code.
+_WEB_SEARCH_FIELDS = {
+    "chatgpt": {"web_search", "force_web_search", "country", "city"},
+    "claude": {"web_search", "force_web_search", "country", "city"},
+    "gemini": {"web_search"},
+    "perplexity": {"country"},
+}
+
+# The engines a NEW prompt tracks by default. A deliberate subset of PLATFORMS (founder
+# decision, 2026-08-27): Claude is dropped from default tracking to cut per-prompt cost —
+# with web search on, each engine's check carries that provider's own search-tool fee, and
+# ChatGPT + Gemini + Perplexity cover the high-traffic AI answer surfaces at ~$0.072/prompt
+# vs ~$0.094 for all four. Claude stays fully CONNECTABLE (connectable_platforms) — any
+# prompt can opt back in from its settings; this only changes what new prompts start with.
+DEFAULT_TRACKED_MODELS = ["chatgpt", "gemini", "perplexity"]
 
 # Substrings marking a cheap tier, best first. Used only to pick a replacement when the
 # preferred model is gone — a visibility check wants the provider's ordinary answer, and the
@@ -91,6 +121,13 @@ _CHEAP_TIER_HINTS = ("haiku", "flash-lite", "nano", "mini", "flash", "sonar")
 # llm_type -> the provider's live model names, fetched once per process. The models endpoint
 # is free ("your account will not be charged"), so this costs nothing but one request.
 _MODEL_CACHE: dict[str, list[str]] = {}
+
+# (platform, model) -> optional task fields that model has rejected with 40501, learned at
+# runtime. gpt-5.4-mini rejects max_output_tokens, temperature AND force_web_search — three
+# discovery round-trips per check; remembering them per process keeps a 200-prompt run from
+# re-learning the same rejections 200 times. Rejected calls bill 0, so this saves latency,
+# not money.
+_REJECTED_FIELDS: dict[tuple[str, str], set] = {}
 
 # Every engine above rides the same DataForSEO credential pair.
 DATAFORSEO_ENV_VARS = ("DATAFORSEO_LOGIN", "DATAFORSEO_PASSWORD")
@@ -167,6 +204,8 @@ def not_connected_result(platform_id: str) -> dict:
         "position": None,
         "snippet": not_connected_reason(platform_id),
         "competitors": [],
+        "topPick": None,
+        "webSearchUsed": None,
         "cost": 0.0,
         "tokens": None,
         "checkedAt": None,
@@ -313,15 +352,29 @@ def _citation_hit(citations, needles: list[str]) -> dict:
     Matching is on the URL's HOST, never a substring of the URL: a substring test finds
     `premierstaff.com` inside `notpremierstaff.com`, and would also match a competitor's page
     whose path happens to mention us (`.../vs-premierstaff`). A real subdomain does count.
-    Only hostname-shaped needles are used — a brand needle like "acme" must not match the host
-    `acme-lookalike.io`, and the domain needle covers the honest case anyway.
+
+    Two needle shapes match, nothing else:
+
+    * A hostname-shaped needle ("eventstaff.com") matches that host or a real subdomain of it.
+    * A bare-name needle ("eventstaff") matches only by EXACT EQUALITY with the host's
+      registrable label — the label left of the TLD. Competitors are routinely tracked by
+      brand name rather than domain, and before this (added 2026-08-27) such an entry could
+      never be seen in citations at all: eventstaff.com stood at source #2 of a real stored
+      answer while the tracked competitor "eventstaff" reported nothing. Equality, never a
+      substring — "acme" must not match `acme-lookalike.io` — and names under 4 characters or
+      containing spaces never match a label anyway ("julia valler" still needs its domain
+      added to be citation-visible).
 
     `position` is the source's 1-based number in the provider's own list, i.e. the [n] the user
     sees next to it. A real property of the answer, not an estimate.
     """
     miss = {"mentioned": False, "cited": False, "position": None, "snippet": ""}
     hosts = [n for n in (needles or []) if _HOSTNAME_RE.match(n)]
-    if not hosts or not citations:
+    # The same >=4-char floor `_needles` applies to expanded labels, for the same reason:
+    # three-letter names are ordinary English words.
+    names = [n for n in (needles or [])
+             if n not in hosts and len(n) >= 4 and re.fullmatch(r"[a-z0-9-]+", n)]
+    if not (hosts or names) or not citations:
         return miss
 
     for index, citation in enumerate(citations or [], start=1):
@@ -336,11 +389,17 @@ def _citation_hit(citations, needles: list[str]) -> dict:
             continue
         if host.startswith("www."):
             host = host[4:]
-        for needle in hosts:
-            if host == needle or host.endswith("." + needle):
-                title = str(citation.get("title") or "").strip()
-                return {"mentioned": True, "cited": True, "position": index,
-                        "snippet": title or str(citation.get("url") or "")}
+        hit = any(host == n or host.endswith("." + n) for n in hosts)
+        if not hit and names:
+            labels = host.split(".")
+            # The registrable label: left of the TLD, and also one further left so
+            # `eventstaff.co.uk` and `blog.eventstaff.com` both resolve to "eventstaff".
+            candidates = set(labels[-2:-1] + labels[-3:-2])
+            hit = any(n in candidates for n in names)
+        if hit:
+            title = str(citation.get("title") or "").strip()
+            return {"mentioned": True, "cited": True, "position": index,
+                    "snippet": title or str(citation.get("url") or "")}
     return miss
 
 
@@ -389,6 +448,14 @@ def analyze_answer(answer: str, brand: str, aliases=(), competitors=(), citation
                 "snippet": comp_hit["snippet"],
             })
 
+    # The answer's own #1 recommendation, whoever it is — tracked or not. The first item of
+    # the answer's ranked/bulleted list, verbatim (cleaned of markdown). Benchmarking against
+    # manually-researched winners showed this is the single most useful fact the page was
+    # discarding: the verdict says whether WE appear, but not who the model actually told the
+    # user to hire. Extracted, never inferred: an answer with no list has no top pick.
+    items = _list_items(answer)
+    top_pick = _clean(items[0][1]) if items else ""
+
     # No brand configured => nothing was looked for, so "absent" would be a verdict we never
     # earned. `None` is the honest answer; callers refuse to run without a brand anyway.
     verdict = (
@@ -398,6 +465,7 @@ def analyze_answer(answer: str, brand: str, aliases=(), competitors=(), citation
         else "absent"
     )
     return {
+        "topPick": top_pick or None,
         "verdict": verdict,
         "mentioned": hit["mentioned"],
         "cited": hit["cited"],
@@ -541,6 +609,8 @@ def _error_result(platform_id: str, model: str, message: str) -> dict:
         "position": None,
         "snippet": "",
         "competitors": [],
+        "topPick": None,
+        "webSearchUsed": None,
         "cost": 0.0,
         "tokens": None,
         "checkedAt": None,
@@ -574,14 +644,21 @@ def _country_iso(country: str | None) -> str | None:
 
 def check_prompt(question: str, brand: str, aliases=(), competitors=(),
                  platform: str = "chatgpt", model: str | None = None,
-                 timeout: int = REQUEST_TIMEOUT, web_search: bool = False,
-                 country: str | None = None) -> dict:
+                 timeout: int = REQUEST_TIMEOUT, web_search: bool = True,
+                 country: str | None = None, city: str | None = None) -> dict:
     """Ask one answer engine one tracked prompt (via DataForSEO's LLM Responses API) and
     report what really came back.
 
     Costs money — call it only from an explicit user action, never while rendering a page.
     Never raises: a provider failure comes back as `state="error"`, so one bad prompt cannot
     abort a batch run or lose the results already paid for.
+
+    `web_search` defaults ON (changed 2026-08-27): provider-verified citations exist only on a
+    web-search-enabled check, and a searchless completion is not the answer real users see —
+    every engine but the search-native Perplexity returned zero citations and scored "absent"
+    on brands the live products recommend. A web-search check bills higher than a bare
+    completion; pass `web_search=False` explicitly when that cheaper, source-less answer is
+    genuinely what the caller wants to measure.
     """
     question = (question or "").strip()
     meta = PLATFORMS.get(platform)
@@ -608,35 +685,83 @@ def check_prompt(question: str, brand: str, aliases=(), competitors=(),
         "max_output_tokens": MAX_ANSWER_TOKENS,
         "temperature": TEMPERATURE,
     }
+    # `location` reports what geo targeting was REALLY sent, for the result/history entry —
+    # "US · Austin", "US", or None. Never the configured value: a country the provider does
+    # not accept was not applied, and saying it was would be an invented fact.
+    location_sent: list[str] = []
     if web_search:
-        task["web_search"] = True
-        # Only meaningful alongside web search — it geo-scopes the web results the model is
-        # grounded in. There is no city-level equivalent on this endpoint: `web_search_country_
-        # iso_code` is the finest geography DataForSEO's LLM Responses API accepts, which is
-        # why the modal's City field cannot be honoured (see the note beside it).
-        iso = _country_iso(country)
-        if iso:
-            task["web_search_country_iso_code"] = iso
+        # Every field is gated on what THIS provider's endpoint documents — see
+        # _WEB_SEARCH_FIELDS. An unsupported field is not ignored by DataForSEO: gemini
+        # returns `40501 Invalid Field` and the whole check is lost.
+        fields = _WEB_SEARCH_FIELDS.get(platform, set())
+        if "web_search" in fields:
+            task["web_search"] = True
+        if "force_web_search" in fields:
+            # Without this, a model handed the search tool may still answer from memory —
+            # the check would silently measure an ungrounded answer some of the time.
+            task["force_web_search"] = True
+        if "country" in fields:
+            iso = _country_iso(country)
+            if iso:
+                task["web_search_country_iso_code"] = iso
+                location_sent.append(iso)
+        if "city" in fields:
+            city_clean = (city or "").strip()
+            if city_clean:
+                task["web_search_city"] = city_clean
+                location_sent.append(city_clean)
+
+    # Fields this model already taught us it rejects — dropped up front, no discovery calls.
+    known_rejected = _REJECTED_FIELDS.get((platform, str(model)), set())
+    for field in known_rejected:
+        task.pop(field, None)
 
     try:
-        response = requests.post(
-            f"{DATAFORSEO_BASE}/ai_optimization/{meta['llm_type']}/llm_responses/live",
-            auth=(os.environ["DATAFORSEO_LOGIN"], os.environ["DATAFORSEO_PASSWORD"]),
-            json=[task],
-            timeout=timeout,
-        )
-        response.raise_for_status()
-        data = response.json()
-        # What DataForSEO says it charged for this call (model spend included). 0 from a live
-        # endpoint means the charge wasn't reported — unknown, not free.
-        cost = extract_cost(data) or None
-        tasks = data.get("tasks") or []
-        task_out = tasks[0] if tasks else {}
-        if task_out.get("status_code") != 20000:
-            raise ValueError(
-                f"DataForSEO task failed: {task_out.get('status_code')} "
-                f"{task_out.get('status_message')}"
+        # Retries ONLY for `40501 Invalid Field` naming an optional field we sent: the field
+        # is dropped and the call repeated. Providers disagree about which tuning fields
+        # exist per model GENERATION, not just per llm_type — gpt-5.x rejects
+        # max_output_tokens, temperature AND force_web_search, all accepted by gpt-4o — and a
+        # rejected task is billed at 0, so the retries pay for one real answer, not several.
+        # Anything other than that exact failure raises on the first attempt as before.
+        # Bound = every optional field gone; user_prompt + model_name alone always remain.
+        total_cost = 0.0
+        for _attempt in range(len(task) + 1):
+            response = requests.post(
+                f"{DATAFORSEO_BASE}/ai_optimization/{meta['llm_type']}/llm_responses/live",
+                auth=(os.environ["DATAFORSEO_LOGIN"], os.environ["DATAFORSEO_PASSWORD"]),
+                json=[task],
+                timeout=timeout,
             )
+            response.raise_for_status()
+            data = response.json()
+            total_cost += extract_cost(data)
+            tasks = data.get("tasks") or []
+            task_out = tasks[0] if tasks else {}
+            if task_out.get("status_code") == 20000:
+                break
+            message = str(task_out.get("status_message") or "")
+            # The message quotes the offending field, but in more than one wording:
+            # "Invalid Field: 'max_output_tokens'." vs
+            # "Invalid Field: 'this model does not support 'temperature''." — so instead of
+            # parsing the sentence, look for any OPTIONAL field we actually sent quoted
+            # anywhere in it. Required fields are never dropped.
+            bad = next((f for f in task
+                        if f not in ("user_prompt", "model_name") and f"'{f}'" in message),
+                       None) if task_out.get("status_code") == 40501 else None
+            if bad:
+                logger.warning(
+                    "[ai_visibility] %s (%s) rejects field %r — retrying without it",
+                    platform, model, bad)
+                task.pop(bad)
+                _REJECTED_FIELDS.setdefault((platform, str(model)), set()).add(bad)
+                continue
+            raise ValueError(
+                f"DataForSEO task failed: {task_out.get('status_code')} {message}")
+        else:
+            raise ValueError("DataForSEO task failed: still rejecting fields after retries")
+        # What DataForSEO says it charged (model spend included, summed over any retries).
+        # 0 from a live endpoint means the charge wasn't reported — unknown, not free.
+        cost = total_cost or None
         results = task_out.get("result") or []
         if not results:
             raise ValueError("DataForSEO returned no result for the task")
@@ -645,6 +770,12 @@ def check_prompt(question: str, brand: str, aliases=(), competitors=(),
         input_tokens = result.get("input_tokens")
         output_tokens = result.get("output_tokens")
         model_used = result.get("model_name") or model
+        # DataForSEO reports whether the provider ACTUALLY searched the web for this answer —
+        # distinct from whether we asked it to (a model given the tool can still decline, and
+        # sonar searches without being asked). None when the envelope doesn't say.
+        web_search_used = result.get("web_search")
+        if not isinstance(web_search_used, bool):
+            web_search_used = None
     except Exception as exc:
         logger.error(f"[ai_visibility] {platform} check failed: {exc}")
         return _error_result(platform, model, str(exc))
@@ -653,6 +784,14 @@ def check_prompt(question: str, brand: str, aliases=(), competitors=(),
         # A 200 with an empty body is a provider failure, not an "absent" verdict — reporting
         # "your brand is absent" from an answer that does not exist would be a fabricated result.
         return _error_result(platform, model_used, "Provider returned an empty answer.")
+    if answer.rstrip().endswith(":"):
+        # The stream died right after the model announced a list ("...options to consider:")
+        # — observed live on 2 of 5 ChatGPT checks (25 output tokens against a 600 budget).
+        # Scoring "absent" from the stump would be a fabricated verdict: the cut-off list is
+        # exactly where the brands would have been named. An error cell is retried by the
+        # next run; a wrong "absent" sits in the grid looking like a finding.
+        return _error_result(platform, model_used,
+                             "Provider returned a truncated answer (cut off mid-list).")
 
     # Citations go IN, rather than being stapled on afterwards. They used to be assigned to
     # the result after the verdict had already been decided from the text alone, so an answer
@@ -667,6 +806,10 @@ def check_prompt(question: str, brand: str, aliases=(), competitors=(),
         "model": model_used,
         "error": None,
         "answer": answer,
+        # The geo targeting that was actually sent to the provider ("US · Austin", "US") or
+        # None — real request property, distinct from what the prompt's config merely stores.
+        "location": " · ".join(location_sent) or None,
+        "webSearchUsed": web_search_used,
         "cost": cost,
         "tokens": {
             "input": input_tokens,
