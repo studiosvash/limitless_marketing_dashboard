@@ -93,6 +93,14 @@ PAGE_CONNECTORS: dict[str, list[str]] = {
     # whole 'audit' scope above to record six cheap probes, which meant 20-30 minutes and a
     # billable DataForSEO OnPage crawl for about four seconds of actual work.
     "domain_checks": ["domain_checks"],
+    # What the topbar "Refresh all" button actually runs (changed 2026-08-31, user decision):
+    # Overview traffic + Backlinks + the Site audit — the domain-level basics. Positions,
+    # Keywords, Ads and AI checks are deliberately NOT here: each is metered per-project work
+    # the user starts from its own page (or the Automation schedule), and bundling them into
+    # one button made a casual click cost a full SERP + AI sweep. Ordering mirrors 'audit':
+    # cheap/free connectors first, the long-polling paid OnPage crawl last.
+    "core": ["gsc", "ga4", "dataforseo_backlinks", "domain_checks", "gsc_pages",
+             "url_inspection", "pagespeed", "sitemap", "dataforseo_onpage"],
 }
 
 # Scopes whose connectors should be narrowed to the keywords that still need measuring.

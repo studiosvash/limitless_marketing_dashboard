@@ -1583,6 +1583,13 @@ before a page reload.
 
 Free, read-only feed for the confirm dialog "Refresh all" opens BEFORE spending anything
 (added 2026-08-31 — the button used to start a 20-30-minute metered run on one bare click).
+**The button runs scope `core`, not `all`** (changed same day, user decision):
+`PAGE_CONNECTORS["core"]` = organic (gsc+ga4) + backlinks + site audit (+sitemap). Positions,
+Keywords, Ads and AI are deliberately excluded — each refreshes from its own page or the
+Automation schedule. A `core` RefreshRun resets the covered modules' scheduler clocks
+(`scheduling._covered_by_core_scope`) and counts toward the covered page scopes' 24h
+manual-freshness check, exactly as `all` always did. `scope=all` remains valid API-side
+(new-site initial sync still uses it).
 `{scope, groups: [{label, connectors, last_synced, est_cost, est_seconds}], total_est_cost,
 total_est_seconds, cost_partial, time_partial}`. Groups are `sync_api_service._PREFLIGHT_GROUPS`
 (each connector in exactly one group — no double-counted sums). `last_synced` is the OLDEST

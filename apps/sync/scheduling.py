@@ -105,6 +105,14 @@ def _covered_by_all_scope(module: str) -> bool:
     return bool(connectors) and set(connectors) <= set(ALL_CONNECTORS)
 
 
+def _covered_by_core_scope(module: str) -> bool:
+    """Same reasoning as `_covered_by_all_scope`, for the topbar's 'core' refresh (2026-08-31):
+    a 'core' run really does fetch organic/backlinks/audit, so it must reset those modules'
+    clocks -- otherwise the scheduler re-buys data the button just fetched."""
+    connectors = PAGE_CONNECTORS.get(_SCOPE_TO_PAGE_KEY.get(module, module), [])
+    return bool(connectors) and set(connectors) <= set(PAGE_CONNECTORS.get("core", []))
+
+
 # ---------------------------------------------------------------------------
 # Orphaned-run reaping
 # ---------------------------------------------------------------------------
@@ -503,6 +511,8 @@ def _scope_filter(module: str):
     scopes = [module]
     if _covered_by_all_scope(module):
         scopes.append("all")
+    if _covered_by_core_scope(module):
+        scopes.append("core")
     return scopes
 
 

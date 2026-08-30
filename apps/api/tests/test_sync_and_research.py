@@ -70,6 +70,31 @@ class SyncPreflightTests(APITestCase):
         # Preflight is read-only: no run row may exist afterwards.
         self.assertEqual(RefreshRun.objects.count(), 0)
 
+    def test_preflight_core_scope_lists_only_the_three_bundled_groups(self):
+        """The Refresh-all dialog asks for scope=core (2026-08-31): organic + backlinks +
+        site audit only. Positions/Keywords/AI must not appear — they are per-page work."""
+        body = self.client_auth.get(
+            "/api/projects/fusehealth/sync/preflight?scope=core").json()
+        labels = [g["label"] for g in body["groups"]]
+        self.assertEqual(len(labels), 3)
+        for expected in ("Organic traffic", "Backlinks", "Site audit"):
+            self.assertTrue(any(l.startswith(expected) for l in labels), expected)
+        for excluded in ("Positions", "Keywords", "AI visibility"):
+            self.assertFalse(any(l.startswith(excluded) for l in labels), excluded)
+
+    @patch("apps.dashboard.services.sync_api_service._spawn_sync_process", return_value=4242)
+    def test_core_scope_runs_exactly_the_bundled_connectors(self, mock_spawn):
+        resp = self.client_auth.post(
+            "/api/projects/fusehealth/sync", {"scope": "core"}, format="json")
+        self.assertEqual(resp.status_code, 200)
+        steps = resp.json()["steps"]
+        self.assertIn("gsc", steps)
+        self.assertIn("dataforseo_backlinks", steps)
+        self.assertIn("dataforseo_onpage", steps)
+        for excluded in ("dataforseo_serp", "dataforseo_llm_mentions",
+                         "dataforseo_ai_keywords", "google_ads", "gsc_keywords"):
+            self.assertNotIn(excluded, steps)
+
     def test_preflight_group_is_stale_while_any_connector_lacks_a_success(self):
         from django.utils import timezone
         from apps.sync.models import SyncLog, SyncStatus

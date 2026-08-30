@@ -97,6 +97,15 @@ def project_scope_last_ran(site_url: str, site_pk: int, scope: str, now=None):
     covering = {scope, "all"}
     if scope == "positions_new":
         covering.add("positions")
+    # A 'core' run (the topbar refresh: organic + backlinks + audit) really did fetch any
+    # scope whose connectors it wholly contains — same reasoning as counting 'all'.
+    try:
+        from pipeline.services.sync_engine import PAGE_CONNECTORS
+        core = set(PAGE_CONNECTORS.get("core", []))
+        if core and set(_connectors_for_scope(scope)) <= core:
+            covering.add("core")
+    except Exception:
+        pass
     cutoff = (now or timezone.now()) - FRESH_WITHIN
     run = (RefreshRun.objects
            .filter(site_url=site_url, site_pk=site_pk, scope__in=covering,

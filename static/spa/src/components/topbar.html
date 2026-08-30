@@ -190,7 +190,7 @@
             <div style="font-size: 13px; color: #64748b; padding: 12px 0;">Checking what needs fetching…</div>
           </sc-if>
           <sc-if value="{{ refreshConfirm.ready }}" hint-placeholder-val="{{ false }}">
-            <div style="font-size: 13px; color: #475569;">This calls every data source for this project and typically takes 20–30 minutes. Between refreshes every page keeps showing the last saved data.</div>
+            <div style="font-size: 13px; color: #475569;">This fetches Overview traffic (Search Console + GA4), Backlinks and the Site audit. Positions, Keywords, Ads and AI checks are <b>not</b> included — refresh those from their own pages. Between refreshes every page keeps showing the last saved data.</div>
             <div style="display: flex; flex-direction: column; border: 1px solid #e2e8f0; border-radius: 10px; overflow: hidden;">
               <sc-for list="{{ refreshConfirm.rows }}" as="r" hint-placeholder-count="6">
                 <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 14px; border-bottom: 1px solid #f1f5f9;">

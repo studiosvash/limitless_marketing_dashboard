@@ -769,22 +769,25 @@
      preflight read fails the dialog is skipped rather than blocking the refresh: the guard
      must never become the outage. */
   openRefreshConfirm() {
-    if (this.state.sync.active) { this.startSync('all'); return; }
+    /* 'core' (organic + backlinks + site audit), NOT 'all' (2026-08-31, user decision):
+       positions, keywords, ads and AI checks are metered per-project work started from their
+       own pages — the one big button must not sweep them along. */
+    if (this.state.sync.active) { this.startSync('core'); return; }
     this.setState({ refreshConfirm: { loading: true } });
-    window.FuseAPI.get('/api/projects/' + this.state.projectId + '/sync/preflight')
+    window.FuseAPI.get('/api/projects/' + this.state.projectId + '/sync/preflight', { scope: 'core' })
       .then(d => {
         if (this._alive && this.state.refreshConfirm) this.setState({ refreshConfirm: d });
       })
       .catch(() => {
         if (!this._alive) return;
         this.setState({ refreshConfirm: null });
-        this.startSync('all');
+        this.startSync('core');
       });
   }
 
   confirmRefreshAll() {
     this.setState({ refreshConfirm: null });
-    this.startSync('all');
+    this.startSync('core');
   }
 
   /* startSync(scope, preTaskId)
@@ -3160,7 +3163,9 @@
     const rActive = { padding: '6px 12px', background: '#f1f5f9', color: '#1e293b', fontWeight: 500, cursor: 'pointer' };
     const syncing = s.sync.active && (!s.sync.projectId || s.sync.projectId === s.projectId);
     const activeScope = syncing ? (s.sync.scope || 'all') : null;
-    const isAllSyncing = syncing && activeScope === 'all';
+    /* 'core' is what the topbar button starts now; 'all' still counts so a pre-change run
+       (or an API-started full sync, e.g. a new site's first fetch) keeps owning the button. */
+    const isAllSyncing = syncing && (activeScope === 'all' || activeScope === 'core');
     /* isPageSyncing is computed further down, once `pageScope` exists — it has to compare the
        running scope against THIS PAGE'S OWN scope. It used to be `syncing && activeScope !==
        'all'`, i.e. "some narrow scope is running", so a Positions refresh put a spinner and a
@@ -3208,6 +3213,7 @@
       overview: 'Overview', keywords: 'Keywords', positions: 'Positions',
       positions_new: 'new keywords', backlinks: 'Backlinks', audit: 'Site Audit',
       domain_checks: 'Domain Checks', ai: 'AI Data', ads: 'Ads',
+      core: 'Overview + Backlinks + Site Audit',
     };
     const pageScope = tabToScope[tab];
 
@@ -3232,7 +3238,7 @@
     const isPageSyncing = syncing && !!pageScope && activeScope === pageScope;
     const isPageQueued = !!pageScope && queuedScope === pageScope;
     const isPageBlocked = syncing && !!pageScope && !isPageSyncing && !isPageQueued;
-    const isAllQueued = queuedScope === 'all';
+    const isAllQueued = queuedScope === 'all' || queuedScope === 'core';
     const runningLabel = activeScope
       ? (activeScope === 'all' ? 'all modules' : (scopeToLabel[activeScope] || activeScope))
       : '';
@@ -3599,10 +3605,10 @@
         : 'Refresh all',
       refreshBtnStyle: { display: 'inline-flex', alignItems: 'center', gap: '8px', borderRadius: '8px', background: isAllSyncing ? '#818cf8' : (isAllQueued ? '#94a3b8' : '#4f46e5'), color: 'white', fontSize: '14px', fontWeight: 500, padding: '8px 16px', boxShadow: '0 1px 2px rgba(0,0,0,0.05)', cursor: (isAllSyncing || isAllQueued) ? 'default' : 'pointer' },
       refreshIconStyle: isAllSyncing ? { animation: 'fuseSpin 1s linear infinite' } : {},
-      refreshAllTitle: isAllSyncing ? 'Every module is fetching now.'
+      refreshAllTitle: isAllSyncing ? 'The core refresh is fetching now.'
         : isAllQueued ? ('Waiting for the ' + runningLabel + ' refresh to finish, then this one starts automatically.')
-        : (syncing ? ('A ' + runningLabel + ' refresh is running — click to queue a full refresh behind it.')
-                   : 'Fetch fresh data for every module — shows what it will fetch and cost before starting.'),
+        : (syncing ? ('A ' + runningLabel + ' refresh is running — click to queue the core refresh behind it.')
+                   : 'Fetch Overview traffic, Backlinks and the Site audit — shows staleness and cost before starting. Positions, Keywords, Ads and AI refresh from their own pages.'),
       refreshConfirm: (() => {
         const rc = s.refreshConfirm;
         if (!rc) return null;

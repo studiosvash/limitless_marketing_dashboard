@@ -105,6 +105,16 @@ class CadenceDueLogicTests(TestCase):
         due, _ = scheduling.is_due(SITE, "positions", "weekly")
         self.assertFalse(due, "'all' runs every positioning connector; it must reset that clock")
 
+    def test_a_core_refresh_counts_for_the_modules_it_really_covers(self):
+        """The topbar's 'core' refresh (organic + backlinks + audit, 2026-08-31) resets those
+        modules' clocks — but never positions, which it deliberately does not fetch."""
+        make_run(SITE, "core", RefreshStatus.SUCCESS, timedelta(hours=1))
+        for module in ("organic", "backlinks", "audit"):
+            due, _ = scheduling.is_due(SITE, module, "weekly")
+            self.assertFalse(due, f"a core run fetched {module}; it must reset that clock")
+        due, _ = scheduling.is_due(SITE, "positions", "weekly")
+        self.assertTrue(due, "core does not run the positioning connectors")
+
     def test_a_full_refresh_does_not_count_as_an_ads_run(self):
         """sync_all()'s connector list has no google_ads, so a full refresh never actually
         pulls Ads data and must not be allowed to reset the Ads clock."""
