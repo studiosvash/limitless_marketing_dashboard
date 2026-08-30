@@ -760,6 +760,33 @@
   }
 
   /* ---------- sync ---------- */
+  /* "Refresh all" costs real money and 20-30 minutes, and one accidental click used to start
+     it with no way back. The button now opens a confirm dialog first: what will be fetched,
+     when each part was last fetched, and cost/time estimates from THIS site's own recorded
+     history (GET /sync/preflight — free, read-only). Confirm runs exactly what always ran;
+     Cancel spends nothing. When a run is already active the click keeps its old meaning
+     (queue/notify via startSync) — a dialog would just delay the queue answer. If the
+     preflight read fails the dialog is skipped rather than blocking the refresh: the guard
+     must never become the outage. */
+  openRefreshConfirm() {
+    if (this.state.sync.active) { this.startSync('all'); return; }
+    this.setState({ refreshConfirm: { loading: true } });
+    window.FuseAPI.get('/api/projects/' + this.state.projectId + '/sync/preflight')
+      .then(d => {
+        if (this._alive && this.state.refreshConfirm) this.setState({ refreshConfirm: d });
+      })
+      .catch(() => {
+        if (!this._alive) return;
+        this.setState({ refreshConfirm: null });
+        this.startSync('all');
+      });
+  }
+
+  confirmRefreshAll() {
+    this.setState({ refreshConfirm: null });
+    this.startSync('all');
+  }
+
   /* startSync(scope, preTaskId)
    *   scope      – 'all' | 'positions' | 'backlinks' | etc.
    *   preTaskId  – (optional) task_id already created server-side (e.g., from POST /api/projects).
@@ -3275,7 +3302,7 @@
          run -- 'nothing new' and 'everything' must not be the same outcome. */
       refreshNewKeywords: () => this.startSync('positions_new'),
 
-      refreshAll: () => this.startSync('all'),
+      refreshAll: () => this.openRefreshConfirm(),
       retry: () => this.fetchTab(tab, s.projectId, s.range, true),
       explorerInput: e => this.setState({ explorerQ: e.target.value }),
       explorerKey: e => { if (e.key === 'Enter') this.runResearch(); },
@@ -3575,7 +3602,32 @@
       refreshAllTitle: isAllSyncing ? 'Every module is fetching now.'
         : isAllQueued ? ('Waiting for the ' + runningLabel + ' refresh to finish, then this one starts automatically.')
         : (syncing ? ('A ' + runningLabel + ' refresh is running — click to queue a full refresh behind it.')
-                   : 'Fetch fresh data for every module. Takes 20-30 minutes.'),
+                   : 'Fetch fresh data for every module — shows what it will fetch and cost before starting.'),
+      refreshConfirm: (() => {
+        const rc = s.refreshConfirm;
+        if (!rc) return null;
+        if (rc.loading) return { loading: true, ready: false, cancel: () => this.setState({ refreshConfirm: null }) };
+        const money = c => '$' + Number(c || 0).toFixed(c > 0 && c < 0.1 ? 3 : 2);
+        const mins = sec => !sec ? '—' : sec < 90 ? '~1 min' : '~' + Math.round(sec / 60) + ' min';
+        return {
+          loading: false,
+          ready: true,
+          rows: (rc.groups || []).map(g => ({
+            label: g.label,
+            last: g.last_synced ? ('fetched ' + this.agoText(g.last_synced)) : 'never fully fetched',
+            lastStyle: { fontSize: '12px', color: g.last_synced ? '#64748b' : '#b45309', whiteSpace: 'nowrap' },
+            cost: g.est_cost ? ('≈ ' + money(g.est_cost)) : 'free / n.a.',
+            time: mins(g.est_seconds)
+          })),
+          /* "at least" whenever some metered connector has no history yet — an estimate
+             that might understate must say so, never look precise. */
+          totalLine: (rc.cost_partial ? 'At least ' : 'About ') + money(rc.total_est_cost)
+            + ' · ' + (rc.time_partial ? 'roughly ' : '') + mins(rc.total_est_seconds)
+            + ' — estimated from this project’s past runs.',
+          confirm: () => this.confirmRefreshAll(),
+          cancel: () => this.setState({ refreshConfirm: null })
+        };
+      })(),
       freshness: s.freshness,
       syncing, syncScopeLabel: runningLabel, syncStep: s.sync.step, syncPct: Math.round(s.sync.progress * 100),
       /* Amber while the browser cannot reach the server, indigo while it can. The colour is

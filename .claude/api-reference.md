@@ -1579,6 +1579,21 @@ never ran, and the checklist says so rather than showing a false ✓.
 any non-2xx as a hard error, and a 404 would break the progress bar for a task that finished
 before a page reload.
 
+### `GET /api/projects/<slug>/sync/preflight[?scope=all]`
+
+Free, read-only feed for the confirm dialog "Refresh all" opens BEFORE spending anything
+(added 2026-08-31 — the button used to start a 20-30-minute metered run on one bare click).
+`{scope, groups: [{label, connectors, last_synced, est_cost, est_seconds}], total_est_cost,
+total_est_seconds, cost_partial, time_partial}`. Groups are `sync_api_service._PREFLIGHT_GROUPS`
+(each connector in exactly one group — no double-counted sums). `last_synced` is the OLDEST
+success among the group's connectors and null whenever any of them has never succeeded — an
+errored last run means there genuinely is something to fetch. Estimates come from the site's
+own history: `SyncLog.duration_seconds` and the mean of each connector's last 5 `ConnectorCost`
+rows — never a price table; `cost_partial`/`time_partial` flag missing history so the SPA words
+totals as "at least" rather than faking precision. The SPA (app.js `openRefreshConfirm`) skips
+the dialog and refreshes directly if this read fails — the guard must never become the outage —
+and a click while a run is active keeps its old queue/notify meaning.
+
 ### `GET /api/projects/<slug>/sync/active`
 
 `{"task_id": 17, "scope": "all", …}` for the in-flight `RefreshRun` on this site — the full

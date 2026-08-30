@@ -50,7 +50,7 @@ from apps.dashboard.services.shared_queries import (
     _get_ads_overview, _get_keywords_overview,
 )
 from apps.dashboard.services.sync_api_service import (
-    start_sync_run, task_status,
+    start_sync_run, sync_preflight, task_status,
 )
 from apps.dashboard.services.keyword_research_service import (
     run_keyword_research, run_prompt_research,
@@ -1413,6 +1413,20 @@ class ProjectSyncView(APIView):
         force = bool(request.data.get("force", False))
         return Response(start_sync_run(site_id, scope, user=request.user, force=force,
                                        site_pk=project.id))
+
+
+@method_decorator(login_not_required, name="dispatch")
+class ProjectSyncPreflightView(APIView):
+    """GET /api/projects/<slug>/sync/preflight[?scope=all] — what a Refresh would actually do.
+
+    Free and read-only: per-group last-fetched times plus cost/duration estimates from this
+    site's own recorded history, for the confirm dialog the SPA shows before the full-refresh
+    button spends 20-30 minutes of APIs. Never starts anything.
+    """
+
+    def get(self, request, slug):
+        site_id = resolve_project_or_404(slug).site_url
+        return Response(sync_preflight(site_id, request.GET.get("scope", "all")))
 
 
 @method_decorator(login_not_required, name="dispatch")

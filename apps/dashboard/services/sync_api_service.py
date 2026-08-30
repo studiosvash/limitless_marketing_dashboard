@@ -152,6 +152,128 @@ def scope_last_synced(site_url: str, connectors: list[str], now=None):
     return min(fresh.values())
 
 
+# How "Refresh all" is itemised for the pre-flight confirm dialog. Explicit connector lists,
+# each connector in exactly ONE group (dataforseo_ai_keywords lives under AI, not Keywords),
+# so per-group cost/time sums never double-count. Order is display order.
+_PREFLIGHT_GROUPS = [
+    ("Organic traffic (Search Console + GA4)", ["gsc", "ga4"]),
+    ("Positions & competitors (SERPs)",
+     ["dataforseo_serp", "dataforseo_keywords", "dataforseo_labs_competitors",
+      "dataforseo_serp_competitors"]),
+    ("Keywords (Search Console)", ["gsc_keywords"]),
+    ("Backlinks", ["dataforseo_backlinks"]),
+    ("Site audit (crawl, PageSpeed, indexing)",
+     ["domain_checks", "gsc_pages", "url_inspection", "pagespeed", "dataforseo_onpage",
+      "sitemap"]),
+    ("AI visibility (AI keywords + LLM mentions)",
+     ["dataforseo_ai_keywords", "dataforseo_llm_mentions"]),
+]
+
+# The post-sync rebuild (aggregates, anomalies, technical issues, AI summary) is real wall
+# time every full run pays once — see the itemised budget in apps/sync/scheduling.py.
+_PREFLIGHT_REBUILD_SECONDS = 120
+
+
+def sync_preflight(site_url: str, scope: str = "all") -> dict:
+    """What pressing Refresh on `scope` would actually do — free, read-only.
+
+    Feeds the SPA's confirm dialog before a full refresh: per-group "when was this last
+    fetched", plus cost and duration ESTIMATES taken from this site's own recorded history —
+    ConnectorCost rows (the real USD DataForSEO reported) and SyncLog.duration_seconds (the
+    real wall time of each connector's last run). Estimates from measured history, never a
+    price table; a connector with no history contributes nothing and flags the estimate as
+    partial rather than inventing a number.
+    """
+    scope_connectors = set(_connectors_for_scope(scope))
+
+    logs = {
+        row.connector: row
+        for row in SyncLog.objects.filter(site_url=site_url,
+                                          connector__in=scope_connectors)
+    }
+
+    # Mean cost of each connector's recent runs, from the analytics DB. One fetch, grouped in
+    # Python; read failure degrades to "cost unknown" rather than taking the dialog down.
+    cost_avg: dict[str, float] = {}
+    try:
+        from sqlalchemy import select
+        from pipeline.db.schema import ConnectorCost
+        from pipeline.utils.db_connection import get_session
+        with get_session() as session:
+            rows = session.execute(
+                select(ConnectorCost.connector, ConnectorCost.cost)
+                .where(ConnectorCost.site_id == site_url,
+                       ConnectorCost.connector.in_(scope_connectors))
+                .order_by(ConnectorCost.run_at.desc())
+                .limit(500)
+            ).all()
+        recent: dict[str, list[float]] = {}
+        for connector, cost in rows:
+            bucket = recent.setdefault(connector, [])
+            if len(bucket) < 5:
+                bucket.append(float(cost or 0.0))
+        cost_avg = {c: sum(v) / len(v) for c, v in recent.items() if v}
+    except Exception:
+        logger.warning("[sync] preflight could not read connector costs", exc_info=True)
+
+    groups = []
+    total_cost = 0.0
+    total_seconds = 0.0
+    cost_partial = False
+    time_partial = False
+    for label, connectors in _PREFLIGHT_GROUPS:
+        present = [c for c in connectors if c in scope_connectors]
+        if not present:
+            continue
+        synced = [logs[c].last_synced for c in present
+                  if logs.get(c) and logs[c].status == SyncStatus.SUCCESS
+                  and logs[c].last_synced]
+        # The OLDEST successful part — "every step of this group is at least this fresh".
+        # None whenever any connector has never succeeded: then there genuinely is
+        # something to fetch, and "never fetched" is the honest display.
+        last = min(synced).isoformat() if len(synced) == len(present) else None
+
+        seconds = 0.0
+        for c in present:
+            d = logs.get(c).duration_seconds if logs.get(c) else None
+            if d:
+                seconds += float(d)
+            else:
+                time_partial = True
+
+        cost = 0.0
+        for c in present:
+            if c in cost_avg:
+                cost += cost_avg[c]
+            elif not c.startswith(("gsc", "ga4", "domain_checks", "sitemap",
+                                   "url_inspection", "pagespeed")):
+                # Free/Google connectors record no cost rows — their absence is a real $0.
+                # A METERED connector with no history yet is a genuine unknown.
+                cost_partial = True
+
+        total_cost += cost
+        total_seconds += seconds
+        groups.append({
+            "label": label,
+            "connectors": len(present),
+            "last_synced": last,
+            "est_cost": round(cost, 4),
+            "est_seconds": int(seconds),
+        })
+
+    total_seconds += _PREFLIGHT_REBUILD_SECONDS
+    return {
+        "scope": scope,
+        "groups": groups,
+        "total_est_cost": round(total_cost, 4),
+        "total_est_seconds": int(total_seconds),
+        # True when some metered connector has no recorded history (or none of the durations
+        # are known yet) — the SPA words the totals as "at least" instead of "about".
+        "cost_partial": cost_partial,
+        "time_partial": time_partial,
+    }
+
+
 def _spawn_sync_process(run_id: int) -> int | None:
     """Launch `manage.py run_sync --run-id <id>` as a detached child. Returns its pid.
 

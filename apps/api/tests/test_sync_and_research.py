@@ -39,6 +39,51 @@ def _bootstrap(test_case):
     return client
 
 
+class SyncPreflightTests(APITestCase):
+    """GET /sync/preflight — the free read the Refresh-all confirm dialog is built on."""
+
+    def setUp(self):
+        self.client_auth = _bootstrap(self)
+
+    def test_preflight_reports_groups_without_starting_anything(self):
+        from django.utils import timezone
+        from apps.sync.models import SyncLog, SyncStatus
+        SyncLog.objects.create(connector="gsc", site_url=SITE_URL,
+                               status=SyncStatus.SUCCESS, last_synced=timezone.now(),
+                               duration_seconds=12.5)
+        SyncLog.objects.create(connector="ga4", site_url=SITE_URL,
+                               status=SyncStatus.SUCCESS, last_synced=timezone.now(),
+                               duration_seconds=7.5)
+        resp = self.client_auth.get("/api/projects/fusehealth/sync/preflight")
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(body["scope"], "all")
+        organic = next(g for g in body["groups"]
+                       if g["label"].startswith("Organic traffic"))
+        # Both connectors succeeded recently → a real last_synced and their summed duration.
+        self.assertIsNotNone(organic["last_synced"])
+        self.assertEqual(organic["est_seconds"], 20)
+        # Positions has no history at all → honestly "never fully fetched".
+        positions = next(g for g in body["groups"]
+                         if g["label"].startswith("Positions"))
+        self.assertIsNone(positions["last_synced"])
+        # Preflight is read-only: no run row may exist afterwards.
+        self.assertEqual(RefreshRun.objects.count(), 0)
+
+    def test_preflight_group_is_stale_while_any_connector_lacks_a_success(self):
+        from django.utils import timezone
+        from apps.sync.models import SyncLog, SyncStatus
+        SyncLog.objects.create(connector="gsc", site_url=SITE_URL,
+                               status=SyncStatus.SUCCESS, last_synced=timezone.now())
+        SyncLog.objects.create(connector="ga4", site_url=SITE_URL,
+                               status=SyncStatus.ERROR, last_synced=timezone.now())
+        body = self.client_auth.get("/api/projects/fusehealth/sync/preflight").json()
+        organic = next(g for g in body["groups"]
+                       if g["label"].startswith("Organic traffic"))
+        # An errored connector means this group genuinely has something to fetch.
+        self.assertIsNone(organic["last_synced"])
+
+
 class SyncEndpointTests(APITestCase):
     def setUp(self):
         self.client_auth = _bootstrap(self)
