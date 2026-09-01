@@ -9,8 +9,10 @@ command the operator's own scheduler (Windows Task Scheduler / cron) invokes on 
 
 Each invocation:
   1. reaps RefreshRun rows orphaned by a server restart (see scheduling.RUN_TIMEOUT);
-  2. reads every active Site and its `syncConfig` cadences;
-  3. starts at most ONE due module per site, through the existing start_sync_run().
+  2. reads every active PROJECT (one `sites` row each -- eighteen for a domain registered
+     as eighteen city projects) and its domain's `syncConfig` cadences;
+  3. starts at most ONE due module per domain, through the existing start_sync_run(),
+     tagged with the project (`site_pk`) whose clock said it was due.
 
 WHY at most one per site: start_sync_run() spawns a process per run and the connectors are
 rate-limited and metered. Firing five modules at once would run five processes against the same
@@ -59,36 +61,56 @@ class Command(BaseCommand):
 
     # -- helpers ------------------------------------------------------------
 
-    def _site_urls(self, only: str | None) -> list[str]:
-        from pipeline.services.site_service import get_active_site_ids
+    def _projects(self, only: str | None) -> list[dict]:
+        """Every active PROJECT (one per `sites` row), optionally only those on `only`.
 
-        active = get_active_site_ids()
+        Projects, not distinct domains: a LOCATION_SCOPED module (positions) is due, and is
+        fetched, per project. `--site` still takes a site_url and keeps every project on it.
+        """
+        projects = scheduling.active_projects()
         if only is None:
-            return active
-        if only not in active:
+            return projects
+        chosen = [p for p in projects if p["site_url"] == only]
+        if not chosen:
             # Deliberately an error, not a silent no-op: a typo'd --site in a scheduled task
             # would otherwise look like "nothing was due" forever.
+            active = sorted({p["site_url"] for p in projects})
             raise CommandError(f"{only!r} is not an active site. Active: {', '.join(active) or '(none)'}")
-        return [only]
+        return chosen
 
-    def _start(self, site_url: str, module: str, reason: str, dry_run: bool) -> bool:
+    def _start(self, project: dict, module: str, reason: str, dry_run: bool) -> bool:
         if dry_run:
             self.stdout.write(f"  WOULD START  {module:<10} — {reason}")
             return True
         # The one sanctioned way to run a sync. Not reimplemented here: start_sync_run owns the
-        # RefreshRun row, the scope aliasing (positions -> positioning) and the worker thread.
+        # RefreshRun row, the scope aliasing (positions -> positioning) and the worker process.
         from apps.dashboard.services.sync_api_service import start_sync_run
 
         # manual=False: the cadences this command enforces ARE the freshness logic for
         # scheduled runs. Letting the manual "already fresh?" check apply here too would put
         # two systems in charge of one decision -- a 24h window over a 12h cadence means that
         # module silently never runs -- and the fresh response has no `task_id` to read below.
-        info = start_sync_run(site_url, module, manual=False)
+        #
+        # site_pk: the run is tagged with the project whose clock said "due", so the
+        # connectors fetch THAT project's city and the run credits THAT project's clock (and
+        # the Position Tracking "Updated" column, which counts only project-tagged runs).
+        info = start_sync_run(project["site_url"], module, manual=False,
+                              site_pk=project["site_pk"])
         if info.get("budget_exceeded"):
             self.stdout.write(self.style.WARNING(
                 f"  SKIPPED      {module:<10} — {reason} — DataForSEO budget exceeded "
                 f"(${info['spent']:.2f} of ${info['cap']:.2f})"
             ))
+            return False
+        if info.get("sibling_running") or info.get("already_running"):
+            # The domain's one slot is held by another run (a user's manual fetch, or a
+            # sibling project's). Nothing was started for THIS project; say so rather than
+            # claim a start, and let the next tick try again.
+            owner = info.get("project") or project["site_url"]
+            self.stdout.write(
+                f"  SKIPPED      {module:<10} — {reason} — a {info.get('scope', '?')!r} run "
+                f"for {owner} holds the slot (task {info.get('task_id')}); next tick"
+            )
             return False
         self.stdout.write(self.style.SUCCESS(
             f"  STARTED      {module:<10} — {reason} (task {info['task_id']}, "
@@ -124,16 +146,23 @@ class Command(BaseCommand):
                 f"{scheduling.RUN_TIMEOUT.total_seconds() / 3600:.0f}h timeout"
             ))
 
-        site_urls = self._site_urls(opts["site"])
-        if not site_urls:
+        projects = self._projects(opts["site"])
+        if not projects:
             self.stdout.write("No active sites — nothing to do.")
             return
 
         started = 0
-        for site_url in site_urls:
-            self.stdout.write(f"\n{site_url}")
+        # One start per DOMAIN per tick, whatever the number of projects on it: the DB
+        # enforces one running RefreshRun per site_url, the connectors are rate-limited per
+        # account, and the SPA's banner follows one run. Eighteen due cities therefore drain
+        # one per tick -- eighteen hours at worst, well inside a weekly cadence. The set is
+        # what makes a --dry-run (which starts nothing) predict the same thing a real run does.
+        busy: set[str] = set()
+        for project in projects:
+            site_url, site_pk, name = project["site_url"], project["site_pk"], project["name"]
+            self.stdout.write(f"\n{site_url} — {name} (#{site_pk})")
 
-            if scheduling.is_sync_running(site_url, ignore_ids=reaped_ids):
+            if site_url in busy or scheduling.is_sync_running(site_url, ignore_ids=reaped_ids):
                 self.stdout.write(
                     "  SKIPPED — a sync is already running for this site; will retry next tick"
                 )
@@ -141,11 +170,12 @@ class Command(BaseCommand):
 
             if forced is not None:
                 cadence = scheduling.get_sync_config(site_url).get(forced, "manual")
-                if self._start(site_url, forced, f"forced via --scope (cadence: {cadence})", dry_run):
+                if self._start(project, forced, f"forced via --scope (cadence: {cadence})", dry_run):
                     started += 1
+                    busy.add(site_url)
                 continue
 
-            rows = scheduling.due_modules(site_url, now=now)
+            rows = scheduling.due_modules(site_url, now=now, site_pk=site_pk)
             due = [r for r in rows if r["due"]]
             if not due:
                 for r in rows:
@@ -154,8 +184,9 @@ class Command(BaseCommand):
 
             # Most overdue first (due_modules already sorted); the rest wait for the next tick.
             winner, deferred = due[0], due[1:]
-            if self._start(site_url, winner["module"], winner["reason"], dry_run):
+            if self._start(project, winner["module"], winner["reason"], dry_run):
                 started += 1
+                busy.add(site_url)
             for r in deferred:
                 self.stdout.write(
                     f"  DEFERRED     {r['module']:<10} — due ({r['reason']}) but one sync per "
@@ -165,5 +196,9 @@ class Command(BaseCommand):
                 if not r["due"]:
                     self.stdout.write(f"  not due      {r['module']:<10} — {r['reason']}")
 
+        domains = {p["site_url"] for p in projects}
         verb = "would start" if dry_run else "started"
-        self.stdout.write(f"\nDone — {verb} {started} sync(s) across {len(site_urls)} site(s).")
+        self.stdout.write(
+            f"\nDone — {verb} {started} sync(s) across {len(projects)} project(s) on "
+            f"{len(domains)} site(s)."
+        )

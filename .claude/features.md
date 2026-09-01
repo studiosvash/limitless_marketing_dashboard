@@ -191,10 +191,14 @@ nothing about the process.
   connector that had not started; the one in flight may already be billed. No confirmation —
   recovery is clicking Fetch again.
 - **Already fetched recently** — pressing a refresh button for a scope whose connectors all
-  synced successfully within the last 24 hours does not start a run. A prompt says when it was
-  last fetched and offers *Refetch anyway* or *Cancel*. A connector whose last run failed is
-  never treated as fresh, so a refresh right after fixing a credential always runs. Scheduled
-  syncs are unaffected — their cadences in Settings → Automation are their own freshness logic.
+  synced successfully **inside the module's own Settings → Automation cadence** (weekly →
+  7 days; `manual` and Refresh all keep a flat 24 h) does not start a run. The prompt says when
+  it was last fetched, that the module is on a weekly schedule and when the next automatic
+  fetch is, and what a refetch now costs on this site's own recorded spend ("about $0.37"),
+  then offers *Refetch anyway* or *Cancel*. Changed 2026-09-01 from a flat 24 h: a click inside
+  the cadence buys data the scheduler is about to buy anyway. A connector whose last run failed
+  is never treated as fresh, so a refresh right after fixing a credential always runs. Scheduled
+  syncs are unaffected — their cadences are their own freshness logic.
 
 ### Global overlays
 
@@ -1410,6 +1414,21 @@ defaults to `daily`: GSC and GA4 are free and unmetered.
 whole panel read as current while Search Console had not been fetched in weeks. Row dates are
 **success-anchored** — a failed attempt fetched nothing and must not read as a run — and a row
 with a real cadence that has never succeeded is coloured amber rather than left to look normal.
+
+**The scheduler walks projects, not domains, and the positions clock is per project
+(2026-09-01).** One domain can be registered as many projects (18 premierstaff.com city
+projects), and a positions run measures ONE project's city. `run_scheduled_syncs` therefore
+iterates `scheduling.active_projects()` (one entry per `sites` row), evaluates
+`due_modules(site_url, site_pk=…)` for each, and starts a run **tagged with that project's
+`site_pk`** — at most one start per domain per tick, so 18 due cities drain one per hourly
+tick. For `scheduling.LOCATION_SCOPED_MODULES` (`positions`) the "is it due?" clock counts only
+runs carrying that project's pk; domain-wide modules (organic, backlinks, audit, …) keep the
+domain clock, where a sibling's run legitimately counts. Settings passes the same `site_pk`, so
+a project's row and the tick that fires for it agree. Before this, the clock was keyed on
+`site_url`: any city's manual fetch marked all 18 "fresh", the scheduler never once started
+positions on the domain in five weeks of live history, and every city's Settings page showed
+the most recent sibling's run as its own "Last run". A legacy run with no `site_pk` counts for
+no project — one extra run on single-project domains after deploy is the accepted price.
 
 ⚠️ The hourly OS task is an **operator install step**, not something the app can do for itself.
 Until it is registered, cadences are stored and the panel is accurate about what *would* run,

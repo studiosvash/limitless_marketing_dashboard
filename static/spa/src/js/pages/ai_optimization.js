@@ -130,7 +130,11 @@
           ? 'AI spend ' + this.money(d.budget.spent) + ' of ' + this.money(d.budget.cap) + ' cap'
           : 'AI spend ' + this.money(d.budget.spent) + ' · no cap set';
         aiv.budgetStyle = { fontSize: '12px', fontWeight: 600, padding: '4px 10px', borderRadius: '6px', background: nearCap ? '#fee2e2' : '#f1f5f9', color: nearCap ? '#b91c1c' : '#475569' };
-        aiv.nextRunLabel = d.next_run ? ('Runs weekly · next ' + d.next_run) : 'Runs weekly · not yet scheduled';
+        /* No scheduler runs tracked prompts (next_run is null by design — see
+           build_ai_response); "Runs weekly · not yet scheduled" promised a schedule that
+           does not exist. Say the truth: runs happen when a Run button is pressed. */
+        aiv.nextRunLabel = d.next_run ? ('Runs weekly · next ' + d.next_run)
+          : 'Prompts run manually — press Run here';
         /* THE RUN IS SERVER STATE. `d.run` is the task the worker process updates, so a run
            in flight survives switching tabs, reloading the page and the death of the worker
            itself. The old `s.aiRunning` was a client-side flag cleared only when the (8-15

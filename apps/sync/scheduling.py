@@ -65,6 +65,21 @@ SYNC_MODULES: tuple[str, ...] = (
     "organic", "positions", "backlinks", "audit", "keywords", "ads", "ai",
 )
 
+# Modules whose runs fetch PER-PROJECT data. Several projects can share one domain
+# (eighteen premierstaff.com city projects, each with its own tracking location), and a
+# positions run measures ONE project's city -- so for these modules the "is it due?" clock
+# is keyed on the project (`RefreshRun.site_pk`), never on the domain. Every other module's
+# data is the same answer for every sibling (one domain's backlinks, crawl, Search Console
+# traffic), so those clocks stay domain-wide and a sibling's run legitimately resets them.
+#
+# Found on the live server 2026-09-01: with the clock keyed on site_url alone, any city's
+# manual fetch marked all 18 "fresh", so in five weeks the scheduler never once started
+# positions for the domain while Connecticut/Denver/Las Vegas sat 12-13 days stale under a
+# weekly cadence -- and every Settings page showed Miami's run as its own "Last run".
+#
+# Mirrors sync_api_service._LOCATION_SCOPED_PAGES; `test_scheduling` pins the two together.
+LOCATION_SCOPED_MODULES: frozenset[str] = frozenset({"positions"})
+
 # Cadence code -> how long a successful run stays "fresh". These are exactly the values the
 # Settings dropdowns emit (see settings_service._CADENCE_LABELS).
 #
@@ -516,23 +531,30 @@ def _scope_filter(module: str):
     return scopes
 
 
-def last_run_at(site_url: str, module: str, statuses: list[str]) -> datetime | None:
+def last_run_at(site_url: str, module: str, statuses: list[str],
+                site_pk: int | None = None) -> datetime | None:
     """`started_at` of the most recent RefreshRun for this (site, module) in `statuses`.
 
     started_at (not finished_at) is the anchor because it is what "when did we last hit the
     APIs" means, and it is the only one of the two that is always set.
+
+    `site_pk` narrows a LOCATION_SCOPED module to one project's own runs. A run with no
+    site_pk (legacy, pre-2026-09-01 scheduler) fetched one arbitrary city and cannot be
+    credited to any project, so it is excluded too -- the rule has no exceptions on purpose.
+    For domain-wide modules `site_pk` is ignored: a sibling's backlinks run IS this project's.
+    Without a site_pk the clock stays domain-wide, so callers with no project in hand keep
+    the old meaning.
     """
-    return (
-        RefreshRun.objects.filter(
-            site_url=site_url, scope__in=_scope_filter(module), status__in=statuses
-        )
-        .order_by("-started_at")
-        .values_list("started_at", flat=True)
-        .first()
+    qs = RefreshRun.objects.filter(
+        site_url=site_url, scope__in=_scope_filter(module), status__in=statuses
     )
+    if site_pk is not None and module in LOCATION_SCOPED_MODULES:
+        qs = qs.filter(site_pk=site_pk)
+    return qs.order_by("-started_at").values_list("started_at", flat=True).first()
 
 
-def next_run_for(site_url: str, module: str, cadence: str) -> datetime | None:
+def next_run_for(site_url: str, module: str, cadence: str,
+                 site_pk: int | None = None) -> datetime | None:
     """When this module's next automatic sync is due, or None when there is no honest answer.
 
     None in exactly two cases:
@@ -549,13 +571,14 @@ def next_run_for(site_url: str, module: str, cadence: str) -> datetime | None:
     interval = CADENCE_INTERVALS.get(cadence)
     if interval is None:
         return None
-    last_success = last_run_at(site_url, module, [RefreshStatus.SUCCESS])
+    last_success = last_run_at(site_url, module, [RefreshStatus.SUCCESS], site_pk=site_pk)
     if last_success is None:
         return None
     return max(last_success + interval, timezone.now())
 
 
-def is_due(site_url: str, module: str, cadence: str, now: datetime | None = None) -> tuple[bool, str]:
+def is_due(site_url: str, module: str, cadence: str, now: datetime | None = None,
+           site_pk: int | None = None) -> tuple[bool, str]:
     """Should the scheduler start this module right now? Returns (due, human reason).
 
     The reason string is what --dry-run prints and what the log line records, so it is written
@@ -569,9 +592,10 @@ def is_due(site_url: str, module: str, cadence: str, now: datetime | None = None
     # A failed attempt holds the module off even though it did not refresh anything -- see
     # FAILED_RUN_BACKOFF for why.
     last_attempt = last_run_at(
-        site_url, module, [RefreshStatus.SUCCESS, RefreshStatus.ERROR, RefreshStatus.RUNNING]
+        site_url, module, [RefreshStatus.SUCCESS, RefreshStatus.ERROR, RefreshStatus.RUNNING],
+        site_pk=site_pk,
     )
-    last_success = last_run_at(site_url, module, [RefreshStatus.SUCCESS])
+    last_success = last_run_at(site_url, module, [RefreshStatus.SUCCESS], site_pk=site_pk)
 
     if last_attempt is not None and last_attempt != last_success:
         retry_at = last_attempt + min(FAILED_RUN_BACKOFF, interval)
@@ -601,20 +625,25 @@ def _ago(now: datetime, then: datetime) -> str:
     return f"{hours // 24}d {hours % 24}h ago"
 
 
-def due_modules(site_url: str, now: datetime | None = None) -> list[dict]:
+def due_modules(site_url: str, now: datetime | None = None,
+                site_pk: int | None = None) -> list[dict]:
     """Every module for this site with its cadence, whether it is due, and why.
 
     Returns ALL modules, not just the due ones, so --dry-run can show the full picture.
     Ordered most-overdue first (SYNC_MODULES order breaks ties), because the caller starts at
     most one sync per site per tick -- see the command for why.
+
+    `site_pk` makes the LOCATION_SCOPED rows answer for one project -- see last_run_at.
+    The scheduler and the Settings panel both pass it, which is what keeps "next in 6d" on a
+    project's Settings page and the tick that actually fires for it in agreement.
     """
     now = now or timezone.now()
     config = get_sync_config(site_url)
     rows = []
     for module in SYNC_MODULES:
         cadence = config.get(module, "manual")
-        due, reason = is_due(site_url, module, cadence, now=now)
-        last_success = last_run_at(site_url, module, [RefreshStatus.SUCCESS])
+        due, reason = is_due(site_url, module, cadence, now=now, site_pk=site_pk)
+        last_success = last_run_at(site_url, module, [RefreshStatus.SUCCESS], site_pk=site_pk)
         interval = CADENCE_INTERVALS.get(cadence)
         overdue = timedelta(0)
         if due and last_success is not None and interval is not None:
@@ -628,14 +657,31 @@ def due_modules(site_url: str, now: datetime | None = None) -> list[dict]:
             "due": due,
             "reason": reason,
             "last_success": last_success,
-            "next_run": next_run_for(site_url, module, cadence),
+            "next_run": next_run_for(site_url, module, cadence, site_pk=site_pk),
             "overdue": overdue,
         })
     rows.sort(key=lambda r: (not r["due"], -r["overdue"].total_seconds() if r["due"] else 0))
     return rows
 
 
-def schedule_summary(site_url: str) -> dict:
+def active_projects() -> list[dict]:
+    """Every active PROJECT as `{"site_url", "site_pk", "name"}` -- one entry per `sites` row,
+    so a domain registered as eighteen city projects yields eighteen entries.
+
+    The scheduler walks this rather than `get_active_site_ids()` (distinct-by-nothing
+    site_url strings) because the unit of scheduling for a LOCATION_SCOPED module is the
+    project: it is the project whose clock is read and the project whose city is fetched.
+    """
+    from pipeline.services.site_service import list_sites
+
+    return [
+        {"site_url": s.site_url, "site_pk": s.id,
+         "name": getattr(s, "site_name", None) or getattr(s, "slug", None) or s.site_url}
+        for s in list_sites(active_only=True)
+    ]
+
+
+def schedule_summary(site_url: str, site_pk: int | None = None) -> dict:
     """The Automation panel's header values: `{"next_run": "YYYY-MM-DD"|None, "day": <weekday>|None}`.
 
     The panel shows ONE next run for the whole site, so this is the earliest next_run across
@@ -648,7 +694,8 @@ def schedule_summary(site_url: str) -> dict:
     """
     config = get_sync_config(site_url)
     candidates = [
-        dt for dt in (next_run_for(site_url, m, config.get(m, "manual")) for m in SYNC_MODULES)
+        dt for dt in (next_run_for(site_url, m, config.get(m, "manual"), site_pk=site_pk)
+                      for m in SYNC_MODULES)
         if dt is not None
     ]
     if not candidates:

@@ -225,6 +225,8 @@ class BuildSettingsResponseNoRowTests(TestCase):
         for row in rows:
             self.assertIsNone(row["last_success"])
             self.assertIsNone(row["next_run"], "no successful run to measure a cadence from")
+            # No connector has ever succeeded either — both clocks honestly empty.
+            self.assertIsNone(row["data_synced"])
         self.assertEqual(body["usage"]["budget"], 0)
         self.assertEqual(body["usage"]["currency"], "USD")
         self.assertEqual(body["usage"]["month_to_date"], 0)
@@ -236,6 +238,45 @@ class BuildSettingsResponseNoRowTests(TestCase):
         })
         for item in body["usage"]["items"]:
             self.assertIsNone(item["est"])
+
+    def test_positions_row_shows_this_projects_own_last_run_not_a_siblings(self):
+        """Settings -> Sync schedule is rendered per project. On 2026-09-01 Charlotte,
+        Houston and Connecticut all showed "Position tracking · Last run 11m ago" -- Miami's
+        run. The row must read the same per-project clock the scheduler acts on."""
+        from datetime import timedelta
+        from django.utils import timezone as dj_tz
+        from apps.sync.models import RefreshRun, RefreshStatus
+        from apps.dashboard.services.settings_service import build_settings_response
+
+        sibling = RefreshRun.objects.create(site_url=SITE_ID, scope="positions",
+                                            status=RefreshStatus.SUCCESS, site_pk=999)
+        RefreshRun.objects.filter(pk=sibling.pk).update(started_at=dj_tz.now() - timedelta(hours=1))
+
+        rows = {r["module"]: r for r in build_settings_response(SITE_ID, site_pk=1)["sync"]["modules"]}
+        self.assertIsNone(rows["positions"]["last_success"],
+                          "a sibling project's positions run is not this project's")
+        rows = {r["module"]: r for r in build_settings_response(SITE_ID, site_pk=999)["sync"]["modules"]}
+        self.assertIsNotNone(rows["positions"]["last_success"])
+
+    def test_module_with_no_run_of_its_own_still_reports_connector_data_freshness(self):
+        """`data_synced` is the connector-level clock (added 2026-08-31): a module introduced
+        after this project's old full syncs has no RefreshRun of its own (`last_success`
+        None → "Never run") while its connectors hold real data — the two contradicting each
+        other on screen is what the founder reported as 'kya bakchodi chal rahi hai'."""
+        from django.utils import timezone as dj_tz
+        from apps.sync.models import SyncLog, SyncStatus
+        from apps.dashboard.services.settings_service import build_settings_response
+        stamp = dj_tz.now()
+        SyncLog.objects.create(connector="gsc", site_url=SITE_ID,
+                               status=SyncStatus.SUCCESS, last_synced=stamp)
+        SyncLog.objects.create(connector="ga4", site_url=SITE_ID,
+                               status=SyncStatus.SUCCESS, last_synced=stamp)
+        rows = {r["module"]: r for r in build_settings_response(SITE_ID)["sync"]["modules"]}
+        organic = rows["organic"]
+        self.assertIsNone(organic["last_success"], "no RefreshRun exists for the module")
+        self.assertEqual(organic["data_synced"], stamp.isoformat())
+        # A module whose connectors never ran keeps both clocks empty.
+        self.assertIsNone(rows["positions"]["data_synced"])
 
 
 class BuildSettingsResponsePartialBlobTests(TestCase):

@@ -495,9 +495,10 @@ A *cell* is `{pos, prev, diff, direction}` with `direction ∈ up|down|flat` —
 domain's 1-based **citation slot in Google's AI Overview** source list for that keyword; a
 real ordinal, not a rank) and `feat` (`{type, slot}`|null — best non-organic feature slot,
 `type ∈ local_pack|featured_snippet`). Both come from the `serp_feature_rankings` table,
-written by `dataforseo_serp_competitors` (task_post now sends `load_async_ai_overview: true`,
-+$0.0006/query auto-refunded when no AIO exists, and results are fetched via
-`task_get/advanced` — the regular endpoint never returns AI Overview items). The whole
+written by `dataforseo_serp_competitors` from the SERPs `dataforseo_serp` bought earlier in the
+same run (since 2026-09-01 the own-domain task_post sends `load_async_ai_overview: true`,
++$0.0006/query auto-refunded when no AIO exists, and both connectors read `task_get/advanced` —
+the regular endpoint never returns AI Overview items; see §Connectors for the sharing). The whole
 reference list is stored per capture (every cited domain, not just tracked ones), so
 share-of-AIO-citations can be computed later without refetching. Cells for domains the
 snapshot did not record keep `aio`/`feat` null — nothing is invented.
@@ -1699,10 +1700,19 @@ live problems, and `FAILED_RUN_BACKOFF` would hold the module off for 6 hours �
 restart the user cancelled in order to make.
 
 **"Already fetched recently".** Before starting a MANUAL run, `start_sync_run` calls
-`scope_last_synced()`. If every connector in the scope has a `success` row inside
-`FRESH_WITHIN` (24 hours, a module constant — not configurable), no run is created and the
-response is `{"fresh": true, "scope", "last_synced"}` — a shape with **no `task_id`**. The SPA
-prompts "last fetched 40 minutes ago — refetch anyway?" and re-POSTs with `force: true`.
+`scope_last_synced()`. If every connector in the scope has a `success` row inside the window,
+no run is created and the response is `{"fresh": true, "scope", "last_synced", "cadence",
+"window_hours", "next_scheduled", "est_cost"}` — a shape with **no `task_id`**. **The window
+is the module's own Settings → Automation cadence** (`freshness_window()`, 2026-09-01): a
+weekly `positions` fetched three days ago is fresh, because the scheduler will fetch it again
+in four and a click now buys the same data twice (live history: NYC hand-fetched at 3 and
+2 days under a weekly cadence, and the old flat 24 h window prompted for neither). `manual`
+cadences and scopes with no cadence (`all`, `core`, `domain_checks`) keep the flat
+`FRESH_WITHIN` (24 h). `est_cost` is this site's own 90-day average per run of the scope's
+connectors (`estimate_scope_cost`, None with no history); `next_scheduled` is
+`scheduling.next_run_for()` for the project. The SPA's confirm quotes all three
+("on a weekly schedule — next automatic fetch in 4 days … about $0.37") and re-POSTs with
+`force: true`.
 A connector whose last run **errored** is never fresh, so a refresh right after fixing a
 credential always runs. `manual=False` disables the check entirely and is what
 `run_scheduled_syncs` passes: the cadences already are the scheduler's freshness logic (a 24h
@@ -1967,9 +1977,14 @@ Behaviours worth knowing:
 - **`gsc_property.resolve_gsc_property()`** exists because `add_site` defaults `gsc_property` to
   a bare domain, which the API interprets as the `http://` URL-prefix property and 403s. It
   matches the stored value against the account's real property list and repairs the `Site` row.
-- **GA4 requires a per-site property id.** When a `Site` row exists without `ga4_property_id`,
-  the connector raises rather than falling back to `.env` — the fallback once wrote 6 654 rows of
-  one site's data under another site's id.
+- **GA4 requires a per-site property id — resolved per domain, not per row (2026-09-01).**
+  `_resolve_site` reads the run's own project row (`connector.site_pk`) first, then, if that
+  row's `ga4_property_id` is blank, any **sibling row with the same `site_url`** that has one —
+  one domain is one GA4 property, and with 18 premierstaff.com projects the id was stored on a
+  single row while a by-domain first-match lookup landed on a blank sibling, so every scheduled
+  `organic` run failed "No GA4 property configured" for a month. Still never `.env`, never
+  another domain: that fallback once wrote 6 654 rows of one site's data under another site's
+  id, so a domain with no property anywhere still raises.
 - GA4 sends **one batched request per report** to conserve its 14 000-token/hour quota.
 - **`pagespeed` measures every known page, mobile only, stalest first.** Order is: never
   measured → longest since measured → most clicks → url. Staleness outranks traffic so that a
@@ -1995,10 +2010,10 @@ Behaviours worth knowing:
 
 | Connector / caller | Endpoint | Writes |
 |---|---|---|
-| `dataforseo_keywords` | `keywords_data/google_ads/search_volume/live`, `dataforseo_labs/google/bulk_keyword_difficulty/live`, `.../keyword_overview/live`, `.../keyword_ideas/live`, `.../related_keywords/live`, `.../keyword_suggestions/live` | `KeywordRanking` (volume/CPC only — never positions) |
-| `dataforseo_serp` | `serp/google/organic/task_post` → `task_get/regular/{id}` | `KeywordRanking` positions |
-| `dataforseo_serp_competitors` | Same task_post/task_get pair | `CompetitorKeywordRanking` |
-| `dataforseo_labs_competitors` | `dataforseo_labs/google/competitors_domain/live` | `CompetitorDomain` |
+| `dataforseo_keywords` | `keywords_data/google_ads/search_volume/live`, `dataforseo_labs/google/bulk_keyword_difficulty/live`, `.../keyword_overview/live`, `.../keyword_ideas/live`, `.../related_keywords/live`, `.../keyword_suggestions/live` | `KeywordRanking` (volume/CPC only — never positions). **Buys a keyword's volume/KD/CPC at most once per `VOLUME_FRESH_DAYS` (30) per (site, location)**; a keyword priced inside the window is carried forward into the run's row with no call (2026-09-01 — it ran inside every weekly positions run and re-bought monthly numbers weekly, $6.37 of $25 / 90 d) |
+| `dataforseo_serp` | `serp/google/organic/task_post` (with `load_async_ai_overview: true`) → `task_get/advanced/{id}` | `KeywordRanking` positions. **Publishes every completed SERP into the run's `run_shared["serp_tasks"]`** (attached by `sync_engine._attach_run_context`) so the competitor connector reads off it. `priority` is `TASK_PRIORITY` (2, fast queue) for a watched run and `NORMAL_PRIORITY` (1, half price) when `connector.scheduled` — set from `RefreshRun.triggered_by is None` by `run_sync` — with a longer poll window (`_poll_budget`) |
+| `dataforseo_serp_competitors` | **No purchase of its own inside a sync run** (2026-09-01): reads competitor ranks, SERP features and AIO citations off `run_shared["serp_tasks"]`. It used to post the identical task per keyword (same keyword/city/device/depth) — $7.59 of $25 / 90 d, the largest line. Posts its own task_post/task_get only when no own-domain SERP ran in the same process (standalone use); an empty shared list means "paid for, still pending, drained next run", not "buy again" | `CompetitorKeywordRanking`, `SerpFeatureRanking` |
+| `dataforseo_labs_competitors` | `dataforseo_labs/google/competitors_domain/live` — **at most once per `COMPETITORS_FRESH_DAYS` (7) per domain**; a list fetched inside the window by this or any sibling project is returned as-is with no call (the table is per domain, but the connector ran in all 18 city runs) | `CompetitorDomain` |
 | `dataforseo_backlinks` | `backlinks/backlinks/live` | `Backlink` |
 | `dataforseo_onpage` | `on_page/task_post` → `on_page/summary/{id}` → `on_page/pages` | `TechnicalIssue` |
 | `dataforseo_ai_keywords` | `ai_optimization/ai_keyword_data/keywords_search_volume/live` (max 1 000 keywords/call) | `AIKeywordData` |

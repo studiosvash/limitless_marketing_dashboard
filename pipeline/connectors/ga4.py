@@ -105,11 +105,33 @@ class GA4Connector(BaseConnector):
         .env property belongs to the PRIMARY site, and falling back to it here used to
         write the primary site's GA4 rows under the new site's id (real bug: 6,654
         fusehealth rows stored as eventstaff.com on 2026-07-15)."""
-        from pipeline.services.site_service import get_site
+        from sqlalchemy import select
+
+        from pipeline.db.schema import Site
+        from pipeline.services.site_service import get_site, get_site_by_pk
+
         with get_session() as session:
-            site = get_site(session, site_id)
+            # The run's own project first (sync_engine attaches `site_pk` per run), then the
+            # domain. Several projects can share one domain and its GA4 property is stored on
+            # whichever row the user typed it into: on the live server it sat on ONE of 18
+            # premierstaff.com rows, and a by-domain lookup that stopped at the first sibling
+            # made every scheduled organic run fail "No GA4 property configured" for a month.
+            # One domain is one GA4 property, so a blank row borrows a SIBLING's -- same
+            # site_url only, never another domain (that is the env-fallback bug above).
+            site = get_site_by_pk(session, getattr(self, "site_pk", None))
+            if site is None:
+                site = get_site(session, site_id)
             if site:
-                return (site.site_url, site.ga4_property_id or "")
+                prop = (site.ga4_property_id or "").strip()
+                if not prop:
+                    prop = session.execute(
+                        select(Site.ga4_property_id)
+                        .where(Site.site_url == site.site_url,
+                               Site.ga4_property_id.isnot(None),
+                               Site.ga4_property_id != "")
+                        .order_by(Site.id)
+                    ).scalars().first() or ""
+                return (site.site_url, prop)
         return (self._default_site_url, self._default_property_id or "")
 
     @with_retry(max_retries=3, base_delay=10.0)

@@ -45,3 +45,62 @@ class GA4ResolveSiteTests(TestCase):
         site_url, prop = connector._resolve_site("newsite.com")
         self.assertEqual(site_url, "newsite.com")
         self.assertEqual(prop, "")  # "" -> fetch() raises a clear error, writes nothing
+
+
+class GA4ResolveSiblingProjectTests(TestCase):
+    """One domain registered as several projects (18 premierstaff.com city projects) is ONE
+    GA4 property: the traffic is the domain's, whichever city project the run belongs to.
+
+    Live server, 2026-09-01: the property was stored on exactly one of the 18 rows (Denver),
+    `_resolve_site` looked the domain up by site_url and got the first sibling -- blank -- so
+    every scheduled organic run since 5 Aug ended "No GA4 property configured" while the
+    property sat one row over. Resolution order: the run's own project row, then any sibling
+    on the same domain that has a property. Never another domain (see the env-fallback bug
+    the class above pins).
+    """
+
+    def setUp(self):
+        db_connection._SessionFactory = None
+        self.addCleanup(setattr, db_connection, "_SessionFactory", None)
+        tmp = tempfile.mkdtemp()
+        db_path = str(Path(tmp) / "fusehealth.db")
+        init_db(get_engine(db_path))
+        self._ctx = override_settings(ANALYTICS_DB_PATH=db_path)
+        self._ctx.enable()
+        self.addCleanup(self._ctx.disable)
+
+        with get_session() as session:
+            blank = Site(site_url="shared.com", slug="shared-charlotte", is_active=1,
+                         ga4_property_id=None)
+            holder = Site(site_url="shared.com", slug="shared-denver", is_active=1,
+                          ga4_property_id="318744602")
+            other = Site(site_url="other.com", slug="other", is_active=1,
+                         ga4_property_id="777777777")
+            session.add_all([blank, holder, other])
+            session.flush()
+            self.blank_pk, self.holder_pk = blank.id, holder.id
+
+    def _connector(self, site_pk=None):
+        connector = GA4Connector()
+        connector._default_property_id = "999999999"  # env default must never leak in
+        connector.site_pk = site_pk                    # what sync_engine attaches per run
+        return connector
+
+    def test_the_runs_own_project_row_wins_when_it_has_a_property(self):
+        self.assertEqual(self._connector(self.holder_pk)._resolve_site("shared.com"),
+                         ("shared.com", "318744602"))
+
+    def test_a_blank_project_row_borrows_a_siblings_property_on_the_same_domain(self):
+        self.assertEqual(self._connector(self.blank_pk)._resolve_site("shared.com"),
+                         ("shared.com", "318744602"))
+
+    def test_a_domain_lookup_with_no_project_borrows_a_sibling_too(self):
+        """The legacy path (no site_pk on the run) used to stop at whichever row came first."""
+        self.assertEqual(self._connector()._resolve_site("shared.com"),
+                         ("shared.com", "318744602"))
+
+    def test_a_property_is_never_borrowed_from_another_domain(self):
+        with get_session() as session:
+            session.add(Site(site_url="lonely.com", slug="lonely", is_active=1,
+                             ga4_property_id=None))
+        self.assertEqual(self._connector()._resolve_site("lonely.com"), ("lonely.com", ""))

@@ -22,14 +22,28 @@ from apps.sync.models import RefreshRun, RefreshStatus, SyncLog, SyncStatus
 SITE = "https://fusehealth.com"
 
 
-def make_run(site_url, scope, status, age):
+def make_run(site_url, scope, status, age, site_pk=None):
     """A RefreshRun that started `age` ago. started_at is auto_now_add, so it has to be
-    written back after creation."""
-    run = RefreshRun.objects.create(site_url=site_url, scope=scope, status=status)
+    written back after creation. `site_pk` names the PROJECT the run belonged to; None is a
+    legacy domain-wide run."""
+    run = RefreshRun.objects.create(site_url=site_url, scope=scope, status=status,
+                                    site_pk=site_pk)
     started = timezone.now() - age
     RefreshRun.objects.filter(pk=run.pk).update(started_at=started)
     run.refresh_from_db()
     return run
+
+
+def fake_sites(*specs):
+    """Stand-ins for `site_service.list_sites()` rows: (site_url, id, name) tuples. The command
+    must iterate PROJECTS (rows), not distinct domains, so two specs may share a site_url."""
+    from types import SimpleNamespace
+    return [SimpleNamespace(site_url=u, id=i, site_name=n, slug=n.lower().replace(" ", "-"),
+                            is_active=1) for (u, i, n) in specs]
+
+
+def patch_sites(*specs):
+    return mock.patch("pipeline.services.site_service.list_sites", return_value=fake_sites(*specs))
 
 
 def set_cadences(site_url, **cadences):
@@ -375,7 +389,7 @@ class RunScheduledSyncsCommandTests(TestCase):
 
     def _run(self, *args, **kwargs):
         out = StringIO()
-        with mock.patch("pipeline.services.site_service.get_active_site_ids", return_value=[SITE]), \
+        with patch_sites((SITE, 1, "Fusehealth")), \
              mock.patch("apps.dashboard.services.sync_api_service.start_sync_run") as started:
             started.side_effect = lambda site_url, scope, **kw: {"task_id": 999, "steps": ["gsc"], "est_cost": 0}
             call_command("run_scheduled_syncs", *args, stdout=out, **kwargs)
@@ -385,7 +399,9 @@ class RunScheduledSyncsCommandTests(TestCase):
         set_cadences(SITE, positions="weekly", backlinks="weekly", audit="monthly",
                      keywords="monthly", ads="12h", ai="weekly")
         for scope in ("positions", "backlinks", "audit", "keywords", "ads", "ai"):
-            make_run(SITE, scope, RefreshStatus.SUCCESS, timedelta(minutes=10))
+            # site_pk=1: the command evaluates project #1's clock, and a positions run only
+            # counts for the project it was tagged with.
+            make_run(SITE, scope, RefreshStatus.SUCCESS, timedelta(minutes=10), site_pk=1)
         output, started = self._run("--dry-run")
         started.assert_not_called()
         self.assertIn("would start 0 sync(s)", output)
@@ -425,7 +441,7 @@ class RunScheduledSyncsCommandTests(TestCase):
         make_run(SITE, "positions", RefreshStatus.SUCCESS, timedelta(days=30))
 
         out = StringIO()
-        with mock.patch("pipeline.services.site_service.get_active_site_ids", return_value=[SITE]), \
+        with patch_sites((SITE, 1, "Fusehealth")), \
              mock.patch("apps.dashboard.services.sync_api_service.start_sync_run") as started:
             # Stand in for the real thing: it creates the `running` row, which is what makes
             # the second invocation a no-op.
@@ -478,8 +494,9 @@ class RunScheduledSyncsCommandTests(TestCase):
         next tick after a restart. Bounded, unlike the old permanent block."""
         set_cadences(SITE, positions="weekly", backlinks="manual", audit="manual",
                      keywords="manual", ads="manual", ai="manual")
-        make_run(SITE, "positions", RefreshStatus.SUCCESS, timedelta(days=30))
-        make_run(SITE, "positions", RefreshStatus.RUNNING, scheduling.RUN_TIMEOUT + timedelta(minutes=5))
+        make_run(SITE, "positions", RefreshStatus.SUCCESS, timedelta(days=30), site_pk=1)
+        make_run(SITE, "positions", RefreshStatus.RUNNING, scheduling.RUN_TIMEOUT + timedelta(minutes=5),
+                 site_pk=1)
         output, started = self._run()
         started.assert_not_called()
         self.assertIn("REAPED", output)
@@ -618,7 +635,7 @@ class OrganicTrafficModuleTests(TestCase):
         """`--scope` validates against SYNC_MODULES, so an unregistered module is a hard
         CommandError -- which is how an operator would discover the gap, if they looked."""
         out = StringIO()
-        with mock.patch("pipeline.services.site_service.get_active_site_ids", return_value=[SITE]):
+        with patch_sites((SITE, 1, "Fusehealth")):
             call_command("run_scheduled_syncs", "--dry-run", "--site", SITE,
                          "--scope", "organic", stdout=out)
         self.assertIn("WOULD START  organic", out.getvalue())
@@ -725,3 +742,153 @@ class PerModuleScheduleTests(TestCase):
         summary = self._summary()
         for key in ("next_run", "day", "last_run"):
             self.assertIn(key, summary)
+
+
+DOMAIN = "premierstaff.com"
+CHARLOTTE, HOUSTON = 21, 22
+
+
+class SiblingProjectClockTests(TestCase):
+    """Several projects share one domain (18 premierstaff.com city projects). A positions run
+    fetches ONE project's location, so the "is this due?" clock must be per project for
+    location-scoped modules -- and stay per domain for modules whose data is the same answer
+    for every sibling (backlinks, audit, organic, ...).
+
+    Proven against the live server on 2026-09-01: the domain-keyed clock let any city's manual
+    fetch mark all 18 "fresh", so the scheduler never once started positions for the domain,
+    and Connecticut/Denver/Las Vegas sat 12-13 days stale under a weekly cadence.
+    """
+
+    def test_a_siblings_positions_run_does_not_make_this_project_fresh(self):
+        make_run(DOMAIN, "positions", RefreshStatus.SUCCESS, timedelta(hours=1), site_pk=CHARLOTTE)
+        due, reason = scheduling.is_due(DOMAIN, "positions", "weekly", site_pk=HOUSTON)
+        self.assertTrue(due, "Charlotte's fetch says nothing about Houston's rankings")
+        self.assertEqual(reason, "never synced")
+
+    def test_this_projects_own_positions_run_resets_its_clock(self):
+        make_run(DOMAIN, "positions", RefreshStatus.SUCCESS, timedelta(hours=1), site_pk=HOUSTON)
+        due, _ = scheduling.is_due(DOMAIN, "positions", "weekly", site_pk=HOUSTON)
+        self.assertFalse(due)
+
+    def test_a_manual_run_three_days_ago_skips_that_project_only(self):
+        """The founder's own spec: a project fetched by hand a few days ago is skipped; one
+        that is over a week old runs. Both on the same domain, in the same tick."""
+        make_run(DOMAIN, "positions", RefreshStatus.SUCCESS, timedelta(days=3), site_pk=CHARLOTTE)
+        make_run(DOMAIN, "positions", RefreshStatus.SUCCESS, timedelta(days=9), site_pk=HOUSTON)
+        self.assertFalse(scheduling.is_due(DOMAIN, "positions", "weekly", site_pk=CHARLOTTE)[0])
+        self.assertTrue(scheduling.is_due(DOMAIN, "positions", "weekly", site_pk=HOUSTON)[0])
+
+    def test_a_siblings_backlinks_run_counts_for_the_whole_domain(self):
+        make_run(DOMAIN, "backlinks", RefreshStatus.SUCCESS, timedelta(hours=1), site_pk=CHARLOTTE)
+        due, _ = scheduling.is_due(DOMAIN, "backlinks", "weekly", site_pk=HOUSTON)
+        self.assertFalse(due, "one domain's backlinks are the same answer for every sibling")
+
+    def test_a_legacy_domain_wide_positions_run_does_not_count_for_a_project(self):
+        """A run with no site_pk fetched one arbitrary city (get_site() first-match). It
+        cannot be credited to any particular project. One extra run for the single-project
+        domains right after deploy is the accepted price of a rule with no exceptions."""
+        make_run(DOMAIN, "positions", RefreshStatus.SUCCESS, timedelta(hours=1), site_pk=None)
+        self.assertTrue(scheduling.is_due(DOMAIN, "positions", "weekly", site_pk=HOUSTON)[0])
+
+    def test_without_a_site_pk_the_positions_clock_stays_domain_wide(self):
+        """Callers with no project in hand keep the old behaviour, so nothing that does not
+        pass site_pk changes meaning."""
+        make_run(DOMAIN, "positions", RefreshStatus.SUCCESS, timedelta(hours=1), site_pk=CHARLOTTE)
+        self.assertFalse(scheduling.is_due(DOMAIN, "positions", "weekly")[0])
+
+    def test_a_siblings_failed_attempt_does_not_back_this_project_off(self):
+        make_run(DOMAIN, "positions", RefreshStatus.ERROR, timedelta(hours=1), site_pk=CHARLOTTE)
+        due, reason = scheduling.is_due(DOMAIN, "positions", "weekly", site_pk=HOUSTON)
+        self.assertTrue(due)
+        self.assertEqual(reason, "never synced")
+
+    def test_due_modules_and_next_run_are_per_project(self):
+        set_cadences(DOMAIN, positions="weekly")
+        make_run(DOMAIN, "positions", RefreshStatus.SUCCESS, timedelta(days=1), site_pk=CHARLOTTE)
+        rows = {r["module"]: r for r in scheduling.due_modules(DOMAIN, site_pk=HOUSTON)}
+        self.assertIsNone(rows["positions"]["last_success"])
+        self.assertIsNone(rows["positions"]["next_run"])
+        self.assertTrue(rows["positions"]["due"])
+        rows = {r["module"]: r for r in scheduling.due_modules(DOMAIN, site_pk=CHARLOTTE)}
+        self.assertIsNotNone(rows["positions"]["last_success"])
+        self.assertFalse(rows["positions"]["due"])
+
+    def test_schedule_summary_is_per_project(self):
+        set_cadences(DOMAIN, positions="weekly")
+        make_run(DOMAIN, "positions", RefreshStatus.SUCCESS, timedelta(days=1), site_pk=CHARLOTTE)
+        self.assertIsNotNone(scheduling.schedule_summary(DOMAIN, site_pk=CHARLOTTE)["next_run"])
+        self.assertIsNone(scheduling.schedule_summary(DOMAIN, site_pk=HOUSTON)["next_run"])
+
+    def test_location_scoped_modules_mirror_sync_api_service(self):
+        """`scheduling.LOCATION_SCOPED_MODULES` must agree with the runner's own notion of
+        which scopes fetch per-project data, or the scheduler keys a clock per project for a
+        run that fetches per domain (or vice versa)."""
+        from apps.dashboard.services.sync_api_service import _scope_is_location_scoped
+
+        for module in scheduling.SYNC_MODULES:
+            self.assertEqual(
+                module in scheduling.LOCATION_SCOPED_MODULES,
+                _scope_is_location_scoped(module),
+                f"{module!r}: scheduler and runner disagree on whether it is per-project",
+            )
+
+
+class RunScheduledSyncsPerProjectTests(TestCase):
+    """The command walks PROJECTS, not domains, and every run it starts names its project."""
+
+    def _run(self, sites, *args, side_effect=None):
+        out = StringIO()
+        with patch_sites(*sites), \
+             mock.patch("apps.dashboard.services.sync_api_service.start_sync_run") as started:
+            started.side_effect = side_effect or (
+                lambda site_url, scope, **kw: {"task_id": 999, "steps": ["gsc"], "est_cost": 0})
+            call_command("run_scheduled_syncs", *args, stdout=out)
+        return out.getvalue(), started
+
+    def test_starts_the_stale_sibling_and_tags_the_run_with_its_site_pk(self):
+        set_cadences(DOMAIN, positions="weekly")
+        make_run(DOMAIN, "positions", RefreshStatus.SUCCESS, timedelta(hours=2), site_pk=CHARLOTTE)
+        output, started = self._run([(DOMAIN, CHARLOTTE, "PS/ES - Charlotte"),
+                                     (DOMAIN, HOUSTON, "PS/ES - Houston")])
+        self.assertEqual(started.call_count, 1)
+        self.assertEqual(started.call_args.args, (DOMAIN, "positions"))
+        self.assertEqual(started.call_args.kwargs.get("site_pk"), HOUSTON)
+        self.assertFalse(started.call_args.kwargs.get("manual", True))
+        self.assertIn("PS/ES - Houston", output)
+
+    def test_one_start_per_domain_per_tick_even_when_every_sibling_is_due(self):
+        set_cadences(DOMAIN, positions="weekly")
+        output, started = self._run([(DOMAIN, CHARLOTTE, "PS/ES - Charlotte"),
+                                     (DOMAIN, HOUSTON, "PS/ES - Houston")])
+        self.assertEqual(started.call_count, 1)
+        self.assertIn("next tick", output)
+        self.assertIn("started 1 sync(s)", output)
+
+    def test_two_domains_each_get_a_start_in_the_same_tick(self):
+        set_cadences(DOMAIN, positions="weekly")
+        set_cadences(SITE, positions="weekly")
+        _, started = self._run([(DOMAIN, CHARLOTTE, "PS/ES - Charlotte"), (SITE, 1, "Fusehealth")])
+        self.assertEqual(started.call_count, 2)
+        self.assertEqual({c.kwargs["site_pk"] for c in started.call_args_list}, {CHARLOTTE, 1})
+
+    def test_a_sibling_running_answer_is_reported_not_counted_as_started(self):
+        set_cadences(DOMAIN, positions="weekly")
+        output, started = self._run(
+            [(DOMAIN, HOUSTON, "PS/ES - Houston")],
+            side_effect=lambda *a, **kw: {"task_id": 5, "sibling_running": True,
+                                          "project": "PS/ES - Charlotte", "scope": "positions",
+                                          "est_cost": 0, "warnings": []},
+        )
+        self.assertIn("started 0 sync(s)", output)
+        self.assertIn("PS/ES - Charlotte", output)
+
+    def test_site_filter_keeps_every_project_on_that_domain(self):
+        set_cadences(DOMAIN, positions="weekly")
+        set_cadences(SITE, positions="weekly")
+        output, started = self._run([(DOMAIN, CHARLOTTE, "PS/ES - Charlotte"),
+                                     (DOMAIN, HOUSTON, "PS/ES - Houston"), (SITE, 1, "Fusehealth")],
+                                    "--site", DOMAIN, "--dry-run")
+        self.assertIn("PS/ES - Charlotte", output)
+        self.assertIn("PS/ES - Houston", output)
+        self.assertNotIn("Fusehealth", output)
+

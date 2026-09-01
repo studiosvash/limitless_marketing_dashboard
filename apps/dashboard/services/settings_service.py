@@ -45,7 +45,7 @@ from sqlalchemy import select
 
 from apps.accounts.models import UserProfile
 from apps.dashboard.models import ProjectSettings
-from apps.sync.models import SyncLog
+from apps.sync.models import SyncLog, SyncStatus
 from pipeline.db.schema import Site
 from pipeline.services.competitor_service import get_tracked_competitors, set_tracked_competitors
 from apps.dashboard.services.ads_credentials import (
@@ -372,7 +372,7 @@ def _get_or_create_blob(site_id: str) -> ProjectSettings:
     return obj
 
 
-def _sync_summary_raw(site_id: str) -> dict:
+def _sync_summary_raw(site_id: str, site_pk: int | None = None) -> dict:
     """Real 'next scheduled run' summary for the Automation sub-tab header
     (`data.sync.next_run`/`.day`/`.last_run`, dereferenced unguarded at index.html:6424).
 
@@ -431,8 +431,30 @@ def _sync_summary_raw(site_id: str) -> dict:
     # due_modules() sorts most-overdue-first for the scheduler's benefit. The panel renders a
     # fixed list of rows, so it re-keys by `module` and ignores this order -- but the order is
     # left as-is rather than re-sorted here, so that the one function stays the one authority.
+    # CONNECTOR-level freshness per module, alongside the module-RUN clock. The two answer
+    # different questions and used to contradict each other on screen: `last_success` counts
+    # RefreshRun rows for the module's own scope (plus 'all'/'core'), so a module introduced
+    # after this project's old full syncs reads "Never run" even though its CONNECTORS have
+    # fetched real data — the founder read that as a bug ("kya bakchodi chal rahi hai").
+    # `data_synced` is the newest successful SyncLog.last_synced among the module's connectors,
+    # whatever run produced it, so the row can say "module never ran · data is 39d old" instead
+    # of a bare "Never run" that looks like an empty database.
+    connector_latest = dict(
+        SyncLog.objects.filter(site_url=site_id, status=SyncStatus.SUCCESS,
+                               last_synced__isnull=False)
+        .values_list("connector", "last_synced")
+    )
+
+    def _data_synced(module: str):
+        stamps = [connector_latest[c] for c in _module_connector_names(module)
+                  if c in connector_latest]
+        return max(stamps).isoformat() if stamps else None
+
+    # `site_pk` is threaded into due_modules/schedule_summary so a LOCATION_SCOPED row
+    # (positions) reads THIS project's own run history. Without it every one of the 18
+    # premierstaff.com Settings pages showed the same sibling's run as its "Last run".
     return {
-        **schedule_summary(site_id),
+        **schedule_summary(site_id, site_pk=site_pk),
         "last_run": latest.isoformat() if latest else None,
         "modules": [
             {
@@ -442,8 +464,9 @@ def _sync_summary_raw(site_id: str) -> dict:
                 "reason": row["reason"],
                 "last_success": row["last_success"].isoformat() if row["last_success"] else None,
                 "next_run": row["next_run"].isoformat() if row["next_run"] else None,
+                "data_synced": _data_synced(row["module"]),
             }
-            for row in due_modules(site_id)
+            for row in due_modules(site_id, site_pk=site_pk)
         ],
     }
 
@@ -723,7 +746,7 @@ def build_settings_response(site_id: str, site_pk: int | None = None) -> dict:
         "connectors": query_connectors_raw(site_id),
         "team": query_team_raw(),
         "invitations": query_invitations_raw(),
-        "sync": _sync_summary_raw(site_id),
+        "sync": _sync_summary_raw(site_id, site_pk=site_pk or (site.id if site else None)),
         "usage": _usage_raw(site_id, blob["syncConfig"], blob["budget"]["cap"]),
         **blob,
     }

@@ -83,7 +83,10 @@
         ['audit', 'Site audit crawl', 'OnPage crawl · ~$0.00125/page', 'audit'],
         ['keywords', 'Keyword volumes', 'Labs volume / KD / intent refresh', 'keywords'],
         ['ads', 'Ads (Google + GA4)', 'GAQL reports + GA4 runReport · $0', 'ads'],
-        ['ai', 'AI visibility', 'LLM mention checks across 5 models', 'ai']
+        /* This row is the LLM Mentions + AI-keyword-volume connectors ONLY. The Tracked
+           Prompts grid (prompt × engine checks) is a separate pipeline run manually from the
+           AI Optimization page — naming that here made its runs look missing from this clock. */
+        ['ai', 'AI visibility (LLM mentions index)', 'LLM Mentions + AI keyword volumes · tracked prompts run from the AI page', 'ai']
       ];
       /* Per-module schedule facts, keyed for lookup. settings_service._sync_summary_raw builds
          these from the SAME apps.sync.scheduling.due_modules() the scheduler acts on, so a row
@@ -438,8 +441,13 @@
           const cadence = info.cadence || syncCfg[m[0]] || 'weekly';
           /* SUCCESS-anchored (see _sync_summary_raw): a failed attempt is not a run, and
              showing one as "Last run" is how a module that has fetched nothing for three
-             weeks reads as current. */
-          const last = info.last_success ? 'Last run ' + this.relTime(info.last_success) : 'Never run';
+             weeks reads as current. Two clocks, both named: `last_success` is this MODULE's
+             own run history, `data_synced` is when its CONNECTORS last fetched under any run.
+             A module created after old full syncs has no run of its own but real data — a
+             bare "Never run" there read as an empty database and got reported as a bug. */
+          const last = info.last_success ? 'Last run ' + this.relTime(info.last_success)
+            : info.data_synced ? 'Module never ran on its own · data fetched ' + this.relTime(info.data_synced)
+            : 'Never run';
           /* Three genuinely different states, none of them a date:
                manual        — nothing will ever start it; saying "due now" would be a lie.
                due           — the next hourly tick takes it; that IS "now".
@@ -456,7 +464,10 @@
             /* Amber only for a real cadence that has never produced data — the state this
                whole change exists to surface. An overdue-by-an-hour row is normal (the tick is
                hourly) and must not cry wolf. */
-            scheduleStyle: { fontSize: '11.5px', marginTop: '3px', color: (!info.last_success && cadence !== 'manual') ? '#b45309' : '#94a3b8' },
+            /* Amber only when there is truly NO data behind the row — a module whose
+               connectors have fetched under some other run has data, just no run of its own,
+               and must not scream like an empty one. */
+            scheduleStyle: { fontSize: '11.5px', marginTop: '3px', color: (!info.last_success && !info.data_synced && cadence !== 'manual') ? '#b45309' : '#94a3b8' },
             title: info.reason || '',
             canSync: !syncing, run: () => this.startSync(m[3])
           };
