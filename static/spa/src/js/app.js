@@ -839,8 +839,25 @@
            Refresh and it ignored me" is worse than one prompt. This is the only place `force`
            is ever set. */
         if (t.fresh) {
-          if (window.confirm('This was last fetched ' + this.agoText(t.last_synced) + '.'
-              + '\n\nRefetch anyway? It will call the APIs again and re-spend any credits they cost.')) {
+          /* Argue with the schedule and the money, not just the clock (2026-09-01): the
+             window is now the module's own cadence, so say what that cadence is, when the
+             scheduler fetches it next, and what a refetch costs on THIS site's recorded
+             spend. Every line is conditional on the server having the fact — a first run
+             has no cost history and a manual cadence has no next run. */
+          const lines = ['This was last fetched ' + this.agoText(t.last_synced) + '.'];
+          if (t.cadence && t.cadence !== 'manual') {
+            const days = Math.round((t.window_hours || 0) / 24);
+            let sched = 'It is on a ' + t.cadence + ' schedule';
+            if (t.next_scheduled) sched += ' — the next automatic fetch is ' + this.agoText(t.next_scheduled).replace(/ ago$/, '').replace(/^in /, 'in ');
+            sched += (days >= 1 ? ' (data counts as current for ' + days + ' day' + (days === 1 ? '' : 's') + ').' : '.');
+            lines.push(sched);
+          }
+          if (t.est_cost != null && t.est_cost > 0) {
+            lines.push('Refetching now would cost about $' + (t.est_cost < 0.01 ? '0.01' : t.est_cost.toFixed(2)) + ' in DataForSEO credits, based on this site\'s own recent runs.');
+          } else {
+            lines.push('Refetching now will call the APIs again and re-spend any credits they cost.');
+          }
+          if (window.confirm(lines.join('\n\n') + '\n\nRefetch anyway?')) {
             this.startSync(scope, null, true);
           }
           return;

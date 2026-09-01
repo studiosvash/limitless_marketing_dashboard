@@ -352,7 +352,25 @@ def _run_post_sync(site_url: str, connectors_run: list[str]) -> None:
 # sync_all
 # ---------------------------------------------------------------------------
 
-def sync_all(site_url: str, run_id: int, site_pk: int | None = None) -> dict:
+def _attach_run_context(connector, site_pk, run_shared: dict, scheduled: bool) -> None:
+    """The per-run facts every connector gets, whatever scope started it.
+
+    * `site_pk` — which project this run belongs to (location-aware connectors read it).
+    * `run_shared` — ONE dict per run, the same object on every connector, so a connector can
+      hand a later one what it already paid for. `dataforseo_serp` publishes each completed
+      SERP here and `dataforseo_serp_competitors` reads competitor ranks off those instead of
+      buying the identical SERP again (2026-09-01: that duplicate was the largest line on the
+      DataForSEO bill — $7.59 of $25 over 90 days).
+    * `scheduled` — nobody is watching a progress bar. The SERP connectors use it to take the
+      normal-priority queue (half the per-query price) and wait longer for it.
+    """
+    connector.site_pk = site_pk
+    connector.run_shared = run_shared
+    connector.scheduled = bool(scheduled)
+
+
+def sync_all(site_url: str, run_id: int, site_pk: int | None = None,
+             scheduled: bool = False) -> dict:
     """
     Run all active connectors for site_url.
     Updates the RefreshRun progress row after each connector completes.
@@ -370,6 +388,7 @@ def sync_all(site_url: str, run_id: int, site_pk: int | None = None) -> dict:
 
     connectors = list(ALL_CONNECTORS)
     total = len(connectors)
+    run_shared: dict = {}   # one per run — see _attach_run_context
     completed = 0
     total_records = 0
     errors: list[str] = []
@@ -410,9 +429,9 @@ def sync_all(site_url: str, run_id: int, site_pk: int | None = None) -> dict:
             RefreshRun.objects.filter(pk=run_id).update(completed_count=completed)
             continue
 
-        # Which project this run belongs to. Read by the location-aware connectors with
-        # getattr(self, "site_pk", None); harmless for every other connector.
-        connector.site_pk = site_pk
+        # Which project this run belongs to, the run's shared context and whether anyone is
+        # watching — see _attach_run_context.
+        _attach_run_context(connector, site_pk, run_shared, scheduled)
 
         # NOTE: scope='all' deliberately has NO incremental narrowing. Narrowing belongs to
         # sync_page's `positioning_new` scope, whose whole purpose is to measure only the
@@ -481,7 +500,8 @@ def sync_all(site_url: str, run_id: int, site_pk: int | None = None) -> dict:
 # sync_page
 # ---------------------------------------------------------------------------
 
-def sync_page(page: str, site_url: str, run_id: int, site_pk: int | None = None) -> dict:
+def sync_page(page: str, site_url: str, run_id: int, site_pk: int | None = None,
+              scheduled: bool = False) -> dict:
     """
     Run only the connectors relevant to `page` for site_url.
     Updates the RefreshRun progress row after each connector completes.
@@ -496,6 +516,7 @@ def sync_page(page: str, site_url: str, run_id: int, site_pk: int | None = None)
 
     connector_names = PAGE_CONNECTORS.get(page, [])
     total = len(connector_names)
+    run_shared: dict = {}   # one per run — see _attach_run_context
     completed = 0
     total_records = 0
     errors: list[str] = []
@@ -574,8 +595,9 @@ def sync_page(page: str, site_url: str, run_id: int, site_pk: int | None = None)
             RefreshRun.objects.filter(pk=run_id).update(completed_count=completed)
             continue
 
-        # Which project this run belongs to — see the same line in sync_all.
-        connector.site_pk = site_pk
+        # Which project this run belongs to, the run's shared context and whether anyone is
+        # watching — see _attach_run_context.
+        _attach_run_context(connector, site_pk, run_shared, scheduled)
 
         # Narrow this run to the keywords that actually need measuring, for scopes that ask
         # for it. `incremental_kws` is resolved ONCE above, before any connector runs; if it

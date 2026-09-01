@@ -84,6 +84,17 @@ TASK_PENDING = (40601, 40602)      # still working — keep polling, never disca
 # a third of a cent per keyword to make the button actually finish is the right trade.
 TASK_PRIORITY = 2
 
+# The queue a run nobody is watching takes. A scheduled (cron) run has no progress bar and no
+# user waiting, so paying double for an 80-second answer buys nothing; the normal queue costs
+# half per query and `_poll_budget` waits accordingly. A task still pending when that window
+# closes is not lost — `_drain_ready_tasks` collects it on the next run.
+NORMAL_PRIORITY = 1
+
+# Poll windows, (polls, seconds between polls). Priority-2 tasks measured ~80 s, so the watched
+# window is generous at 4 min; the normal queue is slower and unwatched, so it gets 12.
+_WATCHED_POLL_BUDGET = (24, 10)
+_SCHEDULED_POLL_BUDGET = (48, 15)
+
 # The (device, os) pairs a SERP task_post accepts. Keys are the lowercased form of
 # `sites.device`; anything unrecognised (or unset) tracks the desktop SERP.
 _DEVICE_PAYLOADS = {
@@ -207,6 +218,28 @@ class DataForSEOSERPConnector(BaseConnector):
             )
             return subset
         return keywords
+
+    # -- run context (attached by sync_engine._attach_run_context; absent when standalone) --
+
+    def _priority(self) -> int:
+        return NORMAL_PRIORITY if getattr(self, "scheduled", False) else TASK_PRIORITY
+
+    def _poll_budget(self) -> tuple[int, int]:
+        """(max_polls, poll_interval) for this run — longer when nobody is watching."""
+        return _SCHEDULED_POLL_BUDGET if getattr(self, "scheduled", False) else _WATCHED_POLL_BUDGET
+
+    def _publish(self, task_data: dict) -> None:
+        """Hand a completed SERP to the rest of this run.
+
+        `dataforseo_serp_competitors` reads competitor ranks, SERP features and AI Overview
+        citations off exactly these results instead of buying the identical SERP a second
+        time — the reason this connector now fetches the ADVANCED rendering with the AI
+        Overview loaded. No-op outside a sync run (no `run_shared` attached).
+        """
+        shared = getattr(self, "run_shared", None)
+        if isinstance(shared, dict):
+            shared.setdefault("serp_tasks", []).append(task_data)
+
     @with_retry(max_retries=3, base_delay=5.0)
     def _submit_tasks(self, keywords: list[str], target_domain: str,
                       location: str = DEFAULT_LOCATION,
@@ -252,7 +285,12 @@ class DataForSEOSERPConnector(BaseConnector):
                     # tracking produced nothing.
                     "depth": 30,                     # Top 30 only (not 100)
                     "calculate_rectangles": False,   # Not needed
-                    "priority": TASK_PRIORITY,       # see the constant — Standard is too slow
+                    # +$0.0006/query, refunded by DataForSEO when the SERP has no AI
+                    # Overview. This purchase is now the ONLY SERP purchase per keyword —
+                    # the competitor connector reads off it (see _publish) — so the AI
+                    # Overview it used to load on its own duplicate task is loaded here.
+                    "load_async_ai_overview": True,
+                    "priority": self._priority(),    # watched: fast queue; scheduled: normal
                     "tag": f"fusehealth_{iso(yesterday())}",
                 }
                 for kw in batch
@@ -298,19 +336,28 @@ class DataForSEOSERPConnector(BaseConnector):
         target_domain: str,
         site_id: str,
         location: str = DEFAULT_LOCATION,
-        max_polls: int = 24,
-        poll_interval: int = 10,
+        max_polls: int | None = None,
+        poll_interval: int | None = None,
     ) -> list[dict]:
         """
-        Poll the priority queue for completed tasks.
-        Measured completion time on priority 2: ~80 s. Max wait: max_polls x poll_interval.
+        Poll the queue for completed tasks.
+        Measured completion time on priority 2: ~80 s. Max wait: max_polls x poll_interval,
+        defaulting to `_poll_budget()` — longer for a scheduled run on the normal queue.
 
         A task still pending when the window closes is NOT lost — it stays in DataForSEO's
         `tasks_ready` list for 30 days and the next run's `_drain_ready_tasks()` collects it.
 
+        Reads the ADVANCED rendering (free — billing happened at task_post): the organic
+        items this connector needs are identical, and the AI Overview / feature items that
+        only exist there are what the competitor connector reads off the published result.
+
         Returns:
             Normalized records for keyword_rankings table.
         """
+        if max_polls is None or poll_interval is None:
+            budget_polls, budget_interval = self._poll_budget()
+            max_polls = budget_polls if max_polls is None else max_polls
+            poll_interval = budget_interval if poll_interval is None else poll_interval
         records = []
         pending = list(task_ids)
         tracking_date = yesterday()
@@ -329,7 +376,7 @@ class DataForSEOSERPConnector(BaseConnector):
             for task_id in pending:
                 try:
                     resp = requests.get(
-                        f"{DATAFORSEO_BASE}/serp/google/organic/task_get/regular/{task_id}",
+                        f"{DATAFORSEO_BASE}/serp/google/organic/task_get/advanced/{task_id}",
                         auth=self.auth,
                         timeout=20,
                     )
@@ -347,6 +394,7 @@ class DataForSEOSERPConnector(BaseConnector):
                         task_records = self._normalize_task(task_data, tracking_date,
                                                             target_domain, site_id, location)
                         records.extend(task_records)
+                        self._publish(task_data)
                     elif status_code in TASK_PENDING:
                         still_pending.append(task_id)      # 40601/40602 — still working
                     else:
@@ -417,7 +465,7 @@ class DataForSEOSERPConnector(BaseConnector):
         for row in mine:
             try:
                 resp = requests.get(
-                    f"{DATAFORSEO_BASE}/serp/google/organic/task_get/regular/{row['id']}",
+                    f"{DATAFORSEO_BASE}/serp/google/organic/task_get/advanced/{row['id']}",
                     auth=self.auth, timeout=20,
                 )
                 resp.raise_for_status()
@@ -427,6 +475,7 @@ class DataForSEOSERPConnector(BaseConnector):
                 if task_data.get("status_code") == TASK_OK:
                     records.extend(self._normalize_task(task_data, tracking_date,
                                                         target_domain, site_id, location))
+                    self._publish(task_data)
             except Exception as exc:
                 self.logger.warning(f"[dataforseo_serp] Could not collect {row['id']}: {exc}")
         return records
@@ -523,6 +572,12 @@ class DataForSEOSERPConnector(BaseConnector):
         )
         self._run_cost = 0.0
         records: list[dict] = []
+        # Declare the shared SERP list up front, even if it stays empty: its PRESENCE is how
+        # the competitor connector knows this connector ran in this process and must not buy
+        # the SERPs itself — an empty list means "paid for, still pending, drained next run".
+        shared = getattr(self, "run_shared", None)
+        if isinstance(shared, dict):
+            shared.setdefault("serp_tasks", [])
         try:
             # Leftovers first: results an earlier run paid for and never collected. Free —
             # task_get on an already-charged task costs nothing — and it means a slow queue

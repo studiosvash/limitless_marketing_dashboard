@@ -36,7 +36,8 @@ from pipeline.connectors.dataforseo_live_serp import normalize_location_name
 # One definition of the DataForSEO task status codes and the queue priority, with
 # the full account of what each wrong value cost. See dataforseo_serp.py.
 from pipeline.connectors.dataforseo_serp import (
-    TASK_CREATED, TASK_OK, TASK_PENDING, TASK_PRIORITY, _resolve_device,
+    NORMAL_PRIORITY, TASK_CREATED, TASK_OK, TASK_PENDING, TASK_PRIORITY,
+    _SCHEDULED_POLL_BUDGET, _WATCHED_POLL_BUDGET, _resolve_device,
 )
 from pipeline.db.schema import DEFAULT_LOCATION
 from pipeline.utils.retry import with_retry
@@ -126,6 +127,30 @@ class DataForSEOSerpCompetitorsConnector(BaseConnector):
             )
             return subset
         return keywords
+
+    # -- run context (attached by sync_engine._attach_run_context; absent when standalone) --
+
+    def _priority(self) -> int:
+        return NORMAL_PRIORITY if getattr(self, "scheduled", False) else TASK_PRIORITY
+
+    def _poll_budget(self) -> tuple[int, int]:
+        return _SCHEDULED_POLL_BUDGET if getattr(self, "scheduled", False) else _WATCHED_POLL_BUDGET
+
+    def _shared_serps(self) -> Optional[list[dict]]:
+        """The SERPs `dataforseo_serp` bought earlier in THIS run, or None when it did not
+        run in this process (standalone use) and this connector must buy its own.
+
+        An empty list is not None: it means the own-domain connector ran but every task was
+        still pending when its poll window closed. Those SERPs are paid for and will be
+        drained on the next run; buying them again here is the exact double spend this
+        sharing exists to end.
+        """
+        shared = getattr(self, "run_shared", None)
+        if not isinstance(shared, dict):
+            return None
+        tasks = shared.get("serp_tasks")
+        return list(tasks) if isinstance(tasks, list) else None
+
     @with_retry(max_retries=3, base_delay=5.0)
     def _submit_tasks(self, keywords: list[str],
                       location: str = DEFAULT_LOCATION,
@@ -162,10 +187,9 @@ class DataForSEOSerpCompetitorsConnector(BaseConnector):
                     # Overview. Makes the ai_overview item (and its citation references)
                     # available on task_get/advanced — retrieval itself is free.
                     "load_async_ai_overview": True,
-                    # Priority queue — see TASK_PRIORITY in dataforseo_serp.py for the
-                    # measurement. The Standard Queue does not finish inside any poll window a
-                    # user is willing to watch.
-                    "priority": TASK_PRIORITY,
+                    # Priority queue when a user is watching — see TASK_PRIORITY in
+                    # dataforseo_serp.py for the measurement; the normal queue when scheduled.
+                    "priority": self._priority(),
                     "tag": f"fusehealth_comp_{iso(yesterday())}",
                 }
                 for kw in batch
@@ -196,8 +220,13 @@ class DataForSEOSerpCompetitorsConnector(BaseConnector):
 
     def _poll_and_fetch(self, task_ids: list[str], competitors: set[str], site_id: str,
                         location: str = DEFAULT_LOCATION,
-                        max_polls: int = 24, poll_interval: int = 10) -> list[dict]:
-        """Poll the Standard Queue and normalize completed tasks into competitor rows."""
+                        max_polls: int | None = None, poll_interval: int | None = None) -> list[dict]:
+        """Poll the queue and normalize completed tasks into competitor rows. The window
+        defaults to `_poll_budget()` — longer for a scheduled run on the normal queue."""
+        if max_polls is None or poll_interval is None:
+            budget_polls, budget_interval = self._poll_budget()
+            max_polls = budget_polls if max_polls is None else max_polls
+            poll_interval = budget_interval if poll_interval is None else poll_interval
         records: list[dict] = []
         pending = list(task_ids)
         tracking_date = yesterday()
@@ -458,6 +487,24 @@ class DataForSEOSerpCompetitorsConnector(BaseConnector):
             # reason a slow queue now costs a delay rather than the data.
             records = self._drain_ready_tasks(competitors, resolved_site_id, location)
 
+            # ONE SERP purchase per keyword per run. When the own-domain connector ran earlier
+            # in this process it bought the very SERPs this connector used to buy again — same
+            # keyword, city, device and depth, with the AI Overview loaded and the ADVANCED
+            # rendering fetched — so competitor ranks and SERP features are read off those.
+            # Nothing is posted and nothing is billed. (2026-09-01: the duplicate purchase was
+            # the largest line on the DataForSEO bill.)
+            shared = self._shared_serps()
+            if shared is not None:
+                tracking_date = yesterday()
+                for task_data in shared:
+                    records.extend(self._normalize_task(task_data, tracking_date, competitors,
+                                                        resolved_site_id, location))
+                self.logger.info(
+                    f"[dataforseo_serp_competitors] Read {len(shared)} SERP(s) bought by "
+                    f"dataforseo_serp in this run — no tasks posted"
+                )
+                return records
+
             device, os_name = _resolve_device(getattr(self, "site_pk", None), resolved_site_id)
             task_ids = self._submit_tasks(keywords, location, device=device, os_name=os_name)
             if not task_ids:
@@ -473,13 +520,15 @@ class DataForSEOSerpCompetitorsConnector(BaseConnector):
 
             records += self._poll_and_fetch(task_ids, competitors, resolved_site_id, location)
         finally:
-            # `units` = SERP queries posted — the same $0.003/query priority-queue meter as
-            # dataforseo_serp, paid separately because this run captures full results
-            # (no `target`) so every competitor stays visible.
+            # `units` = SERP queries posted on the fallback path (own tasks). On the shared
+            # path nothing was posted, `_run_cost` is 0 and record_cost skips the row — a
+            # purchase that did not happen is not a spend event.
             record_cost(
-                self.name, resolved_site_id, self._run_cost, units=len(keywords),
+                self.name, resolved_site_id, self._run_cost,
+                units=len(keywords) if self._run_cost else 0,
                 notes=(f"serp/google/organic task_post+task_get, {len(competitors)} "
-                       f"competitors @ {location}"),
+                       f"competitors @ {location}") if self._run_cost
+                else "reused dataforseo_serp's SERPs from this run — nothing posted",
             )
         self.logger.info(
             f"[dataforseo_serp_competitors] Captured {len(records)} competitor ranking rows "

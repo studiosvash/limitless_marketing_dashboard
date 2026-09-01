@@ -93,7 +93,9 @@ class StartSyncRunFreshnessTests(TestCase):
         self.assertEqual(RefreshRun.objects.count(), 0)
 
     def test_a_stale_scope_runs_normally(self):
-        _log("dataforseo_backlinks", minutes_ago=60 * 40)
+        # Older than the module's cadence — the window is the cadence now (backlinks
+        # defaults to weekly), not a flat day. See CadenceWindowTests.
+        _log("dataforseo_backlinks", minutes_ago=60 * 24 * 8)
         result = start_sync_run(SITE_URL, "backlinks")
         self.assertNotIn("fresh", result)
         self.assertIn("task_id", result)
@@ -245,9 +247,11 @@ class PerProjectFreshnessTests(TestCase):
 
     def test_a_projects_old_run_is_not_fresh(self):
         self._domain_positioning_fresh()
+        # Older than the positions cadence (weekly by default) — the window is the cadence
+        # now, not FRESH_WITHIN. See CadenceWindowTests.
         RefreshRun.objects.create(site_url=SITE_URL, site_pk=22, scope="positions",
                                   status=RefreshStatus.SUCCESS,
-                                  finished_at=timezone.now() - FRESH_WITHIN - timedelta(hours=1))
+                                  finished_at=timezone.now() - timedelta(days=8))
         result = start_sync_run(SITE_URL, "positions", site_pk=22)
         self.assertNotIn("fresh", result)
 
@@ -360,3 +364,90 @@ class SyncCancelApiTests(TestCase):
         token request to /login/."""
         response = self.client_auth.post(self.url, {}, format="json")
         self.assertNotEqual(response.status_code, 302)
+
+
+class CadenceWindowTests(TestCase):
+    """The manual "already fetched" window is the module's own cadence (2026-09-01).
+
+    Live history: NYC was hand-fetched at 3 days and again at 2 days under a weekly cadence,
+    and the flat 24h window prompted for neither. A click inside the cadence buys data the
+    scheduler is about to buy anyway, so the prompt now argues with the schedule and the cost.
+    """
+
+    def setUp(self):
+        p = mock.patch("apps.dashboard.services.sync_api_service._spawn_sync_process",
+                       return_value=4321)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def _cadence(self, **cfg):
+        from apps.dashboard.models import ProjectSettings
+        ProjectSettings.objects.update_or_create(
+            site_url=SITE_URL, defaults={"data": {"syncConfig": cfg}})
+
+    def _positions_run(self, days_ago, site_pk=1):
+        """A completed positions run for the project AND the domain-level SyncLog rows its
+        connectors leave behind — the freshness check reads the domain first, then the
+        project, so a fixture needs both halves to be "fetched"."""
+        run = RefreshRun.objects.create(site_url=SITE_URL, scope="positions", site_pk=site_pk,
+                                        status=RefreshStatus.SUCCESS)
+        stamp = timezone.now() - timedelta(days=days_ago)
+        RefreshRun.objects.filter(pk=run.pk).update(started_at=stamp, finished_at=stamp)
+        from pipeline.services.sync_engine import PAGE_CONNECTORS
+        for connector in PAGE_CONNECTORS["positioning"]:
+            SyncLog.objects.update_or_create(
+                connector=connector, site_url=SITE_URL,
+                defaults={"status": SyncStatus.SUCCESS, "last_synced": stamp})
+        return run
+
+    def test_positions_fetched_three_days_ago_is_fresh_under_a_weekly_cadence(self):
+        self._cadence(positions="weekly")
+        self._positions_run(days_ago=3)
+        result = start_sync_run(SITE_URL, "positions", site_pk=1)
+        self.assertTrue(result.get("fresh"))
+        self.assertEqual(result["cadence"], "weekly")
+        self.assertEqual(result["window_hours"], 24 * 7)
+        self.assertIn("next_scheduled", result)
+        self.assertIn("est_cost", result)
+        self.assertNotIn("task_id", result)
+
+    def test_positions_fetched_nine_days_ago_runs(self):
+        self._cadence(positions="weekly")
+        self._positions_run(days_ago=9)
+        result = start_sync_run(SITE_URL, "positions", site_pk=1)
+        self.assertIn("task_id", result)
+
+    def test_a_manual_cadence_keeps_the_flat_day(self):
+        self._cadence(positions="manual")
+        self._positions_run(days_ago=3)
+        self.assertIn("task_id", start_sync_run(SITE_URL, "positions", site_pk=1))
+        RefreshRun.objects.all().delete()
+        SyncLog.objects.all().delete()
+        self._positions_run(days_ago=0)
+        result = start_sync_run(SITE_URL, "positions", site_pk=1)
+        self.assertTrue(result.get("fresh"))
+        self.assertEqual(result["cadence"], "manual")
+        self.assertIsNone(result["next_scheduled"])
+
+    def test_a_siblings_run_inside_the_window_still_does_not_count(self):
+        self._cadence(positions="weekly")
+        self._positions_run(days_ago=3, site_pk=999)
+        self.assertIn("task_id", start_sync_run(SITE_URL, "positions", site_pk=1))
+
+    def test_a_domain_scope_uses_its_cadence_too(self):
+        self._cadence(backlinks="weekly")
+        _log("dataforseo_backlinks", minutes_ago=60 * 24 * 3)
+        result = start_sync_run(SITE_URL, "backlinks")
+        self.assertTrue(result.get("fresh"))
+        self.assertEqual(result["cadence"], "weekly")
+
+    def test_refresh_all_keeps_the_flat_day(self):
+        from apps.dashboard.services.sync_api_service import freshness_window
+        window, cadence = freshness_window(SITE_URL, "all")
+        self.assertEqual(window, FRESH_WITHIN)
+        self.assertIsNone(cadence)
+
+    def test_force_still_wins(self):
+        self._cadence(positions="weekly")
+        self._positions_run(days_ago=1)
+        self.assertIn("task_id", start_sync_run(SITE_URL, "positions", site_pk=1, force=True))

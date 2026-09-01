@@ -363,3 +363,61 @@ class ConnectorMapResolvesTests(TestCase):
         conn = sync_engine._get_connector("dataforseo_serp")
         if conn is not None:
             self.assertEqual(type(conn).__name__, "DataForSEOSERPConnector")
+
+
+class RunContextTests(TestCase):
+    """Per-run context the engine hands every connector (2026-09-01):
+
+    * `run_shared` — ONE dict per run, the same object on every connector, so a connector can
+      hand a later one what it already paid for. `dataforseo_serp` publishes each completed
+      SERP into it and `dataforseo_serp_competitors` reads competitor ranks off those instead
+      of buying the identical SERP a second time.
+    * `scheduled` — True when nobody is watching (cron). The SERP connectors use it to pick
+      the normal-priority queue (half price) and a longer poll window.
+    """
+
+    def setUp(self):
+        p = patch.object(sync_engine, "_run_post_sync", lambda *a, **kw: None)
+        p.start()
+        self.addCleanup(p.stop)
+        self.built = {}
+
+        def factory(name, site_id=None):
+            conn = FakeConnector(name)
+            self.built[name] = conn
+            return conn
+
+        p = patch.object(sync_engine, "_get_connector", side_effect=factory)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def _row(self, scope):
+        return RefreshRun.objects.create(site_url=SITE_URL, scope=scope,
+                                         status=RefreshStatus.RUNNING)
+
+    def test_every_connector_in_a_page_run_shares_one_dict(self):
+        sync_page("positioning", SITE_URL, self._row("positions").pk)
+        shared = [c.run_shared for c in self.built.values()]
+        self.assertEqual(len(shared), len(PAGE_CONNECTORS["positioning"]))
+        self.assertTrue(all(s is shared[0] for s in shared), "one object per run")
+        self.assertIsInstance(shared[0], dict)
+
+    def test_every_connector_in_a_full_run_shares_one_dict(self):
+        sync_all(SITE_URL, self._row("all").pk)
+        shared = [c.run_shared for c in self.built.values()]
+        self.assertTrue(all(s is shared[0] for s in shared))
+
+    def test_two_runs_do_not_share_a_dict(self):
+        sync_page("positioning", SITE_URL, self._row("positions").pk)
+        first = next(iter(self.built.values())).run_shared
+        self.built.clear()
+        sync_page("positioning", SITE_URL, self._row("positions").pk)
+        second = next(iter(self.built.values())).run_shared
+        self.assertIsNot(first, second)
+
+    def test_scheduled_flag_reaches_every_connector_and_defaults_to_false(self):
+        sync_page("positioning", SITE_URL, self._row("positions").pk, scheduled=True)
+        self.assertTrue(all(c.scheduled for c in self.built.values()))
+        self.built.clear()
+        sync_all(SITE_URL, self._row("all").pk)
+        self.assertTrue(all(c.scheduled is False for c in self.built.values()))

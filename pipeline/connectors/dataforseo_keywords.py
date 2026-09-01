@@ -12,7 +12,7 @@ Google Trends: Always use Standard method — never Live (shared 250 req/min glo
 import json
 import os
 import time
-from datetime import date
+from datetime import date, timedelta
 from typing import Optional
 
 import requests
@@ -32,6 +32,12 @@ from pipeline.db.writer import upsert_keyword_rankings
 load_dotenv()
 
 DATAFORSEO_BASE = "https://api.dataforseo.com/v3"
+
+# How long a keyword's volume / KD / CPC stays good before this connector buys it again.
+# Google Ads search volume is a MONTHLY figure; re-buying it inside every weekly positions run
+# cost $6.37 of $25 over 90 days on the live account for numbers that had not changed. A
+# keyword never priced, or priced longer ago than this, is fetched exactly as before.
+VOLUME_FRESH_DAYS = 30
 
 
 class DataForSEOKeywordsConnector(BaseConnector):
@@ -672,13 +678,39 @@ class DataForSEOKeywordsConnector(BaseConnector):
             self.logger.warning("[dataforseo_keywords] No keywords found.")
             return []
 
-        self.logger.info(
-            f"[dataforseo_keywords] Fetching metadata for {len(keywords)} keywords "
-            f"(site: {resolved_site_id} @ {location!r})"
-        )
         tracking_date = yesterday()
         records = []
         self._run_cost = 0.0
+
+        # Buy volume/KD/CPC at most once per VOLUME_FRESH_DAYS per keyword. This connector
+        # runs inside every positions run, so a weekly city refresh re-bought all 21 volumes
+        # every week for a number Google updates monthly. A keyword priced within the window
+        # is carried forward into this run's row instead (no call), so every reader that takes
+        # the newest row still sees its volume; the rest are fetched exactly as before.
+        fresh = self._fresh_metadata(resolved_site_id, keywords, location)
+        for kw in keywords:
+            known = fresh.get((kw or "").strip().lower())
+            if known:
+                records.append({
+                    "date": tracking_date,
+                    "site_id": resolved_site_id,
+                    "keyword": kw,
+                    "position": None,
+                    "url": None,
+                    **known,
+                })
+        keywords = [kw for kw in keywords if (kw or "").strip().lower() not in fresh]
+        if not keywords:
+            self.logger.info(
+                f"[dataforseo_keywords] All {len(records)} keywords priced within "
+                f"{VOLUME_FRESH_DAYS} days — carried forward, nothing fetched"
+            )
+            return records
+
+        self.logger.info(
+            f"[dataforseo_keywords] Fetching metadata for {len(keywords)} keywords "
+            f"({len(records)} carried forward) (site: {resolved_site_id} @ {location!r})"
+        )
 
         # Process in batches of 1,000 (API limit)
         batch_size = 1000
@@ -725,6 +757,49 @@ class DataForSEOKeywordsConnector(BaseConnector):
 
         self.logger.info(f"[dataforseo_keywords] Fetched metadata for {len(records)} keywords")
         return records
+
+    def _fresh_metadata(self, site_id: str, keywords: list[str], location: str) -> dict[str, dict]:
+        """{keyword_lower: {search_volume, keyword_difficulty, cpc, trend}} for every keyword
+        priced within VOLUME_FRESH_DAYS in THIS project's market — the newest priced row wins.
+
+        Keyed on (site, location, keyword): a sibling city's volume is a different market's
+        number and does not count. Never raises — a lookup failure means "nothing is fresh",
+        i.e. the old behaviour of buying everything.
+        """
+        wanted = {(k or "").strip().lower() for k in keywords if k and k.strip()}
+        if not wanted:
+            return {}
+        try:
+            from sqlalchemy import func, select
+
+            from pipeline.db.schema import KeywordRanking
+            from pipeline.utils.site_ids import resolve_site_ids
+
+            cutoff = date.today() - timedelta(days=VOLUME_FRESH_DAYS)
+            with get_session() as session:
+                rows = session.execute(
+                    select(KeywordRanking.keyword, KeywordRanking.search_volume,
+                           KeywordRanking.keyword_difficulty, KeywordRanking.cpc,
+                           KeywordRanking.trend, KeywordRanking.date)
+                    .where(KeywordRanking.site_id.in_(resolve_site_ids(site_id)),
+                           KeywordRanking.location == location,
+                           func.lower(KeywordRanking.keyword).in_(wanted),
+                           KeywordRanking.search_volume.isnot(None),
+                           KeywordRanking.date >= cutoff)
+                    .order_by(KeywordRanking.date.desc())
+                ).all()
+        except Exception as exc:
+            self.logger.warning(f"[dataforseo_keywords] freshness lookup failed — fetching all: {exc}")
+            return {}
+
+        fresh: dict[str, dict] = {}
+        for kw, volume, kd, cpc, trend, _day in rows:
+            key = (kw or "").strip().lower()
+            if key in fresh:
+                continue        # newest first: the first row seen per keyword wins
+            fresh[key] = {"search_volume": volume, "keyword_difficulty": kd,
+                          "cpc": cpc, "trend": trend}
+        return fresh
 
     def _resolve_location(self, site_id: str) -> str:
         """This PROJECT's tracking location — see the identical method on gsc_keywords.

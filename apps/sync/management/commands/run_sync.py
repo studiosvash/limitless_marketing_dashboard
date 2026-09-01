@@ -69,17 +69,25 @@ class Command(BaseCommand):
         from pipeline.services.sync_engine import sync_all, sync_page
 
         scope = run.scope or "all"
-        self.stdout.write(f"Running scope={scope!r} for {run.site_url!r} (run #{run_id})…")
+        # Nobody triggered it => nobody is watching it. The scheduler (and any other unattended
+        # caller) creates the row with no user; a click always carries one. The SERP connectors
+        # price and pace themselves on this — normal-priority queue, longer poll window — so a
+        # cron run costs half per query and a watched refresh still finishes while the user
+        # is looking at the bar.
+        scheduled = run.triggered_by_id is None
+        self.stdout.write(f"Running scope={scope!r} for {run.site_url!r} (run #{run_id}"
+                          f"{', scheduled' if scheduled else ''})…")
 
         try:
             # `run.site_pk` names the project that triggered this run; the connectors need it to
             # resolve THEIR OWN tracking location rather than a sibling project's. It rides on
             # the row because this command is a separate process — see RefreshRun.site_pk.
             if scope == "all":
-                summary = sync_all(run.site_url, run.pk, site_pk=run.site_pk)
+                summary = sync_all(run.site_url, run.pk, site_pk=run.site_pk,
+                                   scheduled=scheduled)
             else:
                 summary = sync_page(SCOPE_ALIASES.get(scope, scope), run.site_url, run.pk,
-                                    site_pk=run.site_pk)
+                                    site_pk=run.site_pk, scheduled=scheduled)
         except Exception:
             # sync_all/sync_page mark the row themselves on the paths they control, but a crash
             # OUTSIDE their per-connector try/except (an import error, a DB outage, or a bug

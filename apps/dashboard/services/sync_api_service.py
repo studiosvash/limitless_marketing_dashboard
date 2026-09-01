@@ -85,7 +85,51 @@ def _scope_is_location_scoped(scope: str) -> bool:
     return SCOPE_ALIASES.get(scope, scope) in _LOCATION_SCOPED_PAGES
 
 
-def project_scope_last_ran(site_url: str, site_pk: int, scope: str, now=None):
+def freshness_window(site_url: str, scope: str) -> tuple[timedelta, str | None]:
+    """(how long a manual refresh of `scope` counts as "already fetched", the cadence it came
+    from). The window IS the module's Settings -> Automation cadence: a weekly module fetched
+    three days ago is fresh, and the scheduler will fetch it again in four — a click before
+    that buys the same data twice. `manual` and scopes with no cadence (all/core/domain_checks)
+    keep the flat FRESH_WITHIN. Never raises."""
+    from apps.sync import scheduling
+
+    module = "positions" if scope in ("positions", "positions_new") else scope
+    if module not in scheduling.SYNC_MODULES:
+        return FRESH_WITHIN, None
+    try:
+        cadence = scheduling.get_sync_config(site_url).get(module, "manual")
+    except Exception:
+        logger.warning("[sync] could not read the cadence for %r — using the flat window",
+                       site_url, exc_info=True)
+        return FRESH_WITHIN, None
+    interval = scheduling.CADENCE_INTERVALS.get(cadence)
+    if interval is None:
+        return FRESH_WITHIN, cadence
+    return interval, cadence
+
+
+def estimate_scope_cost(site_url: str, connectors: list[str]) -> float | None:
+    """What one run of these connectors has cost on THIS site, from its own recorded spend:
+    the 90-day average per run of each connector, summed. None when nothing was ever
+    recorded (a first run has no history to quote). Never raises."""
+    try:
+        from apps.dashboard.services.cost_service import cost_last_90_days
+
+        by_connector = {c["connector"]: c for c in cost_last_90_days(site_url)["by_connector"]}
+    except Exception:
+        logger.warning("[sync] cost estimate unavailable for %r", site_url, exc_info=True)
+        return None
+    total, seen = 0.0, False
+    for name in connectors:
+        row = by_connector.get(name)
+        if row and row.get("runs"):
+            total += float(row["cost"]) / float(row["runs"])
+            seen = True
+    return round(total, 4) if seen else None
+
+
+def project_scope_last_ran(site_url: str, site_pk: int, scope: str, now=None,
+                           within: timedelta = FRESH_WITHIN):
     """When THIS project itself last completed this scope, within FRESH_WITHIN — else None.
 
     RefreshRun is the only per-PROJECT record of a sync; SyncLog is keyed (connector,
@@ -106,7 +150,7 @@ def project_scope_last_ran(site_url: str, site_pk: int, scope: str, now=None):
             covering.add("core")
     except Exception:
         pass
-    cutoff = (now or timezone.now()) - FRESH_WITHIN
+    cutoff = (now or timezone.now()) - within
     run = (RefreshRun.objects
            .filter(site_url=site_url, site_pk=site_pk, scope__in=covering,
                    status=RefreshStatus.SUCCESS, finished_at__gte=cutoff)
@@ -136,7 +180,8 @@ def _project_name_for_pk(site_pk: int | None) -> str | None:
         return None
 
 
-def scope_last_synced(site_url: str, connectors: list[str], now=None):
+def scope_last_synced(site_url: str, connectors: list[str], now=None,
+                      within: timedelta = FRESH_WITHIN):
     """When this whole scope last succeeded, or None if any part of it is stale.
 
     Returns the OLDEST of the connectors' `last_synced` values -- so the answer means "every
@@ -149,7 +194,7 @@ def scope_last_synced(site_url: str, connectors: list[str], now=None):
     """
     if not connectors:
         return None
-    cutoff = (now or timezone.now()) - FRESH_WITHIN
+    cutoff = (now or timezone.now()) - within
     fresh = dict(
         SyncLog.objects.filter(
             connector__in=connectors, site_url=site_url,
@@ -445,20 +490,40 @@ def start_sync_run(site_url: str, scope: str, user=None, force: bool = False,
     # Checked AFTER the one-run-per-site guard: if a run is already in flight, attaching to it
     # is what the user wanted, and answering "already up to date" would hide it.
     if manual and not force:
-        last_synced = scope_last_synced(site_url, connectors)
+        # The window is the module's own cadence (weekly => 7 days), not a flat day: a click
+        # inside the cadence buys data the scheduler is about to buy anyway. On the live
+        # account the flat 24h window let NYC be re-fetched at 2 and 3 days.
+        window, cadence = freshness_window(site_url, scope)
+        last_synced = scope_last_synced(site_url, connectors, within=window)
         if last_synced is not None and site_pk is not None and _scope_is_location_scoped(scope):
             # SyncLog freshness is DOMAIN-level, but this scope fetches per-project data:
             # a sibling city project's sync an hour ago says nothing about THIS project's
             # location. Fresh only if this project itself ran it recently — and the prompt
             # then quotes this project's own timestamp, not the sibling's.
-            last_synced = project_scope_last_ran(site_url, site_pk, scope)
+            last_synced = project_scope_last_ran(site_url, site_pk, scope, within=window)
         if last_synced is not None:
-            logger.info("[sync] %r for %r is already fresh (since %s) — asking before running",
-                        scope, site_url, last_synced.isoformat())
+            logger.info("[sync] %r for %r is already fresh (since %s, window %s) — asking "
+                        "before running", scope, site_url, last_synced.isoformat(), window)
+            next_scheduled = None
+            if cadence:
+                from apps.sync import scheduling
+                module = "positions" if scope in ("positions", "positions_new") else scope
+                try:
+                    nxt = scheduling.next_run_for(site_url, module, cadence, site_pk=site_pk)
+                    next_scheduled = nxt.isoformat() if nxt else None
+                except Exception:
+                    logger.warning("[sync] next-run lookup failed", exc_info=True)
             return {
                 "fresh": True,
                 "scope": scope,
                 "last_synced": last_synced.isoformat(),
+                # What the confirm dialog needs to argue its case: how long this module's
+                # data is considered good, when the schedule fetches it next, and what a
+                # refetch now would cost on this site's own recorded spend.
+                "cadence": cadence,
+                "window_hours": int(window.total_seconds() // 3600),
+                "next_scheduled": next_scheduled,
+                "est_cost": estimate_scope_cost(site_url, connectors),
             }
 
     try:

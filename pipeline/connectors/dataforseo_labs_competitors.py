@@ -11,7 +11,7 @@ Writes to: competitor_domains table.
 """
 
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import requests
@@ -27,6 +27,12 @@ load_dotenv()
 
 DATAFORSEO_BASE = "https://api.dataforseo.com/v3"
 ENDPOINT = f"{DATAFORSEO_BASE}/dataforseo_labs/google/competitors_domain/live"
+
+# How long a domain's competitor list stays good before it is bought again. The list is
+# per DOMAIN (`competitor_domains` is keyed site_id + competitor_domain) but this connector
+# runs inside every city project's positions run, so 18 premierstaff.com projects re-bought
+# and overwrote the same 25 rows every week. Weekly per domain matches the positions cadence.
+COMPETITORS_FRESH_DAYS = 7
 
 # DataForSEO Labs returns keyword COUNTS per SERP position band (not a position).
 # Map each band to a representative midpoint so we can derive a weighted avg position.
@@ -152,6 +158,17 @@ class DataForSEOLabsCompetitorsConnector(BaseConnector):
                 "configured for this site (Settings → Manage Sites)."
             )
 
+        recent = self._recent_rows(resolved_site_id)
+        if recent:
+            # Bought within COMPETITORS_FRESH_DAYS — by this project or a sibling on the same
+            # domain. Returned as-is so the run still reports the rows it has, with no API
+            # call and no spend event (record_cost skips a zero).
+            self.logger.info(
+                f"[dataforseo_labs_competitors] {len(recent)} competitor domains for {target} "
+                f"fetched within {COMPETITORS_FRESH_DAYS} days — reused, nothing fetched"
+            )
+            return recent
+
         self.logger.info(
             f"[dataforseo_labs_competitors] Fetching top {limit} competitors for {target}"
         )
@@ -193,6 +210,47 @@ class DataForSEOLabsCompetitorsConnector(BaseConnector):
             f"[dataforseo_labs_competitors] Discovered {len(records)} competitor domains for {target}"
         )
         return records
+
+    def _recent_rows(self, site_id: str) -> list[dict]:
+        """This domain's stored competitor list if its newest row is within
+        COMPETITORS_FRESH_DAYS, else []. Never raises — a lookup failure means "fetch"."""
+        try:
+            from sqlalchemy import select
+
+            from pipeline.db.schema import CompetitorDomain
+            from pipeline.utils.site_ids import resolve_site_ids
+
+            with get_session() as session:
+                rows = session.execute(
+                    select(CompetitorDomain)
+                    .where(CompetitorDomain.site_id.in_(resolve_site_ids(site_id)))
+                ).scalars().all()
+                session.expunge_all()
+        except Exception as exc:
+            self.logger.warning(f"[dataforseo_labs_competitors] freshness lookup failed — fetching: {exc}")
+            return []
+        if not rows:
+            return []
+
+        def _utc_naive(value):
+            if value is None:
+                return None
+            return value.astimezone(timezone.utc).replace(tzinfo=None) if value.tzinfo else value
+
+        stamps = [_utc_naive(r.last_fetched) for r in rows if r.last_fetched is not None]
+        cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=COMPETITORS_FRESH_DAYS)
+        if not stamps or max(stamps) < cutoff:
+            return []
+        return [{
+            "site_id": r.site_id,
+            "competitor_domain": r.competitor_domain,
+            "intersections": r.intersections,
+            "full_domain_metrics_organic_count": r.full_domain_metrics_organic_count,
+            "avg_position": r.avg_position,
+            "median_position": r.median_position,
+            "etv": r.etv,
+            "last_fetched": r.last_fetched,
+        } for r in rows]
 
     def _write_records(self, session, records: list[dict], site_id: Optional[str] = None) -> int:
         return upsert_competitor_domains(session, records, site_id=site_id)
